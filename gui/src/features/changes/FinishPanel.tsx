@@ -139,12 +139,12 @@ export function FinishPanel({ ws, onClose, onGitChanged }: Props) {
       )}
       {policy && !policy.ready && (
         <div className="mb-3 space-y-2">
-          <Button variant="outline" size="sm" onClick={() => void verify()} disabled={busy !== null}>
+          {policy.repos.some((repo) => !repo.ready) && <Button variant="outline" size="sm" onClick={() => void verify()} disabled={busy !== null}>
             {busy === 'verify' ? <Spinner className="size-3" /> : null} Run verification
-          </Button>
+          </Button>}
           <label className="flex items-center gap-2 text-xs">
-            <Checkbox checked={overriding} onCheckedChange={(checked) => setOverriding(Boolean(checked))} aria-label="Finish without fresh passing verification" />
-            Finish without fresh passing verification
+            <Checkbox checked={overriding} onCheckedChange={(checked) => setOverriding(Boolean(checked))} aria-label="Finish anyway, with a reason" />
+            Finish anyway, with a reason
           </label>
           {overriding && (
             <>
@@ -190,7 +190,7 @@ export function FinishPanel({ ws, onClose, onGitChanged }: Props) {
             <p role="alert" className="text-destructive-foreground">Finish refused, nothing changed: {result.policy.blockers.join(' ')}</p>
           ) : (
             <>
-              {result.override && <p className="text-amber-700">Finished without fresh verification. Recorded reason: {result.override.reason}</p>}
+              {result.override && <p className="text-amber-700">Finished anyway. Recorded reason: {result.override.reason}</p>}
               {result.repos.map((r) => (
                 <p key={r.name} className="font-mono text-[11px]">
                   {r.name}: {r.skipped ? `skipped — ${r.skipped}` : [

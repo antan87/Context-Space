@@ -87,18 +87,23 @@ export async function finishCommand(
     const mark = repo.ready ? chalk.green('✔') : chalk.red('✖');
     console.log(`  ${mark} ${repo.detail}`);
   }
+  // The plan: what a milestone still waits for stops finishing; the rest only warns.
+  const planBlockers = policy.blockers.slice(policy.repos.filter((repo) => !repo.ready).length);
+  for (const blocker of planBlockers) console.log(`  ${chalk.red('✖')} ${blocker}`);
+  for (const warning of policy.warnings) console.log(`  ${chalk.yellow('!')} ${warning}`);
   console.log();
   const override = options.overrideVerification !== undefined
     ? { reason: options.overrideVerification }
     : undefined;
+  const unverified = policy.repos.some((repo) => !repo.ready);
   if (!policy.ready && !override) {
-    console.log(chalk.red('✖ Finish refused: verification evidence is missing, failed or stale.'));
-    console.log(chalk.dim(`  Run \`ctxspace verify\`, or finish anyway with --override-verification "<reason>" (the reason is recorded).\n`));
+    console.log(chalk.red(`✖ Finish refused: ${[unverified && 'verification evidence is missing, failed or stale', planBlockers.length && 'a milestone still waits for open plan items'].filter(Boolean).join(', and ')}.`));
+    console.log(chalk.dim(`  ${unverified ? 'Run `ctxspace verify`' : 'Handle them with `ctxspace plan`'}, or finish anyway with --override-verification "<reason>" (the reason is recorded).\n`));
     process.exitCode = 1;
     return;
   }
   if (!policy.ready && override) {
-    console.log(chalk.yellow(`⚠ Finishing without fresh passing verification. Recorded reason: ${override.reason}\n`));
+    console.log(chalk.yellow(`⚠ Finishing anyway. Recorded reason: ${override.reason}\n`));
   }
 
   if (options.dryRun) {

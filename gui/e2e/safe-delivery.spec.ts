@@ -199,7 +199,7 @@ test.describe('finish', () => {
     await panel.getByLabel('Commit message for remaining changes').fill('feat: deliver');
     await expect(panel.getByRole('button', { name: 'Finish', exact: true })).toBeDisabled();
 
-    await panel.getByRole('checkbox', { name: 'Finish without fresh passing verification' }).click();
+    await panel.getByRole('checkbox', { name: 'Finish anyway, with a reason' }).click();
     await panel.getByLabel(/This reason is recorded/).fill('short');
     await expect(panel.getByRole('button', { name: 'Finish', exact: true })).toBeDisabled();
     await panel.getByLabel(/This reason is recorded/).fill('Hotfix approved by the owner');

@@ -5,9 +5,11 @@
  *
  * Evidence is the latest verification of each editable repository, bound to
  * the content that was tested (HEAD plus a fingerprint of the working tree).
- * Missing, failed, timed-out, unreadable and stale evidence all block. A
- * caller may still proceed with an explicit override that states a reason;
- * the override is recorded and returned, never implied by a generic "yes".
+ * Missing, failed, timed-out, unreadable and stale evidence all block. So does
+ * the plan's sixth rule: an open item that a milestone waits for blocks, and
+ * other open items only warn. A caller may still proceed with an explicit
+ * override that states a reason; the override is recorded and returned, never
+ * implied by a generic "yes".
  * Checkpoint commits are not gated by this policy — only finish/release is.
  */
 
@@ -43,13 +45,27 @@ export interface RepoEvidence {
   command?: string;
 }
 
+/** A plan item named in the decision. */
+export interface PlanFinishItem {
+  id: string;
+  /** Code and name: "Q1 Which time zone?". */
+  label: string;
+  status: string;
+  /** Labels of the milestones and items that wait for it. */
+  heldUpBy: string[];
+}
+
 /** The policy decision for a workspace. */
 export interface ProgressionDecision {
-  /** True when every editable repository has fresh, acceptable evidence. */
+  /** True when every editable repository has fresh, acceptable evidence and nothing a milestone waits for is open. */
   ready: boolean;
   repos: RepoEvidence[];
+  /** What the plan still has open: what stops finishing, and what only warns. */
+  plan: { blocking: PlanFinishItem[]; open: PlanFinishItem[] };
   /** Human-readable reasons the decision is not ready; empty when ready. */
   blockers: string[];
+  /** Open plan items that do not stop finishing, in words. */
+  warnings: string[];
 }
 
 /** An explicit override supplied by a caller. */
@@ -64,7 +80,7 @@ export const MIN_OVERRIDE_REASON_LENGTH = 8;
 export function validateOverrideReason(reason: string | undefined): string | null {
   const trimmed = reason?.trim() ?? '';
   if (trimmed.length < MIN_OVERRIDE_REASON_LENGTH) {
-    return `An override needs a reason of at least ${MIN_OVERRIDE_REASON_LENGTH} characters explaining why unverified work may be finished.`;
+    return `An override needs a reason of at least ${MIN_OVERRIDE_REASON_LENGTH} characters explaining why the workspace may be finished anyway.`;
   }
   return null;
 }
@@ -142,7 +158,38 @@ export async function evaluateProgression(
     targets.map((target) => judgeRepo(target.name, target.path, state.repos[target.name]?.lastVerification)),
   );
   const blockers = repos.filter((repo) => !repo.ready).map((repo) => repo.detail);
-  return { ready: blockers.length === 0, repos, blockers };
+  const plan = await judgePlan(workspacePath);
+  blockers.push(...plan.problems);
+  for (const item of plan.blocking) {
+    blockers.push(`${item.heldUpBy.join(' and ')} ${item.heldUpBy.length === 1 ? 'waits' : 'wait'} for ${item.label}, which is ${item.status}. Finish, answer or drop it in the plan.`);
+  }
+  const warnings = plan.open.map((item) => `${item.label} is still ${item.status}.`);
+  return { ready: blockers.length === 0, repos, plan: { blocking: plan.blocking, open: plan.open }, blockers, warnings };
+}
+
+/**
+ * The plan's part of the decision, read without writing anything. A plan that cannot be read stops finishing:
+ * nobody can tell what it still waits for.
+ */
+async function judgePlan(workspacePath: string): Promise<{ blocking: PlanFinishItem[]; open: PlanFinishItem[]; problems: string[] }> {
+  // Imported here: the plan modules lead back to verification, which this module also uses.
+  const [{ readPlanReadOnly }, { planFinishCheck }, { heldUpBy }, { itemLabel, STATUS_WORDS }] = await Promise.all([
+    import('./lifecycle.js'), import('./plan-app.js'), import('./plan.js'), import('./plan-words.js'),
+  ]);
+  let plan;
+  try {
+    plan = await readPlanReadOnly(workspacePath);
+  } catch (error) {
+    return { blocking: [], open: [], problems: [`The plan cannot be read: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+  const check = planFinishCheck(plan);
+  const describe = (item: typeof plan.items[number]): PlanFinishItem => ({
+    id: item.id,
+    label: itemLabel(item),
+    status: item.proposal ? "waiting for the user's OK" : STATUS_WORDS[item.status].label.toLowerCase(),
+    heldUpBy: heldUpBy(plan, item.id).map(itemLabel),
+  });
+  return { blocking: check.blocks.map(describe), open: check.warns.map(describe), problems: [] };
 }
 
 /** Keeps the override log bounded; the latest finish record also carries its override. */

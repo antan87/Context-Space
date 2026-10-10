@@ -13,15 +13,18 @@ function Rows({ items, view }: { items: PlanItemView[]; view: PlanView }) {
   })}</ul>;
 }
 
-/** What the plan still has open, for the finish panel: what milestones wait for first, then the rest. */
+/**
+ * What the plan still has open, for the finish panel: what a milestone waits for stops finishing (the policy counts it
+ * too); the rest only warns.
+ */
 export function PlanFinishList({ workspaceId }: { workspaceId: string }) {
   const { data: view } = usePlan(workspaceId);
   if (!view) return null;
   const { blocks, warns, handled } = view.finish;
   if (!blocks.length && !warns.length) return <p className="mb-3 text-xs text-muted-foreground" data-testid="finish-plan">Everything in the plan is handled.</p>;
   return <div className="mb-3 space-y-2" data-testid="finish-plan">
-    {blocks.length > 0 && <div><p className="mb-1 text-[11px] font-semibold text-foreground">A milestone waits for these</p><Rows items={blocks} view={view} /></div>}
-    {warns.length > 0 && <div><p className="mb-1 text-[11px] font-semibold text-foreground">Still open · finish them, move them to later, or drop them in the plan</p><Rows items={warns} view={view} /></div>}
+    {blocks.length > 0 && <div><p className="mb-1 text-[11px] font-semibold text-destructive-foreground">Stops finishing · a milestone waits for these</p><Rows items={blocks} view={view} /></div>}
+    {warns.length > 0 && <div><p className="mb-1 text-[11px] font-semibold text-foreground">Only warns · finish them, move them to later, or drop them in the plan</p><Rows items={warns} view={view} /></div>}
     <p className="text-[11px] text-muted-foreground">Already handled: {handled.done} done · {handled.dropped} dropped · {handled.later} for later.</p>
   </div>;
 }

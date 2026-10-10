@@ -747,11 +747,17 @@ export interface RepoEvidence {
   command?: string;
 }
 
+/** A plan item named in the finish decision. */
+export interface PlanFinishItem { id: string; label: string; status: string; heldUpBy: string[] }
+
 /** The shared finish policy decision (GET /api/workspace/:id/progression). */
 export interface ProgressionDecision {
   ready: boolean;
   repos: RepoEvidence[];
+  /** What a milestone still waits for (it stops finishing), and other open items (they only warn). */
+  plan?: { blocking: PlanFinishItem[]; open: PlanFinishItem[] };
   blockers: string[];
+  warnings?: string[];
 }
 
 export interface CommitRepoResult {

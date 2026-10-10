@@ -299,7 +299,7 @@ describe('repository safety contract (real git)', { timeout: 60_000 }, () => {
     it('reference repos are outside the decision', async () => {
       const a = await hostWithRemote(root, 'a');
       const workspacePath = await inPlaceWorkspace(root, [a.host]);
-      expect(await evaluateProgression(workspacePath)).toEqual({ ready: true, repos: [], blockers: [] });
+      expect(await evaluateProgression(workspacePath)).toEqual({ ready: true, repos: [], plan: { blocking: [], open: [] }, blockers: [], warnings: [] });
     });
   });
 });

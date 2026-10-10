@@ -540,7 +540,7 @@ export const tools: NexusFlowTool[] = [
         return json({
           ...report,
           note: report.blocked
-            ? `Finish refused, nothing changed: ${report.policy.blockers.join(' ')} Run verify_workspace, or ask the user whether to finish anyway with overrideReason.`
+            ? `Finish refused, nothing changed: ${report.policy.blockers.join(' ')} Run verify_workspace or handle the open plan items with \`ctxspace plan\`, or ask the user whether to finish anyway with overrideReason.`
             : report.dryRun
               ? 'Dry run: nothing was changed.'
               : report.safeToCleanup
