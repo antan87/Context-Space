@@ -4,14 +4,17 @@
  * without setup: the AI runs these commands in its shell, and the person sees the same plan in the
  * Plan tab.
  *
- * Who is acting: a non-interactive shell, which is how AI tools run commands, acts as the AI, so a
- * close that needs the user becomes a proposal. An interactive terminal is the user, who is asked
- * first before making a decision that is theirs. This guides behaviour; it is not a security boundary.
+ * Who is acting: always the AI, so a close that is the user's becomes a proposal they accept in the
+ * Plan tab. Some AI tools run commands in a terminal, so a terminal alone does not mean a person is
+ * typing. A person acts as the user with `--as user` (and `accept`/`reject`) in their own terminal,
+ * after confirming; a prompt that nobody answers gives up instead of waiting. This guides
+ * behaviour; it is not a security boundary.
  */
 
 import { Command } from 'commander';
 import { confirm } from '@inquirer/prompts';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
+import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
 import { ensurePlanStore } from '../core/lifecycle.js';
@@ -57,6 +60,14 @@ export interface PlanCommandContext {
   now?: Date;
 }
 
+/** Who a change is made as, stated in the help. */
+export const WHO_ACTS = [
+  'Who acts: every change is made as the AI and recorded with its name. When a close is the user\'s',
+  '(a milestone, or an item the user owns), it becomes a proposal: the user accepts it in the Plan tab.',
+  'That is the end of the AI\'s part, even when the user told you the answer: say it waits for them.',
+  'The user can act as themselves with --as user in their own terminal.',
+].join('\n');
+
 /** How each change is typed, shown when it is typed wrongly. */
 export const PLAN_USAGE: Record<string, string> = {
   add: 'ctxspace plan add <milestone|task|question|decision|existing> "<name>" [--after M1] [--before M2] [--owner user|agent]',
@@ -72,20 +83,30 @@ export const PLAN_USAGE: Record<string, string> = {
   reject: 'ctxspace plan reject <code> --reason "what still needs doing"',
 };
 
+/** How long a question to the person at the terminal waits before giving up. */
+export const CONFIRM_TIMEOUT_MS = 30_000;
+
 /**
- * Who makes the change. A non-interactive shell is the AI, named after its tool when known
- * (`--harness`, CTXSPACE_HARNESS, or Claude Code's own CLAUDECODE variable).
+ * Who makes the change: the AI, named after its tool when known (`--harness`, CTXSPACE_HARNESS, or
+ * Claude Code's own CLAUDECODE variable). The user only when they ask for it (`--as user`, or a
+ * verb only the user can use) in their own terminal, with no AI tool around.
  */
-export function resolvePlanActor(options: { as?: string; harness?: string }, env: NodeJS.ProcessEnv, interactive: boolean): PlanActor {
+export function resolvePlanActor(
+  options: { as?: string; harness?: string },
+  env: NodeJS.ProcessEnv,
+  interactive: boolean,
+  verb: { userOnly?: boolean } = {},
+): PlanActor {
   if (options.as !== undefined && options.as !== 'user' && options.as !== 'agent') {
     throw new PlanError(`--as takes "user" or "agent", not "${options.as}".`, 'invalid');
   }
   const harness = (options.harness ?? env.CTXSPACE_HARNESS ?? (env.CLAUDECODE ? 'claude' : undefined))?.trim().toLowerCase() || undefined;
   const agent: PlanActor = harness ? { by: 'agent', harness } : { by: 'agent' };
   if (options.as === 'agent') return agent;
-  if (interactive) return { by: 'user' };
+  const wantsUser = options.as === 'user' || Boolean(verb.userOnly);
+  if (wantsUser && interactive && !runsInsideAiTool(env)) return { by: 'user' };
   if (options.as === 'user') {
-    throw new PlanError('Acting as the user needs an interactive terminal. From an AI tool, make the change as the AI: a close that needs the user becomes a proposal they accept.', 'not_allowed');
+    throw new PlanError("Only the user acts as the user, from their own terminal or the Plan tab. Make the change as the AI: when the item is the user's, it becomes a proposal they accept.", 'not_allowed');
   }
   return agent;
 }
@@ -199,7 +220,24 @@ function textOf(...candidates: Array<string | string[] | undefined>): string {
   return '';
 }
 
-async function contextFor(options: PlanCommonOptions): Promise<PlanCommandContext> {
+/**
+ * Asks the person at the terminal, and gives up after `ms` when nobody answers: some AI tools run
+ * commands in a terminal, and a question they cannot see must not hold them up.
+ */
+export async function confirmWithin(
+  question: string,
+  ms = CONFIRM_TIMEOUT_MS,
+  ask: (config: { message: string; default: boolean }, context: { signal: AbortSignal }) => Promise<boolean> = confirm,
+): Promise<boolean> {
+  try {
+    return await ask({ message: `${question} (no answer in ${Math.round(ms / 1000)} s means no)`, default: false }, { signal: AbortSignal.timeout(ms) });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortPromptError') return false;
+    throw error;
+  }
+}
+
+async function contextFor(options: PlanCommonOptions, verb: { userOnly?: boolean } = {}): Promise<PlanCommandContext> {
   const workspacePath = await resolveWorkspaceQuiet(options.workspace);
   if (!workspacePath) {
     throw new PlanError('No workspace here. Run this inside a workspace folder, or pass --workspace <path>.', 'not_found');
@@ -207,10 +245,10 @@ async function contextFor(options: PlanCommonOptions): Promise<PlanCommandContex
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   return {
     workspacePath,
-    actor: resolvePlanActor(options, process.env, interactive),
+    actor: resolvePlanActor(options, process.env, interactive, verb),
     interactive,
     json: Boolean(options.json),
-    confirmAsUser: (question) => confirm({ message: question, default: false }),
+    confirmAsUser: (question) => confirmWithin(question),
     print: (text) => console.log(text),
   };
 }
@@ -241,7 +279,7 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
   const plan = common(program
     .command('plan')
     .description('Read and change the workspace plan, one item at a time')
-    .addHelpText('after', `\n${renderPlanRules()}\n`));
+    .addHelpText('after', `\n${renderPlanRules()}\n\n${WHO_ACTS}\n`));
 
   const onError = (json?: boolean) => async (error: unknown) => {
     if (json) {
@@ -252,11 +290,14 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
     await fail(error);
   };
 
-  const action = <O extends PlanCommonOptions, A extends unknown[]>(handler: (context: PlanCommandContext, options: O, ...args: A) => Promise<void>) =>
+  const action = <O extends PlanCommonOptions, A extends unknown[]>(
+    handler: (context: PlanCommandContext, options: O, ...args: A) => Promise<void>,
+    verb: { userOnly?: boolean } = {},
+  ) =>
     async (...args: [...A, O, Command]) => {
       const options = (args[args.length - 1] as Command).optsWithGlobals<O>();
       const positional = args.slice(0, -2) as unknown as A;
-      await run(async () => handler(await contextFor(options), options, ...positional), onError(options.json))();
+      await run(async () => handler(await contextFor(options, verb), options, ...positional), onError(options.json))();
     };
 
   common(plan.command('show', { isDefault: true }).description('Show the plan: Goal, Needs you, Milestones, Other open work, Done and dropped, What changed')
@@ -294,17 +335,17 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
     .action(action<PlanCommonOptions & { resolution?: string; message?: string }, [string, string[]]>((context, options, id, words) =>
       planChange(context, { type: 'done', id, resolution: textOf(options.resolution, options.message, words) })));
 
-  common(plan.command('answer').description('Answer a question').argument('<code>').argument('[answer...]')
+  common(plan.command('answer').description('Answer a question (from an AI, the user\'s question gets a proposed answer they accept)').argument('<code>').argument('[answer...]')
     .option('-m, --message <text>', 'The answer'))
     .action(action<PlanCommonOptions & { message?: string }, [string, string[]]>((context, options, id, words) =>
       planChange(context, { type: 'answer', id, answer: textOf(options.message, words) })));
 
-  common(plan.command('drop').description('Drop an item that is not needed, with why').argument('<code>').argument('[reason...]')
+  common(plan.command('drop').description('Drop an item that is not needed, with why (from an AI, a milestone or the user\'s item becomes a proposal)').argument('<code>').argument('[reason...]')
     .option('--reason <text>', 'Why it is not needed').option('-m, --message <text>', 'Same as --reason'))
     .action(action<PlanCommonOptions & { reason?: string; message?: string }, [string, string[]]>((context, options, id, words) =>
       planChange(context, { type: 'drop', id, reason: textOf(options.reason, options.message, words) })));
 
-  common(plan.command('later').description('Move an item to later, with when to look again').argument('<code>').argument('[when...]')
+  common(plan.command('later').description('Move an item to later, with when to look again (from an AI, a milestone or the user\'s item becomes a proposal)').argument('<code>').argument('[when...]')
     .option('--until <text>', 'When to look at it again').option('-m, --message <text>', 'Same as --until'))
     .action(action<PlanCommonOptions & { until?: string; message?: string }, [string, string[]]>((context, options, id, words) =>
       planChange(context, { type: 'later', id, revisitWhen: textOf(options.until, options.message, words) })));
@@ -314,7 +355,7 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
     .action(action<PlanCommonOptions & { reason?: string; message?: string }, [string, string[]]>((context, options, id, words) =>
       planChange(context, { type: 'block', id, reason: textOf(options.reason, options.message, words) })));
 
-  common(plan.command('reopen').description('Reopen finished, dropped or later work, with what is wrong').argument('<code>').argument('[reason...]')
+  common(plan.command('reopen').description('Reopen finished, dropped or later work, with what is wrong (from an AI, a milestone or the user\'s item becomes a proposal)').argument('<code>').argument('[reason...]')
     .option('--reason <text>', 'What is wrong').option('-m, --message <text>', 'Same as --reason'))
     .action(action<PlanCommonOptions & { reason?: string; message?: string }, [string, string[]]>((context, options, id, words) =>
       planChange(context, { type: 'reopen', id, reason: textOf(options.reason, options.message, words) })));
@@ -332,13 +373,13 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
         ...(options.owner !== undefined ? { owner: options.owner } : {}),
       })));
 
-  common(plan.command('accept').description('Accept what an AI proposed (the user only)').argument('<code>'))
-    .action(action<PlanCommonOptions, [string]>((context, _options, id) => planChange(context, { type: 'accept', id })));
+  common(plan.command('accept').description('Accept what an AI proposed (the user only: an AI tells the user it waits for them)').argument('<code>'))
+    .action(action<PlanCommonOptions, [string]>((context, _options, id) => planChange(context, { type: 'accept', id }), { userOnly: true }));
 
-  common(plan.command('reject').description('Send a proposal back, with what still needs doing (the user only)').argument('<code>').argument('[reason...]')
+  common(plan.command('reject').description('Send a proposal back, with what still needs doing (the user only: an AI tells the user it waits for them)').argument('<code>').argument('[reason...]')
     .option('--reason <text>', 'What still needs doing').option('-m, --message <text>', 'Same as --reason'))
     .action(action<PlanCommonOptions & { reason?: string; message?: string }, [string, string[]]>((context, options, id, words) =>
-      planChange(context, { type: 'reject', id, reason: textOf(options.reason, options.message, words) })));
+      planChange(context, { type: 'reject', id, reason: textOf(options.reason, options.message, words) }), { userOnly: true }));
 
   common(plan.command('log').description('Show the history of one item, or the latest changes').argument('[code]'))
     .action(action<PlanCommonOptions, [string | undefined]>((context, _options, id) => planLog(context, id)));

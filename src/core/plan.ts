@@ -466,7 +466,8 @@ const PROPOSED: Record<ProposalAction, (label: string) => string> = {
 
 function proposedMessage(item: PlanItem, action: ProposalAction): string {
   const whose = item.kind === 'milestone' ? 'A milestone is the user\'s decision' : 'This item is the user\'s decision';
-  return `${sentence(PROPOSED[action](itemLabel(item)))} ${whose}: they see it under Needs you and accept it or send it back.`;
+  return `${sentence(PROPOSED[action](itemLabel(item)))} ${whose}: they see it under Needs you and accept it or send it back. `
+    + 'Your part is done: tell the user it waits for them. Do not look for another way to close it.';
 }
 
 function clearOpenNotes(item: PlanItem): void {

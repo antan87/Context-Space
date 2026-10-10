@@ -23,6 +23,7 @@ import { statusCommand } from './commands/status.js';
 import { verifyCommand } from './commands/verify.js';
 import { flowCommand } from './commands/flow.js';
 import { registerPlanCommand } from './commands/plan.js';
+import { runsInsideAiTool } from './utils/ai-tool.js';
 import { uiCommand } from './commands/ui.js';
 import { tuiCommand } from './commands/tui.js';
 import { syncCommand } from './commands/sync.js';
@@ -862,8 +863,9 @@ mcp
   .action(runAction(mcpSetupCommand));
 
 program.hook('postAction', async (thisCommand, actionCommand) => {
-  // Skip update check for non-TTY streams and MCP runs to prevent contaminating stdout stream
-  if (!process.stdout.isTTY || actionCommand.name() === 'data' || actionCommand.parent?.name() === 'diagnostics'
+  // Skip update check for non-TTY streams and MCP runs to prevent contaminating stdout stream, and inside
+  // AI tools, which may run commands in a terminal but have no use for the banner.
+  if (!process.stdout.isTTY || runsInsideAiTool() || actionCommand.name() === 'data' || actionCommand.parent?.name() === 'diagnostics'
       || (actionCommand.name() === 'run' && actionCommand.parent?.name() === 'mcp')) {
     return;
   }
