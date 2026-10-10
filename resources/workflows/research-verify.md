@@ -9,8 +9,8 @@ proposing optimization. Distinguish observations from inference.
 
 Return the agreed findings, evidence, remaining questions, and options for the next
 stage. Investigation does not automatically authorize implementation. If the user
-has authorized the next stage, update the current assignment and existing milestone
-plan and proceed within that scope. Otherwise stop at the agreed output.
+has authorized the next stage, update the current assignment and the existing plan
+(`ctxspace plan`) and proceed within that scope. Otherwise stop at the agreed output.
 
 Work directly by default. An independent specialist can investigate a bounded
 question when delegation is permitted and materially helps; a research agent team

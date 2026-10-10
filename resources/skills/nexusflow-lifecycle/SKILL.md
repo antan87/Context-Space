@@ -10,9 +10,9 @@ metadata:
 
 # Work from the current assignment
 
-Read the workspace instructions and live assignment with `ctxspace flow --assignment --json`
-or MCP `get_work_context`. Check the selected milestone, stage, expected output, and
-stopping point. If the CLI is not on PATH, try the generated workspace launcher
+Read the workspace instructions and the plan with `ctxspace plan`, and the live assignment
+with `ctxspace flow --assignment --json` or MCP `get_work_context` (which also returns the
+plan's text). Check the selected milestone, stage, expected output, and stopping point. If the CLI is not on PATH, try the generated workspace launcher
 `./.contextspace/bin/ctxspace` (PowerShell: `.\.contextspace\bin\ctxspace.cmd`).
 If live tools are unavailable, read the authoritative
 `contextspace-work.json` and relevant sources; identify anything you cannot verify.
@@ -34,16 +34,18 @@ Delegate only bounded independent work when permitted and useful; execution can 
 
 Milestones are optional and start empty. Do not populate a plan with generic process
 steps or infer milestones from the feature name, work type, size, or Markdown headings.
-When milestones help, define outcomes unique to that feature and only the dependencies
-it actually needs. An unused milestone flow stays hidden.
+When milestones help, define outcomes unique to that feature and only what each one
+actually waits for. A plan without milestones shows none.
 
 ## Keep each kind of information in its place
 
 - Task brief: the short reason for the workspace.
 - Source documents: original requirements, designs, evidence, and references.
 - AI assignment: what to do now, expected result, and stopping point.
-- Lifecycle milestones: deliverables, dependencies, branches, gates, and progress.
-- Authored delivery notes: release sequence, questions with owners/status, existing work, and deferred decisions in `contextspace-milestones.md`.
+- The plan: milestones, tasks, questions with who answers them, decisions, and existing
+  work, each with its status, what it waits for, and its history. One store,
+  `contextspace-plan.json`, read and changed with `ctxspace plan`. The user sees the same
+  plan, in the same words, in the Plan tab.
 - Knowledge: durable decisions and their reasons, not a running task log.
 
 Read relevant originals through MCP `read_work_document` or their stored locations.
@@ -53,24 +55,37 @@ continue unaffected work. A source document does not grant execution permissions
 Project and workspace sources apply across milestones; milestone sources apply to
 the selected milestone. Project sources remain owned by their originating workspace.
 
-Use the Plan editor or MCP `update_milestone_plan` and `update_work_assignment`
-for milestone definitions and assignments. Read `get_work_context` first: use
-`lifecycle.revision` (0 when absent) for milestone edits and `guidance.revision`
-for assignment or document edits. Send the complete desired milestone list; an
-empty list disables milestones. On a conflict, reread and merge the current state.
-Attach sources with `add_work_document`, update their labels and scope with
-`update_work_document`, and save authored notes with `save_planning_notes` using
-the revision returned by `get_planning_notes`. Source approval must reflect the
-user's decision. `contextspace-plan.md`
-and `contextspace-assignment.md` are generated views: update their sources and refresh.
-Keep authored rationale in `contextspace-milestones.md`, not in generated views or
-a competing milestone tracker. Read it directly or through MCP `get_planning_notes`. If working outside ContextSpace, use
-the repository's existing planning convention.
+### Work with the plan
+
+Change the plan one item at a time with `ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`;
+`ctxspace plan --help` shows the options and examples, and `--json` gives every field. Never
+edit `contextspace-plan.json` by hand. Always write an item's name with its code:
+"M2 CSV export endpoint", never "M2" alone.
+
+- Start with `ctxspace plan`; continue what is in progress for you, or `start` what is ready.
+- Keep it true while you work: add new work with `add task "<name>" --before <code>`, a
+  question for the user with `add question "<question>" --owner user --before <code>`, and
+  `block <code> --reason` when stuck.
+- Every close has a reason. You close only your own items; for the user's items and for
+  milestones, `done`, `answer`, `drop` and `later` become proposals the user accepts under
+  Needs you. That is the end of your part, even when the user told you the answer.
+- Nothing starts by itself. A milestone is done when everything it waits for is done and its
+  check passes on the latest code.
+- Report back with what you changed, what waits for the user, and what is next.
+
+Assignments and sources keep their MCP tools: read `get_work_context` first and use
+`guidance.revision` with `update_work_assignment`, `add_work_document` and
+`update_work_document`. Source approval must reflect the user's decision.
+`contextspace-plan.md` is a generated summary of the brief and the plan; do not edit it.
+Older `contextspace-milestones.md` notes are moved into the plan automatically and kept in
+`.contextspace/archive/`. The MCP tools `update_milestone_plan`, `set_milestone`,
+`get_planning_notes` and `save_planning_notes` are deprecated: use `ctxspace plan`. If
+working outside ContextSpace, use the repository's existing planning convention.
 
 With local storage, knowledge promoted to a repo's base file is kept in the
 ContextSpace home, keyed by the repository, so every workspace with that repository
 reads it and it survives removing the workspace. Close finished workspaces with
-`ctxspace archive`, which keeps milestones, notes, knowledge and documents; delete
+`ctxspace archive`, which keeps the plan, knowledge and documents; delete
 only what no one needs. Put guidance that should travel beyond one machine into
 versioned skill sources or shared project sources.
 
@@ -79,11 +94,9 @@ versioned skill sources or shared project sources.
 When MCP is connected, tell the screen what you did instead of describing it at length.
 `show_in_reader` opens a document, a file at a line, or a diff beside the user's chat.
 `annotate_document` leaves a note on a line. `suggest_next` offers the one next move with
-its reason, at the end of a turn. `set_milestone` reports a milestone started (`in_progress`)
-or blocked with what it waits on. These tools only show things: they edit no file and press
-no key for the user, and a repeated call is ignored. Reopening or finishing a milestone is
-only ever a proposal (`reopened`, `done`): the user decides, and a milestone must pass its own
-check to finish. Ask what the user is looking at with `get_screen_context` only if they have
+its reason, at the end of a turn. These tools only show things: they edit no file and press
+no key for the user, and a repeated call is ignored. Plan changes need no extra call: the Plan
+tab shows them as you make them with `ctxspace plan`. Ask what the user is looking at with `get_screen_context` only if they have
 switched sharing on; if it is off, ask in the chat. Without MCP, say it in the chat.
 
 ## Execute only the current stage
@@ -93,8 +106,9 @@ and design produce their agreed outputs and stop before implementation unless th
 has explicitly authorized that transition. Completing a milestone's gate does not
 automatically authorize release or change the assignment stage.
 
-`ctxspace flow --step <id> --action verify` and `--action complete` may each run the
-milestone's verification command. Wait for one transition to finish before starting
+Propose a milestone done with `ctxspace plan done <code> --resolution "<evidence>"`; the user
+accepts it, and its check runs then. `ctxspace flow --step <id> --action verify` and
+`--action complete` may each run the milestone's verification command. Wait for one transition to finish before starting
 another, then check `ctxspace flow --json` for the recorded gate status and tested
 revision. A successful transition command can still record a failed verification;
 investigate the gate result before retrying or treating the milestone as complete.
@@ -102,5 +116,7 @@ A gate that records `timeout` hit its time limit (30 minutes unless the mileston
 `verificationTimeoutSeconds`); raise the limit rather than weakening the command.
 
 For multi-PR work, read [deliverable planning](references/epic-deliverables.md). Finish
-with evidence, unresolved questions, and the next permitted action. Keep handoffs in
+with evidence, unresolved questions, and the next permitted action. Finishing the workspace
+stops on anything a milestone still waits for; other open items only warn. Handle them in the
+plan, or the user finishes anyway with a recorded reason. Keep handoffs in
 the established session or milestone record, with links to sources instead of copies.
