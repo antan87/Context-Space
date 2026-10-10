@@ -74,14 +74,14 @@ const clickCross = async (page: Page, name: string) => {
 const current = (page: Page, name: string) => expect(session(page, name)).toHaveAttribute('aria-current', 'page');
 
 test.describe('the chat is the centre of a workspace', () => {
-  test('a workspace opens on its chat, with nothing open beside it', async ({ page }) => {
+  test('a workspace opens on its plan, with its sessions one click away', async ({ page }) => {
     await page.goto('/#/workspaces/alpha');
-    await expect(chatOf(page)).toBeVisible();
-    await current(page, 'alpha');
-    // The rail offers what can open beside the chat; the chat is the page, so it has no item and none is current.
-    await expect(workspaceNav(page).getByRole('link')).toHaveCount(5);
-    await expect(workspaceNav(page).locator('[aria-current="page"]')).toHaveCount(0);
-    // The address is left as it was given: no section is the chat.
+    await expect(page.getByRole('region', { name: 'The plan', exact: true })).toBeVisible();
+    // Nothing runs, so the sessions sit beside the plan instead of a chat.
+    await expect(chatOf(page)).toBeHidden();
+    await expect(page.getByRole('complementary', { name: 'Sessions' })).toBeVisible();
+    await expect(workspaceNav(page).getByRole('link', { name: 'Plan' })).toHaveAttribute('aria-current', 'page');
+    // The address is left as it was given: no section is the plan.
     await expect(page).toHaveURL(/#\/workspaces\/alpha$/);
   });
 
@@ -234,9 +234,11 @@ test.describe('the address says which chat is showing', () => {
     await page.goto('/#/workspaces/old/chat');
     await expect(chatOf(page)).toBeHidden();
     await expect(workspaceNav(page).getByRole('link', { name: /^Chat/ })).toHaveCount(0);
+    // With no section, an archived workspace opens on its record, not on the plan where an active one opens.
     await page.goto('/#/workspaces/old');
     await expect(chatOf(page)).toBeHidden();
     await expect(workspaceNav(page).getByRole('link', { name: 'Record' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('complementary', { name: 'Sessions' })).toHaveCount(0);
   });
 
   test('an old link to a section that no longer exists lands on the overview, not the chat', async ({ page }) => {

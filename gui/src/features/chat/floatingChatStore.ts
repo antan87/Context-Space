@@ -117,7 +117,8 @@ export const floatingChatStore = {
     return () => listeners.delete(listener);
   },
 
-  openTerminal: (branchName: string, target = 'shell', sessionId?: string, cwd?: string) => {
+  /** Starts `target` in the workspace's session tabs; `prompt` is the first message of a new session. */
+  openTerminal: (branchName: string, target = 'shell', sessionId?: string, cwd?: string, prompt?: string) => {
     const pending = currentState.terminalLaunches[branchName];
     if (sessionId && pending?.target === target && pending.sessionId === sessionId) {
       floatingChatStore.openCli(branchName);
@@ -125,7 +126,12 @@ export const floatingChatStore = {
     }
     floatingChatStore.open(branchName);
     floatingChatStore.setHarness(branchName, target);
-    updateState(prev => ({ ...prev, modes: { ...prev.modes, [branchName]: 'cli' }, terminalLaunches: { ...prev.terminalLaunches, [branchName]: { id: crypto.randomUUID(), target, sessionId, cwd } } }));
+    updateState(prev => ({ ...prev, modes: { ...prev.modes, [branchName]: 'cli' }, terminalLaunches: { ...prev.terminalLaunches, [branchName]: { id: crypto.randomUUID(), target, sessionId, cwd, ...(prompt ? { prompt } : {}) } } }));
+  },
+  /** Brings a running terminal of the workspace on screen in its session tabs. */
+  showTerminal: (branchName: string, terminalId: string, target: string) => {
+    floatingChatStore.open(branchName);
+    updateState(prev => ({ ...prev, modes: { ...prev.modes, [branchName]: 'cli' }, terminalLaunches: { ...prev.terminalLaunches, [branchName]: { id: crypto.randomUUID(), target, terminalId } } }));
   },
   consumeTerminalLaunch: (branchName: string, id: string) => {
     updateState(prev => {

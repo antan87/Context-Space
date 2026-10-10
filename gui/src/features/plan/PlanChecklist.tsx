@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronRight, CircleHelp, ListPlus, RefreshCw } from 'lucide-react';
+import { ChevronRight, CircleHelp, ListPlus, Play, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { Input } from '../../components/ui/input.js';
@@ -19,12 +19,13 @@ function Section({ title, hint, children }: { title: string; hint?: ReactNode; c
   </section>;
 }
 
-/** One item as a row: the whole row opens it. Names first; the code is small. */
-function ItemRow({ item, view, onOpen }: { item: PlanItemView; view: PlanView; onOpen: () => void }) {
+/** One item as a row: the whole row opens it. Names first; the code is small. A ready item can start a session. */
+function ItemRow({ item, view, onOpen, onStart }: { item: PlanItemView; view: PlanView; onOpen: () => void; onStart?: (item: PlanItemView) => void }) {
   const { icon: Icon, tone } = itemLook(item);
   const finished = item.status === 'done' || item.status === 'dropped';
-  return <li>
-    <button type="button" onClick={onOpen} className="group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring">
+  const ready = Boolean(onStart) && view.ready.includes(item.label);
+  return <li className="flex items-start gap-1">
+    <button type="button" onClick={onOpen} className="group flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring">
       <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${TONE_CLASS[tone]}`} />
       <span className="min-w-0 flex-1">
         <span className={`text-sm ${finished ? 'text-muted-foreground' : 'text-foreground'}`}>{item.title}</span>
@@ -33,6 +34,7 @@ function ItemRow({ item, view, onOpen }: { item: PlanItemView; view: PlanView; o
       </span>
       <ChevronRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
     </button>
+    {ready && <Button size="xs" variant="ghost" className="mt-1 shrink-0 text-muted-foreground" aria-label={`Start a session on ${item.label}`} onClick={() => onStart!(item)}><Play />Start</Button>}
   </li>;
 }
 
@@ -83,7 +85,11 @@ function ProposalRow({ item, busy, readOnly, onAccept, onReject, onOpen }: {
  * The Plan tab: Needs you, Milestones in order, Other open work, Done and dropped, What changed. The
  * same plan, in the same words, that AI tools read and change with `ctxspace plan`.
  */
-export function PlanChecklist({ workspaceId, readOnly = false, onChanged }: { workspaceId: string; readOnly?: boolean; onChanged?: () => void }) {
+export function PlanChecklist({ workspaceId, readOnly = false, onChanged, onStartSession }: {
+  workspaceId: string; readOnly?: boolean; onChanged?: () => void;
+  /** Starts a session on a ready item; without it, rows have no Start. */
+  onStartSession?: (item: PlanItemView) => void;
+}) {
   const plan = usePlan(workspaceId);
   const change = useChangePlan(workspaceId);
   const runCheck = useRunMilestoneCheck(workspaceId);
@@ -161,11 +167,11 @@ export function PlanChecklist({ workspaceId, readOnly = false, onChanged }: { wo
       {view.milestones.length === 0 ? <div className="flex items-center gap-2 px-2">
         <p className="text-sm text-muted-foreground">No milestones yet. Most work does not need them; add some when it has steps worth checking off.</p>
         {!readOnly && <Button size="xs" variant="outline" onClick={() => setAdding(true)}>Add a milestone</Button>}
-      </div> : <ol>{view.milestones.map((item) => <ItemRow key={item.id} item={item} view={view} onOpen={() => setOpenId(item.id)} />)}</ol>}
+      </div> : <ol>{view.milestones.map((item) => <ItemRow key={item.id} item={item} view={view} onOpen={() => setOpenId(item.id)} onStart={readOnly ? undefined : onStartSession} />)}</ol>}
     </Section>
 
     {view.otherOpen.length > 0 && <Section title="Other open work">
-      <ul>{view.otherOpen.map((item) => <ItemRow key={item.id} item={item} view={view} onOpen={() => setOpenId(item.id)} />)}</ul>
+      <ul>{view.otherOpen.map((item) => <ItemRow key={item.id} item={item} view={view} onOpen={() => setOpenId(item.id)} onStart={readOnly ? undefined : onStartSession} />)}</ul>
     </Section>}
 
     {closedOther.length > 0 && <Section title="Done and dropped" hint={<button type="button" className="text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setShowDone(!showDone)}>

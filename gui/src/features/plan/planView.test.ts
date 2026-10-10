@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeText, forYou, itemLook, milestoneProgress, planNames, splitPlanCodes, stateLine, whenText, whoName, NEEDS_YOU_LOOK, STATUS_LOOK } from './planView.js';
+import { changeText, forYou, itemLook, startableItems, workingOn, milestoneProgress, planNames, splitPlanCodes, stateLine, whenText, whoName, NEEDS_YOU_LOOK, STATUS_LOOK } from './planView.js';
 import type { PlanItemView, PlanWords } from './planTypes.js';
 
 const words: PlanWords = {
@@ -90,5 +90,28 @@ describe('splitPlanCodes', () => {
   it('leaves codes it does not know, and parts of other words, alone', () => {
     expect(splitPlanCodes('M3 and M22 and xM2 and M2-b', names)).toEqual(['M3 and M22 and xM2 and M2-b']);
     expect(splitPlanCodes('nothing here', new Map())).toEqual(['nothing here']);
+  });
+});
+
+describe('what a tool works on and what a session can start on', () => {
+  const started = (by: string, at: string) => [{ at, by, action: 'started' }];
+  const view = {
+    milestones: [
+      item({ id: 'M1', title: 'Query', status: 'done' }),
+      item({ id: 'M2', title: 'Endpoint', status: 'in_progress', history: started('claude', '2026-10-10T10:00:00.000Z') }),
+      item({ id: 'M3', title: 'Button', label: 'M3 Button' }),
+    ],
+    otherOpen: [item({ id: 'T1', kind: 'task', title: 'Queue', label: 'T1 Queue', status: 'in_progress', history: started('Claude', '2026-10-10T11:00:00.000Z') })],
+    needsYou: [], closed: [], ready: ['M3 Button'],
+  } as unknown as Parameters<typeof startableItems>[0];
+
+  it('names the items a tool started, newest first', () => {
+    expect(workingOn(view, 'claude').map((entry) => entry.id)).toEqual(['T1', 'M2']);
+    expect(workingOn(view, 'codex')).toEqual([]);
+    expect(workingOn(undefined, 'claude')).toEqual([]);
+  });
+
+  it('offers ready items first, then what is in progress', () => {
+    expect(startableItems(view).map((entry) => entry.id)).toEqual(['M3', 'M2', 'T1']);
   });
 });

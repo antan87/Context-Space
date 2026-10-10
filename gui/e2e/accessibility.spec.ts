@@ -47,6 +47,8 @@ async function mockChatStrip(page: Page) {
     + frame('screen', { event: { id: 'p1', timestamp: '2026-10-02T11:40:00.000Z', harness: 'claude', event: 'milestone_proposal', payload: { stepId: 'a', proposal: 'reopen', reason: 'The expiry case is not covered' } } }, '2026-10-02T11:40:00.000Z');
   await page.route('**/api/terminals/bootstrap', (route) => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/terminals/demo/status', (route) => route.fulfill({ json: { available: true, sessions: [terminal], targets: [{ id: 'shell', name: 'Shell', available: true, reason: null }] } }));
+  // The same shell as a running terminal: a running session shows beside the plan.
+  await page.route('**/api/terminals/running', (route) => route.fulfill({ json: { sessions: [{ ...terminal, startedAt: '2026-10-02T09:00:00.000Z', attached: true }] } }));
   await page.route('**/api/workspace/demo/progress-facts', (route) => route.fulfill({ json: { facts: {
     workspaceId: 'demo', generatedAt: '2026-10-02T12:00:00.000Z', milestones, currentMilestoneId: 'd',
     counts: { total: 5, done: 1, inProgress: 1, reopened: 1, blocked: 1, upcoming: 1 },

@@ -168,3 +168,22 @@ export function splitPlanCodes(text: string, names: Map<string, string>): PlanCo
   if (last < text.length) parts.push(text.slice(last));
   return parts.length ? parts : [text];
 }
+
+/** What a tool is working on, by the plan: the in-progress items it started, newest first. */
+export function workingOn(view: Pick<PlanView, 'milestones' | 'otherOpen' | 'needsYou'> | undefined, tool: string): PlanItemView[] {
+  if (!view) return [];
+  const started = (item: PlanItemView) => [...(item.history ?? [])].reverse().find((entry) => entry.action === 'started');
+  const seen = new Set<string>();
+  return [...view.milestones, ...view.otherOpen, ...view.needsYou]
+    .filter((item) => !seen.has(item.id) && seen.add(item.id) && item.status === 'in_progress' && started(item)?.by.toLowerCase() === tool.toLowerCase())
+    .sort((a, b) => (started(b)?.at ?? '').localeCompare(started(a)?.at ?? ''));
+}
+
+/** Items a new session can start on: ready milestones and tasks, then what is in progress, without items waiting for the user. */
+export function startableItems(view: PlanView | undefined): PlanItemView[] {
+  if (!view) return [];
+  const all = [...view.milestones, ...view.otherOpen];
+  const ready = all.filter((item) => view.ready.includes(item.label));
+  const going = all.filter((item) => item.status === 'in_progress' && !item.proposal);
+  return [...ready, ...going.filter((item) => !ready.includes(item))];
+}

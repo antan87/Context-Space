@@ -10,10 +10,10 @@ describe('chatPath', () => {
 });
 
 describe('showsChatOf', () => {
-  it('is true for the chat section and for no section, with or without a trailing slash', () => {
+  it('is true for the chat section, with or without a trailing slash, and not for no section, which opens the plan', () => {
     expect(showsChatOf('/workspaces/alpha/chat', 'alpha')).toBe(true);
-    expect(showsChatOf('/workspaces/alpha', 'alpha')).toBe(true);
-    expect(showsChatOf('/workspaces/alpha/', 'alpha')).toBe(true);
+    expect(showsChatOf('/workspaces/alpha', 'alpha')).toBe(false);
+    expect(showsChatOf('/workspaces/alpha/', 'alpha')).toBe(false);
     expect(showsChatOf('/workspaces/alpha/chat/', 'alpha')).toBe(true);
     expect(showsChatOf(chatPath('feature/x y'), 'feature/x y')).toBe(true);
   });
@@ -109,16 +109,16 @@ describe('browserPath', () => {
 
   it('agrees with showsChatOf about which address is a workspace\'s chat', async () => {
     const { browserPath, showsChatOf } = await import('./chatRoute');
-    expect(showsChatOf(browserPath('#/workspaces/alpha'), 'alpha')).toBe(true);
+    expect(showsChatOf(browserPath('#/workspaces/alpha'), 'alpha')).toBe(false);
     expect(showsChatOf(browserPath('#/workspaces/alpha/chat'), 'alpha')).toBe(true);
     expect(showsChatOf(browserPath('#/workspaces/beta/chat'), 'alpha')).toBe(false);
   });
 });
 
 describe('parseWorkspacePath', () => {
-  it('names the workspace and the section, and a missing section is the chat', () => {
-    expect(parseWorkspacePath('/workspaces/alpha')).toEqual({ workspace: 'alpha', section: 'chat' });
-    expect(parseWorkspacePath('/workspaces/alpha/')).toEqual({ workspace: 'alpha', section: 'chat' });
+  it('names the workspace and the section, and a missing section is the plan, where a workspace opens', () => {
+    expect(parseWorkspacePath('/workspaces/alpha')).toEqual({ workspace: 'alpha', section: 'plan' });
+    expect(parseWorkspacePath('/workspaces/alpha/')).toEqual({ workspace: 'alpha', section: 'plan' });
     expect(parseWorkspacePath('/workspaces/alpha/plan')).toEqual({ workspace: 'alpha', section: 'plan' });
     expect(parseWorkspacePath('/workspaces/feature%2Fx%20y/changes')).toEqual({ workspace: 'feature/x y', section: 'changes' });
   });
@@ -133,7 +133,9 @@ describe('parseWorkspacePath', () => {
 describe('showsChatFor', () => {
   it('is true for the workspace\'s own chat, whether or not the chat is known to be on screen', () => {
     expect(showsChatFor('/workspaces/alpha/chat', 'alpha', false)).toBe(true);
-    expect(showsChatFor('/workspaces/alpha', 'alpha', false)).toBe(true);
+    // No section opens the plan: the chat is there only when it shows beside it.
+    expect(showsChatFor('/workspaces/alpha', 'alpha', false)).toBe(false);
+    expect(showsChatFor('/workspaces/alpha', 'alpha', true)).toBe(true);
   });
 
   it('is true for another part of the same workspace only while the chat is showing beside it', () => {
@@ -149,7 +151,7 @@ describe('showsChatFor', () => {
 
   it('agrees with showsChatOf about the chat section itself', () => {
     expect(showsChatOf('/workspaces/alpha/plan', 'alpha')).toBe(false);
-    expect(showsChatOf('/workspaces/alpha', 'alpha')).toBe(true);
+    expect(showsChatOf('/workspaces/alpha/chat', 'alpha')).toBe(true);
   });
 });
 
@@ -198,10 +200,10 @@ describe('pathForSwitchingTo', () => {
     expect(pathForSwitchingTo('beta', '/workspaces/alpha/chat')).toBe('/workspaces/beta/chat');
   });
 
-  it('opens the chat from a page that is not a workspace, or a workspace with no part named', () => {
-    expect(pathForSwitchingTo('beta', '/overview')).toBe('/workspaces/beta/chat');
-    expect(pathForSwitchingTo('beta', '/workspaces/alpha')).toBe('/workspaces/beta/chat');
-    expect(pathForSwitchingTo('beta', '/settings')).toBe('/workspaces/beta/chat');
+  it('opens the plan from a page that is not a workspace, or a workspace with no part named', () => {
+    expect(pathForSwitchingTo('beta', '/overview')).toBe('/workspaces/beta/plan');
+    expect(pathForSwitchingTo('beta', '/workspaces/alpha')).toBe('/workspaces/beta/plan');
+    expect(pathForSwitchingTo('beta', '/settings')).toBe('/workspaces/beta/plan');
   });
 
   it('is not fooled by a workspace whose name starts with chat', () => {
