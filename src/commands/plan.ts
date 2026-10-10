@@ -68,6 +68,20 @@ export const WHO_ACTS = [
   'The user can act as themselves with --as user in their own terminal.',
 ].join('\n');
 
+/** Examples in the help, so nobody has to search for how a change is typed. */
+export const PLAN_EXAMPLES = [
+  'Examples:',
+  '  ctxspace plan                                                read the plan',
+  '  ctxspace plan add task "Rate limit for logins" --before M2   M2 then waits for the new task',
+  '  ctxspace plan add question "Which email provider?" --owner user --before M3',
+  '  ctxspace plan start T1',
+  '  ctxspace plan done T1 --resolution "Limit is 5 tries a minute; tests pass"',
+  '  ctxspace plan answer Q2 "Use the company SMTP server"',
+  '  ctxspace plan block M3 --reason "Waiting for the design"',
+  '  ctxspace plan later D1 --until "after the first release"',
+  '  ctxspace plan drop M4 --reason "Covered by the new login page"',
+].join('\n');
+
 /** How each change is typed, shown when it is typed wrongly. */
 export const PLAN_USAGE: Record<string, string> = {
   add: 'ctxspace plan add <milestone|task|question|decision|existing> "<name>" [--after M1] [--before M2] [--owner user|agent]',
@@ -281,7 +295,7 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
   const plan = common(program
     .command('plan')
     .description('Read and change the workspace plan, one item at a time')
-    .addHelpText('after', `\n${renderPlanRules()}\n\n${WHO_ACTS}\n`));
+    .addHelpText('after', `\n${PLAN_EXAMPLES}\n\n${renderPlanRules()}\n\n${WHO_ACTS}\n`));
 
   const onError = (json?: boolean) => async (error: unknown) => {
     if (json) {

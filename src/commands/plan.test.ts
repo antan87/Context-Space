@@ -278,6 +278,7 @@ describe('the command line', () => {
     plan.outputHelp();
     expect(help).toContain('1. Every close has a reason. Nothing is deleted.');
     expect(help).toContain('Who acts: every change is made as the AI');
+    expect(help).toContain('ctxspace plan add task "Rate limit for logins" --before M2   M2 then waits for the new task');
     expect(help).not.toContain('--harness');
     expect(help).not.toMatch(/^\s+--as <who>/m);
     expect(help).toContain('accept');
