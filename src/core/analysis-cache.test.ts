@@ -192,3 +192,91 @@ describe('analysis-cache', () => {
     });
   });
 });
+
+describe('getRepoFingerprint where a file cannot be opened without following links', () => {
+  const dirtyStatus = (stdout: string) => vi.mocked(execa).mockImplementation((async (_cmd: any, args: any) =>
+    args[0] === 'rev-parse' ? { stdout: 'abc123\n' } : { stdout }) as any);
+  const stat = (over: Record<string, number> = {}) => ({ size: 10, mtimeMs: 1000, ctimeMs: 1000, ino: 7, ...over }) as any;
+  const windows = { hasNoFollow: false } as const;
+  const metadata = { hasNoFollow: false, unsafeRead: 'metadata' } as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.readlink).mockRejectedValue(Object.assign(new Error('not a link'), { code: 'EINVAL' }));
+    vi.mocked(fs.lstat).mockResolvedValue(stat());
+    dirtyStatus(' M src/file1.ts\0');
+  });
+
+  it('gives up by default, which is what reusing a cached analysis needs', async () => {
+    expect(await getRepoFingerprint('/ws/repo-1', windows)).toBeNull();
+    expect(fs.lstat).not.toHaveBeenCalled();
+    expect(fs.readFile).not.toHaveBeenCalled();
+  });
+
+  it('with the metadata form, fingerprints an uncommitted file without opening it', async () => {
+    const fp = await getRepoFingerprint('/ws/repo-1', metadata);
+
+    expect(fp).toMatch(/^nf\S+:abc123\+[0-9a-f]{12}$/);
+    expect(fs.readFile).not.toHaveBeenCalled();
+  });
+
+  it('is the same fingerprint every time while nothing changes, so a refresh can settle on it', async () => {
+    expect(await getRepoFingerprint('/ws/repo-1', metadata)).toBe(await getRepoFingerprint('/ws/repo-1', metadata));
+  });
+
+  it.each([
+    ['its size', { size: 11 }],
+    ['its modified time', { mtimeMs: 2000 }],
+    ['its change time', { ctimeMs: 2000 }],
+    ['its identity on disk', { ino: 8 }],
+  ])('changes when %s changes', async (_what, change) => {
+    const before = await getRepoFingerprint('/ws/repo-1', metadata);
+    vi.mocked(fs.lstat).mockResolvedValue(stat(change));
+
+    expect(await getRepoFingerprint('/ws/repo-1', metadata)).not.toBe(before);
+  });
+
+  it('changes when a different file is the uncommitted one', async () => {
+    const before = await getRepoFingerprint('/ws/repo-1', metadata);
+    dirtyStatus(' M src/file2.ts\0');
+
+    expect(await getRepoFingerprint('/ws/repo-1', metadata)).not.toBe(before);
+  });
+
+  it('records a deleted file as missing, and that differs from the file being there', async () => {
+    const present = await getRepoFingerprint('/ws/repo-1', metadata);
+    vi.mocked(fs.lstat).mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+
+    const deleted = await getRepoFingerprint('/ws/repo-1', metadata);
+
+    expect(deleted).toMatch(/^nf\S+:abc123\+[0-9a-f]{12}$/);
+    expect(deleted).not.toBe(present);
+  });
+
+  it('still reads a symlink by its target, never through the link', async () => {
+    vi.mocked(fs.readlink).mockResolvedValue('../outside/secret' as any);
+
+    const fp = await getRepoFingerprint('/ws/repo-1', metadata);
+
+    expect(fp).toMatch(/^nf\S+:abc123\+[0-9a-f]{12}$/);
+    expect(fs.lstat).not.toHaveBeenCalled();
+    expect(fs.readFile).not.toHaveBeenCalled();
+  });
+
+  it('needs no file information for a clean tree', async () => {
+    dirtyStatus('');
+
+    expect(await getRepoFingerprint('/ws/repo-1', metadata)).toMatch(/^nf\S+:abc123$/);
+    expect(fs.lstat).not.toHaveBeenCalled();
+  });
+
+  it('keeps hashing the real bytes where files can be opened safely, whatever form is asked for', async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(Buffer.from('first') as any);
+    const before = await getRepoFingerprint('/ws/repo-1', { hasNoFollow: true, unsafeRead: 'metadata' });
+    vi.mocked(fs.readFile).mockResolvedValue(Buffer.from('second') as any);
+    const after = await getRepoFingerprint('/ws/repo-1', { hasNoFollow: true, unsafeRead: 'metadata' });
+
+    expect(fs.lstat).not.toHaveBeenCalled();
+    expect(after).not.toBe(before);
+  });
+});

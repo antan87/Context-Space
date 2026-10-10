@@ -49,6 +49,7 @@ import type { Feature, WorkspaceStatus } from '../types.js';
 import { RepositoriesPanel, RepositoriesToggle } from './WorkspaceRepositories.js';
 import { hasUnpreparedRepo } from '../features/worktrees/normalizeWorktrees.js';
 import { normalizeWorktreeGroups } from '../features/worktrees/normalizeWorktrees.js';
+import { hasBranchDrift } from '../features/worktrees/branchDrift.js';
 import { PrepareRepoDialog } from '../features/worktrees/PrepareRepoDialog.js';
 import { useWorkspaceRepositories } from '../lib/api/queries.js';
 import { useWorktreeNavigationState } from '../features/worktrees/worktreeStore.js';
@@ -176,6 +177,7 @@ function SidebarContents({
     return normalizeWorktreeGroups(activeWorkspace, workspaceStatuses[activeWorkspace.branchName], liveRepositories.data);
   }, [activeWorkspace, workspaceStatuses, liveRepositories.data]);
   const needsPreparing = !activeWorkspace?.archivedAt && hasUnpreparedRepo(repoGroups);
+  const branchChanged = !activeWorkspace?.archivedAt && hasBranchDrift(repoGroups);
 
   // Keyboard shortcut for toggling rail (Z or [)
   useEffect(() => {
@@ -538,7 +540,7 @@ function SidebarContents({
                           </Link>
                           <div className="flex items-center gap-1 shrink-0">
                             {isSelected && activeWorkspace && (
-                              <RepositoriesToggle branch={tab} open={repositoriesOpen} needsPreparing={needsPreparing} onToggle={() => setRepositoriesOpen((open) => !open)} />
+                              <RepositoriesToggle branch={tab} open={repositoriesOpen} needsPreparing={needsPreparing} branchChanged={branchChanged} onToggle={() => setRepositoriesOpen((open) => !open)} />
                             )}
                             {!ws?.archivedAt && (
                               <button
@@ -702,7 +704,7 @@ function SidebarContents({
                             </Link>
                             <div className="flex items-center gap-1 shrink-0">
                               {isSelected && activeWorkspace && (
-                                <RepositoriesToggle branch={w.branchName} open={repositoriesOpen} needsPreparing={needsPreparing} onToggle={() => setRepositoriesOpen((open) => !open)} />
+                                <RepositoriesToggle branch={w.branchName} open={repositoriesOpen} needsPreparing={needsPreparing} branchChanged={branchChanged} onToggle={() => setRepositoriesOpen((open) => !open)} />
                               )}
                               {!w.archivedAt && (
                                 <button

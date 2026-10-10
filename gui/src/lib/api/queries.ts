@@ -44,6 +44,7 @@ import type {
   WorkGuidance,
   ProgressFacts,
   RepoChangeListing,
+  WorkspaceBackupStatus,
 } from '../../types.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -717,6 +718,23 @@ export function useWorkGuidance(wsId: string | null) {
   });
 }
 
+// ─── Backup status (would the hand-written notes survive losing this computer) ──
+
+/**
+ * Read-only. The server has no route that adds a remote or pushes, so the notice built on this
+ * only shows the commands to run; it cannot run them.
+ */
+export function useWorkspaceBackup(workspaceId: string) {
+  return useQuery({
+    queryKey: ['workspace-backup', workspaceId],
+    queryFn: ({ signal }) =>
+      apiFetch<{ backup: WorkspaceBackupStatus }>(`/api/workspace/${encodeURIComponent(workspaceId)}/backup`, { signal }),
+    select: (data) => data.backup,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 // ─── Progress facts (the Where Are We strip) ──────────────────────────────
 
 export const progressFactsKey = (wsId: string | null) => ['progress-facts', wsId] as const;
@@ -813,7 +831,13 @@ export function useAcknowledgeQuestions(wsId: string) {
 
 // ─── Repository safety & delivery ─────────────────────────────────────────
 
-/** Live per-repo state: edit boundary, branch, HEAD and changed files. */
+/**
+ * Live per-repo state: edit boundary, branch, HEAD and changed files. Re-read every 30 seconds while the
+ * window is visible (TanStack pauses it in a hidden tab), so a folder switched to another branch from a
+ * terminal or an editor is flagged soon after, not only when the window next gets focus.
+ */
+export const WORKSPACE_REPOSITORIES_POLL_MS = 30_000;
+
 export function useWorkspaceRepositories(wsId: string | null) {
   return useQuery({
     queryKey: ['workspace-repositories', wsId],
@@ -821,6 +845,7 @@ export function useWorkspaceRepositories(wsId: string | null) {
       `/api/workspace/${encodeURIComponent(wsId!)}/repositories`, { signal },
     )).repositories,
     enabled: Boolean(wsId),
+    refetchInterval: WORKSPACE_REPOSITORIES_POLL_MS,
   });
 }
 

@@ -125,6 +125,25 @@ function describeAgentResult({ name, outcome }: AgentMcpResult): string {
   }
 }
 
+/**
+ * After registering on Windows, how to confirm the server really connected. Setup checks the agent's
+ * config, which proves the entry is there; only the agent itself can prove it starts through `cmd /c`.
+ */
+export function windowsVerificationHint(agents: AgentMcpResult[], platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') return [];
+  const added = agents.filter((agent) => agent.outcome.result === 'added');
+  if (added.length === 0) return [];
+  const listing = added
+    .filter((agent) => agent.id === 'claude' || agent.id === 'codex')
+    .map((agent) => `\`${agent.id} mcp list\``);
+  return [
+    'On Windows the server starts through `cmd /c npx`. To confirm it connected:',
+    `  1. Restart the agent${listing.length ? `, then run ${listing.join(' or ')} to see it listed` : ''}.`,
+    '  2. Ask the agent to call `get_work_context`. A real answer means it works.',
+    `  If it does not connect, run \`${CLI_NAME} doctor\` and report it as an issue.`,
+  ];
+}
+
 export async function mcpSetupCommand(options: McpSetupOptions = {}) {
   console.log(chalk.blue.bold(`\nSetting up ${BRAND_NAME} MCP Server for AI Assistants...`));
 
@@ -163,6 +182,7 @@ export async function mcpSetupCommand(options: McpSetupOptions = {}) {
   if (editorsUpdated + added > 0) {
     console.log(chalk.green.bold(`\nConfigured ${editorsUpdated + added} AI environment${editorsUpdated + added === 1 ? '' : 's'}.`));
     console.log(chalk.white('Restart running agent sessions, editors and Claude Desktop for the changes to take effect.'));
+    for (const line of windowsVerificationHint(agents)) console.log(chalk.white(line));
   } else if (failed > 0) {
     // The failure lines above say what went wrong.
   } else if (agentFound || editorsUnchanged > 0) {

@@ -2,6 +2,7 @@ import { GitBranch, Wrench } from 'lucide-react';
 
 import { IconButton } from '../../components/ui/icon-button.js';
 import type { RepoWorktreeGroup } from './types.js';
+import { isOffBranch } from './branchDrift.js';
 
 export interface RepositoriesListProps {
   groups: readonly RepoWorktreeGroup[];
@@ -29,6 +30,12 @@ export function RepositoriesList({ groups, onPrepare }: RepositoriesListProps) {
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium text-foreground">{group.repoName}</span>
               <span className="block truncate font-mono text-[10px] text-muted-foreground">{current?.branchName ?? 'unknown'}</span>
+              {/* Not "on the wrong branch": the person may have switched on purpose. It says what the workspace is for and lets them judge. */}
+              {!group.isHostRepo && isOffBranch(current) && (
+                <span className="block truncate text-[10px] text-warning" data-testid={`off-branch-${group.repoName}`}>
+                  workspace edits on <span className="font-mono">{current?.expectedBranch}</span>
+                </span>
+              )}
             </span>
             {state && <span className={group.isHostRepo ? 'shrink-0 text-warning' : 'shrink-0 text-muted-foreground'}>{state}</span>}
             {group.isHostRepo && onPrepare && (

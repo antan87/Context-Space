@@ -64,6 +64,9 @@ export function normalizeWorktreeGroups(
       isHostReadOnly: reference,
       commitSha: live?.headSha ?? '',
       dirtyFilesCount,
+      // The server decides what the expected branch is (the same answer the commit screen uses), so the two
+      // cannot disagree. A read-only reference is not edited here, so it has none.
+      ...(live?.editable && live.expectedBranch ? { expectedBranch: live.expectedBranch, onExpectedBranch: live.onExpectedBranch } : {}),
       isolatedAt: isolated?.isolatedAt || feature.createdAt,
     }];
 

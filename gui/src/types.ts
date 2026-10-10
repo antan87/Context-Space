@@ -299,6 +299,17 @@ export interface ResolvedCategoryRules {
 /** Classified outcome of a sync/rebase attempt for a repo (mirrors src/types.ts). */
 export type SyncStatus = 'up-to-date' | 'rebased' | 'conflict' | 'stash-conflict' | 'error';
 
+/** Would the notes a person wrote in a workspace survive losing this computer? Mirrors the server's WorkspaceBackupStatus. */
+export interface WorkspaceBackupStatus {
+  remote: { state: 'configured'; name: string; url: string } | { state: 'none' };
+  handWritten: { knowledgeEntries: number; planningNotes: boolean };
+  atRisk: boolean;
+  /** What is at risk, in one plain sentence. Null when nothing is. */
+  summary: string | null;
+  /** The summary plus the commands that fix it, for text output. */
+  message: string | null;
+}
+
 /** At-a-glance status for one workspace, from GET /api/workspaces/status. */
 export interface WorkspaceStatus {
   id: string;

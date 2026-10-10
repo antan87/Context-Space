@@ -146,6 +146,36 @@ export async function addWorkspaceRemote(workspacePath: string, url: string): Pr
   await execa('git', ['remote', 'add', 'origin', url], { cwd: workspacePath });
 }
 
+/** Whether the workspace artifact repository has a remote, and where. `url` is safe to display. */
+export type WorkspaceRemote =
+  | { state: 'configured'; name: string; url: string }
+  | { state: 'none' };
+
+/** A remote URL that is safe to show: a `user:token@` part is replaced, since a URL can embed a credential. */
+export function redactRemoteUrl(url: string): string {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1***@');
+}
+
+async function sameDirectory(a: string, b: string): Promise<boolean> {
+  const real = (target: string) => fs.realpath(target).catch(() => path.resolve(target));
+  return (await real(a)) === (await real(b));
+}
+
+/**
+ * Read-only: runs `git remote` and nothing that touches the network. A workspace folder that is
+ * not its own git repository (nothing has been committed yet) has no remote.
+ */
+export async function getWorkspaceRemote(workspacePath: string): Promise<WorkspaceRemote> {
+  const top = await execa('git', ['rev-parse', '--show-toplevel'], { cwd: workspacePath, reject: false });
+  if (top.exitCode !== 0 || !(await sameDirectory(top.stdout.trim(), workspacePath))) return { state: 'none' };
+  const list = await execa('git', ['remote'], { cwd: workspacePath, reject: false });
+  const names = list.exitCode === 0 ? list.stdout.split('\n').map((name) => name.trim()).filter(Boolean) : [];
+  const name = names.includes('origin') ? 'origin' : names[0];
+  if (!name) return { state: 'none' };
+  const url = await execa('git', ['remote', 'get-url', name], { cwd: workspacePath, reject: false });
+  return { state: 'configured', name, url: redactRemoteUrl(url.exitCode === 0 ? url.stdout.trim() : '') };
+}
+
 async function currentBranch(workspacePath: string): Promise<string> {
   const { stdout } = await execa('git', ['branch', '--show-current'], { cwd: workspacePath });
   const branch = stdout.trim();

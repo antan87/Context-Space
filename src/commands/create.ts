@@ -41,6 +41,7 @@ import type { AIAssistant, Feature, Project, RepoSelection, WorkspaceContext, Wo
 import { suggestWorkflow } from '../utils/workflow-advisor.js';
 import { getWorkflowTemplates, saveWorkflowTemplate } from '../utils/workflows.js';
 import { BRAND_NAME, CLI_NAME } from '../core/constants.js';
+import { offerBackupRemote } from './backup-offer.js';
 
 /**
  * Executes the full "create workspace" flow:
@@ -428,6 +429,10 @@ export async function createCommand(options: CreateCommandOptions = {}): Promise
     `\n  ${chalk.dim('To navigate:')} cd "${workspacePath}"`,
   );
   console.log();
+
+  // The notes written here live only in this folder's git history, so offer a place to keep them.
+  // The quick-fix flow is meant to be fast, so it skips the question.
+  await offerBackupRemote(workspacePath, { skip: isQuick });
 
   // ── 9. Start AI Assistant Session ───────────────────────────────────
   if (selectedAI.length > 0) {

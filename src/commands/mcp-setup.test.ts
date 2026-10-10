@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentMcpResult } from '../core/agent-mcp.js';
 import { registerAgentMcp } from '../core/agent-mcp.js';
-import { mcpSetupCommand } from './mcp.js';
+import { mcpSetupCommand, windowsVerificationHint } from './mcp.js';
 
 vi.mock('../core/agent-mcp.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../core/agent-mcp.js')>()),
@@ -161,5 +161,35 @@ describe('mcp setup output', () => {
       expect(output).toContain('"contextspace-mcp"');
       expect(output).toContain('"npx"');
     });
+  });
+});
+
+describe('windowsVerificationHint', () => {
+  const added = (id: AgentMcpResult['id']) => agent(id, { result: 'added', how: `${id} mcp add` });
+
+  it('says nothing off Windows, where nothing about the launcher is in doubt', () => {
+    expect(windowsVerificationHint([added('claude')], 'linux')).toEqual([]);
+    expect(windowsVerificationHint([added('claude')], 'darwin')).toEqual([]);
+  });
+
+  it('says nothing on Windows when nothing was registered', () => {
+    expect(windowsVerificationHint([agent('claude', { result: 'already', serverName: 'contextspace-mcp' }), agent('codex', { result: 'not-installed' })], 'win32')).toEqual([]);
+  });
+
+  it('tells a Windows user how to confirm the server connected, naming the agents that have a list command', () => {
+    const lines = windowsVerificationHint([added('claude'), added('codex'), added('antigravity')], 'win32').join('\n');
+
+    expect(lines).toContain('cmd /c npx');
+    expect(lines).toContain('`claude mcp list` or `codex mcp list`');
+    expect(lines).toContain('get_work_context');
+    expect(lines).toContain('ctxspace doctor');
+    expect(lines).not.toContain('antigravity mcp list');
+  });
+
+  it('still gives the confirmation steps when only an agent without a list command was registered', () => {
+    const lines = windowsVerificationHint([added('pi')], 'win32').join('\n');
+
+    expect(lines).toContain('get_work_context');
+    expect(lines).not.toContain('mcp list');
   });
 });

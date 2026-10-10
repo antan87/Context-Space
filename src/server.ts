@@ -2975,6 +2975,22 @@ app.post('/api/workspace/:id/lifecycle/step', async (c) => {
   }
 });
 
+// 13c-2a. Whether the notes a person wrote in this workspace would survive losing this computer.
+// Read-only on purpose. There is deliberately no route that adds a remote or pushes: this server
+// has no login, so such a route would let any local program send the workspace's notes to a
+// repository of its choosing. Setting a remote and pushing stay with `ctxspace remote add|push`.
+app.get('/api/workspace/:id/backup', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const config = await loadConfig();
+    const workspacePath = resolveWorkspacePath(config.workspacesDir, id);
+    const { describeWorkspaceBackup } = await import('./core/workspace-backup.js');
+    return c.json({ backup: await describeWorkspaceBackup(workspacePath) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
 // 13c-2b. Checkable progress facts: milestones (with reopened work), open questions,
 // changed files and the last verification. Cheap enough to poll: no remote queries.
 app.get('/api/workspace/:id/progress-facts', async (c) => {

@@ -37,6 +37,8 @@ import { perfMark } from '../lib/perfMarks.js';
 import { BRAND_NAME, LEGACY_BRAND_NAME } from '../brand.js';
 import { ServiceConsole } from '../features/services/ServiceConsole.js';
 import { WorkspaceHeader } from '../features/workspace-shell/WorkspaceHeader.js';
+import { WorkspaceBackupNotice } from '../features/workspace-shell/WorkspaceBackupNotice.js';
+import { BranchDriftNotice } from '../features/workspace-shell/BranchDriftNotice.js';
 import { WorkspaceRail } from '../features/workspace-shell/WorkspaceRail.js';
 import { SECTION_LABELS, visibleSection, type WorkspaceSection } from '../features/workspace-shell/destinations.js';
 import { ArchivedNotice, ArchivedWorkspaceView } from '../features/workspace-shell/ArchivedWorkspaceView.js';
@@ -763,6 +765,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               </Menu>
           </>}
         />
+        {!archived && <WorkspaceBackupNotice workspaceId={selected.branchName} />}
+        {!archived && <BranchDriftNotice workspaceId={selected.branchName} />}
         {/* Tab Navigation & Content Container */}
         <div ref={setBody} className="flex min-h-0 flex-1 pb-14 md:pb-0">
           {showChat && (

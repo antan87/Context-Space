@@ -35,6 +35,10 @@ export interface WorktreeDescriptor {
   intent?: string;
   commitSha: string;
   dirtyFilesCount: number | null;
+  /** The branch this workspace edits on, from live state. Absent for a read-only reference or before live state loads. */
+  expectedBranch?: string;
+  /** From live state: whether the folder is on `expectedBranch`. `false` means someone switched it. */
+  onExpectedBranch?: boolean;
   status: WorktreeStatusType;
   isPinned: boolean;
   isHostReadOnly: boolean;

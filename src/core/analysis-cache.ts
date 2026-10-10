@@ -137,6 +137,16 @@ export async function saveAnalysisCache(
   await fs.writeFile(resolved.path, data, 'utf-8');
 }
 
+export interface RepoFingerprintOptions {
+  /**
+   * What to do with an uncommitted regular file when the platform has no no-follow open flag.
+   * `'fail'` (default) returns null. `'metadata'` fingerprints it by `lstat` size and timestamps.
+   */
+  unsafeRead?: 'fail' | 'metadata';
+  /** Test seam: pretend the platform does (true) or does not (false) have a no-follow open flag. */
+  hasNoFollow?: boolean;
+}
+
 /**
  * Computes a content fingerprint for a repo: this package's version, the HEAD
  * commit SHA, and a hash of each dirty path plus its actual bytes (or symlink
@@ -153,11 +163,20 @@ export async function saveAnalysisCache(
  * upgrade — file IO, no tokens — and makes stale context impossible to serve by
  * default.
  *
+ * Freshness checks (`generation-lock`) may ask for `unsafeRead: 'metadata'`. Where the platform
+ * cannot open a file without following links, they then get a fingerprint built from each
+ * uncommitted file's size and timestamps instead of nothing. Reading metadata with `lstat` opens no
+ * file and follows no link, so the race above does not apply. It is weaker than hashing the bytes
+ * (an edit that keeps both the size and the timestamps goes unseen), which is acceptable for
+ * "has this changed since the context was generated?" but not for reusing a cached analysis, so
+ * the default stays fail-closed.
+ *
  * @param repoPath - Absolute path to the repo root.
  * @returns The fingerprint, or null when git fails (caller should re-analyze).
  */
 export async function getRepoFingerprint(
   repoPath: string,
+  options: RepoFingerprintOptions = {},
 ): Promise<string | null> {
   try {
     const prefix = `nf${getGeneratorVersion()}:`;
@@ -189,19 +208,27 @@ export async function getRepoFingerprint(
         const target = await fs.readlink(filePath);
         dirty.update('symlink\0').update(target);
       } catch {
-        if (typeof constants.O_NOFOLLOW !== 'number') {
+        if (!(options.hasNoFollow ?? typeof constants.O_NOFOLLOW === 'number')) {
           // Windows does not expose O_NOFOLLOW. An ordinary read after the
           // failed readlink probe would reintroduce a symlink-swap race, so
-          // disable cache reuse for this dirty snapshot and reanalyze it.
-          return null;
-        }
-        try {
-          const flags = constants.O_RDONLY | constants.O_NOFOLLOW;
-          dirty.update('file\0').update(await fs.readFile(filePath, { flag: flags }));
-        } catch {
-          // Deletions have no bytes to read; their status and path above are the
-          // complete retained state that must invalidate the snapshot.
-          dirty.update('missing\0');
+          // disable cache reuse for this dirty snapshot and reanalyze it, unless
+          // the caller only needs to notice a change and accepts metadata.
+          if (options.unsafeRead !== 'metadata') return null;
+          try {
+            const stat = await fs.lstat(filePath);
+            dirty.update('meta\0').update(`${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.ino}`);
+          } catch {
+            dirty.update('missing\0');
+          }
+        } else {
+          try {
+            const flags = constants.O_RDONLY | constants.O_NOFOLLOW;
+            dirty.update('file\0').update(await fs.readFile(filePath, { flag: flags }));
+          } catch {
+            // Deletions have no bytes to read; their status and path above are the
+            // complete retained state that must invalidate the snapshot.
+            dirty.update('missing\0');
+          }
         }
       }
       dirty.update('\0');

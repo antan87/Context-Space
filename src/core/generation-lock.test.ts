@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as analysisCache from './analysis-cache.js';
-import { constants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -86,19 +85,18 @@ describe('generation lock', () => {
     expect(await fs.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8')).toContain('with uncommitted changes');
   });
 
-  it('keeps generation usable when dirty files cannot be safely fingerprinted', async () => {
+  it('gives a repo with uncommitted files a real fingerprint on every platform, so generation never has to give up on it', async () => {
     await fs.writeFile(path.join(repoPath, 'README.md'), '# dirty\n');
     const snapshot = await captureGenerationSnapshot([
       { name: 'repo', path: repoPath, defaultBranch: 'main' },
     ]);
 
-    if (typeof constants.O_NOFOLLOW === 'number') {
-      expect(snapshot.repos.repo!.fingerprint).toContain('+');
-      expect(renderFreshnessBanner(snapshot)).not.toContain('CANNOT BE VERIFIED');
-    } else {
-      expect(snapshot.repos.repo!.fingerprint).toMatch(/^uncacheable:/);
-      expect(renderFreshnessBanner(snapshot)).toContain('CANNOT BE VERIFIED');
-    }
+    // Where the platform can open a file without following links the bytes are hashed; where it cannot
+    // (Windows) the file's size and timestamps are used instead. Either way there is a fingerprint, so
+    // the snapshot is never recorded as unreadable and the notice never has to say it cannot be verified.
+    expect(snapshot.repos.repo!.fingerprint).toContain('+');
+    expect(snapshot.repos.repo!.fingerprint).not.toMatch(/^uncacheable:/);
+    expect(renderFreshnessBanner(snapshot)).not.toContain('CANNOT BE VERIFIED');
   });
 
   it('reports an unverifiable same-revision snapshot without claiming known staleness', async () => {
@@ -127,38 +125,93 @@ describe('generation lock', () => {
     const banner = await fs.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8');
     const message = result.drift.find((item) => item.kind === 'unverified')!.message;
     for (const text of [banner, message]) {
-      expect(text).toContain('Windows cannot safely read uncommitted files');
+      expect(text).toContain('they could not be fingerprinted');
       expect(text).toContain('Commits are still checked');
-      expect(text).toContain('commit or stash the changes and run `ctxspace refresh`');
-      expect(text).toContain('refreshing alone does not');
+      expect(text).toContain('run `ctxspace refresh`');
+      expect(text).toContain('make sure git can read the repository');
+      expect(text).not.toContain('Windows');
     }
     expect(banner).toContain('Uncommitted changes in repo cannot be checked');
     expect(banner).toContain('check live state with `ctxspace status`');
   });
 
-  it('stays unverifiable across refreshes while files are uncommitted, and clears once they are committed and refreshed', async () => {
-    // A Windows-like machine: a dirty tree cannot be fingerprinted, a clean one can.
-    const realFingerprint = analysisCache.getRepoFingerprint;
-    vi.spyOn(analysisCache, 'getRepoFingerprint').mockImplementation(async (repo) => {
-      const { stdout } = await execa('git', ['status', '--porcelain'], { cwd: repo });
-      return stdout.trim() ? null : realFingerprint(repo);
+  describe('on a platform that cannot open files without following links (Windows)', () => {
+    // The real fingerprint, told it is on such a platform. Bytes are never read there.
+    beforeEach(() => {
+      const real = analysisCache.getRepoFingerprint;
+      vi.spyOn(analysisCache, 'getRepoFingerprint').mockImplementation((repo, options) => real(repo, { ...options, hasNoFollow: false }));
     });
     const unverified = expect.objectContaining({ kind: 'unverified', name: 'repo' });
+    const stale = expect.objectContaining({ kind: 'repo', name: 'repo' });
+
+    it('settles on a refresh while files are uncommitted, instead of staying unverifiable', async () => {
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted\n');
+
+      await createLock();
+
+      const lock = JSON.parse(await fs.readFile(path.join(workspacePath, PRIMARY_LOCK_FILE), 'utf8'));
+      expect(lock.repos.repo.fingerprint).not.toMatch(/^uncacheable:/);
+      expect(await checkGenerationLock(workspacePath)).toMatchObject({ fresh: true, drift: [] });
+      expect(await fs.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8')).not.toContain('CANNOT BE VERIFIED');
+    });
+
+    it('still notices an edit to an uncommitted file made after the context was generated', async () => {
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted\n');
+      await createLock();
+
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted, then edited further\n');
+
+      const result = await checkGenerationLock(workspacePath);
+      expect(result.fresh).toBe(false);
+      expect(result.drift).toContainEqual(stale);
+      expect(result.drift).not.toContainEqual(unverified);
+    });
+
+    it('is fresh again after the next refresh, and after committing and refreshing', async () => {
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted\n');
+      await createLock();
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted, then edited further\n');
+      await createLock();
+      expect(await checkGenerationLock(workspacePath)).toMatchObject({ fresh: true, drift: [] });
+
+      await execa('git', ['commit', '-am', 'save the work'], { cwd: repoPath });
+      expect((await checkGenerationLock(workspacePath)).drift).toContainEqual(stale);
+      await createLock();
+      expect(await checkGenerationLock(workspacePath)).toMatchObject({ fresh: true, drift: [] });
+    });
+
+    it('clears, with one refresh, a lock an older version recorded as unreadable on this platform', async () => {
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted\n');
+      await createLock();
+      const lockPath = path.join(workspacePath, PRIMARY_LOCK_FILE);
+      const lock = JSON.parse(await fs.readFile(lockPath, 'utf8'));
+      lock.repos.repo.fingerprint = `uncacheable:${lock.repos.repo.sha}`;
+      await fs.writeFile(lockPath, JSON.stringify(lock));
+      expect((await checkGenerationLock(workspacePath)).drift).toContainEqual(unverified);
+
+      await createLock();
+
+      expect(await checkGenerationLock(workspacePath)).toMatchObject({ fresh: true, drift: [] });
+    });
+
+    it('does not weaken the analysis cache: asking without the metadata form still gives up', async () => {
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted\n');
+
+      expect(await analysisCache.getRepoFingerprint(repoPath)).toBeNull();
+    });
+  });
+
+  it('stays unverified, with a way out that names git, when git cannot report on the repository', async () => {
     await fs.writeFile(path.join(repoPath, 'README.md'), '# uncommitted\n');
+    vi.spyOn(analysisCache, 'getRepoFingerprint').mockResolvedValue(null);
 
     await createLock();
-    expect((await checkGenerationLock(workspacePath)).drift).toContainEqual(unverified);
-    // Refreshing again records the same unreadable state, so it cannot clear the notice.
-    await createLock();
-    expect((await checkGenerationLock(workspacePath)).drift).toContainEqual(unverified);
+    const result = await checkGenerationLock(workspacePath, { markDocuments: true });
 
-    // Committing moves HEAD, which is still checked: the old snapshot is now plainly stale.
-    await execa('git', ['commit', '-am', 'save the work'], { cwd: repoPath });
-    expect((await checkGenerationLock(workspacePath)).drift).toContainEqual(expect.objectContaining({ kind: 'repo', name: 'repo' }));
-
-    // Refreshing on the clean tree clears it.
-    await createLock();
-    expect(await checkGenerationLock(workspacePath)).toMatchObject({ fresh: true, drift: [] });
+    expect(result.drift).toContainEqual(expect.objectContaining({ kind: 'unverified', name: 'repo' }));
+    const message = result.drift.find((item) => item.kind === 'unverified')!.message;
+    expect(message).toContain('make sure git can read the repository');
+    expect(await fs.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf8')).toContain('CANNOT BE VERIFIED');
   });
 
   it('detects edits outside the mutable freshness banner', async () => {

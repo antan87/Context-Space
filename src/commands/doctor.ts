@@ -18,6 +18,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   'Test Commands': '🧪 Test Commands:',
   'Core Artifacts': '📄 Core Artifacts:',
   'Generated Context': '🔒 Generated Context Provenance:',
+  'Workspace Backup': '💾 Workspace Backup:',
   'Explicit Contracts': '🔗 Explicit Runtime Contracts:',
   'AI Agent MCP': '🔌 AI Agent MCP Server:',
 };

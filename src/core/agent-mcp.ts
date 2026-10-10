@@ -42,6 +42,20 @@ export function unboundMcpServer(): McpServerDefinition {
   return { command: 'npx', args: ['-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive'] };
 }
 
+/**
+ * What an AI agent is registered with. On Windows `npx` is really `npx.cmd`, a batch shim, and the
+ * agents start the server directly rather than through a shell, so a bare `npx` never connects.
+ * `cmd /c` runs the shim the way a prompt would; it is the form Claude Code, Codex and Antigravity
+ * document for Windows. Elsewhere this is exactly `unboundMcpServer()`.
+ *
+ * Only agent registration uses this. `unboundMcpServer()` stays as it was for the editor configs
+ * `ctxspace mcp setup` writes, so what they get on Windows is unchanged.
+ */
+export function agentMcpServer(platform: NodeJS.Platform = process.platform): McpServerDefinition {
+  const server = unboundMcpServer();
+  return platform === 'win32' ? { command: 'cmd', args: ['/c', server.command, ...server.args] } : server;
+}
+
 /** The name new registrations use. */
 export const MCP_REGISTRATION_NAME = BRAND_CONFIG.mcp.serverName;
 
@@ -278,12 +292,8 @@ async function inspectTarget(target: AgentTarget, ctx: Context): Promise<AgentMc
   }
   const present = KNOWN_SERVER_NAMES.find((name) => servers.includes(name));
   if (present) return { ...base, status: { state: 'registered', serverName: present } };
-  // Native Windows runs npx through a .cmd shim that agents cannot start directly; the
-  // wrapper that fixes that has not been tried here. Registering would report success for
-  // a server that never connects, so decline and let the user add it by hand.
-  if (ctx.platform === 'win32') {
-    return { ...base, status: { state: 'unsupported', reason: 'automatic registration is not available on Windows yet (npx needs a cmd /c wrapper that is untested); add the server to the agent by hand' } };
-  }
+  // On Windows the registration goes through `cmd /c` (see agentMcpServer). It has been checked against
+  // the agents' config files, not yet against a live connection on Windows, so setup says how to confirm it.
   return { ...base, status: { state: 'missing' } };
 }
 
@@ -299,7 +309,7 @@ export async function inspectAgentMcp(options: AgentMcpOptions = {}): Promise<Ag
  */
 export async function registerAgentMcp(options: AgentMcpOptions = {}): Promise<AgentMcpResult[]> {
   const ctx = contextOf(options);
-  const definition = unboundMcpServer();
+  const definition = agentMcpServer(ctx.platform);
   const results: AgentMcpResult[] = [];
 
   for (const target of TARGETS) {

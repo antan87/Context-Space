@@ -19,6 +19,7 @@ import { findExecutable } from '../agent/cliAvailability.js';
 import { checkGenerationLock } from './generation-lock.js';
 import { readWorkspaceKnowledge } from './knowledge.js';
 import { inspectAgentMcp } from './agent-mcp.js';
+import { describeWorkspaceBackup } from './workspace-backup.js';
 import { CLI_NAME } from './constants.js';
 
 import type { ProjectAnalysis } from '../types.js';
@@ -322,6 +323,24 @@ export async function runDoctor(workspacePath: string): Promise<DoctorReport> {
       warnings.push(item.message);
       checks.push({ category: 'Generated Context', name: item.name, status: 'warn', message: item.message });
     }
+  }
+
+  // ── 6b. Would the hand-written notes survive losing this computer? ───────
+  // Advisory only: nothing here adds a remote or pushes. It warns just when there is
+  // something a person wrote (knowledge, planning notes) that exists nowhere else.
+  try {
+    const backup = await describeWorkspaceBackup(workspacePath);
+    const category = 'Workspace Backup';
+    if (backup.remote.state === 'configured') {
+      checks.push({ category, name: 'remote', status: 'pass', message: `git remote "${backup.remote.name}" is set (${backup.remote.url || 'no URL'})` });
+    } else if (backup.atRisk && backup.message) {
+      warnings.push(backup.message);
+      checks.push({ category, name: 'remote', status: 'warn', message: backup.message });
+    } else {
+      checks.push({ category, name: 'remote', status: 'info', message: 'no git remote, but nothing hand-written needs backing up yet' });
+    }
+  } catch {
+    // A diagnostic about backup must never break the workspace report.
   }
 
   const workspaceName = path.basename(workspacePath);

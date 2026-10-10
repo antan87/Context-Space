@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   MCP_REGISTRATION_NAME,
+  agentMcpServer,
   inspectAgentMcp,
   registerAgentMcp,
   unboundMcpServer,
@@ -16,12 +17,15 @@ import { BRAND_CONFIG, ENGINE_NPM_PACKAGE } from './constants.js';
 
 let home: string;
 let calls: Array<{ file: string; args: string[] }>;
+/** The program path exactly as the code under test handed it to the runner. */
+let rawFiles: string[];
 /** Which agent CLIs this test pretends are installed. No real executables are involved. */
 let installed: Set<string>;
 
 beforeEach(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), 'cs-agent-mcp-'));
   calls = [];
+  rawFiles = [];
   installed = new Set();
 });
 
@@ -51,8 +55,10 @@ const envWith = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PATH: '
  */
 function fakeCli(env: NodeJS.ProcessEnv): CommandRunner {
   return async (file, args) => {
-    calls.push({ file: path.basename(file), args });
-    const tool = path.basename(file);
+    rawFiles.push(file);
+    // win32.basename understands both `/` and `\\`, and the extension is dropped: `C:\\bin\\codex.cmd` is the tool `codex`.
+    const tool = path.win32.basename(file).replace(/\.(exe|cmd)$/i, '');
+    calls.push({ file: tool, args });
     const [, , ...rest] = args; // after "mcp add"
     if (tool === 'claude') {
       const scope = rest.splice(0, 2); // --scope user
@@ -108,6 +114,27 @@ describe('unboundMcpServer', () => {
     const [, spec] = unboundMcpServer().args;
     expect(spec).not.toBe(ENGINE_NPM_PACKAGE);
     expect(spec).toBe(`${ENGINE_NPM_PACKAGE}@latest`);
+  });
+});
+
+describe('agentMcpServer', () => {
+  it('is exactly the unbound server everywhere except Windows', () => {
+    expect(agentMcpServer('linux')).toEqual(unboundMcpServer());
+    expect(agentMcpServer('darwin')).toEqual(unboundMcpServer());
+  });
+
+  it('runs npx through cmd /c on Windows, because npx there is a .cmd shim an agent cannot start directly', () => {
+    const base = unboundMcpServer();
+    expect(agentMcpServer('win32')).toEqual({ command: 'cmd', args: ['/c', 'npx', ...base.args] });
+  });
+
+  it('keeps asking the registry for the latest version on Windows too', () => {
+    expect(agentMcpServer('win32').args).toContain(`${ENGINE_NPM_PACKAGE}@latest`);
+    expect(agentMcpServer('win32').args).not.toContain(ENGINE_NPM_PACKAGE);
+  });
+
+  it('leaves unboundMcpServer alone, so the editor configs written on Windows are unchanged', () => {
+    expect(unboundMcpServer().command).toBe('npx');
   });
 });
 
@@ -291,22 +318,106 @@ describe('registerAgentMcp', () => {
     const windows = (extra: Partial<AgentMcpOptions> = {}) =>
       options({ platform: 'win32', findBinary: (name) => (['claude', 'codex', 'agy'].includes(name) ? `C:\\bin\\${name}.exe` : null), ...extra });
 
-    it('declines to register, because npx cannot be started there without an untested wrapper', async () => {
+    it('registers through cmd /c with each agent CLI, because npx cannot be started directly there', async () => {
       const results = await registerAgentMcp(windows());
 
-      expect(calls).toEqual([]);
-      for (const id of ['claude', 'codex', 'antigravity']) {
-        const outcome = byId(results, id).outcome;
-        expect(outcome).toMatchObject({ result: 'skipped' });
-        expect((outcome as { reason: string }).reason).toContain('Windows');
+      for (const id of ['claude', 'codex', 'antigravity']) expect(byId(results, id).outcome).toMatchObject({ result: 'added' });
+      const wrapper = ['--', 'cmd', '/c', 'npx', '-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive'];
+      expect(calls).toEqual([
+        { file: 'claude', args: ['mcp', 'add', '--scope', 'user', MCP_REGISTRATION_NAME, ...wrapper] },
+        { file: 'codex', args: ['mcp', 'add', MCP_REGISTRATION_NAME, ...wrapper] },
+        { file: 'agy', args: ['mcp', 'add', MCP_REGISTRATION_NAME, ...wrapper] },
+      ]);
+    });
+
+    it('leaves each agent config listing the server with the cmd wrapper, which is what the agent will launch', async () => {
+      await registerAgentMcp(windows());
+
+      const claude = (await readJson('.claude.json')).mcpServers[MCP_REGISTRATION_NAME];
+      expect(claude).toMatchObject({ command: 'cmd', args: ['/c', 'npx', '-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive'] });
+      const codex = parseToml(await read('.codex/config.toml')).mcp_servers as Record<string, { command: string; args: string[] }>;
+      expect(codex[MCP_REGISTRATION_NAME]).toMatchObject({ command: 'cmd', args: ['/c', 'npx', '-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive'] });
+      const agy = (await readJson('.gemini/config/mcp_config.json')).mcpServers[MCP_REGISTRATION_NAME];
+      expect(agy).toMatchObject({ command: 'cmd', args: expect.arrayContaining(['/c', 'npx']) });
+    });
+
+    it('hands an agent path with spaces to the runner as one program, never split or quoted into the arguments', async () => {
+      const spaced: Record<string, string> = {
+        claude: 'C:\\Users\\Jo Smith\\AppData\\Roaming\\npm\\claude.cmd',
+        codex: 'C:\\Program Files\\nodejs\\codex.cmd',
+        agy: 'D:\\My Tools\\Antigravity Agent\\agy.exe',
+      };
+      const results = await registerAgentMcp(windows({ findBinary: (name) => spaced[name] ?? null }));
+
+      expect(rawFiles).toEqual([spaced.claude, spaced.codex, spaced.agy]);
+      for (const id of ['claude', 'codex', 'antigravity']) expect(byId(results, id).outcome).toMatchObject({ result: 'added' });
+      const everyArgument = calls.flatMap((call) => call.args);
+      for (const piece of ['Program', 'Files', 'Smith', 'Tools', '"', "'"]) {
+        expect(everyArgument.some((arg) => arg.includes(piece))).toBe(false);
       }
-      expect(byId(results, 'pi').outcome).toEqual({ result: 'not-installed' });
+    });
+
+    it('does not register again when the server is already there, and does not replace it', async () => {
+      await write('.claude.json', JSON.stringify({ mcpServers: { [MCP_REGISTRATION_NAME]: { command: 'node', args: ['mine.js'] } } }));
+
+      const results = await registerAgentMcp(windows());
+
+      expect(byId(results, 'claude').outcome).toEqual({ result: 'already', serverName: MCP_REGISTRATION_NAME });
+      expect(calls.some((call) => call.file === 'claude')).toBe(false);
+      expect((await readJson('.claude.json')).mcpServers[MCP_REGISTRATION_NAME]).toEqual({ command: 'node', args: ['mine.js'] });
+    });
+
+    it('keeps unrelated Codex settings and servers, and respects CODEX_HOME', async () => {
+      const env = envWith({ CODEX_HOME: path.join(home, 'custom-codex') });
+      await write('custom-codex/config.toml', stringifyToml({ model: 'keep-me', mcp_servers: { other: { command: 'x', args: ['y'] } } }));
+
+      const results = await registerAgentMcp(windows({ run: fakeCli(env), env }));
+
+      expect(byId(results, 'codex').outcome).toMatchObject({ result: 'added' });
+      const config = parseToml(await read('custom-codex/config.toml')) as Record<string, any>;
+      expect(config.model).toBe('keep-me');
+      expect(config.mcp_servers.other).toEqual({ command: 'x', args: ['y'] });
+      expect(config.mcp_servers[MCP_REGISTRATION_NAME].command).toBe('cmd');
+      expect(await exists('.codex/config.toml')).toBe(false);
+    });
+
+    it('writes the same wrapper into Pi\'s shared config', async () => {
+      await write('.pi/agent/settings.json', JSON.stringify({ packages: ['npm:pi-mcp-adapter'] }));
+      const results = await registerAgentMcp(options({ platform: 'win32', findBinary: (name) => (name === 'pi' ? 'C:\\Program Files\\pi\\pi.exe' : null) }));
+
+      expect(byId(results, 'pi').outcome).toMatchObject({ result: 'added' });
+      const server = (await readJson('.config/mcp/mcp.json')).mcpServers[MCP_REGISTRATION_NAME];
+      expect(server).toEqual({ command: 'cmd', args: ['/c', 'npx', '-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive'] });
+    });
+
+    it('shows what it would do in a dry run and changes nothing', async () => {
+      const results = await registerAgentMcp(windows({ dryRun: true }));
+
+      expect(calls).toEqual([]);
+      expect(await exists('.claude.json')).toBe(false);
+      expect(results.filter((r) => r.outcome.result === 'would-add').map((r) => r.id).sort()).toEqual(['antigravity', 'claude', 'codex']);
+    });
+
+    it('reports a CLI that fails on Windows with its message, like anywhere else', async () => {
+      const run: CommandRunner = async () => ({ exitCode: 1, stdout: '', stderr: "'cmd' is not recognized" });
+
+      const results = await registerAgentMcp(windows({ run }));
+
+      expect(byId(results, 'claude').outcome).toMatchObject({ result: 'failed', reason: expect.stringContaining("'cmd' is not recognized") });
       expect(await exists('.claude.json')).toBe(false);
     });
 
-    it('reports the same reason to doctor, so it does not tell the user to run a setup that will skip them', async () => {
+    it('reports a CLI that claims success but changes nothing as a failure, since the config is the proof', async () => {
+      const run: CommandRunner = async () => ({ exitCode: 0, stdout: 'Added', stderr: '' });
+
+      const results = await registerAgentMcp(windows({ run }));
+
+      expect(byId(results, 'claude').outcome).toMatchObject({ result: 'failed', reason: expect.stringContaining('still does not list the server') });
+    });
+
+    it('tells doctor the server can be set up, instead of calling Windows unsupported', async () => {
       const claude = byId(await inspectAgentMcp(windows()), 'claude').status;
-      expect(claude.state).toBe('unsupported');
+      expect(claude).toEqual({ state: 'missing' });
     });
 
     it('still recognises a server the user added by hand', async () => {

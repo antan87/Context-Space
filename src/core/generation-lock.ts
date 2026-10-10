@@ -129,13 +129,17 @@ async function readOutput(
 }
 
 /**
- * Why dirty-file freshness can be unknowable, and the one way out, shared by the banner and the
- * drift message so the two cannot disagree. Windows has no way to refuse to follow a link when
- * opening a file, so uncommitted files are not read (see getRepoFingerprint). Refreshing records
- * that same unreadable state again, so it cannot clear the notice while the files stay uncommitted.
+ * Freshness fingerprints uncommitted files by their size and timestamps when the platform cannot open a
+ * file without following links (Windows), instead of giving up on them; see `getRepoFingerprint`. So a
+ * repo only ends up "unverified" when git itself could not report on it, or when the lock was written by
+ * an older version that did give up. Both the banner and the drift message read from this text, so they
+ * cannot disagree. A refresh re-records the repo, which is why it is the way out.
  */
-const UNREADABLE_DIRTY_FILES = 'Windows cannot safely read uncommitted files';
-const UNVERIFIED_WAY_OUT = `commit or stash the changes and run \`${CLI_NAME} refresh\`; refreshing alone does not.`;
+const UNREADABLE_DIRTY_FILES = 'they could not be fingerprinted';
+const UNVERIFIED_WAY_OUT = `run \`${CLI_NAME} refresh\`. If this keeps coming back, make sure git can read the repository (run \`git status\` in it).`;
+
+/** Freshness only needs to notice a change, so it takes the metadata fingerprint where hashing the bytes is unsafe. */
+const FRESHNESS_FINGERPRINT = { unsafeRead: 'metadata' } as const;
 
 export function renderFreshnessBanner(
   snapshot: GenerationSnapshot,
@@ -150,7 +154,7 @@ export function renderFreshnessBanner(
   const lines = confirmedDrift.length === 0 && uncertainRepos.length > 0
     ? [
         `> **⚠ ${BRAND_NAME.toUpperCase()} CONTEXT FRESHNESS CANNOT BE VERIFIED.**`,
-        `> Uncommitted changes in ${uncertainRepos.join(', ')} cannot be checked on this platform (${UNREADABLE_DIRTY_FILES}), so later edits to them would go unnoticed. Commits are still checked. This does not prove the context is stale.`,
+        `> Uncommitted changes in ${uncertainRepos.join(', ')} cannot be checked right now (${UNREADABLE_DIRTY_FILES}), so later edits to them would go unnoticed. Commits are still checked. This does not prove the context is stale.`,
         `> Treat generated facts as provisional and check live state with \`${CLI_NAME} status\`. To clear this, ${UNVERIFIED_WAY_OUT}`,
       ]
     : drift.length === 0
@@ -169,7 +173,7 @@ export async function captureGenerationSnapshot(repos: RepoInfo[]): Promise<Gene
   const states = await Promise.all(repos.map(async (repo) => {
     const [{ stdout }, fingerprint] = await Promise.all([
       execa('git', ['rev-parse', 'HEAD'], { cwd: repo.path }),
-      getRepoFingerprint(repo.path),
+      getRepoFingerprint(repo.path, FRESHNESS_FINGERPRINT),
     ]);
     // A null fingerprint means cache reuse is unsafe, not that generation is
     // impossible. Preserve the generated output with an explicit unverifiable
@@ -270,7 +274,7 @@ export async function checkGenerationLock(
   const repos = await currentWorkspaceRepos(workspacePath);
   const repoDrift = await Promise.all(repos.map(async (repo): Promise<GenerationDrift | null> => {
     const recorded = lock.repos[repo.name];
-    const current = await getRepoFingerprint(repo.path);
+    const current = await getRepoFingerprint(repo.path, FRESHNESS_FINGERPRINT);
     if (!recorded || !current || recorded.fingerprint !== current) {
       const sha = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo.path })
         .then((result) => result.stdout.trim())
@@ -289,7 +293,7 @@ export async function checkGenerationLock(
         generated: recorded?.sha,
         current: sha,
         message: uncertain
-          ? `Generated from ${repo.name}@${recorded?.sha.slice(0, 12) ?? 'unknown'}, but uncommitted changes cannot be checked on this platform (${UNREADABLE_DIRTY_FILES}), so later edits to them would go unnoticed. Commits are still checked. To clear this, ${UNVERIFIED_WAY_OUT}`
+          ? `Generated from ${repo.name}@${recorded?.sha.slice(0, 12) ?? 'unknown'}, but uncommitted changes cannot be checked right now (${UNREADABLE_DIRTY_FILES}), so later edits to them would go unnoticed. Commits are still checked. To clear this, ${UNVERIFIED_WAY_OUT}`
           : `Generated at ${repo.name}@${recorded?.sha.slice(0, 12) ?? 'unknown'}; repo now at ${sha.slice(0, 12)}${newlyDirty || current?.includes('+') ? ' with uncommitted changes' : ''}.`,
       };
     }
