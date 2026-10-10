@@ -278,6 +278,8 @@ describe('the command line', () => {
     plan.outputHelp();
     expect(help).toContain('1. Every close has a reason. Nothing is deleted.');
     expect(help).toContain('Who acts: every change is made as the AI');
+    expect(help).not.toContain('--harness');
+    expect(help).not.toMatch(/^\s+--as <who>/m);
     expect(help).toContain('accept');
   });
 });

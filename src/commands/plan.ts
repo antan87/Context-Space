@@ -11,7 +11,7 @@
  * behaviour; it is not a security boundary.
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { confirm } from '@inquirer/prompts';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { runsInsideAiTool } from '../utils/ai-tool.js';
@@ -269,11 +269,13 @@ function run<A extends unknown[]>(action: (...args: A) => Promise<void>, onError
  * command does; with --json the error is printed as JSON and the exit code is still 1.
  */
 export function registerPlanCommand(program: Command, fail: (error: unknown) => Promise<void> | void): void {
+  // --as and --harness stay out of the option list: ContextSpace names the AI tool itself, and an AI
+  // reading the help should not go looking for a way to act as the user. WHO_ACTS tells people about --as.
   const common = (command: Command) => command
     .option('-w, --workspace <path>', 'Workspace path or name (defaults to the workspace you are in)')
     .option('--json', 'Print JSON instead of text')
-    .option('--as <who>', 'Act as "user" (interactive terminal only) or "agent"')
-    .option('--harness <name>', 'Name of the AI tool making the change, for the history');
+    .addOption(new Option('--as <who>', 'Act as "user" (a person in their own terminal) or "agent"').hideHelp())
+    .addOption(new Option('--harness <name>', 'Name of the AI tool making the change, for the history').hideHelp());
 
   // The shared options work before the verb (`plan --json show`) and after it (`plan show --json`).
   const plan = common(program
