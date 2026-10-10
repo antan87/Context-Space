@@ -28,6 +28,7 @@ import {
   isOpenStatus,
   isSettledStatus,
   itemLabel,
+  sentence,
   statusLabel,
   type PlanKind,
   type PlanStatus,
@@ -455,6 +456,19 @@ function resolveIds(plan: PlanDocument, ids: string[] | undefined): PlanItem[] {
   return [...new Set(ids ?? [])].map((id) => find(plan, id));
 }
 
+const PROPOSED: Record<ProposalAction, (label: string) => string> = {
+  done: (label) => `Proposed that ${label} is done`,
+  answer: (label) => `Proposed an answer for ${label}`,
+  drop: (label) => `Proposed dropping ${label}`,
+  later: (label) => `Proposed moving ${label} to later`,
+  reopen: (label) => `Proposed reopening ${label}`,
+};
+
+function proposedMessage(item: PlanItem, action: ProposalAction): string {
+  const whose = item.kind === 'milestone' ? 'A milestone is the user\'s decision' : 'This item is the user\'s decision';
+  return `${sentence(PROPOSED[action](itemLabel(item)))} ${whose}: they see it under Needs you and accept it or send it back.`;
+}
+
 function clearOpenNotes(item: PlanItem): void {
   delete item.blockedReason;
   delete item.blockedAt;
@@ -478,12 +492,7 @@ export function applyPlanChange(
     if (agentMayClose(item, actor)) return applied(item, apply());
     item.proposal = { action, by: actorName(actor), note, at: now };
     record(item, actor, 'proposed', now, `${action}: ${note}`);
-    const who = item.kind === 'milestone' ? 'A milestone' : 'This item';
-    return {
-      itemId: item.id,
-      outcome: 'proposed' as const,
-      message: `Proposed: ${action} ${itemLabel(item)}. ${who} needs the user, who sees it under Needs you and accepts or sends it back.`,
-    };
+    return { itemId: item.id, outcome: 'proposed' as const, message: proposedMessage(item, action) };
   };
 
   const finish = (item: PlanItem, status: 'done' | 'dropped', resolution: string, action: string) => {
@@ -545,7 +554,7 @@ export function applyPlanChange(
         record(later, actor, 'waits', now, `now waits for ${itemLabel(item)}`);
       }
       const holds = before.length ? ` ${before.map(itemLabel).join(', ')} now ${before.length === 1 ? 'waits' : 'wait'} for it.` : '';
-      return applied(item, `Added ${itemLabel(item)}.${holds}`);
+      return applied(item, `${sentence(`Added ${itemLabel(item)}`)}${holds}`);
     }
 
     case 'start': {
@@ -559,7 +568,7 @@ export function applyPlanChange(
       clearOpenNotes(item);
       item.startedAt ??= now;
       record(item, actor, 'started', now);
-      return applied(item, `Started ${itemLabel(item)}.`);
+      return applied(item, sentence(`Started ${itemLabel(item)}`));
     }
 
     case 'done':
@@ -579,7 +588,7 @@ export function applyPlanChange(
       return closing(item, isAnswer ? 'answer' : 'done', resolution, () => {
         assertGate(item, change.type === 'done' ? change.checkPassed : undefined);
         finish(item, 'done', resolution, isAnswer ? 'answered' : 'done');
-        return isAnswer ? `Answered ${itemLabel(item)}: ${resolution}` : `Done: ${itemLabel(item)}.`;
+        return isAnswer ? `Answered ${itemLabel(item)}: ${resolution}` : sentence(`Done: ${itemLabel(item)}`);
       });
     }
 
@@ -638,11 +647,7 @@ export function applyPlanChange(
       if (reopenNeedsUser) {
         item.proposal = { action: 'reopen', by: actorName(actor), note: reason, at: now };
         record(item, actor, 'proposed', now, `reopen: ${reason}`);
-        return {
-          itemId: item.id,
-          outcome: 'proposed',
-          message: `Proposed: reopen ${itemLabel(item)}. The user decides under Needs you.`,
-        };
+        return { itemId: item.id, outcome: 'proposed', message: proposedMessage(item, 'reopen') };
       }
       // Finished work goes back into progress; parked or dropped work goes back to the list.
       item.status = item.status === 'done' || item.status === 'in_progress' ? 'in_progress' : 'todo';
@@ -723,7 +728,7 @@ export function applyPlanChange(
           notes.push(`${itemLabel(later)} now waits for it`);
         }
       }
-      if (!notes.length) return applied(item, `Nothing to change on ${itemLabel(item)}.`);
+      if (!notes.length) return applied(item, sentence(`Nothing to change on ${itemLabel(item)}`));
       record(item, actor, 'edited', now, notes.join('; '));
       return applied(item, `Changed ${itemLabel(item)}: ${notes.join('; ')}.`);
     }
@@ -753,7 +758,7 @@ export function applyPlanChange(
       const reason = cleanNote(change.reason, `Sending it back needs a reason: say what still needs doing on ${itemLabel(item)}.`);
       delete item.proposal;
       record(item, actor, 'rejected', now, `${proposal.action} sent back to ${proposal.by}: ${reason}`);
-      return applied(item, `Sent back to ${proposal.by}: ${itemLabel(item)}. ${reason}`);
+      return applied(item, `${sentence(`Sent back to ${proposal.by}: ${itemLabel(item)}`)} ${reason}`);
     }
   }
 }
@@ -774,7 +779,7 @@ export interface PlanSections {
   otherOpen: PlanItem[];
   /** Done and dropped items, each with its reason. */
   closed: PlanItem[];
-  /** Items to do whose waits are settled: what can start next. Nothing starts by itself. */
+  /** Milestones and tasks to do whose waits are settled: what can start next. Nothing starts by itself. */
   ready: PlanItem[];
   /** The latest changes across all items, newest first. */
   changes: PlanChangeEntry[];
@@ -790,10 +795,12 @@ export function planSections(plan: PlanDocument, options: { changes?: number } =
     ...plan.items.filter((item) => !item.proposal && needsUser(item)),
   ];
   const count = (status: PlanStatus) => plan.items.filter((item) => item.status === status).length;
+  // Newest first. Changes in the same millisecond keep their recorded order, newest first.
   const changes = plan.items
-    .flatMap((item) => item.history.map((entry) => ({ ...entry, itemId: item.id, label: itemLabel(item) })))
-    .sort((a, b) => b.at.localeCompare(a.at))
-    .slice(0, options.changes ?? 10);
+    .flatMap((item) => item.history.map((entry, index) => ({ entry: { ...entry, itemId: item.id, label: itemLabel(item) }, index })))
+    .sort((a, b) => b.entry.at.localeCompare(a.entry.at) || b.index - a.index)
+    .slice(0, options.changes ?? 10)
+    .map(({ entry }) => entry);
   return {
     counts: {
       needsYou: needsYou.length, inProgress: count('in_progress'), todo: count('todo'), blocked: count('blocked'),
@@ -803,7 +810,8 @@ export function planSections(plan: PlanDocument, options: { changes?: number } =
     milestones: plan.items.filter((item) => item.kind === 'milestone'),
     otherOpen: plan.items.filter((item) => item.kind !== 'milestone' && !needsUser(item) && (isOpenStatus(item.status) || item.status === 'later')),
     closed: plan.items.filter((item) => item.status === 'done' || item.status === 'dropped'),
-    ready: plan.items.filter((item) => item.status === 'todo' && unsettledWaits(plan, item).length === 0),
+    ready: plan.items.filter((item) => (item.kind === 'milestone' || item.kind === 'task') && item.status === 'todo' && !item.proposal
+      && unsettledWaits(plan, item).length === 0),
     changes,
   };
 }

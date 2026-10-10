@@ -297,7 +297,7 @@ describe('who may close what', () => {
     const rejected = await change({ type: 'reject', id: 'Q1', reason: 'Use the account time zone' });
     expect(rejected.item.status).toBe('todo');
     expect(rejected.item).not.toHaveProperty('proposal');
-    expect(rejected.message).toBe('Sent back to codex: Q1 Which time zone?. Use the account time zone');
+    expect(rejected.message).toBe('Sent back to codex: Q1 Which time zone? Use the account time zone');
   });
 
   it('turns the AI reopening a milestone into a proposal', async () => {
@@ -368,7 +368,8 @@ describe('the sections everyone sees', () => {
     expect(sections.milestones.map((item) => item.id)).toEqual(['M1', 'M2', 'M3']);
     expect(sections.otherOpen.map((item) => item.id)).toEqual(['Q2', 'D1']);
     expect(sections.closed.map((item) => item.id)).toEqual(['M1', 'T1']);
-    expect(sections.ready.map((item) => item.id)).toEqual(['Q1', 'Q2']);
+    // Questions are answered, not started: only milestones and tasks are ready to start.
+    expect(sections.ready.map((item) => item.id)).toEqual([]);
     expect(sections.counts).toMatchObject({ needsYou: 1, todo: 4, done: 2, later: 1 });
     expect(sections.changes[0]).toMatchObject({ itemId: 'D1', label: 'D1 Excel export', action: 'later' });
   });

@@ -83,3 +83,15 @@ export function itemLabel(item: { id: string; title: string }): string {
 export function statusLabel(status: PlanStatus): string {
   return STATUS_WORDS[status].label;
 }
+
+/** Ends a sentence that may end in a name: "Added Q1 Which time zone?" needs no extra full stop. */
+export function sentence(text: string): string {
+  return /[.!?…]$/.test(text) ? text : `${text}.`;
+}
+
+/** What each recorded change is called when people read the history. */
+export const CHANGE_WORDS: Record<string, string> = {
+  added: 'added', imported: 'moved into the plan', started: 'started', done: 'finished', answered: 'answered',
+  dropped: 'dropped', later: 'moved to later', blocked: 'blocked', reopened: 'reopened', edited: 'changed',
+  waits: 'changed', proposed: 'proposed a change to', accepted: 'accepted', rejected: 'sent back',
+};

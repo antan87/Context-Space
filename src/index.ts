@@ -22,6 +22,7 @@ import { logsCommand } from './commands/logs.js';
 import { statusCommand } from './commands/status.js';
 import { verifyCommand } from './commands/verify.js';
 import { flowCommand } from './commands/flow.js';
+import { registerPlanCommand } from './commands/plan.js';
 import { uiCommand } from './commands/ui.js';
 import { tuiCommand } from './commands/tui.js';
 import { syncCommand } from './commands/sync.js';
@@ -228,6 +229,9 @@ program
   .action(runAction(async (workspace: string | undefined, options: any) => {
     await flowCommand(workspace, options);
   }));
+
+// The plan, one item at a time: what AI tools run in their shell and people read in the Plan tab.
+registerPlanCommand(program, (error) => runAction(async () => { throw error; })());
 
 program
   .command('progress')

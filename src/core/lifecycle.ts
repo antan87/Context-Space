@@ -231,8 +231,10 @@ async function moveLifecycleToPlan(workspacePath: string): Promise<PlanDocument>
 /**
  * The plan, after moving an older lifecycle into it if needed. An untouched template plan from an
  * older release is dropped instead, unless the brief or a document still names one of its steps.
+ * Everything that changes the plan calls this first, so milestones saved by an older release are
+ * never missing from it.
  */
-async function ensurePlanStore(workspacePath: string): Promise<PlanDocument> {
+export async function ensurePlanStore(workspacePath: string): Promise<PlanDocument> {
   const stored = await readPlanIfExists(workspacePath);
   if (stored) return stored;
   const legacy = (await loadWorkspaceState(workspacePath)).lifecycle;
