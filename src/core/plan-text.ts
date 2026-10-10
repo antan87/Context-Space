@@ -311,7 +311,7 @@ export function renderPlanInstructions(): string {
   return [
     '## Plan',
     '',
-    'Read the plan with `ctxspace plan` (`--json` gives every field). Change it one item at a time with `ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`; `--help` shows how. If `plan` is an unknown command, use `./.contextspace/bin/ctxspace plan` (PowerShell: `.\\.contextspace\\bin\\ctxspace.cmd plan`). Never edit `contextspace-plan.json` by hand.',
+    'Read the plan with `ctxspace plan` (`--json` gives every field). Change it one item at a time with `ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`; `--help` shows how. If `ctxspace` is not on PATH, use `./.contextspace/bin/ctxspace plan` (PowerShell: `.\\.contextspace\\bin\\ctxspace.cmd plan`). Never edit `contextspace-plan.json` by hand.',
     '',
     'How to work with the plan:',
     ...PLAN_WORKFLOW.flatMap((step, index) => [`${index + 1}. ${step.text}`, ...(step.list ?? []).map((line) => `   - ${line}`)]),

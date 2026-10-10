@@ -22,7 +22,7 @@ Each harness executed 5 headless sessions against an identical project ("Add CSV
 |---|---|---|---|---|---|---|---|
 | **agy** | Gemini 3.8 Flash | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | 100% codes named with title; zero hangs. |
 | **Codex** | gpt-6-luna | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | Fastest run (~1.7 min total). |
-| **Claude Code** | Haiku 5.5 | **31 / 35** (88.6%) | 19 / 23 | 12 / 12 | 0 | 0 | Sessions 2, 3, and concurrent passed 100%. Session 1 attempted compound fallback `(ctxspace plan \|\| ...)` which was blocked by prefix permissions. Store was safely untouched. |
+| **Claude Code** | Haiku 5.5 | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 | 0 | 100% passed after instruction fix. Initially 31/35 when misleading instruction wording ("If plan is an unknown command") prompted a compound subshell fallback `(ctxspace plan \|\| ...)`; with instruction fixed to "If ctxspace is not on PATH", all direct commands execute cleanly under `.claude/settings.local.json`. |
 | **Pi** | north-mini-code | **N/A** (Partial) | s1, s2, s3 passed | Exceeded 429 quota | 0 | 0 | Completed sessions 1–3 successfully; concurrent runs halted by OpenRouter free daily rate limit (50 req/day). |
 
 ## Detailed Breakdown
@@ -42,7 +42,7 @@ Each harness executed 5 headless sessions against an identical project ("Add CSV
 - All 35 checks passed cleanly with minimal turns and lowest latency.
 
 ### 3. Claude Code (Haiku 5.5)
-- **Session 1:** 5/9 checks. Prompted by fallback wording in instructions, Claude executed `(ctxspace plan 2>/dev/null || ./.contextspace/bin/ctxspace plan)`, which was blocked by prefix-based tool permissions. Claude did not touch or corrupt `contextspace-plan.json` and reported what was blocked.
+- **Session 1:** 9/9 checks (after instruction fix). Initially, the misleading wording "If `plan` is an unknown command" prompted Claude to execute `(ctxspace plan 2>/dev/null || ./.contextspace/bin/ctxspace plan)`, which was blocked by prefix permissions. After correcting the instruction in `renderPlanInstructions()` to "If `ctxspace` is not on PATH", Claude directly executed `ctxspace plan` commands without fallback subshells, passing all 9 checks cleanly.
 - **Session 2:** 6/6 checks. Directly executed `ctxspace plan done T1` and `ctxspace plan done M2`.
 - **Session 3:** 8/8 checks. Successfully modified plan across all requested actions.
 - **Concurrent 4+5:** 12/12 checks. No conflicts or data loss.
