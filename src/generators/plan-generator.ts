@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import { loadWorkspaceState } from '../core/workspace-state.js';
 import { loadWorkspaceLifecycle, renderLifecyclePlan } from '../core/lifecycle.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
-import { isUnusedLegacyPlan } from '../core/legacy-lifecycle.js';
+import { planStoreExists } from '../core/plan.js';
 import { PLANNING_NOTES_FILE, planningNotesAreAuthored } from '../core/planning-notes.js';
 import { writeWorkspaceFile } from '../core/storage.js';
 import { findInterRepoDependencies } from '../analyzers/detect-deps.js';
@@ -215,8 +215,9 @@ export async function generateImplementationPlan(
   try {
     const { feature, repos, analysis } = ctx;
     const state = await loadWorkspaceState(workspacePath);
-    const lifecycle = state.lifecycle && isUnusedLegacyPlan(state.lifecycle)
-      ? await loadWorkspaceLifecycle(workspacePath) : state.lifecycle;
+    // The milestones live in the plan store; an older lifecycle is moved there on first load.
+    const lifecycle = state.lifecycle || await planStoreExists(workspacePath)
+      ? await loadWorkspaceLifecycle(workspacePath, { includeFleet: false }) : undefined;
     const milestonePlan = lifecycle ? renderLifecyclePlan(lifecycle, false) : '';
     // Every repo count gets the current work. Gating this on a single repo left a multi-repo
     // workspace, which needs its objective at least as much, with only a build order.

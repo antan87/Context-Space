@@ -7,10 +7,11 @@ import {
   REOPEN_REASON_MAX_LENGTH,
   advanceLifecycleStep,
   blockLifecycleStep,
+  loadWorkspaceLifecycle,
   renderLifecyclePlan,
 } from './lifecycle.js';
 import { deriveMilestoneFacts } from './progress-facts.js';
-import { loadWorkspaceState, saveWorkspaceState } from './workspace-state.js';
+import { saveWorkspaceState } from './workspace-state.js';
 import type { LifecycleStep } from '../types.js';
 
 vi.mock('./workspace.js', () => ({
@@ -27,7 +28,8 @@ async function seed(steps: LifecycleStep[]) {
     lifecycle: { workspaceId: 'test', flowType: 'feature', updatedAt: '', revision: 3, steps },
   });
 }
-const stepsNow = async () => (await loadWorkspaceState(workspacePath)).lifecycle!.steps;
+// The lifecycle is a view over the plan store.
+const stepsNow = async () => (await loadWorkspaceLifecycle(workspacePath, { includeFleet: false })).steps;
 
 beforeEach(async () => { workspacePath = await mkdtemp(path.join(os.tmpdir(), 'lifecycle-block-')); });
 afterEach(async () => { await rm(workspacePath, { recursive: true, force: true }); });

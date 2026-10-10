@@ -832,6 +832,20 @@ export interface WorkspaceLifecycle {
   steps: LifecycleStep[];
   fleet?: BranchFleetMember[];
   updatedAt: string;
+  /**
+   * Set once the milestones were moved into the plan store (`contextspace-plan.json`). From then on
+   * the steps live there and this record keeps only the flow type.
+   */
+  movedToPlanAt?: string;
+}
+
+/** The latest check of one milestone on this machine. Machine-local, so it stays out of the committed plan. */
+export interface PlanEvidence {
+  lastVerificationSha?: string;
+  lastVerificationStatus?: VerificationStatus;
+  /** Whether the check permitted progress. */
+  canProgress: boolean;
+  at: string;
 }
 
 /** State file saved to track per-repo sync/validation status (`.nexusflow-state.json`). */
@@ -844,6 +858,8 @@ export interface WorkspaceState {
   lastVerification?: WorkspaceVerificationReport;
   /** Active structured lifecycle state machine. */
   lifecycle?: WorkspaceLifecycle;
+  /** The latest check of each milestone, keyed by its plan code. */
+  planEvidence?: Record<string, PlanEvidence>;
   /** Recent explicit verification overrides, newest last (bounded). */
   verificationOverrides?: VerificationOverrideRecord[];
   /** Durable record of the latest finish run, so it can be resumed after a restart. */

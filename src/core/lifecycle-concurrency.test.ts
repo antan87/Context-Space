@@ -31,9 +31,10 @@ it('preserves both concurrent completions and independent sync state', async () 
     recordRepoSync(workspacePath, 'repo', { status: 'rebased', message: 'synced' }),
   ]);
   const state = await loadWorkspaceState(workspacePath);
-  expect(state.lifecycle?.steps.map((step) => step.status)).toEqual(['completed', 'completed']);
+  const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
+  expect(lifecycle.steps.map((step) => step.status)).toEqual(['completed', 'completed']);
   expect(state.repos.repo.pendingValidation).toBe(true);
-  expect(state.lifecycle?.currentStepId).toBeUndefined();
+  expect(lifecycle.currentStepId).toBeUndefined();
 });
 
 it('preserves progress made while another step is being verified', async () => {
@@ -49,7 +50,7 @@ it('preserves progress made while another step is being verified', async () => {
   await advanceLifecycleStep(workspacePath, 'b', 'complete');
   finish({ overallStatus: 'pass', canProgress: true, repos: [] });
   await verification;
-  expect((await loadWorkspaceState(workspacePath)).lifecycle?.steps.map((s) => s.status)).toEqual(['verified', 'completed']);
+  expect((await loadWorkspaceLifecycle(workspacePath, { includeFleet: false })).steps.map((s) => s.status)).toEqual(['verified', 'completed']);
 });
 
 it('rejects a stale verification of a step completed by another caller and permits recovery', async () => {
@@ -67,14 +68,15 @@ it('rejects a stale verification of a step completed by another caller and permi
   finish({ overallStatus: 'pass', canProgress: true, repos: [] });
   await rejected;
   await advanceLifecycleStep(workspacePath, 'b', 'complete');
-  expect((await loadWorkspaceState(workspacePath)).lifecycle?.steps.every((s) => s.status === 'completed')).toBe(true);
+  expect((await loadWorkspaceLifecycle(workspacePath, { includeFleet: false })).steps.every((s) => s.status === 'completed')).toBe(true);
 });
 
 it('initializes a lifecycle once for concurrent first readers', async () => {
   await saveWorkspaceState({ workspacePath, repos: {}, updatedAt: '' });
   const lifecycles = await Promise.all([loadWorkspaceLifecycle(workspacePath), loadWorkspaceLifecycle(workspacePath)]);
   expect(lifecycles[0]).toEqual(lifecycles[1]);
-  expect((await loadWorkspaceState(workspacePath)).lifecycle).toEqual(lifecycles[0]);
+  // The flow type is recorded once; the milestones themselves live in the plan store.
+  expect((await loadWorkspaceState(workspacePath)).lifecycle).toMatchObject({ workspaceId: 'test', flowType: lifecycles[0]!.flowType, steps: [] });
 });
 
 it('preserves corrupt state instead of silently replacing it', async () => {

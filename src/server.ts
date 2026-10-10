@@ -2920,10 +2920,10 @@ app.get('/api/workspace/:id/plan', async (c) => {
     }
 
     const state = await loadWorkspaceState(workspacePath);
-    if (state.lifecycle) {
+    const { planStoreExists } = await import('./core/plan.js');
+    if (state.lifecycle || await planStoreExists(workspacePath)) {
       const { renderLifecyclePlan, loadWorkspaceLifecycle } = await import('./core/lifecycle.js');
-      const { isUnusedLegacyPlan } = await import('./core/legacy-lifecycle.js');
-      const lifecycle = isUnusedLegacyPlan(state.lifecycle) ? await loadWorkspaceLifecycle(workspacePath) : state.lifecycle;
+      const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
       const milestones = renderLifecyclePlan(lifecycle);
       const marker = /<!-- CONTEXTSPACE:MILESTONES:START -->[\s\S]*?<!-- CONTEXTSPACE:MILESTONES:END -->/;
       content = marker.test(content) ? content.replace(marker, () => milestones) : `${milestones}\n\n${content}`;

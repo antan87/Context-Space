@@ -7,6 +7,7 @@ import { app } from './server.js';
 import * as configModule from './core/config.js';
 import { PRIMARY_MANIFEST_FILE } from './core/constants.js';
 import { loadWorkspaceState, saveWorkspaceState } from './core/workspace-state.js';
+import { loadWorkspaceLifecycle } from './core/lifecycle.js';
 import type { LifecycleStep } from './types.js';
 
 let root: string;
@@ -97,13 +98,13 @@ describe('POST /api/workspace/:id/lifecycle/reopen', () => {
     const { status, body } = await call('POST', '/api/workspace/ws/lifecycle/reopen', { stepId: 'plan', reason: 'Gap in step 2' });
     expect(status).toBe(200);
     expect(body.lifecycle.steps[0]).toMatchObject({ status: 'in_progress', reopenReason: 'Gap in step 2', reopenCount: 1 });
-    expect((await loadWorkspaceState(dir)).lifecycle!.steps[0]!.reopenedBy).toBe('user');
+    expect((await loadWorkspaceLifecycle(dir, { includeFleet: false })).steps[0]!.reopenedBy).toBe('user');
   });
 
   it('records the reopen as the user\'s own even if the caller claims to be an agent', async () => {
     const dir = await makeWorkspace('ws', [done('plan')]);
     await call('POST', '/api/workspace/ws/lifecycle/reopen', { stepId: 'plan', reason: 'x', by: 'agent' });
-    expect((await loadWorkspaceState(dir)).lifecycle!.steps[0]!.reopenedBy).toBe('user');
+    expect((await loadWorkspaceLifecycle(dir, { includeFleet: false })).steps[0]!.reopenedBy).toBe('user');
   });
 
   it.each([

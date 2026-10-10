@@ -48,7 +48,7 @@ export const planningTools: NexusFlowTool[] = [
   planningTool('update_milestone_plan',
     'Create, edit, reorder, or remove feature-specific workspace milestones. Read get_work_context first and send lifecycle.revision (0 when absent) plus the entire desired steps array. Omitted steps are removed; [] disables milestones. Retained steps keep progress and verification. Reassign document/assignment scopes before removing referenced milestones. On conflict, reread and merge. Do not invent generic steps. Refresh context after saving to update generated files.',
     lifecyclePlanSchema,
-    async (input, root) => ({ lifecycle: await updateLifecyclePlan(root, input), ...(await refreshPlanningContext(root)) }), true),
+    async (input, root) => ({ lifecycle: await updateLifecyclePlan(root, input, { by: 'agent' }), ...(await refreshPlanningContext(root)) }), true),
   planningTool('update_work_assignment',
     'Update work type, size, and the current AI assignment, including stage, objective, expected output, stopping point, and optional milestone scope. Read get_work_context first and use guidance.revision. Supply the complete assignment; omit milestoneId for workspace scope. Follow the user-authorized scope; changing a saved stage does not itself grant permission to proceed. Returns the updated context and revision.',
     guidanceUpdateSchema,

@@ -1455,7 +1455,14 @@ describe('Server API Endpoints Unit Tests', () => {
       vi.spyOn(config, 'loadConfig').mockResolvedValue({
         workspacesDir: '/mock/workspaces'
       } as any);
-      vi.spyOn(fs, 'readFile').mockResolvedValue('# Mock Plan content');
+      // Only the Markdown plan exists: no state file and no plan store yet.
+      const missing = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
+      vi.spyOn(fs, 'readFile').mockImplementation((async (file: unknown) => {
+        if (String(file).endsWith('.md')) return '# Mock Plan content';
+        throw missing();
+      }) as any);
+      vi.spyOn(fs, 'realpath').mockImplementation((async (candidate: unknown) => String(candidate)) as any);
+      vi.spyOn(fs, 'lstat').mockImplementation((async () => { throw missing(); }) as any);
 
       const response = await app.request('/api/workspace/test-ws/plan');
       expect(response.status).toBe(200);

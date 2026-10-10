@@ -9,7 +9,7 @@ import { loadFeatureConfig, listWorkspaces } from './workspace.js';
 import { readWorkspaceFile, writeWorkspaceFile, resolveWorkspaceFileUrl, workspaceFileExists } from './storage.js';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
 import { loadWorkspaceState } from './workspace-state.js';
-import { isUnusedLegacyPlan } from './legacy-lifecycle.js';
+import { planStoreExists } from './plan.js';
 
 export const WORK_GUIDANCE_FILE = 'contextspace-work.json';
 export const WORK_ASSIGNMENT_FILE = 'contextspace-assignment.md';
@@ -80,8 +80,8 @@ export async function loadWorkGuidance(workspacePath: string): Promise<WorkGuida
 async function checkScope(workspacePath: string, milestoneId?: string, project?: boolean) {
   if (project && !(await requireFeature(workspacePath)).projectId) throw new Error('Project-scoped documents require a registered project.');
   if (!milestoneId) return;
-  const state = await loadWorkspaceState(workspacePath);
-  if (!state.lifecycle?.steps.some((step) => step.id === milestoneId)) throw new Error('Select an existing milestone.');
+  const { readWorkspaceLifecycle } = await import('./lifecycle.js');
+  if (!(await readWorkspaceLifecycle(workspacePath)).steps.some((step) => step.id === milestoneId)) throw new Error('Select an existing milestone.');
 }
 
 export async function ensureWorkGuidance(workspacePath: string): Promise<void> {
@@ -223,12 +223,9 @@ export async function getWorkContext(workspacePath: string) {
   const feature = await requireFeature(workspacePath);
   const guidance = await loadWorkGuidance(workspacePath);
   const state = await loadWorkspaceState(workspacePath);
-  // Read-only consumers must not receive obsolete template steps while waiting
-  // for the lifecycle loader to persist the migration.
-  const lifecycle = state.lifecycle && isUnusedLegacyPlan(state.lifecycle)
-    && !guidance.assignment.milestoneId && !guidance.documents.some((doc) => doc.scope.milestoneId)
-    ? { ...state.lifecycle, steps: [], currentStepId: undefined }
-    : state.lifecycle;
+  // Read-only: the milestones as the plan store holds them, or as an older lifecycle will be moved there.
+  const { readWorkspaceLifecycle } = await import('./lifecycle.js');
+  const lifecycle = state.lifecycle || await planStoreExists(workspacePath) ? await readWorkspaceLifecycle(workspacePath) : undefined;
   const shared = await sharedProjectDocuments(workspacePath);
   const sources = new Map(shared.map((item) => [item.document.id, documentLocation(item.workspacePath, item.workspaceId, item.document)]));
   return { guidance, projectId: feature.projectId, lifecycle: lifecycle ?? null,

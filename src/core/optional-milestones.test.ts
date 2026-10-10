@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { loadWorkspaceLifecycle, updateLifecyclePlan, renderLifecyclePlan } from './lifecycle.js';
 import { loadWorkspaceState, saveWorkspaceState } from './workspace-state.js';
 import { legacyDefaultSteps } from './legacy-lifecycle.js';
+import { planStoreExists } from './plan.js';
 import { addWorkDocument, updateWorkDocument, getWorkContext } from './work-guidance.js';
 
 let root: string;
@@ -35,7 +36,9 @@ it.each(['quick', 'feature', 'epic'] as const)('retires only an untouched legacy
   expect((await getWorkContext(root)).lifecycle?.steps).toEqual([]);
   expect((await loadWorkspaceState(root)).lifecycle?.steps).toEqual(steps);
   expect((await loadWorkspaceLifecycle(root)).steps).toEqual([]);
-  expect((await loadWorkspaceState(root)).lifecycle?.revision).toBe(1);
+  // Retired, not moved: the template never becomes part of the plan store.
+  expect((await loadWorkspaceState(root)).lifecycle).toMatchObject({ steps: [], movedToPlanAt: expect.any(String) });
+  expect(await planStoreExists(root)).toBe(false);
 });
 
 it.each(['edited', 'progressed', 'saved'] as const)('preserves an %s legacy plan', async (kind) => {

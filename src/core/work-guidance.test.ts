@@ -175,7 +175,7 @@ describe('source documents and assignments', () => {
 
 describe('editable milestone definitions', () => {
   it('clears a custom verification command so the default gate can be used again', async () => {
-    let lifecycle = (await loadWorkspaceState(root)).lifecycle!;
+    let lifecycle = (await loadWorkspaceLifecycle(root, { includeFleet: false }));
     lifecycle = await updateLifecyclePlan(root, { revision: 0, steps: lifecycle.steps.map((step) => ({ ...step,
       ...(step.id === 'step_implementation' ? { requiresVerification: true, verificationCommand: 'npm run special-test' } : {}),
     })) });
@@ -183,7 +183,7 @@ describe('editable milestone definitions', () => {
       ...(step.id === 'step_implementation' ? { verificationCommand: '' } : {}),
     })) });
     expect(lifecycle.steps.find((step) => step.id === 'step_implementation')).toMatchObject({ requiresVerification: true });
-    expect((await loadWorkspaceState(root)).lifecycle?.steps.find((step) => step.id === 'step_implementation')?.verificationCommand).toBeUndefined();
+    expect((await loadWorkspaceLifecycle(root, { includeFleet: false })).steps.find((step) => step.id === 'step_implementation')?.verificationCommand).toBeUndefined();
   });
 
   it('preserves progress and exports the same milestone definitions', async () => {
@@ -191,28 +191,29 @@ describe('editable milestone definitions', () => {
     const steps = lifecycle.steps.map((step) => ({ ...step, title: step.id === 'step_implementation' ? 'Optimize invoice lookup' : step.title }));
     lifecycle = await updateLifecyclePlan(root, { revision: lifecycle.revision, steps: [...steps, { id: 'rollout', title: 'Roll out gradually', dependsOn: ['step_ship'] }] });
     expect(lifecycle.steps[0].status).toBe('completed');
-    expect(lifecycle.steps[1].status).toBe('in_progress');
+    // Nothing starts by itself: the next milestone is ready, not started.
+    expect(lifecycle.steps[1].status).toBe('pending');
     expect(lifecycle.steps.at(-1)?.status).toBe('pending');
     expect(renderLifecyclePlan(lifecycle)).toContain('Optimize invoice lookup');
     expect(renderLifecyclePlan(lifecycle)).toContain('Roll out gradually');
   });
 
   it('rejects cycles and stale plan revisions without losing saved steps', async () => {
-    const lifecycle = (await loadWorkspaceState(root)).lifecycle!;
+    const lifecycle = (await loadWorkspaceLifecycle(root, { includeFleet: false }));
     const cycle = lifecycle.steps.map((step) => ({ ...step, dependsOn: step.id === 'step_discovery' ? ['step_ship'] : step.dependsOn }));
     await expect(updateLifecyclePlan(root, { revision: 0, steps: cycle })).rejects.toThrow('cycle');
     await updateLifecyclePlan(root, { revision: 0, steps: lifecycle.steps });
     await expect(updateLifecyclePlan(root, { revision: 0, steps: lifecycle.steps })).rejects.toThrow('another session');
-    expect((await loadWorkspaceState(root)).lifecycle?.steps).toHaveLength(4);
+    expect((await loadWorkspaceLifecycle(root, { includeFleet: false })).steps).toHaveLength(4);
   });
 
   it('validates retained dependencies when optional fields are omitted from an edit', async () => {
-    const lifecycle = (await loadWorkspaceState(root)).lifecycle!;
+    const lifecycle = (await loadWorkspaceLifecycle(root, { includeFleet: false }));
     const steps = lifecycle.steps.map((step) => ({ id: step.id, title: step.title,
       ...(step.id === 'step_discovery' ? { dependsOn: ['step_ship'] } : {}),
     }));
     await expect(updateLifecyclePlan(root, { revision: 0, steps })).rejects.toThrow('cycle');
-    expect((await loadWorkspaceState(root)).lifecycle?.revision ?? 0).toBe(0);
+    expect((await loadWorkspaceLifecycle(root, { includeFleet: false })).revision ?? 0).toBe(0);
   });
 
   it('blocks changing completed gate dependencies', async () => {

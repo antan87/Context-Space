@@ -217,7 +217,7 @@ export const screenTools: NexusFlowTool[] = [
           throw new Error(`"${step.title}" is already ${step.status}. Only the user can reopen finished work.`);
         }
         try {
-          await advanceLifecycleStep(workspacePath, input.id, 'start');
+          await advanceLifecycleStep(workspacePath, input.id, 'start', { by: 'agent', harness: input.harness });
         } catch (error) {
           throw new Error(error instanceof Error ? error.message : String(error));
         }
@@ -228,7 +228,7 @@ export const screenTools: NexusFlowTool[] = [
       if (input.state === 'blocked') {
         needNote('what the milestone is blocked on');
         try {
-          await blockLifecycleStep(workspacePath, input.id, { reason: input.note! });
+          await blockLifecycleStep(workspacePath, input.id, { reason: input.note! }, { by: 'agent', harness: input.harness });
         } catch (error) {
           if (error instanceof LifecycleStepError) throw new Error(error.message);
           throw error;
