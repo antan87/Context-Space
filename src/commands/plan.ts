@@ -17,8 +17,7 @@ import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
-import { ensurePlanStore } from '../core/lifecycle.js';
-import { importPlanningNotes } from '../core/plan-import.js';
+import { preparePlan } from '../core/plan-import.js';
 import { PLAN_KINDS, WHO_ACTS, itemLabel, type PlanKind } from '../core/plan-words.js';
 import {
   PlanError,
@@ -131,15 +130,6 @@ async function planGoal(workspacePath: string): Promise<PlanGoal | undefined> {
 function countsLine(plan: PlanDocument): string {
   const { counts } = planSections(plan);
   return `Plan: Needs you ${counts.needsYou} · In progress ${counts.inProgress} · To do ${counts.todo} · Done ${counts.done}. Run "ctxspace plan" to see it.`;
-}
-
-/**
- * The plan, after older planning moved into it: the lifecycle on first load, and the old notes file
- * (contextspace-milestones.md) once, so an AI that runs this before any refresh still sees them.
- */
-async function preparePlan(workspacePath: string): Promise<PlanDocument> {
-  await importPlanningNotes(workspacePath);
-  return ensurePlanStore(workspacePath);
 }
 
 /** `ctxspace plan` and `ctxspace plan show`. */

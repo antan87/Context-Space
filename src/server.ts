@@ -3,6 +3,7 @@ import { resolveFileReference } from './core/file-reference-resolve.js';
 import { decodeImageAttachment, InvalidImageAttachment } from './services/image-attachment.js';
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
+import { registerPlanRoutes } from './http/plan-routes.js';
 import { extractAstSymbols } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
 /**
@@ -2941,6 +2942,10 @@ app.get('/api/workspace/:id/plan', async (c) => {
 });
 
 registerWorkGuidanceRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerPlanRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

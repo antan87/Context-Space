@@ -252,6 +252,15 @@ export function applyPlanningNotes(plan: PlanDocument, parsed: ParsedNotes, at: 
   return { added, updated };
 }
 
+/**
+ * The plan, after older planning moved into it: the lifecycle on first load, and the old notes file
+ * once. Every reader that people or AI tools see (`ctxspace plan`, the Plan tab) starts here.
+ */
+export async function preparePlan(workspacePath: string): Promise<PlanDocument> {
+  await importPlanningNotes(workspacePath);
+  return ensurePlanStore(workspacePath);
+}
+
 export interface NotesImportResult {
   /** `none`: no notes file. `already`: this content was moved before. */
   status: 'none' | 'imported' | 'already';

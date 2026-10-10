@@ -199,7 +199,7 @@ export function renderPlanText(plan: PlanDocument, options: { goal?: PlanGoal; a
 }
 
 /** An item as JSON: its label and state in words, what it waits for and what it holds up. */
-export function itemToJson(plan: PlanDocument, item: PlanItem) {
+export function itemToJson(plan: PlanDocument, item: PlanItem, options: { history?: boolean } = {}) {
   return {
     id: item.id,
     label: itemLabel(item),
@@ -221,13 +221,19 @@ export function itemToJson(plan: PlanDocument, item: PlanItem) {
     ...(item.links ? { links: item.links } : {}),
     ...(item.gate ? { gate: item.gate } : {}),
     updatedAt: item.updatedAt,
+    ...(options.history ? {
+      createdAt: item.createdAt,
+      ...(item.startedAt ? { startedAt: item.startedAt } : {}),
+      ...(item.closedAt ? { closedAt: item.closedAt } : {}),
+      history: item.history,
+    } : {}),
   };
 }
 
 /** The plan as JSON, in the same sections as the text. */
-export function planToJson(plan: PlanDocument, options: { goal?: PlanGoal; all?: boolean; changes?: number } = {}) {
+export function planToJson(plan: PlanDocument, options: { goal?: PlanGoal; all?: boolean; changes?: number; history?: boolean } = {}) {
   const sections = planSections(plan, { changes: options.changes ?? 10 });
-  const json = (items: PlanItem[]) => items.map((item) => itemToJson(plan, item));
+  const json = (items: PlanItem[]) => items.map((item) => itemToJson(plan, item, { history: options.history }));
   return {
     revision: plan.revision,
     ...(options.goal ? { goal: options.goal } : {}),

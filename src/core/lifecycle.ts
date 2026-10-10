@@ -420,6 +420,8 @@ export async function advanceLifecycleStep(
   stepId: string,
   action: 'start' | 'verify' | 'complete',
   actor: PlanActor = { by: 'user' },
+  /** For complete: what came out of it, kept with the check's result. */
+  options: { resolution?: string } = {},
 ): Promise<WorkspaceLifecycle> {
   const { plan, lifecycle } = await loadView(workspacePath, { write: true });
   const step = lifecycle.steps.find((s) => s.id === stepId);
@@ -468,7 +470,8 @@ export async function advanceLifecycleStep(
     if (action === 'start') {
       await changePlan(workspacePath, { type: 'start', id: stepId }, { actor, ifItemUpdatedAt: item.updatedAt });
     } else if (action === 'complete' && !gateFailed) {
-      const resolution = requiresVerification ? `Passed its check on ${checkedSha ?? 'the latest code'}` : 'Marked done';
+      const checked = requiresVerification ? `Passed its check on ${checkedSha ?? 'the latest code'}` : '';
+      const resolution = [options.resolution?.trim(), checked].filter(Boolean).join('. ') || 'Marked done';
       await changePlan(workspacePath, { type: 'done', id: stepId, resolution, checkPassed: true }, { actor, ifItemUpdatedAt: item.updatedAt });
     }
   } catch (error) {
