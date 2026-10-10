@@ -471,6 +471,7 @@ export function buildAntigravityTurnArgs(
 export class AntigravityCliAdapter extends CliAdapterBase {
   protected readonly binary = 'agy';
   protected readonly label = 'agy CLI';
+  protected override readonly harness = 'antigravity';
   protected readonly useShell = false;
   protected readonly promptViaStdin = false;
   protected readonly advanceFirstTurnOnDispatch = false;

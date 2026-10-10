@@ -29,6 +29,8 @@ export interface AcpTransportOptions {
   args: string[];
   cwd: string;
   client: acp.Client;
+  /** The AI tool's name, given to it as CTXSPACE_HARNESS so `ctxspace plan` records which tool made a change. */
+  harness?: string;
 }
 
 export type AcpTransportFactory = (options: AcpTransportOptions) => AcpTransport;
@@ -37,6 +39,7 @@ export interface AcpCliAdapterOptions {
   executable: string;
   args: string[];
   label: string;
+  harness?: string;
   loginCommand?: string;
   validateSessionId?: (id: string) => boolean;
   transportFactory?: AcpTransportFactory;
@@ -96,7 +99,7 @@ class FluentAcpConnection implements AcpConnection {
 export function createAcpTransport(options: AcpTransportOptions): AcpTransport {
   const child = spawn(options.executable, options.args, {
     cwd: options.cwd,
-    env: { ...process.env, FORCE_COLOR: '0' },
+    env: { ...process.env, FORCE_COLOR: '0', ...(options.harness ? { CTXSPACE_HARNESS: options.harness } : {}) },
     detached: process.platform !== 'win32',
     // npm installs expose a .cmd shim on Windows. All argv here is provider
     // configuration; user prompts and session ids travel inside ACP JSON.
@@ -254,6 +257,7 @@ export class AcpCliAdapter extends EventEmitter implements AgentHarness {
       args: [...this.options.args],
       cwd,
       client,
+      ...(this.options.harness ? { harness: this.options.harness } : {}),
     });
     this.transport = transport;
     this.observeProcess(transport.process);

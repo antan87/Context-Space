@@ -193,6 +193,21 @@ describe('ClaudeSdkAdapter', () => {
     expect(approvals.every((item) => item.decision.behavior === (profile === 'workspace-write' ? 'allow' : 'deny'))).toBe(true);
   });
 
+  it.each(['workspace-write', 'review'] as const)('lets the AI run a plain ctxspace plan command in the %s profile only when it may write', async (profile) => {
+    const commands = ['ctxspace plan', './.contextspace/bin/ctxspace plan done T1 --resolution "Tests pass"', 'ctxspace plan; rm -rf ~', 'ctxspace plan done T1 --resolution "$(whoami)"'];
+    const { handle, approvals } = createMockHandle(commands.map((command, index) => ({
+      type: 'approval_required', requestId: `bash-${index}`, tool: 'Bash', input: { command },
+    })));
+    const mockAdapter = createMockAdapter(handle);
+    const adapter = new ClaudeSdkAdapter(undefined, mockAdapter);
+    await adapter.start('C:/test/workspace');
+    await adapter.send('Mark T1 done', profile);
+    await vi.waitFor(() => expect(approvals).toHaveLength(commands.length));
+    expect(approvals.map((item) => item.decision.behavior)).toEqual(profile === 'workspace-write' ? ['allow', 'allow', 'deny', 'deny'] : ['deny', 'deny', 'deny', 'deny']);
+    // The AI tool is told its name, so the plan records Claude as the one who made the change.
+    expect(vi.mocked(mockAdapter.start).mock.calls[0][0].env).toMatchObject({ CTXSPACE_HARNESS: 'claude' });
+  });
+
   it('emits idle on silent stream termination (prevents turn gate lock)', async () => {
     const { handle } = createMockHandle([
       { type: 'text_delta', text: 'Partial output' },

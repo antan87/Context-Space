@@ -17,3 +17,28 @@ export function asPersonEnv(env: NodeJS.ProcessEnv = process.env): Record<string
   const keys = new Set([...AI_TOOL_ENV, ...Object.keys(env).filter((key) => AI_TOOL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)))]);
   return Object.fromEntries([...keys].map((key) => [key, '']));
 }
+
+/** How an AI tool runs the workspace CLI: from PATH, or the workspace's own copy. */
+const PLAN_LAUNCHERS = ['ctxspace', './.contextspace/bin/ctxspace', '.contextspace/bin/ctxspace'];
+
+/**
+ * Only `ctxspace plan …` commands, so an AI tool may run them without asking each time. Several may
+ * be joined with `&&` or `||` (AIs like a fallback to the workspace copy), and `2>&1` is allowed.
+ * Every word must be plain, or quoted with nothing the shell expands: no other command, pipe,
+ * redirection, variable, substitution, subshell or glob. Anything else still needs the usual approval.
+ */
+export function isPlainPlanCommand(command: string): boolean {
+  const commands: string[][] = [[]];
+  let rest = command.trim();
+  while (rest) {
+    const token = /^(?:&&|\|\||2>&1)(?=[ \t]|$)|^(?:[A-Za-z0-9_./:=@,+%-]+|'[^']*'|"[^"$`\\!]*")+/.exec(rest);
+    if (!token) return false;
+    if (token[0] === '&&' || token[0] === '||') commands.push([]);
+    else if (token[0] !== '2>&1') commands.at(-1)!.push(token[0]);
+    rest = rest.slice(token[0].length);
+    const space = /^[ \t]+/.exec(rest);
+    if (space) rest = rest.slice(space[0].length);
+    else if (rest) return false;
+  }
+  return commands.every((words) => words.length >= 2 && PLAN_LAUNCHERS.includes(words[0]) && words[1] === 'plan');
+}

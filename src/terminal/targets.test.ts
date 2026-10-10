@@ -23,4 +23,14 @@ describe('interactive terminal targets', () => {
       expect(withWorkspaceCli(launch, path.join(root, 'missing')).env.PATH).toBe(launch.env.PATH);
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
+  it.skipIf(process.platform === 'win32')('tells an AI tool it is one, and a shell that it is not', async () => {
+    const bin = await fs.mkdtemp(path.join(os.tmpdir(), 'ctx-terminal-harness-'));
+    try {
+      await fs.writeFile(path.join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+      const env = { PATH: bin, SHELL: '/bin/sh', CTXSPACE_HARNESS: 'codex' };
+      expect(resolveLaunch('claude', undefined, env).env.CTXSPACE_HARNESS).toBe('claude');
+      expect(resolveLaunch('shell', undefined, env).env.CTXSPACE_HARNESS).toBeUndefined();
+      expect(env.CTXSPACE_HARNESS).toBe('codex');
+    } finally { await fs.rm(bin, { recursive: true, force: true }); }
+  });
 });

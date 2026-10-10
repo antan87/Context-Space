@@ -70,6 +70,8 @@ describe('CodexSdkAdapter', () => {
       expect(usageEvents).toEqual([{ inputTokens: 20, outputTokens: 8 }]);
       expect(idleCount).toBeGreaterThanOrEqual(1);
     });
+    // Codex is told its name, so the plan records it as the one who made a change.
+    expect(vi.mocked(mockAdapter.start).mock.calls[0][0].env).toEqual({ CTXSPACE_HARNESS: 'codex' });
   });
 
   it('emits idle on silent stream termination', async () => {

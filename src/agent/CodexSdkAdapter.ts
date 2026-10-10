@@ -47,6 +47,7 @@ export class CodexSdkAdapter extends EventEmitter implements AgentHarness {
           },
           permissionMode,
           model: this.session?.model || process.env.OPENAI_MODEL || process.env.CODEX_MODEL || undefined,
+          env: { CTXSPACE_HARNESS: 'codex' },
           mcpServers: {
             [MCP_ADAPTER_SERVER_NAME]: getLocalMcpServerConfig(this.cwd, role),
             [LEGACY_MCP_ADAPTER_SERVER_NAME]: getLocalMcpServerConfig(this.cwd, role),

@@ -45,13 +45,17 @@ export function resolveShell(env = terminalEnvironment(), platform = process.pla
   throw new Error('No interactive shell was found.');
 }
 
-export function resolveLaunch(target: string, sessionId?: string, env = terminalEnvironment(), platform = process.platform): LaunchSpec {
+export function resolveLaunch(target: string, sessionId?: string, baseEnv = terminalEnvironment(), platform = process.platform): LaunchSpec {
+  // An AI tool learns it is one, so `ctxspace plan` acts as the AI and names the tool; a shell is a person.
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  delete env.CTXSPACE_HARNESS;
   if (target === 'shell') {
     if (sessionId) throw new Error('Shells do not have saved assistant sessions.');
     const file = resolveShell(env, platform);
     return { file, args: platform === 'win32' ? ['-NoLogo'] : ['-l'], env, label: path.basename(file) };
   }
   if (!isCliHarnessId(target)) throw new Error('This harness does not have an embedded terminal target.');
+  env.CTXSPACE_HARNESS = target;
   const harness = CLI_HARNESSES[target];
   let file: string | null | undefined;
   for (const binary of ('terminalBinaries' in harness ? harness.terminalBinaries : [harness.binary])) {
