@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyPlanChange, emptyPlan, type PlanActor, type PlanChange, type PlanDocument } from './plan.js';
-import { checkPlan, firstLine, planToJson, relativeTime, renderChanges, renderHistory, renderPlanRules, renderPlanText } from './plan-text.js';
-import { PLAN_RULES, PLAN_WORKFLOW } from './plan-words.js';
+import { checkPlan, firstLine, goalFromBrief, planToJson, relativeTime, renderChanges, renderHistory, renderPlanInstructions, renderPlanRules, renderPlanText } from './plan-text.js';
+import { PLAN_RULES, PLAN_WORKFLOW, WHO_ACTS } from './plan-words.js';
 
 const user: PlanActor = { by: 'user' };
 const claude: PlanActor = { by: 'agent', harness: 'claude' };
@@ -153,9 +153,30 @@ describe('small helpers', () => {
 
   it('gives the AI a work routine: read, keep the plan true, record what the user says, report with names', () => {
     expect(PLAN_WORKFLOW).toHaveLength(6);
-    expect(PLAN_WORKFLOW[0]).toMatch(/^Start by running `ctxspace plan`/);
-    expect(PLAN_WORKFLOW.join(' ')).toContain('your part is done');
-    expect(PLAN_WORKFLOW.at(-1)).toContain('never "M2" alone');
+    expect(PLAN_WORKFLOW[0].text).toMatch(/^Start by running `ctxspace plan`/);
+    expect(PLAN_WORKFLOW[2].list).toHaveLength(3);
+    expect(PLAN_WORKFLOW.map((step) => step.text).join(' ')).toContain('your part is done');
+    expect(PLAN_WORKFLOW.at(-1)!.text).toContain('never "M2" alone');
+  });
+
+  it('writes the Plan section of AGENTS.md: command, numbered routine with its changes, rules, who acts', () => {
+    const text = renderPlanInstructions();
+    expect(text.split('\n')[0]).toBe('## Plan');
+    expect(text).toContain('`ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`');
+    expect(text).toContain('Never edit `contextspace-plan.json` by hand.');
+    expect(text).toContain('.\\.contextspace\\bin\\ctxspace.cmd plan');
+    expect(text).toContain('3. Keep the plan true while you work, one change at a time:\n   - new work you find:');
+    expect(text).toContain('6. Report back in three short parts');
+    PLAN_RULES.forEach((rule, index) => expect(text).toContain(`${index + 1}. ${rule}`));
+    expect(text.trimEnd().split('\n').at(-1)).toBe(WHO_ACTS.slice(0, 3).join(' '));
+    // Told how a person acts as the user, an AI tried it: AGENTS.md leaves it out.
+    expect(text).not.toContain('--as user');
+  });
+
+  it('takes the goal from the brief, or from the workspace description', () => {
+    expect(goalFromBrief({ objective: 'Ship CSV', stage: 'implement', stopCondition: '' }, 'Reports')).toEqual({ objective: 'Ship CSV', stage: 'implement', stopCondition: undefined });
+    expect(goalFromBrief({ objective: '', stage: 'investigate' }, 'Reports')).toEqual({ objective: 'Reports', stage: 'investigate', stopCondition: undefined });
+    expect(goalFromBrief({ objective: '' })).toBeUndefined();
   });
 
   it('shortens text to its first sentence', () => {

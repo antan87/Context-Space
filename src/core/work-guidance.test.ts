@@ -77,6 +77,15 @@ describe('source documents and assignments', () => {
     expect((await readWorkDocument(root, doc.id)).content).toBe(source().content);
   });
 
+  it('returns the plan text without moving an older lifecycle into the store', async () => {
+    const context = await getWorkContext(root);
+    expect(context.plan).toContain('MILESTONES');
+    expect(context.plan).toContain('step_discovery');
+    expect(context.assignment).toContain('`ctxspace plan`');
+    expect(context.assignment).not.toContain('get_planning_notes');
+    await expect(fs.stat(path.join(root, 'contextspace-plan.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('includes only workspace and active milestone sources', async () => {
     let guidance = await addWorkDocument(root, 0, source('Shared'));
     guidance = await addWorkDocument(root, guidance.revision, { ...source('Implementation-only'), scope: { milestoneId: 'step_implementation' } });

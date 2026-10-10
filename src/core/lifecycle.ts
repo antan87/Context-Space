@@ -264,6 +264,11 @@ export async function ensurePlanStore(workspacePath: string): Promise<PlanDocume
  * The plan as a read-only consumer sees it: an older lifecycle that has not been moved yet is shown
  * as it will be moved, and nothing is written.
  */
+/** The plan as it reads now, without writing anything: the store, or an older lifecycle as it will be moved. */
+export async function readPlanReadOnly(workspacePath: string): Promise<PlanDocument> {
+  return readPlanForView(workspacePath, await loadWorkspaceState(workspacePath));
+}
+
 async function readPlanForView(workspacePath: string, state: WorkspaceState): Promise<PlanDocument> {
   const stored = await readPlanIfExists(workspacePath);
   if (stored) return stored;

@@ -12,6 +12,7 @@ import { getConventionalTestCommands } from '../utils/test-command.js';
 import { renderFreshnessBanner } from '../core/generation-lock.js';
 import { PRIMARY_KNOWLEDGE_FILE, PRIMARY_PLAN_FILE, CLI_NAME } from '../core/constants.js';
 import { resolveActiveDomainRules } from '../core/domain-packs.js';
+import { renderPlanInstructions } from '../core/plan-text.js';
 
 /** How a repo relates to its siblings in this workspace. */
 export interface RepoRelations {
@@ -272,16 +273,18 @@ ${structureRule}${startHint}`
 
 ${summary}${reposSection}
 
+${renderPlanInstructions()}
+
 ## Where to look
 
 If \`ctxspace\` is not on PATH, use \`./.contextspace/bin/ctxspace\` (bash) or \`.\\.contextspace\\bin\\ctxspace.cmd\` (PowerShell) with the same arguments. Trust workspace MCP configs in your assistant.
 
 - \`${PRIMARY_KNOWLEDGE_FILE}\` — decisions and gotchas, one per \`###\` heading. Use MCP \`search_knowledge\`; if the MCP server is not connected, inspect headings, not the whole file. Add via \`${CLI_NAME} knowledge add -t decision|gotcha --title "..." -m "..."\`; without CLI, append a \`### <YYYY-MM-DD> — <Title>\` heading directly. Record a rule and reason that cannot be recovered from the code or git history. Avoid restating structure the code already shows.
-- \`contextspace-milestones.md\` — authored delivery order, questions with owners/status, existing work and deferred decisions; refresh preserves it.
-- \`${PRIMARY_PLAN_FILE}\` — generated: current work, then package order (not a delivery plan); edit milestones via Plan or MCP \`update_milestone_plan\`.
+- \`contextspace-milestones.md\` — older planning notes, kept until they move into the plan. Read them; record new items with \`ctxspace plan add\`.
+- \`${PRIMARY_PLAN_FILE}\` — generated: current work, then package order (not a delivery plan). Change the plan with \`ctxspace plan\`.
 - \`contextspace-work.json\` — assignment and sources. Read live guidance with \`ctxspace flow --assignment\` or MCP \`get_work_context\`.
 - \`.agents/skills/\` — enabled playbooks; Claude copies: \`.claude/skills/\`.
 - Need the user's answer or approval? Call MCP \`request_user_input\` (one short question) so this chat is flagged, then ask in the chat and end your turn. No MCP: just ask.
-- Show your work: MCP \`show_in_reader\`, \`annotate_document\`, \`suggest_next\` and \`set_milestone\` put it beside the user's chat. They only show things. No MCP: say it in the chat.
+- Show your work: MCP \`show_in_reader\`, \`annotate_document\` and \`suggest_next\` put it beside the user's chat. They only show things. No MCP: say it in the chat.
 ${ownInstructions}${customCommands}${teamwork}${enterpriseSection}`;
 }

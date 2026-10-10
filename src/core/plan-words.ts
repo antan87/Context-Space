@@ -63,13 +63,25 @@ export const PLAN_RULES = [
  * this routine cut agy's tool calls from 166 to 58, its reads outside the workspace from 50 to 0,
  * and its codes written without a name to 0: rules alone left the AI guessing how to work.
  */
-export const PLAN_WORKFLOW = [
-  'Start by running `ctxspace plan`. Its output is the whole plan: you do not need the program\'s code, the store file, or other folders.',
-  'Continue what is in progress for you, or start what is ready: `ctxspace plan start <code>`. If the user asks for something else, do that.',
-  'Keep the plan true while you work, one change at a time: new work you find with `ctxspace plan add task "<name>" --before <code it holds up>`; a question for the user with `ctxspace plan add question "<question>" --owner user --before <code it holds up>`; when stuck, `ctxspace plan block <code> --reason "<what you wait for>"`.',
-  'When the user tells you an answer or a decision, record it with the command. For the user\'s items and milestones it becomes a proposal: that is correct, and your part is done.',
-  'Finish your own work with `ctxspace plan done <code> --resolution "<what came out of it>"`.',
-  'Report back in three short parts: what you changed, what waits for the user (Needs you), and what is next. Write the name with every code: "M2 CSV export endpoint", never "M2" alone.',
+export const PLAN_WORKFLOW: readonly { text: string; list?: readonly string[] }[] = [
+  { text: 'Start by running `ctxspace plan`. Its output is the whole plan: you do not need the program\'s code, the store file, or other folders.' },
+  { text: 'Continue what is in progress for you, or start what is ready: `ctxspace plan start <code>`. If the user asks for something else, do that.' },
+  { text: 'Keep the plan true while you work, one change at a time:', list: [
+    'new work you find: `ctxspace plan add task "<name>" --before <code it holds up>`',
+    'a question for the user: `ctxspace plan add question "<question>" --owner user --before <code it holds up>`',
+    'stuck: `ctxspace plan block <code> --reason "<what you wait for>"`',
+  ] },
+  { text: 'When the user tells you an answer or a decision, record it with the command. For the user\'s items and milestones it becomes a proposal: that is correct, and your part is done.' },
+  { text: 'Finish your own work with `ctxspace plan done <code> --resolution "<what came out of it>"`.' },
+  { text: 'Report back in three short parts: what you changed, what waits for the user (Needs you), and what is next. Write the name with every code: "M2 CSV export endpoint", never "M2" alone.' },
+];
+
+/** Who a change is made as, one sentence a line, for `ctxspace plan --help` and AGENTS.md. */
+export const WHO_ACTS = [
+  'Who acts: every change is made as the AI and recorded with its name.',
+  'When a close is the user\'s (a milestone, or an item the user owns), it becomes a proposal: the user accepts it in the Plan tab.',
+  'That is the end of the AI\'s part, even when the user told you the answer: say it waits for them.',
+  'The user can act as themselves with --as user in their own terminal.',
 ] as const;
 
 /** Codes like M2 are for tools; people read names. */

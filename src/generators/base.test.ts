@@ -4,6 +4,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { buildContextContent } from './base.js';
+import { renderPlanInstructions } from '../core/plan-text.js';
+import { PLAN_RULES, WHO_ACTS } from '../core/plan-words.js';
 import type { Feature, ProjectAnalysis, WorkspaceContext } from '../types.js';
 
 /** Minimal ProjectAnalysis with the fields the context builder reads. */
@@ -300,9 +302,23 @@ describe('buildContextContent', () => {
 
       const mentions = content.split('\n').filter((line) => line.includes('show_in_reader'));
       expect(mentions).toHaveLength(1);
-      for (const tool of ['annotate_document', 'suggest_next', 'set_milestone']) expect(mentions[0]).toContain(tool);
+      for (const tool of ['annotate_document', 'suggest_next']) expect(mentions[0]).toContain(tool);
       expect(mentions[0]).toContain('only show things');
       expect(mentions[0]).toContain('No MCP');
+    });
+
+    it('tells every AI tool to work with the plan through ctxspace plan, with the routine, the rules and who acts', async () => {
+      const content = await buildContextContent(ctxFor({}));
+
+      expect(content).toContain(renderPlanInstructions());
+      expect(content.indexOf('## Plan')).toBeLessThan(content.indexOf('## Where to look'));
+      expect(content).toContain('1. Start by running `ctxspace plan`.');
+      expect(content).toContain('   - stuck: `ctxspace plan block <code> --reason "<what you wait for>"`');
+      PLAN_RULES.forEach((rule, index) => expect(content).toContain(`${index + 1}. ${rule}`));
+      expect(content).toContain(WHO_ACTS.slice(0, 3).join(' '));
+      expect(content).toContain('./.contextspace/bin/ctxspace plan');
+      // The plan has no MCP tools: AIs are never sent to the old planning tools.
+      for (const tool of ['update_milestone_plan', 'set_milestone', 'get_planning_notes', 'save_planning_notes']) expect(content).not.toContain(tool);
     });
 
     it('says nothing about relationships or ordering when there are none', async () => {
@@ -322,11 +338,16 @@ describe('buildContextContent', () => {
       // not merely cost tokens. Two repos should be nowhere near that.
       const content = await buildContextContent(relatedCtx());
 
-      expect(content.split('\n').length).toBeLessThan(40);
+      // The Plan section is allowed on top of the caps below: in the agy and Haiku test, its work
+      // routine cut agy's tool calls from 166 to 58. It has a cap of its own.
+      const plan = renderPlanInstructions();
+      expect(content.split('\n').length - plan.split('\n').length).toBeLessThan(40);
       // 1600 until the request_user_input pointer was added, then 1800 until the
       // screen-tool pointer. Agents that load MCP tools on demand need a line like
       // each to know the tools exist; these are the two lines allowed past the old cap.
-      expect(content.length).toBeLessThan(2000);
+      expect(content.length - plan.length).toBeLessThan(2000);
+      expect(plan.split('\n').length).toBeLessThan(25);
+      expect(plan.length).toBeLessThan(2600);
     });
   });
 

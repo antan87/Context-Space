@@ -21,6 +21,7 @@ import {
 import { resolveScreenRepo, resolveScreenTarget, SCREEN_PATH_MAX_LENGTH } from '../core/screen-paths.js';
 import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
 import type { NexusFlowTool } from './tools.js';
+import { useThePlanCommand } from './planning-tools.js';
 
 const harness = z.string().max(40).optional().describe('Optional name of the assistant calling this, for example "claude" or "codex".');
 const repo = z.string().max(200).optional().describe('Name of one of the workspace repositories. Only needed when the path is relative to that repository and could be ambiguous.');
@@ -203,16 +204,17 @@ export const screenTools: NexusFlowTool[] = [
 
   screenTool(
     'set_milestone',
-    `Report where a milestone stands. in_progress starts it (its dependencies must be finished). blocked says what it is waiting on; a note is required. reopened and done are only proposals: you cannot reopen or complete a milestone yourself, because the user decides and a finished milestone must pass its own check. The tool says which one happened. Read get_work_context for milestone ids.`,
+    `${useThePlanCommand('set_milestone')} Report where a milestone stands. in_progress starts it (its dependencies must be finished). blocked says what it is waiting on; a note is required. reopened and done are only proposals: you cannot reopen or complete a milestone yourself, because the user decides and a finished milestone must pass its own check. The tool says which one happened. Read get_work_context for milestone ids.`,
     milestoneSchema,
     async (input, { root, workspacePath }) => {
+      const deprecated = useThePlanCommand('set_milestone');
       const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
       const step = lifecycle.steps.find((candidate) => candidate.id === input.id);
       if (!step) throw new Error(`There is no milestone "${input.id}". Read get_work_context for the ids.`);
       const needNote = (what: string) => { if (!input.note?.trim()) throw new Error(`Add a note: ${what}.`); };
 
       if (input.state === 'in_progress') {
-        if (step.status === 'in_progress') return { status: 'unchanged', milestone: input.id, message: 'It is already in progress.' };
+        if (step.status === 'in_progress') return { deprecated, status: 'unchanged', milestone: input.id, message: 'It is already in progress.' };
         if (step.status === 'completed' || step.status === 'verified') {
           throw new Error(`"${step.title}" is already ${step.status}. Only the user can reopen finished work.`);
         }
@@ -222,7 +224,7 @@ export const screenTools: NexusFlowTool[] = [
           throw new Error(error instanceof Error ? error.message : String(error));
         }
         await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'in_progress', note: input.note } });
-        return { status: 'started', milestone: input.id, ...(await refreshPlanningContext(root)) };
+        return { deprecated, status: 'started', milestone: input.id, ...(await refreshPlanningContext(root)) };
       }
 
       if (input.state === 'blocked') {
@@ -234,7 +236,7 @@ export const screenTools: NexusFlowTool[] = [
           throw error;
         }
         await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'blocked', note: input.note } });
-        return { status: 'blocked', milestone: input.id, message: 'The user can see what it is waiting on. Start it again when the block is gone.', ...(await refreshPlanningContext(root)) };
+        return { deprecated, status: 'blocked', milestone: input.id, message: 'The user can see what it is waiting on. Start it again when the block is gone.', ...(await refreshPlanningContext(root)) };
       }
 
       if (input.state === 'reopened') {
@@ -244,7 +246,7 @@ export const screenTools: NexusFlowTool[] = [
           throw new Error(`"${step.title}" is ${step.status.replace('_', ' ')}, so there is nothing to reopen. Only a finished milestone can be reopened; say what is wrong in the chat.`);
         }
         const { status } = await appendScreenEvent(root, { harness: input.harness, event: 'milestone_proposal', payload: { stepId: input.id, proposal: 'reopen', reason: input.note! } });
-        return { status: status === 'shown' ? 'proposed' : 'already_proposed', milestone: input.id, message: 'This is a proposal. You cannot reopen a milestone yourself: the user sees your reason and decides. Carry on with other work until they do.' };
+        return { deprecated, status: status === 'shown' ? 'proposed' : 'already_proposed', milestone: input.id, message: 'This is a proposal. You cannot reopen a milestone yourself: the user sees your reason and decides. Carry on with other work until they do.' };
       }
 
       needNote('what shows the milestone is finished');
@@ -252,7 +254,7 @@ export const screenTools: NexusFlowTool[] = [
         throw new Error(`"${step.title}" is ${step.status}, so it cannot be proposed as done. Start it first.`);
       }
       const { status } = await appendScreenEvent(root, { harness: input.harness, event: 'milestone_proposal', payload: { stepId: input.id, proposal: 'complete', reason: input.note! } });
-      return { status: status === 'shown' ? 'proposed' : 'already_proposed', milestone: input.id, message: 'This is a proposal. You cannot complete a milestone yourself: it has to pass its own check and the user decides.' };
+      return { deprecated, status: status === 'shown' ? 'proposed' : 'already_proposed', milestone: input.id, message: 'This is a proposal. You cannot complete a milestone yourself: it has to pass its own check and the user decides.' };
     },
   ),
 

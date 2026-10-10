@@ -22,7 +22,12 @@ try {
     transport.stderr?.on('data', (chunk) => { stderr += String(chunk); });
     try {
       await client.connect(transport);
-      const names = (await client.listTools()).tools.map((tool) => tool.name);
+      const tools = (await client.listTools()).tools;
+      const names = tools.map((tool) => tool.name);
+      // AIs change the plan with `ctxspace plan`: the old planning tools say so, for one release.
+      for (const tool of tools.filter((item) => ['get_planning_notes', 'save_planning_notes', 'update_milestone_plan', 'set_milestone'].includes(item.name))) {
+        assert.match(tool.description, /^Deprecated: run `ctxspace plan/);
+      }
       const call = async (name, args = {}) => {
         const result = await client.callTool({ name, arguments: args });
         assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -30,6 +35,7 @@ try {
       };
       let context = await call('get_work_context');
       assert.equal(context.guidance.revision, 0);
+      assert.equal(context.plan, null);
       if (['readonly', 'review', 'ci'].includes(role)) {
         for (const name of mutations) {
           assert(!names.includes(name));
@@ -39,7 +45,11 @@ try {
       } else {
         assert(mutations.every((name) => names.includes(name)));
         const plan = await call('update_milestone_plan', { revision: 0, steps: [{ id: 'reports', title: 'Open reports from the root' }] });
-        context = await call('update_work_assignment', { revision: 0, workType: 'feature', size: 'small', assignment: { stage: 'implement', objective: 'Open root reports', expectedOutput: 'Report viewer', stopCondition: 'Tests pass' } });
+        assert.match(plan.deprecated, /ctxspace plan add milestone/);
+        // The plan reads as `ctxspace plan` prints it, for tools that only have MCP.
+        assert.match((await call('get_work_context')).plan, /MILESTONES[\s\S]*reports Open reports from the root/);
+        // The refresh after a planning save creates the brief, so read its revision first.
+        context = await call('update_work_assignment', { revision: (await call('get_work_context')).guidance.revision, workType: 'feature', size: 'small', assignment: { stage: 'implement', objective: 'Open root reports', expectedOutput: 'Report viewer', stopCondition: 'Tests pass' } });
         context = await call('add_work_document', { revision: context.guidance.revision, title: 'Requirements', role: 'requirements', content: '# Root reports\nKeep their formatting.' });
         const documentId = context.guidance.documents[0].id;
         assert.equal((await call('read_work_document', { documentId })).content, '# Root reports\nKeep their formatting.');
@@ -51,7 +61,7 @@ try {
         await call('update_milestone_plan', { revision: plan.lifecycle.revision, steps: [] });
         assert.deepEqual((await call('get_work_context')).lifecycle.steps, []);
       }
-      console.log(`PASS ${role}: ${names.length} tools; planning reads, writes, and role boundaries verified`);
+      console.log(`PASS ${role}: ${names.length} tools; planning reads, writes, plan text, deprecations and role boundaries verified`);
     } catch (error) {
       if (stderr) console.error(stderr);
       throw error;

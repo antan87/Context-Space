@@ -9,7 +9,9 @@ import {
   KIND_WORDS,
   NAMES_FIRST,
   PLAN_RULES,
+  PLAN_WORKFLOW,
   STATUS_WORDS,
+  WHO_ACTS,
   isOpenStatus,
   itemLabel,
   type PlanStatus,
@@ -28,6 +30,12 @@ export interface PlanGoal {
   objective: string;
   stage?: string;
   stopCondition?: string;
+}
+
+/** The goal from the brief, or from the workspace description when the brief has no objective yet. */
+export function goalFromBrief(assignment: { objective?: string; stage?: string; stopCondition?: string }, description?: string): PlanGoal | undefined {
+  const objective = assignment.objective || description || '';
+  return objective ? { objective, stage: assignment.stage, stopCondition: assignment.stopCondition || undefined } : undefined;
 }
 
 const STATUS_GLYPHS: Record<PlanStatus, string> = {
@@ -279,5 +287,26 @@ export function renderPlanRules(): string {
     `  ${NAMES_FIRST}`,
     '',
     `Words: ${Object.values(STATUS_WORDS).map((word) => word.label).join(', ')}. Needs you collects what waits for the user.`,
+  ].join('\n');
+}
+
+/**
+ * The Plan section of the generated AGENTS.md, for every AI tool: the command, the work routine, the
+ * rules and who acts. AIs change the plan only with `ctxspace plan`; there are no MCP plan tools.
+ * It leaves out how a person acts as the user (`--as user`): told about it, an AI tried it.
+ */
+export function renderPlanInstructions(): string {
+  return [
+    '## Plan',
+    '',
+    'Read the plan with `ctxspace plan` (`--json` gives every field). Change it one item at a time with `ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`; `--help` shows how. If `plan` is an unknown command, use `./.contextspace/bin/ctxspace plan` (PowerShell: `.\\.contextspace\\bin\\ctxspace.cmd plan`). Never edit `contextspace-plan.json` by hand.',
+    '',
+    'How to work with the plan:',
+    ...PLAN_WORKFLOW.flatMap((step, index) => [`${index + 1}. ${step.text}`, ...(step.list ?? []).map((line) => `   - ${line}`)]),
+    '',
+    'How the plan works:',
+    ...PLAN_RULES.map((rule, index) => `${index + 1}. ${rule}`),
+    '',
+    WHO_ACTS.filter((line) => !line.includes('--as user')).join(' '),
   ].join('\n');
 }

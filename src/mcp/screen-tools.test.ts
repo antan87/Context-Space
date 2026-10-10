@@ -231,6 +231,8 @@ describe('set_milestone', () => {
     await seed([step('plan', 'pending')]);
     const { body } = await call('set_milestone', { id: 'plan', state: 'in_progress' });
     expect(body).toMatchObject({ status: 'started', milestone: 'plan', contextRefreshed: true });
+    // It still works for one release, and says which command replaces it.
+    expect(body.deprecated).toContain('`ctxspace plan start|block|done <code>`');
     expect((await stepsNow())[0]!.status).toBe('in_progress');
     expect((await screenLines())[0]).toMatchObject({ event: 'milestone', payload: { stepId: 'plan', state: 'in_progress' } });
     expect(refreshPlanningContext).toHaveBeenCalledTimes(1);

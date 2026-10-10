@@ -18,7 +18,7 @@ import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
 import { ensurePlanStore } from '../core/lifecycle.js';
-import { PLAN_KINDS, itemLabel, type PlanKind } from '../core/plan-words.js';
+import { PLAN_KINDS, WHO_ACTS, itemLabel, type PlanKind } from '../core/plan-words.js';
 import {
   PlanError,
   agentMayClose,
@@ -31,6 +31,7 @@ import {
 } from '../core/plan.js';
 import {
   checkPlan,
+  goalFromBrief,
   itemToJson,
   planToJson,
   renderChanges,
@@ -59,14 +60,6 @@ export interface PlanCommandContext {
   print: (text: string) => void;
   now?: Date;
 }
-
-/** Who a change is made as, stated in the help. */
-export const WHO_ACTS = [
-  'Who acts: every change is made as the AI and recorded with its name. When a close is the user\'s',
-  '(a milestone, or an item the user owns), it becomes a proposal: the user accepts it in the Plan tab.',
-  'That is the end of the AI\'s part, even when the user told you the answer: say it waits for them.',
-  'The user can act as themselves with --as user in their own terminal.',
-].join('\n');
 
 /** Examples in the help, so nobody has to search for how a change is typed. */
 export const PLAN_EXAMPLES = [
@@ -128,8 +121,7 @@ export function resolvePlanActor(
 async function planGoal(workspacePath: string): Promise<PlanGoal | undefined> {
   try {
     const guidance = await loadWorkGuidance(workspacePath);
-    const objective = guidance.assignment.objective || (await loadFeatureConfig(workspacePath))?.description || '';
-    return objective ? { objective, stage: guidance.assignment.stage, stopCondition: guidance.assignment.stopCondition || undefined } : undefined;
+    return goalFromBrief(guidance.assignment, guidance.assignment.objective ? undefined : (await loadFeatureConfig(workspacePath))?.description);
   } catch {
     return undefined;
   }
@@ -295,7 +287,7 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
   const plan = common(program
     .command('plan')
     .description('Read and change the workspace plan, one item at a time')
-    .addHelpText('after', `\n${PLAN_EXAMPLES}\n\n${renderPlanRules()}\n\n${WHO_ACTS}\n`));
+    .addHelpText('after', `\n${PLAN_EXAMPLES}\n\n${renderPlanRules()}\n\n${WHO_ACTS.join('\n')}\n`));
 
   const onError = (json?: boolean) => async (error: unknown) => {
     if (json) {

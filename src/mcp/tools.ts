@@ -1,5 +1,5 @@
 import { readPlanningNotes } from '../core/planning-notes.js';
-import { planningTools } from './planning-tools.js';
+import { planningTools, useThePlanCommand } from './planning-tools.js';
 import { screenTools } from './screen-tools.js';
 /**
  * @module mcp/tools
@@ -188,17 +188,17 @@ export const tools: NexusFlowTool[] = [
   ...screenTools,
   {
     name: 'get_planning_notes',
-    description: 'Read the authored delivery plan, questions with owner/status, existing work evidence, and deferred decisions. Refresh preserves this document.',
+    description: `${useThePlanCommand('get_planning_notes')} Read the older authored notes in contextspace-milestones.md: delivery order, questions, existing work and deferred decisions.`,
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
     handler: async (_args, ctx) => {
-      try { return json(await readPlanningNotes(ctx.workspacePath)); }
+      try { return json({ deprecated: useThePlanCommand('get_planning_notes'), ...(await readPlanningNotes(ctx.workspacePath)) }); }
       catch (error) { return errorResult(error instanceof Error ? error.message : String(error)); }
     },
   },
   {
     name: 'get_work_context',
-    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and milestone plan. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document and lifecycle.revision for update_milestone_plan (use 0 when absent). Read before starting work or editing planning; reread after conflicts.',
+    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is the text `ctxspace plan` prints, `lifecycle` holds the milestones. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan with `ctxspace plan` in your shell.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
     handler: async (_args, ctx) => {
