@@ -163,20 +163,22 @@ describe('source documents and assignments', () => {
     setActiveStorageProvider(new InMemoryAdapter());
     const guidance = await addWorkDocument(root, 0, source());
     expect(files.has(WORK_GUIDANCE_FILE)).toBe(true);
-    expect(files.has(WORK_ASSIGNMENT_FILE)).toBe(true);
+    // The brief is written into the plan summary; the old assignment file is no longer written.
+    expect(files.get('contextspace-plan.md')).toContain('Goal');
+    expect(files.has(WORK_ASSIGNMENT_FILE)).toBe(false);
     expect((await readWorkDocument(root, guidance.documents[0].id)).location).toContain('https://storage.example/');
     expect((await getWorkContext(root)).assignment).toContain('https://storage.example/');
   });
 
-  it('reports a projection write failure without losing the authoritative saved assignment', async () => {
+  it('saves the brief even when the plan summary cannot be written, since the next change rewrites it', async () => {
     class FailingProjection extends LocalStorageAdapter {
       override async writeWorkspaceFile(root: string, id: string, filename: string, content: string) {
-        if (filename === WORK_ASSIGNMENT_FILE) throw new Error('read only projection');
+        if (filename === 'contextspace-plan.md') throw new Error('read only projection');
         return super.writeWorkspaceFile(root, id, filename, content);
       }
     }
     setActiveStorageProvider(new FailingProjection());
-    await expect(addWorkDocument(root, 0, source())).rejects.toThrow('Brief saved');
+    await addWorkDocument(root, 0, source());
     expect((await getWorkContext(root)).guidance.documents).toHaveLength(1);
     expect((await getWorkContext(root)).assignment).toContain('PO requirements');
   });

@@ -222,6 +222,10 @@ export class LocalStorageAdapter implements StoragePort {
     }
   }
 
+  async deleteWorkspaceFile(workspacePath: string, featureId: string, filename: string): Promise<void> {
+    await fs.rm(path.join(workspacePath, filename), { force: true });
+  }
+
   resolveWorkspaceFileUrl(workspacePath: string, featureId: string, filename: string): string {
     return path.join(workspacePath, filename).replace(/\\/g, '/');
   }

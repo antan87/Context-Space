@@ -18,6 +18,7 @@ import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
 import { ensurePlanStore } from '../core/lifecycle.js';
+import { importPlanningNotes } from '../core/plan-import.js';
 import { PLAN_KINDS, WHO_ACTS, itemLabel, type PlanKind } from '../core/plan-words.js';
 import {
   PlanError,
@@ -132,9 +133,18 @@ function countsLine(plan: PlanDocument): string {
   return `Plan: Needs you ${counts.needsYou} · In progress ${counts.inProgress} · To do ${counts.todo} · Done ${counts.done}. Run "ctxspace plan" to see it.`;
 }
 
+/**
+ * The plan, after older planning moved into it: the lifecycle on first load, and the old notes file
+ * (contextspace-milestones.md) once, so an AI that runs this before any refresh still sees them.
+ */
+async function preparePlan(workspacePath: string): Promise<PlanDocument> {
+  await importPlanningNotes(workspacePath);
+  return ensurePlanStore(workspacePath);
+}
+
 /** `ctxspace plan` and `ctxspace plan show`. */
 export async function planShow(context: PlanCommandContext, options: { all?: boolean } = {}): Promise<void> {
-  const plan = await ensurePlanStore(context.workspacePath);
+  const plan = await preparePlan(context.workspacePath);
   const goal = await planGoal(context.workspacePath);
   context.print(context.json
     ? JSON.stringify(planToJson(plan, { goal, all: options.all }), null, 2)
@@ -143,7 +153,7 @@ export async function planShow(context: PlanCommandContext, options: { all?: boo
 
 /** `ctxspace plan log [code]`: one item's history, or the latest changes across the plan. */
 export async function planLog(context: PlanCommandContext, id?: string): Promise<void> {
-  const plan = await ensurePlanStore(context.workspacePath);
+  const plan = await preparePlan(context.workspacePath);
   if (id) {
     const item = plan.items.find((candidate) => candidate.id === id);
     if (!item) throw new PlanError(`There is no item "${id}" in the plan. Read the plan to see the codes.`, 'not_found');
@@ -156,7 +166,7 @@ export async function planLog(context: PlanCommandContext, id?: string): Promise
 
 /** `ctxspace plan check`: waits that can never clear, proposals waiting, work that sits still. */
 export async function planCheck(context: PlanCommandContext): Promise<void> {
-  const plan = await ensurePlanStore(context.workspacePath);
+  const plan = await preparePlan(context.workspacePath);
   const findings = checkPlan(plan, context.now);
   if (context.json) {
     context.print(JSON.stringify({ findings }, null, 2));
@@ -181,7 +191,7 @@ const CLOSING = new Set<PlanChange['type']>(['done', 'answer', 'drop', 'later', 
  * interactive terminal is asked before making a decision that belongs to the user.
  */
 export async function planChange(context: PlanCommandContext, change: PlanChange): Promise<void> {
-  await ensurePlanStore(context.workspacePath);
+  await preparePlan(context.workspacePath);
   if (context.interactive && context.actor.by === 'user' && change.type !== 'add') {
     const plan = await readPlan(context.workspacePath);
     const item = plan.items.find((candidate) => candidate.id === change.id);

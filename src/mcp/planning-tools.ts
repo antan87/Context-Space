@@ -75,7 +75,7 @@ export const planningTools: NexusFlowTool[] = [
     updateDocumentSchema,
     async ({ revision, documentId, ...input }, root) => { await updateWorkDocument(root, documentId, revision, input); return { ...(await getWorkContext(root)), ...(await refreshPlanningContext(root)) }; }),
   planningTool('save_planning_notes',
-    `${useThePlanCommand('save_planning_notes')} Replace authored delivery notes, questions, and deferred decisions in contextspace-milestones.md. First read get_planning_notes and supply its revision hash plus the entire revised content. On conflict, reread and merge instead of overwriting newer notes.`,
+    `${useThePlanCommand('save_planning_notes')} Replace authored delivery notes, questions, and deferred decisions in contextspace-milestones.md. First read get_planning_notes and supply its revision hash plus the entire revised content. The refresh after saving moves the notes into the plan and archives the file.`,
     z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().max(500_000) }),
     async (input, root) => ({ deprecated: useThePlanCommand('save_planning_notes'), ...(await savePlanningNotes(root, input.revision, input.content)), ...(await refreshPlanningContext(root)) }), true),
 ];

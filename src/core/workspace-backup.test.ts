@@ -7,7 +7,8 @@ import { execa } from 'execa';
 
 import { describeWorkspaceBackup } from './workspace-backup.js';
 import { addWorkspaceRemote, ensureWorkspaceGitRepository } from './workspace-git.js';
-import { ensurePlanningNotes, PLANNING_NOTES_FILE } from './planning-notes.js';
+import { PLANNING_NOTES_FILE, PLANNING_NOTES_TEMPLATE } from './planning-notes.js';
+import { changePlan } from './plan.js';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 import { PRIMARY_KNOWLEDGE_FILE } from './constants.js';
@@ -93,7 +94,7 @@ describe('workspace backup status', () => {
 
     await writeKnowledge('# Workspace Knowledge — backup-test\n\n## Known Gotchas\n\n- **2026-10-09:** the only lesson so far\n');
     await fs.writeFile(path.join(workspacePath, PLANNING_NOTES_FILE), authoredPlanningNotes);
-    expect((await describeWorkspaceBackup(workspacePath)).summary).toContain('1 knowledge entry and the planning notes in this workspace exist only');
+    expect((await describeWorkspaceBackup(workspacePath)).summary).toContain('1 knowledge entry and the plan in this workspace exist only');
   });
 
   it('is at risk when only planning notes have been written', async () => {
@@ -103,7 +104,17 @@ describe('workspace backup status', () => {
 
     expect(status.handWritten).toEqual({ knowledgeEntries: 0, planningNotes: true });
     expect(status.atRisk).toBe(true);
-    expect(status.message).toMatch(/^The planning notes in this workspace exist only on this computer/);
+    expect(status.message).toMatch(/^The plan in this workspace exists only on this computer/);
+  });
+
+  it('is at risk when the plan has items, since the old notes file moves into the plan', async () => {
+    await changePlan(workspacePath, { type: 'add', kind: 'milestone', title: 'Ship the first slice' }, { actor: { by: 'user' } });
+
+    const status = await describeWorkspaceBackup(workspacePath);
+
+    expect(status.handWritten).toEqual({ knowledgeEntries: 0, planningNotes: true });
+    expect(status.atRisk).toBe(true);
+    expect(status.summary).toBe('The plan in this workspace exists only on this computer, because it has no git remote.');
   });
 
   it('names both when both have been written', async () => {
@@ -112,12 +123,12 @@ describe('workspace backup status', () => {
 
     const status = await describeWorkspaceBackup(workspacePath);
 
-    expect(status.message).toMatch(/^2 knowledge entries and the planning notes in this workspace/);
+    expect(status.message).toMatch(/^2 knowledge entries and the plan in this workspace exist only/);
   });
 
   it('does not count an empty knowledge template or untouched planning notes as something to lose', async () => {
     await writeKnowledge(knowledgeTemplate);
-    await ensurePlanningNotes(workspacePath, 'backup-test');
+    await fs.writeFile(path.join(workspacePath, PLANNING_NOTES_FILE), PLANNING_NOTES_TEMPLATE);
 
     const status = await describeWorkspaceBackup(workspacePath);
 

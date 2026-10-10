@@ -55,10 +55,22 @@ export async function ensureWorkspaceGitRepository(workspacePath: string): Promi
   }
 }
 
+/** Planning files moved into the plan are kept here for one release (core/plan-import), and committed. */
+const ARCHIVE_DIR = '.contextspace/archive';
+
+async function archivedFiles(workspacePath: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(path.join(workspacePath, ARCHIVE_DIR), { withFileTypes: true });
+    return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md')).map((entry) => `${ARCHIVE_DIR}/${entry.name}`);
+  } catch {
+    return [];
+  }
+}
+
 export async function managedWorkspaceArtifacts(workspacePath: string, extra: string[] = []): Promise<string[]> {
   const lock = await readGenerationLock(workspacePath);
   const workspaceFile = `${path.basename(workspacePath)}.code-workspace`;
-  const candidates = new Set([...CORE_ARTIFACTS, workspaceFile, ...Object.keys(lock?.outputs ?? {}), ...extra]);
+  const candidates = new Set([...CORE_ARTIFACTS, workspaceFile, ...Object.keys(lock?.outputs ?? {}), ...(await archivedFiles(workspacePath)), ...extra]);
   const safe = [...candidates].filter((item) =>
     item && !path.isAbsolute(item) && !item.replace(/\\/g, '/').split('/').includes('..'),
   );

@@ -39,10 +39,11 @@ export const PLAN_FORMAT_VERSION = 1;
 /** How many changes each item keeps in its history. */
 export const PLAN_HISTORY_LIMIT = 20;
 const PLAN_ITEM_LIMIT = 500;
-const NOTE_MAX = 2000;
-const TITLE_MAX = 200;
-const DETAIL_MAX = 4000;
-const ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+/** The longest a resolution, reason or note may be. */
+export const NOTE_MAX = 2000;
+export const TITLE_MAX = 200;
+export const DETAIL_MAX = 4000;
+export const ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 /** Who makes a change. On the command line a non-interactive shell is the AI. */
 export type PlanActor = { by: 'user' } | { by: 'agent'; harness?: string };
@@ -110,11 +111,24 @@ export interface PlanItem {
   history: PlanHistoryEntry[];
 }
 
+/** An older planning file moved into the plan, so moving it again changes nothing. */
+export interface PlanImport {
+  file: string;
+  /** SHA-256 of the file's content when it was read. */
+  hash: string;
+  at: string;
+  /** Where the file was kept, if it was. */
+  archivedAs?: string;
+  /** The items the import added. */
+  items: string[];
+}
+
 export interface PlanDocument {
   version: typeof PLAN_FORMAT_VERSION;
   revision: number;
   updatedAt: string;
   items: PlanItem[];
+  imports?: PlanImport[];
 }
 
 export type PlanChange =
@@ -197,6 +211,10 @@ const planSchema = z.object({
   revision: z.number().int().nonnegative(),
   updatedAt: z.string(),
   items: z.array(itemSchema).max(PLAN_ITEM_LIMIT),
+  imports: z.array(z.object({
+    file: z.string().max(200), hash: z.string().regex(/^[a-f0-9]{64}$/), at: z.string(),
+    archivedAs: z.string().max(300).optional(), items: z.array(z.string()).max(PLAN_ITEM_LIMIT),
+  })).max(100).optional(),
 });
 
 export function emptyPlan(): PlanDocument {
@@ -327,6 +345,20 @@ export async function mutatePlan<T>(
   mutation: (plan: PlanDocument, context: { exists: boolean }) => T,
   options: { keepRevision?: boolean; alwaysWrite?: boolean } = {},
 ): Promise<{ plan: PlanDocument; result: T; changed: boolean }> {
+  const outcome = await savePlanMutation(workspacePath, mutation, options);
+  if (outcome.changed) {
+    // contextspace-plan.md follows the plan. Imported here: the summary module reads the plan.
+    const { writePlanSummary } = await import('./plan-summary.js');
+    await writePlanSummary(workspacePath).catch(() => undefined);
+  }
+  return outcome;
+}
+
+async function savePlanMutation<T>(
+  workspacePath: string,
+  mutation: (plan: PlanDocument, context: { exists: boolean }) => T,
+  options: { keepRevision?: boolean; alwaysWrite?: boolean },
+): Promise<{ plan: PlanDocument; result: T; changed: boolean }> {
   return runPlanMutation(async () => {
     const { root, featureId } = await planLocation(workspacePath);
     const release = await acquireLock(path.join(root, '.contextspace-plan.lock'), {
@@ -445,7 +477,8 @@ function assertWaitsSettled(plan: PlanDocument, item: PlanItem, verb: string): v
   }
 }
 
-function nextId(plan: PlanDocument, kind: PlanKind): string {
+/** The next free code for a kind: M3 after M2. */
+export function nextId(plan: PlanDocument, kind: PlanKind): string {
   const prefix = KIND_WORDS[kind].prefix;
   const pattern = new RegExp(`^${prefix}(\\d+)$`);
   const highest = plan.items.reduce((max, item) => Math.max(max, Number(pattern.exec(item.id)?.[1] ?? 0)), 0);

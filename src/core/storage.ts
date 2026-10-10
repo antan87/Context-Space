@@ -12,6 +12,14 @@ export async function workspaceFileExists(workspacePath: string, featureId: stri
   return await getActiveStorageProvider().workspaceFileExists(workspacePath, featureId, filename);
 }
 
+/** Removes one workspace document. False when the storage adapter cannot remove documents. */
+export async function deleteWorkspaceFile(workspacePath: string, featureId: string, filename: string): Promise<boolean> {
+  const provider = getActiveStorageProvider();
+  if (!provider.deleteWorkspaceFile) return false;
+  await provider.deleteWorkspaceFile(workspacePath, featureId, filename);
+  return true;
+}
+
 export function resolveWorkspaceFileUrl(workspacePath: string, featureId: string, filename: string): string {
   return getActiveStorageProvider().resolveWorkspaceFileUrl(workspacePath, featureId, filename);
 }

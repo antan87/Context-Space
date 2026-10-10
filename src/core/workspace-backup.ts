@@ -2,20 +2,22 @@
  * @module core/workspace-backup
  * Whether the things a person wrote in a workspace would survive losing this computer.
  *
- * ContextSpace regenerates most workspace files, but not the knowledge entries and planning notes
- * people write by hand. Those live only in the workspace's own git repository, so without a remote
- * (see `ctxspace remote add`) one wiped disk loses them. This is a read-only summary: it never
+ * ContextSpace regenerates most workspace files, but not the knowledge entries and the plan that
+ * people write (nor the old planning notes file, until it is moved into the plan). Those live only
+ * in the workspace's own git repository, so without a remote (see `ctxspace remote add`) one wiped
+ * disk loses them. This is a read-only summary: it never
  * adds a remote or pushes, which stay explicit actions by the user.
  */
 
 import { parseKnowledgeEntries, readWorkspaceKnowledge } from './knowledge.js';
 import { planningNotesAreAuthored } from './planning-notes.js';
+import { readPlanIfExists } from './plan.js';
 import { getWorkspaceRemote, type WorkspaceRemote } from './workspace-git.js';
 import { CLI_NAME } from './constants.js';
 
 export interface WorkspaceBackupStatus {
   remote: WorkspaceRemote;
-  /** What has been written by hand, and so cannot be regenerated. */
+  /** What has been written by hand, and so cannot be regenerated. `planningNotes`: the plan has items, or the old notes file has rows. */
   handWritten: { knowledgeEntries: number; planningNotes: boolean };
   /** Hand-written content exists and there is no remote: it exists on this computer only. */
   atRisk: boolean;
@@ -28,10 +30,19 @@ export interface WorkspaceBackupStatus {
 function describeContent(knowledgeEntries: number, planningNotes: boolean): string {
   const parts = [
     knowledgeEntries > 0 ? `${knowledgeEntries} knowledge ${knowledgeEntries === 1 ? 'entry' : 'entries'}` : '',
-    planningNotes ? 'the planning notes' : '',
+    planningNotes ? 'the plan' : '',
   ].filter(Boolean);
   const text = parts.join(' and ');
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Whether the plan holds anything. Never throws: a plan that cannot be read is reported elsewhere. */
+async function planHasItems(workspacePath: string): Promise<boolean> {
+  try {
+    return Boolean((await readPlanIfExists(workspacePath))?.items.length);
+  } catch {
+    return false;
+  }
 }
 
 /** Never throws: a workspace that cannot be inspected is reported as having nothing at risk. */
@@ -43,10 +54,10 @@ export async function describeWorkspaceBackup(workspacePath: string): Promise<Wo
   } catch {
     // Unreadable knowledge is reported by other checks; it must not hide the remote status.
   }
-  const planningNotes = await planningNotesAreAuthored(workspacePath);
+  const planningNotes = await planHasItems(workspacePath) || await planningNotesAreAuthored(workspacePath);
   const atRisk = remote.state === 'none' && (knowledgeEntries > 0 || planningNotes);
-  // One lone entry is singular ("exists"); anything else, including "1 entry and the planning notes", is plural.
-  const verb = knowledgeEntries === 1 && !planningNotes ? 'exists' : 'exist';
+  // One thing is singular ("1 entry exists", "the plan exists"); anything more is plural.
+  const verb = (knowledgeEntries === 1 && !planningNotes) || (knowledgeEntries === 0 && planningNotes) ? 'exists' : 'exist';
   const summary = atRisk
     ? `${describeContent(knowledgeEntries, planningNotes)} in this workspace ${verb} only on this computer, because it has no git remote.`
     : null;

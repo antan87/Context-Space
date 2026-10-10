@@ -51,6 +51,12 @@ export interface StoragePort {
   /** Checks if a workspace context/metadata document exists. */
   workspaceFileExists(workspacePath: string, featureId: string, filename: string): Promise<boolean>;
 
+  /**
+   * Removes one workspace document; a document that does not exist is not an error. Optional: an
+   * adapter without it keeps retired documents, and callers must cope with that.
+   */
+  deleteWorkspaceFile?(workspacePath: string, featureId: string, filename: string): Promise<void>;
+
   /** Resolves the human-readable path or link to the workspace document for the AI assistant. */
   resolveWorkspaceFileUrl(workspacePath: string, featureId: string, filename: string): string;
 

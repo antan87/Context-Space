@@ -57,8 +57,10 @@ try {
         assert.equal(context.guidance.documents[0].status, 'superseded');
         const notes = await call('get_planning_notes');
         await call('save_planning_notes', { revision: notes.revision, content: '# Delivery notes\nReview the report viewer.' });
-        assert.equal((await client.callTool({ name: 'save_planning_notes', arguments: { revision: notes.revision, content: 'stale' } })).isError, true);
-        await call('update_milestone_plan', { revision: plan.lifecycle.revision, steps: [] });
+        // The notes file is retired: the refresh after the save moved what it held into the plan.
+        await assert.rejects(fs.access(path.join(workspace, 'contextspace-milestones.md')));
+        assert.match((await call('get_work_context')).plan, /Is anything in the notes kept from contextspace-milestones\.md still needed\?/);
+        await call('update_milestone_plan', { revision: (await call('get_work_context')).lifecycle.revision, steps: [] });
         assert.deepEqual((await call('get_work_context')).lifecycle.steps, []);
       }
       console.log(`PASS ${role}: ${names.length} tools; planning reads, writes, plan text, deprecations and role boundaries verified`);

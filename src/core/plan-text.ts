@@ -42,6 +42,12 @@ const STATUS_GLYPHS: Record<PlanStatus, string> = {
   todo: '○', in_progress: '◐', blocked: '⊘', done: '✓', dropped: '✗', later: '‖',
 };
 
+/** An owner as `actorWords` takes it: `user` and `agent` in any case, a person's name as written. */
+function ownerName(owner: string | undefined): string {
+  const name = owner?.trim() || 'user';
+  return /^(?:user|agent)$/i.test(name) ? name.toLowerCase() : name;
+}
+
 /** The first sentence or line of a longer text, short enough for one line. */
 export function firstLine(text: string | undefined, max = 100): string {
   const line = (text ?? '').split(/\n/).map((part) => part.trim()).find(Boolean) ?? '';
@@ -98,7 +104,7 @@ export function itemState(plan: PlanDocument, item: PlanItem): string {
     case 'todo': {
       if (unsettledWaits(plan, item).length) return status;
       // A question is answered, not started.
-      if (item.kind === 'question') return `to do · ${actorWords(item.owner?.trim().toLowerCase() || 'user')} answers`;
+      if (item.kind === 'question') return `to do · ${actorWords(ownerName(item.owner))} answers`;
       return 'to do · ready to start';
     }
   }

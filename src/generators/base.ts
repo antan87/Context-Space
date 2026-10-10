@@ -280,8 +280,7 @@ ${renderPlanInstructions()}
 If \`ctxspace\` is not on PATH, use \`./.contextspace/bin/ctxspace\` (bash) or \`.\\.contextspace\\bin\\ctxspace.cmd\` (PowerShell) with the same arguments. Trust workspace MCP configs in your assistant.
 
 - \`${PRIMARY_KNOWLEDGE_FILE}\` — decisions and gotchas, one per \`###\` heading. Use MCP \`search_knowledge\`; if the MCP server is not connected, inspect headings, not the whole file. Add via \`${CLI_NAME} knowledge add -t decision|gotcha --title "..." -m "..."\`; without CLI, append a \`### <YYYY-MM-DD> — <Title>\` heading directly. Record a rule and reason that cannot be recovered from the code or git history. Avoid restating structure the code already shows.
-- \`contextspace-milestones.md\` — older planning notes, kept until they move into the plan. Read them; record new items with \`ctxspace plan add\`.
-- \`${PRIMARY_PLAN_FILE}\` — generated: current work, then package order (not a delivery plan). Change the plan with \`ctxspace plan\`.
+- \`${PRIMARY_PLAN_FILE}\` — generated: the brief and the plan in short, then the build order between repos. Change the plan with \`ctxspace plan\`.
 - \`contextspace-work.json\` — assignment and sources. Read live guidance with \`ctxspace flow --assignment\` or MCP \`get_work_context\`.
 - \`.agents/skills/\` — enabled playbooks; Claude copies: \`.claude/skills/\`.
 - Need the user's answer or approval? Call MCP \`request_user_input\` (one short question) so this chat is flagged, then ask in the chat and end your turn. No MCP: just ask.

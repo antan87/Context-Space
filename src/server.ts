@@ -2922,11 +2922,17 @@ app.get('/api/workspace/:id/plan', async (c) => {
     const state = await loadWorkspaceState(workspacePath);
     const { planStoreExists } = await import('./core/plan.js');
     if (state.lifecycle || await planStoreExists(workspacePath)) {
-      const { renderLifecyclePlan, loadWorkspaceLifecycle } = await import('./core/lifecycle.js');
-      const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
-      const milestones = renderLifecyclePlan(lifecycle);
       const marker = /<!-- CONTEXTSPACE:MILESTONES:START -->[\s\S]*?<!-- CONTEXTSPACE:MILESTONES:END -->/;
-      content = marker.test(content) ? content.replace(marker, () => milestones) : `${milestones}\n\n${content}`;
+      if (marker.test(content)) {
+        // A file from before the plan summary: its milestone block is replaced with the live one.
+        const { renderLifecyclePlan, loadWorkspaceLifecycle } = await import('./core/lifecycle.js');
+        const milestones = renderLifecyclePlan(await loadWorkspaceLifecycle(workspacePath, { includeFleet: false }));
+        content = content.replace(marker, () => milestones);
+      } else {
+        // The summary as it reads now, keeping the build order the last refresh wrote.
+        const { buildPlanSummary, buildOrderOf } = await import('./core/plan-summary.js');
+        content = await buildPlanSummary(workspacePath, { buildOrder: buildOrderOf(content) ?? '' });
+      }
     }
     return c.json({ content });
   } catch (error) {

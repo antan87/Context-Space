@@ -4,11 +4,15 @@ import { createHash } from 'node:crypto';
 import { acquireLock, createMutationQueue } from './locks.js';
 import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
-import { PRIMARY_PLAN_FILE } from './constants.js';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
 
+/**
+ * The old hand-written planning notes. Retired: refresh and `ctxspace plan` move them into the plan
+ * (core/plan-import) and archive the file. The deprecated MCP tools still read and write it for one
+ * release; whatever they write is moved into the plan the same way.
+ */
 export const PLANNING_NOTES_FILE = 'contextspace-milestones.md';
-const template = `# Delivery plan and open questions
+export const PLANNING_NOTES_TEMPLATE = `# Delivery plan and open questions
 
 This is an authored planning document. Refresh preserves it. Use the lifecycle
 editor for executable milestone gates; record the rationale and release sequence here.
@@ -48,22 +52,13 @@ export async function readPlanningNotes(root: string) {
   await assertNoLinkedPathComponents(root, path.join(root, PLANNING_NOTES_FILE));
   let content: string;
   try { content = await readWorkspaceFile(root, feature.id, PLANNING_NOTES_FILE); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; content = template; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; content = PLANNING_NOTES_TEMPLATE; }
   return { content, revision: revision(content) };
 }
 
-export async function ensurePlanningNotes(root: string, featureId: string) {
-  return mutate(root, async () => {
-    try { await readWorkspaceFile(root, featureId, PLANNING_NOTES_FILE); return; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    let imported = '';
-    try {
-      const previous = await readWorkspaceFile(root, featureId, PRIMARY_PLAN_FILE);
-      const start = previous.search(/^## Milestones\s*$/m);
-      if (start >= 0) imported = '\n## Imported planning notes\n\n' + previous.slice(start);
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    await writeWorkspaceFile(root, featureId, PLANNING_NOTES_FILE, template + imported);
-  });
+/** Runs an operation while nobody else writes the notes file. */
+export async function withPlanningNotesLock<T>(root: string, operation: () => Promise<T>) {
+  return mutate(root, operation);
 }
 
 async function mutate<T>(root: string, operation: () => Promise<T>) {
