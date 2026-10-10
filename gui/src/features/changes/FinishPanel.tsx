@@ -18,6 +18,7 @@ import { Textarea } from '../../components/ui/textarea.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { invalidateDeliveryState, useLastFinish, useProgression, useWorkspaceRepositories } from '../../lib/api/queries.js';
 import { remoteLabel, submitFinish } from './deliveryApi.js';
+import { PlanFinishList } from '../plan/PlanFinishList.js';
 
 const MIN_REASON = 8;
 
@@ -116,6 +117,9 @@ export function FinishPanel({ ws, onClose, onGitChanged }: Props) {
           <p className="mt-1">Finishing again resumes from here; completed commits are not repeated.</p>
         </div>
       )}
+
+      <h6 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">Open in the plan</h6>
+      <PlanFinishList workspaceId={wsId} />
 
       <h6 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">1. Verification evidence</h6>
       {progression.isLoading ? <Spinner className="size-4" /> : progression.isError ? (

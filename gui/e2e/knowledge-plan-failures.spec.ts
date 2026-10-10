@@ -68,60 +68,6 @@ test.describe('Knowledge and Plan failure recovery', () => {
     await expect(page.getByText('New revision.')).toBeVisible();
   });
 
-  test('shows malformed and network Plan loads without replacing content, then retries', async ({ page }) => {
-    let planGets = 0;
-    await page.route('**/api/workspace/*/knowledge', async (route) => {
-      if (route.request().method() !== 'GET') return route.fallback();
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ content: '# Knowledge fixture' }),
-      });
-    });
-    await page.route('**/api/workspace/*/plan', async (route) => {
-      if (route.request().method() !== 'GET') return route.fallback();
-      planGets += 1;
-      if (planGets === 1) {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ content: '# Existing plan\n\nKeep this plan.' }),
-        });
-      }
-      if (planGets === 2) {
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ error: 'private response dump' }),
-        });
-      }
-      if (planGets === 3) return route.abort('connectionfailed');
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ content: '# Recovered plan\n\nRetry succeeded.' }),
-      });
-    });
-
-    await page.goto('/#/workspaces/demo/plan');
-    await page.getByRole('button', { name: 'Markdown Plan', exact: true }).click();
-    await expect(page.getByText('Keep this plan.')).toBeVisible();
-
-    await page.goto('/#/workspaces/demo/knowledge');
-    await expect(page.getByRole('region', { name: 'Knowledge', exact: true })).toBeVisible();
-    await page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Plan', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Plan', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Markdown Plan', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('Existing content was kept.');
-    await expect(page.getByRole('alert')).not.toContainText('private response dump');
-    await expect(page.getByText('Keep this plan.')).toBeVisible();
-
-    await page.getByRole('button', { name: 'Retry load' }).click();
-    await expect(page.getByRole('alert')).toContainText('Existing content was kept.');
-    await page.getByRole('button', { name: 'Retry load' }).click();
-    await expect(page.getByText('Retry succeeded.')).toBeVisible();
-  });
-
   test('keeps the Knowledge editor open after a failed save and closes after confirmed retry', async ({ page }) => {
     let saveAttempts = 0;
     await page.route('**/api/workspace/*/knowledge', async (route) => {

@@ -2,8 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   AlertTriangle,
   RefreshCw,
-  FileText,
-  Code,
   CheckCircle2,
   Clock,
   ShieldCheck,
@@ -18,7 +16,6 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { apiFetch } from '../../lib/api/client.js';
@@ -32,22 +29,18 @@ interface ImplementationPlanProps {
   planError: string | null;
   handleRetryPlan: (wsId: string) => Promise<void>;
   workspaceId?: string;
-  defaultViewMode?: 'flow' | 'preview' | 'raw';
   /** Archived: show milestones and verification history, run nothing. */
   readOnly?: boolean;
 }
 
+/**
+ * The Visual Flow of the milestones and the workspace checks. The plan itself is the Plan tab's list;
+ * the Markdown and Raw views of contextspace-plan.md are gone. `planContent` still feeds other views.
+ */
 export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
-  planContent,
-  planLoading,
-  planError,
-  handleRetryPlan,
   workspaceId,
-  defaultViewMode = 'flow',
   readOnly = false,
 }) => {
-  const [viewMode, setViewMode] = useState<'flow' | 'preview' | 'raw'>(defaultViewMode);
-  const [milestoneMarkdown, setMilestoneMarkdown] = useState<string | null>(null);
   const [lifecycle, setLifecycle] = useState<WorkspaceLifecycle | null>(null);
   const [lifecycleLoading, setLifecycleLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -56,12 +49,6 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [isFleetExpanded, setIsFleetExpanded] = useState(false);
   const queryClient = useQueryClient();
-
-  useEffect(() => {
-    if (defaultViewMode) {
-      setViewMode(defaultViewMode);
-    }
-  }, [defaultViewMode]);
 
   const loadLifecycle = useCallback(async (signal?: AbortSignal) => {
     if (!workspaceId) return;
@@ -73,7 +60,6 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
       // A response for a workspace the user already left must not replace the current one.
       if (signal?.aborted) return;
       setLifecycle(data.lifecycle);
-      if (data.plan !== undefined) setMilestoneMarkdown(data.plan);
       if (data.report !== undefined) setVerificationReport(data.report);
     } catch (error) {
       if (signal?.aborted) return;
@@ -85,7 +71,6 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
   }, [workspaceId]);
 
   useEffect(() => {
-    setMilestoneMarkdown(null);
     setVerificationReport(null);
     setVerifyMessage(null);
     const controller = new AbortController();
@@ -149,13 +134,7 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
     }
   };
 
-  const milestoneMarker = /<!-- CONTEXTSPACE:MILESTONES:START -->[\s\S]*?<!-- CONTEXTSPACE:MILESTONES:END -->/;
-  const currentPlanContent = milestoneMarkdown !== null
-    ? milestoneMarker.test(planContent) ? planContent.replace(milestoneMarker, () => milestoneMarkdown) : `${milestoneMarkdown}\n\n${planContent}`
-    : planContent;
-
   const hasMilestones = Boolean(lifecycle?.steps.length);
-  const displayedView = viewMode === 'flow' && !hasMilestones ? 'preview' : viewMode;
 
   return (
     <div className="rounded-xl border border-border/80 bg-card/70 backdrop-blur-md p-5 shadow-xs">
@@ -163,7 +142,7 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
         <div className="flex items-center gap-2">
           <Workflow size={18} className="text-primary" />
           <h4 className="text-sm font-bold text-foreground">
-            {hasMilestones ? 'Lifecycle Flow & Implementation Plan' : 'Plan & verification'}
+            {hasMilestones ? 'Visual Flow' : 'Checks'}
           </h4>
           {hasMilestones && lifecycle && (
             <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-primary/10 text-primary border border-primary/20 uppercase tracking-wider">
@@ -172,34 +151,6 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-muted/50 p-0.5 rounded-md border border-border/60">
-            {hasMilestones && <Button
-              size="xs"
-              variant={displayedView === 'flow' ? 'secondary' : 'ghost'}
-              onClick={() => setViewMode('flow')}
-              className="text-[11px] gap-1 px-2.5 font-medium"
-            >
-              <Workflow size={12} /> Visual Flow
-            </Button>}
-            <Button
-              size="xs"
-              variant={displayedView === 'preview' ? 'secondary' : 'ghost'}
-              onClick={() => setViewMode('preview')}
-              className="text-[11px] gap-1 px-2.5"
-            >
-              <FileText size={12} /> Markdown Plan
-            </Button>
-            <Button
-              size="xs"
-              variant={displayedView === 'raw' ? 'secondary' : 'ghost'}
-              onClick={() => setViewMode('raw')}
-              className="text-[11px] gap-1 px-2"
-            >
-              <Code size={12} /> Raw
-            </Button>
-          </div>
-        </div>
       </header>
 
       {/* Verification Flash Message */}
@@ -253,29 +204,6 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
         </details>
       )}
 
-      {/* Plan Load Error Alert */}
-      {planError && (
-        <div
-          role="alert"
-          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground"
-        >
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={14} className="shrink-0" />
-            <span>{planError}</span>
-          </div>
-          {workspaceId && (
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => void handleRetryPlan(workspaceId)}
-              disabled={planLoading}
-            >
-              <RefreshCw size={11} className={planLoading ? 'animate-spin' : ''} /> Retry load
-            </Button>
-          )}
-        </div>
-      )}
-
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         {hasMilestones && <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="font-semibold text-foreground">Active Step:</span>
@@ -292,8 +220,8 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
         </div>
       </div>
 
-      {/* VISUAL FLOW MODE */}
-      {displayedView === 'flow' ? (
+      {/* VISUAL FLOW */}
+      {hasMilestones && (
         <div className="space-y-6">
           {/* Stepper Pipeline */}
           <div className="space-y-3">
@@ -544,27 +472,6 @@ export const ImplementationPlan: React.FC<ImplementationPlanProps> = ({
                   ))}
                 </div>
               )}
-            </div>
-          )}
-        </div>
-      ) : (
-        /* MARKDOWN / RAW PREVIEW MODE */
-        <div>
-          {planLoading && !currentPlanContent ? (
-            <div className="flex justify-center py-10">
-              <RefreshCw className="animate-spin text-primary" size={20} />
-            </div>
-          ) : !currentPlanContent ? (
-            <div className="rounded-md border border-dashed border-border/80 bg-muted/20 p-6 text-center text-xs text-muted-foreground">
-              No implementation plan generated yet.
-            </div>
-          ) : displayedView === 'preview' ? (
-            <div className="max-h-[550px] overflow-auto rounded-xl border border-border/70 bg-card/40 backdrop-blur-xs p-4">
-              <ChatMarkdown content={currentPlanContent} />
-            </div>
-          ) : (
-            <div className="max-h-[550px] overflow-auto whitespace-pre-wrap rounded-xl border border-border/70 bg-card/40 backdrop-blur-xs p-4 font-mono text-xs leading-relaxed text-muted-foreground">
-              {currentPlanContent}
             </div>
           )}
         </div>

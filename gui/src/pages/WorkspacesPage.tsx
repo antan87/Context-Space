@@ -110,6 +110,7 @@ import { KnowledgeBase } from '../features/knowledge/KnowledgeBase.js';
 import { ImplementationPlan } from '../features/plan/ImplementationPlan.js';
 import { RootDocumentsPanel } from '../features/work-guidance/RootDocumentsPanel.js';
 import { WorkspaceWorkPanel } from '../features/work-guidance/WorkspaceWorkPanel.js';
+import { PlanChecklist } from '../features/plan/PlanChecklist.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
 import { ChatMarkdown } from '../components/ChatMarkdown.js';
 
@@ -1397,11 +1398,13 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               {subTab === 'knowledge' && <KnowledgeBase ws={selected} {...knowledgeProps} readOnly={archived} />}
               {subTab === 'skills' && <WorkspaceSkillsTab ws={selected} showToast={showToast} />}
               {visitedSections.has('plan') && <div hidden={subTab !== 'plan'} className="space-y-6">
-                <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onPlanChanged={() => {
-                  setPlanVersion((version) => version + 1);
-                  void planProps.handleRetryPlan(selected.branchName);
-                }} />
-                <ImplementationPlan key={`${selected.branchName}-${planVersion}`} workspaceId={selected.branchName} defaultViewMode="flow" {...planProps} readOnly={archived} />
+                <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived}
+                  plan={<PlanChecklist key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onChanged={() => {
+                    // The Visual Flow and the plan summary follow the plan.
+                    setPlanVersion((version) => version + 1);
+                    void planProps.handleRetryPlan(selected.branchName);
+                  }} />} />
+                <ImplementationPlan key={`${selected.branchName}-${planVersion}`} workspaceId={selected.branchName} {...planProps} readOnly={archived} />
               </div>}
               {subTab === 'services' && <ServiceConsole ws={selected} />}
           </div>

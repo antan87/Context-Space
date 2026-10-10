@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { PlanningNotesPanel } from './PlanningNotesPanel.js';
 import { DraftConflictNotice, DraftStateLabel, type DraftState } from './BriefDraftNotices.js';
 import {
-  assignmentConflicts, clearDraft, emptyDocumentForm, mergeAssignmentDraft, pickAssignment, readDraft, reconcileAssignment, reconcileDocumentForm, reconcileMilestones,
-  sameAssignment, sameDocumentForm, sameSteps, stepChanges, withSavedProgress, writeDraft, type AssignmentDraft, type BriefKind, type DocumentFormDraft, type StoredDraft,
+  assignmentConflicts, clearDraft, emptyDocumentForm, mergeAssignmentDraft, pickAssignment, readDraft, reconcileAssignment, reconcileDocumentForm,
+  sameAssignment, sameDocumentForm, writeDraft, type AssignmentDraft, type BriefKind, type DocumentFormDraft, type StoredDraft,
 } from './briefDrafts.js';
-import { CheckCircle2, Circle, CircleDot, CircleSlash, Copy, Eye, FileText, Pencil, RefreshCw } from 'lucide-react';
+import { Copy, Eye, FileText, Pencil, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { headline } from '../progress/progressView.js';
@@ -14,7 +13,7 @@ import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
-import type { LifecycleStep, WorkDocument, WorkGuidance, WorkspaceLifecycle } from '../../types.js';
+import type { WorkDocument, WorkGuidance, WorkspaceLifecycle } from '../../types.js';
 
 type WorkContext = {
   guidance: WorkGuidance;
@@ -27,9 +26,9 @@ type WorkContext = {
 };
 type DocumentDraft = Pick<WorkDocument, 'title' | 'role' | 'status' | 'scope' | 'summary'>;
 /** Kept drafts that disagree with the version saved since: shown for a choice, never applied silently. */
-type DraftConflicts = { assignment?: StoredDraft<AssignmentDraft>; milestones?: StoredDraft<LifecycleStep[]> };
+type DraftConflicts = { assignment?: StoredDraft<AssignmentDraft> };
 type LiveDrafts = DraftConflicts & { document?: StoredDraft<DocumentFormDraft> };
-type KeptByThisPanel = 'assignment' | 'milestones' | 'document';
+type KeptByThisPanel = 'assignment' | 'document';
 const emptyDocument = (): DocumentDraft => ({ title: '', role: 'requirements', status: 'draft', scope: {}, summary: '' });
 const selectClass = 'mt-1 w-full rounded-md border border-border bg-background p-2 text-sm';
 const stages = ['investigate', 'design', 'implement', 'verify', 'review', 'release'] as const;
@@ -71,37 +70,15 @@ function GoalSummary({ guidance, scope }: { guidance: WorkGuidance; scope?: stri
   </div>;
 }
 
-const STEP_LOOK: Record<LifecycleStep['status'], { icon: typeof Circle; className: string; label: string }> = {
-  completed: { icon: CheckCircle2, className: 'text-[var(--state-done)]', label: 'done' },
-  verified: { icon: CheckCircle2, className: 'text-[var(--state-done)]', label: 'verified' },
-  in_progress: { icon: CircleDot, className: 'text-[var(--state-ai)]', label: 'in progress' },
-  blocked: { icon: CircleSlash, className: 'text-[var(--state-needs)]', label: 'blocked' },
-  pending: { icon: Circle, className: 'text-muted-foreground', label: 'not started' },
-};
-
-/** The milestones as a checklist, with the one being worked on marked. */
-function MilestoneList({ steps, current }: { steps: LifecycleStep[]; current?: string }) {
-  return <ol className="space-y-1">
-    {steps.map((step) => {
-      const look = STEP_LOOK[step.status] ?? STEP_LOOK.pending;
-      const Icon = look.icon;
-      const finished = step.status === 'completed' || step.status === 'verified';
-      return <li key={step.id} className="flex items-start gap-2 text-sm">
-        <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${look.className}`} />
-        <span className={`min-w-0 flex-1 ${finished ? 'text-muted-foreground' : 'text-foreground'}`}>{step.title || 'Untitled milestone'}<span className="sr-only">, {look.label}</span></span>
-        {step.id === current && !finished && <span className="state-chip shrink-0" data-tone="ai">Now</span>}
-      </li>;
-    })}
-  </ol>;
-}
-
-export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = false }: { workspaceId: string; onPlanChanged: () => void; /** Archived: show the record, change nothing. */ readOnly?: boolean }) {
+/**
+ * The brief: the goal, then the plan (passed in), then the sources. Milestones, questions and decisions
+ * live in the plan; the old milestone editor and the Notes & questions box are gone.
+ */
+export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { workspaceId: string; /** Shown under the goal. */ plan?: ReactNode; /** Archived: show the record, change nothing. */ readOnly?: boolean }) {
   const [context, setContext] = useState<WorkContext | null>(null);
   const [draft, setDraft] = useState<WorkGuidance | null>(null);
-  const [steps, setSteps] = useState<LifecycleStep[]>([]);
   // Which part is being edited. None by default: the plan is read first, and edited one part at a time.
-  const [panel, setPanel] = useState<'assignment' | 'documents' | 'milestones' | 'notes' | null>(null);
-  const [notesOpened, setNotesOpened] = useState(false);
+  const [panel, setPanel] = useState<'assignment' | 'documents' | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -112,9 +89,8 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
   const [url, setUrl] = useState('');
   const [preview, setPreview] = useState<{ title: string; content?: string; location: string } | null>(null);
   const [conflicts, setConflicts] = useState<DraftConflicts>({});
-  const [notKept, setNotKept] = useState<Record<KeptByThisPanel, boolean>>({ assignment: false, milestones: false, document: false });
+  const [notKept, setNotKept] = useState<Record<KeptByThisPanel, boolean>>({ assignment: false, document: false });
   const [saving, setSaving] = useState<BriefKind | null>(null);
-  const [notesState, setNotesState] = useState<DraftState>('saved');
   // The latest unsaved edits, so a reload still finds them when this device cannot store drafts.
   const live = useRef<LiveDrafts>({});
   const base = `/api/workspace/${encodeURIComponent(workspaceId)}`;
@@ -126,7 +102,6 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
       // Leaving the workspace aborts this load: a stale result must not touch state or the stored drafts of this workspace.
       if (signal?.aborted) return;
       let nextDraft = result.guidance;
-      let nextSteps = result.lifecycle?.steps ?? [];
       const found: DraftConflicts = {};
       const kept: string[] = [];
       let nextForm: DocumentFormDraft | null = null;
@@ -135,25 +110,16 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
         if (assignment.kind === 'restore') { nextDraft = { ...result.guidance, ...assignment.value }; kept.push('goal'); }
         else if (assignment.kind === 'conflict') found.assignment = assignment.draft;
         else clearDraft('assignment', workspaceId);
-        if (result.lifecycle) {
-          const milestones = reconcileMilestones(live.current.milestones ?? readDraft('milestones', workspaceId), result.lifecycle.steps);
-          if (milestones.kind === 'restore') { nextSteps = milestones.value; kept.push('milestone'); }
-          else if (milestones.kind === 'conflict') found.milestones = milestones.draft;
-          else clearDraft('milestones', workspaceId);
-        }
         const form = reconcileDocumentForm(live.current.document ?? readDraft('document', workspaceId));
         if (form.kind === 'restore') { nextForm = form.value; kept.push('source document'); }
         else clearDraft('document', workspaceId);
-        // Delivery notes load in their own panel: open it so a kept draft is found, and flagged on its tab.
-        if (readDraft('notes', workspaceId)) setNotesOpened(true);
       }
       live.current = { ...found }; // A copy: the effects below write to it, and `found` becomes state.
-      setContext(result); setDraft(nextDraft); setSteps(nextSteps); setConflicts(found);
+      setContext(result); setDraft(nextDraft); setConflicts(found);
       if (nextForm) { setDocument(nextForm.document); setSourceType(nextForm.sourceType); setContent(nextForm.content); setUrl(nextForm.url); setEditingDocumentId(null); }
       if (kept.length) setMessage(`Unsaved ${kept.join(' and ')} edits kept. Save them, or discard them.`);
       // Kept edits, and edits that clash with a newer save, are shown where they can be finished or settled.
       if (found.assignment || kept.includes('goal')) setPanel('assignment');
-      else if (found.milestones || kept.includes('milestone')) setPanel('milestones');
       else if (kept.includes('source document')) setPanel('documents');
     } catch (error) {
       if (signal?.aborted) return;
@@ -181,18 +147,6 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
     const stored = writeDraft('assignment', workspaceId, saved, mine);
     setNotKept((current) => current.assignment === !stored ? current : { ...current, assignment: !stored });
   }, [readOnly, context, draft, conflicts.assignment, workspaceId]);
-  useEffect(() => {
-    if (readOnly || !context?.lifecycle || conflicts.milestones) return;
-    const saved = context.lifecycle.steps;
-    if (sameSteps(steps, saved)) {
-      live.current.milestones = undefined; clearDraft('milestones', workspaceId);
-      setNotKept((current) => current.milestones ? { ...current, milestones: false } : current);
-      return;
-    }
-    live.current.milestones = { base: saved, value: steps, savedAt: Date.now() };
-    const stored = writeDraft('milestones', workspaceId, saved, steps);
-    setNotKept((current) => current.milestones === !stored ? current : { ...current, milestones: !stored });
-  }, [readOnly, context, steps, conflicts.milestones, workspaceId]);
   // The Add source document form has no saved version to clash with. Pasted source text may be sensitive, so it is kept per window only.
   useEffect(() => {
     if (readOnly || !context) return;
@@ -243,37 +197,9 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
     setContext(result); setDocument(emptyDocument()); setEditingDocumentId(null); setContent(''); setUrl('');
     setMessage(savedMessage('Document saved. Its role, status, and scope now appear in AI context.', result));
   });
-  const saveMilestones = () => perform(async () => {
-    if (!context?.lifecycle) return;
-    const result = await apiFetch<{ lifecycle: WorkspaceLifecycle; contextRefreshed?: boolean; contextRefreshError?: string }>(`${base}/lifecycle/plan`, {
-      method: 'PUT', body: JSON.stringify({ revision: context.lifecycle.revision ?? 0, steps }),
-    });
-    setContext({ ...context, lifecycle: result.lifecycle }); setSteps(result.lifecycle.steps);
-    onPlanChanged(); setMessage(savedMessage('Milestones saved. Visual Flow and the Markdown plan use these same steps.', result));
-  }, 'milestones');
-  const removeMilestone = (stepId: string) => {
-    const step = steps.find((candidate) => candidate.id === stepId);
-    if (!step) return;
-    const dependents = steps.filter((candidate) => candidate.id !== stepId && candidate.dependsOn?.includes(stepId));
-    if (dependents.length) {
-      setError(`Cannot remove “${step.title}” because ${dependents.map((candidate) => `“${candidate.title}”`).join(', ')} depend on it. Remove the dependency first.`);
-      setMessage('The milestone draft was kept.');
-      return;
-    }
-    const scopedDocuments = context?.guidance.documents.filter((document) => document.scope.milestoneId === stepId) ?? [];
-    if (draft?.assignment.milestoneId === stepId || scopedDocuments.length) {
-      setError(`Move the assignment${scopedDocuments.length ? ' and source document' : ''} scope away from “${step.title}” before removing it.`);
-      setMessage('The milestone draft was kept.');
-      return;
-    }
-    setError('');
-    setSteps(steps.filter((candidate) => candidate.id !== stepId));
-  };
   const assignmentDirty = Boolean(draft && context && !sameAssignment(pickAssignment(draft), pickAssignment(context.guidance)));
   const documentFormDirty = !sameDocumentForm({ document, sourceType, content, url }, emptyDocumentForm());
-  const milestonesDirty = Boolean(context?.lifecycle && !sameSteps(steps, context.lifecycle.steps));
   const assignmentState: DraftState = conflicts.assignment ? 'conflict' : saving === 'assignment' ? 'saving' : assignmentDirty ? 'unsaved' : 'saved';
-  const milestonesState: DraftState = conflicts.milestones ? 'conflict' : saving === 'milestones' ? 'saving' : milestonesDirty ? 'unsaved' : 'saved';
   const withoutConflict = (kind: BriefKind) => setConflicts((current) => ({ ...current, [kind]: undefined }));
   // The saved version stays on screen until the user chooses, so a kept draft only ever replaces it deliberately.
   const keepAssignmentDraft = () => {
@@ -282,19 +208,6 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
     setMessage('Your edits are applied to the latest saved assignment. Review them, then save.');
   };
   const useSavedAssignment = () => { if (context) { setDraft(context.guidance); withoutConflict('assignment'); setMessage('Using the saved assignment. Your unsaved edits were discarded.'); } };
-  const keepMilestoneDraft = () => {
-    if (!conflicts.milestones || !context?.lifecycle) return;
-    setSteps(withSavedProgress(conflicts.milestones.value, context.lifecycle.steps)); withoutConflict('milestones');
-    setMessage('Your edits are applied to the latest saved milestones. Review them, then save.');
-  };
-  const useSavedMilestones = () => { if (context?.lifecycle) { setSteps(context.lifecycle.steps); withoutConflict('milestones'); setMessage('Using the saved milestones. Your unsaved edits were discarded.'); } };
-  const draftFirstMilestone = () => {
-    if (!context?.lifecycle || steps.length || assignmentDirty) return;
-    const objective = context.guidance.assignment.objective.replace(/\s+/g, ' ').trim();
-    setSteps([{ id: `milestone-${crypto.randomUUID()}`, title: objective.slice(0, 100) || 'Define the first reviewable outcome', description: context.guidance.assignment.expectedOutput.trim(), status: 'pending', dependsOn: [] }]);
-    setPanel('milestones');
-    setMessage('First milestone drafted locally. Review its title and outcome, then save it when ready.');
-  };
   const copyGoal = () => void perform(async () => {
     if (!context) return;
     if (!await safeCopyToClipboard(context.assignment)) throw new Error('Could not copy the goal. Check browser clipboard permissions.');
@@ -305,7 +218,7 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
     setPreview({ title: result.document.title, content: result.content, location: result.location });
   });
   const close = (what: string) => <Button size="xs" variant="ghost" aria-label={`Done with ${what}`} onClick={() => setPanel(null)}>Done</Button>;
-  const edit = (label: string, target: NonNullable<typeof panel>) => <IconButton label={label} icon={<Pencil />} className="text-muted-foreground" onClick={() => { setPanel(target); if (target === 'notes') setNotesOpened(true); }} />;
+  const edit = (label: string, target: NonNullable<typeof panel>) => <IconButton label={label} icon={<Pencil />} className="text-muted-foreground" onClick={() => setPanel(target)} />;
   const previewBox = preview && <div className="rounded-lg border border-border p-3 space-y-2"><div className="flex justify-between gap-2"><h4 className="text-sm font-semibold">{preview.title}</h4><Button size="sm" variant="ghost" onClick={() => setPreview(null)}>Close document</Button></div>
     {preview.content !== undefined ? <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{preview.content}</pre> : <a className="text-sm text-primary underline" href={preview.location} target="_blank" rel="noopener noreferrer">Open source document</a>}
   </div>;
@@ -320,7 +233,6 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
     {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
     {!context || !draft ? <p className="text-sm">{error ? 'The plan is unavailable.' : 'Loading the plan…'}</p> : <>
       {conflicts.assignment && <DraftConflictNotice noun="goal" differences={assignmentConflicts(conflicts.assignment, pickAssignment(context.guidance))} onKeep={keepAssignmentDraft} onUseSaved={useSavedAssignment} />}
-      {conflicts.milestones && context.lifecycle && <DraftConflictNotice noun="milestones" differences={stepChanges(conflicts.milestones.value, context.lifecycle.steps)} onKeep={keepMilestoneDraft} onUseSaved={useSavedMilestones} />}
 
       <PlanCard title="Goal" action={panel === 'assignment' ? close('the goal') : !readOnly && edit('Edit the goal', 'assignment')}
         meta={!readOnly && panel !== 'assignment' && assignmentState !== 'saved' ? <DraftStateLabel state={assignmentState} kept={!notKept.assignment} /> : null}>
@@ -353,44 +265,7 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
         </div> : <GoalSummary guidance={draft} scope={context.lifecycle?.steps.find((step) => step.id === draft.assignment.milestoneId)?.title} />}
       </PlanCard>
 
-      <PlanCard title="Milestones" action={panel === 'milestones' ? close('the milestones') : !readOnly && edit(context.lifecycle?.steps.length || steps.length ? 'Edit milestones' : 'Add milestones', 'milestones')}
-        meta={<>{steps.length > 0 && <span className="text-xs text-muted-foreground">{steps.filter((step) => step.status === 'completed' || step.status === 'verified').length} of {steps.length} done</span>}
-          {!readOnly && panel !== 'milestones' && milestonesState !== 'saved' && <DraftStateLabel state={milestonesState} kept={!notKept.milestones} />}</>}>
-        {panel === 'milestones' ? <fieldset disabled={readOnly || Boolean(conflicts.milestones)} className="m-0 min-w-0 border-0 p-0 space-y-4">
-          <p className="text-sm text-muted-foreground">Milestones are optional and unique to this work. Name the outcomes you need, or remove them all to hide the flow.</p>
-          {!context.lifecycle?.steps.length && steps.length > 0 && <p className="text-xs text-muted-foreground">This milestone is an unsaved draft. Review its title and outcome; Save milestones creates it as pending and does not start work.</p>}
-  {steps.map((step, index) => <fieldset key={step.id} className="rounded-lg border border-border p-3 space-y-3">
-            <legend className="px-1 text-xs text-muted-foreground">Milestone {index + 1} · {step.status.replaceAll('_', ' ')}</legend>
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => removeMilestone(step.id)}>Remove milestone {index + 1}</Button>
-            <label className="block text-sm">Milestone {index + 1} title<Input value={step.title} onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, title: event.target.value } : item))} /></label>
-            <label className="block text-sm">Milestone {index + 1} outcome<Textarea value={step.description ?? ''} onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, description: event.target.value } : item))} /></label>
-            <label className="block text-sm">Milestone {index + 1} branch (optional)<Input value={step.branch ?? ''} placeholder="feature/invoice-calculation" onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, branch: event.target.value } : item))} /></label>
-            <label className="block text-sm">Milestone {index + 1} repository (optional)<Input value={step.repo ?? ''} placeholder="billing-api" onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, repo: event.target.value } : item))} /></label>
-            <label className="block text-sm">Milestone {index + 1} work item / PR (optional)<Input value={step.workItem ?? ''} placeholder="PBI ID or URL" onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, workItem: event.target.value } : item))} /></label>
-            <label className="block text-sm">Milestone {index + 1} unblock condition (optional)<Input value={step.unblockCondition ?? ''} placeholder="Dependency or decision needed before starting" onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, unblockCondition: event.target.value } : item))} /></label>
-            <fieldset className="space-y-2"><legend className="mb-2 text-sm">Milestone {index + 1} dependencies</legend>
-              {steps.filter((item) => item.id !== step.id).map((item) => <label key={item.id} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={Boolean(step.dependsOn?.includes(item.id))} onChange={(event) => setSteps(steps.map((candidate) => candidate.id === step.id ? {
-                  ...candidate, dependsOn: event.target.checked ? [...(candidate.dependsOn ?? []), item.id] : (candidate.dependsOn ?? []).filter((id) => id !== item.id),
-                } : candidate))} />{item.title || 'Untitled milestone'}
-              </label>)}
-            </fieldset>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(step.requiresVerification || step.verificationCommand)} disabled={step.status === 'completed'} onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, requiresVerification: event.target.checked, ...(!event.target.checked ? { verificationCommand: '' } : {}) } : item))} />Verify before completing milestone {index + 1}</label>
-            {(step.requiresVerification || step.verificationCommand) && <label className="block text-sm">Milestone {index + 1} verification command (optional)<Input value={step.verificationCommand ?? ''} disabled={step.status === 'completed'} placeholder="Uses the workspace test command unless overridden" onChange={(event) => setSteps(steps.map((item) => item.id === step.id ? { ...item, verificationCommand: event.target.value } : item))} /></label>}
-            {(step.requiresVerification || step.verificationCommand) && <label className="block text-sm">Milestone {index + 1} verification time limit in minutes (optional)<Input type="number" min={1} max={120} step={1} value={step.verificationTimeoutSeconds ? Math.round(step.verificationTimeoutSeconds / 60) : ''} placeholder="30" onChange={(event) => {
-              const minutes = Number.parseInt(event.target.value, 10);
-              setSteps(steps.map((item) => item.id === step.id ? { ...item, verificationTimeoutSeconds: Number.isFinite(minutes) && minutes > 0 ? Math.min(minutes, 120) * 60 : undefined } : item));
-            }} /></label>}
-          </fieldset>)}
-          {!readOnly && <div className="flex flex-wrap items-center gap-2"><Button variant="outline" disabled={busy || steps.length >= 100} onClick={() => setSteps([...steps, { id: `milestone-${crypto.randomUUID()}`, title: '', status: 'pending', dependsOn: [] }])}>Add milestone</Button><Button disabled={busy || steps.some((step) => !step.title.trim())} onClick={() => void saveMilestones()}>Save milestones</Button>
-            {milestonesDirty && <Button variant="ghost" disabled={busy} onClick={() => { setSteps(context.lifecycle?.steps ?? []); setMessage('Unsaved milestone edits discarded.'); }}>Discard unsaved milestone changes</Button>}
-            <DraftStateLabel state={milestonesState} kept={!notKept.milestones} /></div>}
-        </fieldset> : steps.length ? <MilestoneList steps={steps} current={context.lifecycle?.currentStepId} /> : <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">No milestones. Most work does not need them; add some when it has steps worth checking off.</p>
-          {!readOnly && <Button size="sm" variant="outline" disabled={busy || !context.lifecycle || Boolean(assignmentDirty)} onClick={draftFirstMilestone}>Draft first milestone</Button>}
-          {!readOnly && assignmentDirty && <p className="text-xs text-muted-foreground">Save the goal before drafting from it.</p>}
-        </div>}
-      </PlanCard>
+      {plan}
 
       <PlanCard title="Sources" action={panel === 'documents' ? close('the sources') : !readOnly && edit('Edit sources', 'documents')}
         meta={context.guidance.documents.length > 0 && <span className="text-xs text-muted-foreground">{context.guidance.documents.length}</span>}>
@@ -466,11 +341,6 @@ export function WorkspaceWorkPanel({ workspaceId, onPlanChanged, readOnly = fals
         </div>}
       </PlanCard>
 
-      <PlanCard title="Notes & questions" action={panel === 'notes' ? close('the notes') : edit(readOnly ? 'Show notes and questions' : 'Edit notes and questions', 'notes')}
-        meta={notesState !== 'saved' && <span data-notes-state={notesState} className="text-xs text-muted-foreground">{notesState === 'conflict' ? 'Conflict' : 'Unsaved'}</span>}>
-        {panel !== 'notes' && <p className="text-sm text-muted-foreground">Delivery order, open questions with their owners, and decisions put off for later.</p>}
-        {notesOpened && <fieldset disabled={readOnly} className="m-0 min-w-0 border-0 p-0" hidden={panel !== 'notes'}><PlanningNotesPanel key={workspaceId} workspaceId={workspaceId} readOnly={readOnly} onStateChange={setNotesState} /></fieldset>}
-      </PlanCard>
     </>}
   </section>;
 }
