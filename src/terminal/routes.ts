@@ -19,7 +19,14 @@ const TOKEN_TTL = 5 * 60_000;
 const OWNER_TTL = 24 * 60 * 60_000;
 const uuid = z.string().uuid();
 const workspaceId = z.string().min(1).max(200);
-const createSchema = z.object({ launchId: uuid, target: z.string().refine(id => id === 'shell' || isCliHarnessId(id)), cwd: z.string().max(4096).optional(), sessionId: uuid.optional() }).strict();
+/**
+ * A first message for a new session: one line of plain text. Control characters and line breaks are
+ * removed, so it cannot type anything beyond itself.
+ */
+// eslint-disable-next-line no-control-regex
+const firstMessage = z.string().max(1000).transform(text => text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim()).pipe(z.string().min(1).max(1000));
+export const createSchema = z.object({ launchId: uuid, target: z.string().refine(id => id === 'shell' || isCliHarnessId(id)), cwd: z.string().max(4096).optional(), sessionId: uuid.optional(), prompt: firstMessage.optional() }).strict()
+  .refine(input => !(input.prompt && input.sessionId), 'A resumed conversation carries on where it was; it takes no first message.');
 
 export function trustedTerminalOrigin(origin: string | undefined, requestUrl: string, developmentOrigin = process.env.CONTEXTSPACE_DASHBOARD_ORIGIN): boolean {
   if (!origin) return false;
@@ -122,7 +129,7 @@ export function registerTerminalRoutes(app: Hono, upgrade: UpgradeWebSocket<any,
           .map(async s => ({ cwd: await containedTerminalCwd(root, s.recordedCwd!).catch(() => ''), createdAt: s.createdAt })));
         manager.claimSession({ owner: getCookie(c, COOKIE)!, workspace: id, target: input.target, cwd, sessionId: input.sessionId, createdAt: found.createdAt, others: others.filter(other => other.cwd) });
       }
-      const terminal = await manager.create({ owner: getCookie(c, COOKIE)!, workspace: id, cwd, target: input.target, sessionId: input.sessionId, launchId: input.launchId, launch: withWorkspaceCli(resolveLaunch(input.target, input.sessionId), root) });
+      const terminal = await manager.create({ owner: getCookie(c, COOKIE)!, workspace: id, cwd, target: input.target, sessionId: input.sessionId, launchId: input.launchId, launch: withWorkspaceCli(resolveLaunch(input.target, input.sessionId, undefined, undefined, input.prompt), root) });
       return c.json({ terminal });
     } catch (error) { return c.json({ error: error instanceof z.ZodError ? 'Invalid terminal launch parameters.' : (error as Error).message }, 400); }
   });
