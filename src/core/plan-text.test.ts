@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyPlanChange, emptyPlan, type PlanActor, type PlanChange, type PlanDocument } from './plan.js';
 import { checkPlan, firstLine, planToJson, relativeTime, renderChanges, renderHistory, renderPlanRules, renderPlanText } from './plan-text.js';
-import { PLAN_RULES } from './plan-words.js';
+import { PLAN_RULES, PLAN_WORKFLOW } from './plan-words.js';
 
 const user: PlanActor = { by: 'user' };
 const claude: PlanActor = { by: 'agent', harness: 'claude' };
@@ -149,6 +149,13 @@ describe('small helpers', () => {
     PLAN_RULES.forEach((rule, index) => expect(help).toContain(`${index + 1}. ${rule}`));
     expect(help).toContain('M2 CSV export endpoint');
     expect(help).toContain('To do, In progress, Blocked, Done, Dropped, Later');
+  });
+
+  it('gives the AI a work routine: read, keep the plan true, record what the user says, report with names', () => {
+    expect(PLAN_WORKFLOW).toHaveLength(6);
+    expect(PLAN_WORKFLOW[0]).toMatch(/^Start by running `ctxspace plan`/);
+    expect(PLAN_WORKFLOW.join(' ')).toContain('your part is done');
+    expect(PLAN_WORKFLOW.at(-1)).toContain('never "M2" alone');
   });
 
   it('shortens text to its first sentence', () => {

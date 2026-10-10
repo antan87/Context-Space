@@ -58,6 +58,20 @@ export const PLAN_RULES = [
   'Before the workspace is finished, everything a milestone waits for must be handled. Other open items only warn. Finishing anyway needs a reason.',
 ] as const;
 
+/**
+ * How an AI works with the plan, step by step, for the generated AGENTS.md. In the agy and Haiku test,
+ * this routine cut agy's tool calls from 166 to 58, its reads outside the workspace from 50 to 0,
+ * and its codes written without a name to 0: rules alone left the AI guessing how to work.
+ */
+export const PLAN_WORKFLOW = [
+  'Start by running `ctxspace plan`. Its output is the whole plan: you do not need the program\'s code, the store file, or other folders.',
+  'Continue what is in progress for you, or start what is ready: `ctxspace plan start <code>`. If the user asks for something else, do that.',
+  'Keep the plan true while you work, one change at a time: new work you find with `ctxspace plan add task "<name>" --before <code it holds up>`; a question for the user with `ctxspace plan add question "<question>" --owner user --before <code it holds up>`; when stuck, `ctxspace plan block <code> --reason "<what you wait for>"`.',
+  'When the user tells you an answer or a decision, record it with the command. For the user\'s items and milestones it becomes a proposal: that is correct, and your part is done.',
+  'Finish your own work with `ctxspace plan done <code> --resolution "<what came out of it>"`.',
+  'Report back in three short parts: what you changed, what waits for the user (Needs you), and what is next. Write the name with every code: "M2 CSV export endpoint", never "M2" alone.',
+] as const;
+
 /** Codes like M2 are for tools; people read names. */
 export const NAMES_FIRST = 'Always write an item\'s name with its code, for example "M2 CSV export endpoint".';
 
