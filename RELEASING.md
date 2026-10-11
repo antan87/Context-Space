@@ -5,12 +5,12 @@ single version:
 
 | Channel | Artifact | Published to |
 | --- | --- | --- |
-| npm | `@mrpatronz/nexusflow` (CLI + server + bundled GUI) | npm registry |
+| npm | `@mrpatronz/nexusflow` (CLI + server + bundled GUI) | npm registry (deprecated; optional via `NPM_PUBLISHING_ENABLED`) |
 | VS Code extension | `ContextSpace.vsix` (`contextspace.contextspace-vscode`) | GitHub Releases; optional VS Code Marketplace |
 | Desktop | `ContextSpaceSetup.exe` (Windows NSIS), `ContextSpace-<version>.AppImage` (Linux), plus `latest.yml`/`latest-linux.yml` and `.sha256` sidecars | GitHub Releases |
 
-The npm package identity remains `@mrpatronz/nexusflow` for existing installs and
-trusted publishing. The product and primary CLI command are ContextSpace and `ctxspace`.
+ContextSpace is distributed primarily via GitHub Releases (desktop installers, release binaries, and installable VSIX).
+The npm package is deprecated and optional: publishing to npm is skipped unless `NPM_PUBLISHING_ENABLED=true` is set.
 Stable GitHub Releases include an installable VSIX even when Marketplace publishing is disabled.
 The Marketplace channel is optional until its publishing variable and credentials are enabled.
 
@@ -57,7 +57,7 @@ What it does, in order:
 4. **Waits for every required check on the tip of `main`**, then dispatches the release pinned to
    that commit. If `main` moves while it waits, it releases the newer tip, so a busy `main` does not
    make the pinned dispatch fail.
-5. **Follows the run to the end**, then checks that the tag, the GitHub Release assets and npm agree.
+5. **Follows the run to the end**, then checks that the tag and the GitHub Release assets agree.
 
 It resumes from whatever state it finds, so running it again after a timeout, a crash or a
 failure continues instead of starting over. Exit codes: `0` released or nothing to release, `1`
@@ -152,7 +152,8 @@ The [`release.yml`](./.github/workflows/release.yml) workflow then:
    succeeded on this exact SHA, and only then creates the immutable tag.
 2. **`npm` / `vscode` / `desktop`** run in parallel. npm and Marketplace skip versions
    that are already published; desktop rebuilds its installers and metadata on each
-   run. Stable releases always package the VSIX. npm uses trusted OIDC publishing;
+   run. Stable releases always package the VSIX. npm publishing is optional and gated behind
+   the repository variable `NPM_PUBLISHING_ENABLED=true`;
    Marketplace publishing runs only when
    the repository variable `VSCODE_PUBLISHING_ENABLED=true` and Azure OIDC credentials
    are present.
@@ -280,10 +281,9 @@ are recorded in the run log.
 
 ### Channel status
 
-A VS Code Marketplace failure does not stop npm, the desktop installers or the
-GitHub Release. The channel is reported as `failed` in the run summary, and the run
-ends red. After fixing the Marketplace credentials, re-run the whole workflow: the
-tag, npm and Marketplace steps are idempotent for an already-published version.
+An npm publish failure or VS Code Marketplace failure does not stop the desktop installers or the
+GitHub Release. The channel is reported in the run summary. After fixing any credentials, re-run
+the workflow: the tag, npm and Marketplace steps are idempotent for an already-published version.
 
 ## Version baseline
 

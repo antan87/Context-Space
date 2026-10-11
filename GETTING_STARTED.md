@@ -32,12 +32,16 @@ flowchart TD
 
 The recommended path for most users is the **desktop app** (Windows NSIS installer or
 Linux AppImage from [GitHub Releases](https://github.com/antan87/Context-Space/releases));
-see the [README installation section](./README.md#-installation). It needs no Node.js.
+see the [README installation section](./README.md#installation). It needs no Node.js.
 
-This guide follows the **CLI** path, which needs Node.js 22.13 or later and Git 2.20 or later:
+> [!NOTE]
+> Installing via `npm install -g @mrpatronz/nexusflow` is deprecated. Users should download
+> Desktop installers or release binaries from [GitHub Releases](https://github.com/antan87/Context-Space/releases).
+> For CLI development, install from source via `npm link` (see [README](./README.md#install-from-source-cli-gui-desktop-and-extension-development)).
+
+This guide follows the **CLI** path (available system-wide after linking or from the release):
 
 ```bash
-npm install -g @mrpatronz/nexusflow   # provides ctxspace (aliases: contextspace, cs, nexusflow)
 ctxspace --version
 ```
 

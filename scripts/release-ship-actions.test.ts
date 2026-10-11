@@ -438,13 +438,20 @@ describe('ship: waiting and failing safely', () => {
     expect(result.message).not.toContain('guard: success');
   });
 
-  it('does not call a green run a release when npm or the assets disagree', async () => {
+  it('does not call a green run a release when the assets disagree', async () => {
     const { world, ctx } = setup({ version: '2.32.0', releases: new Set(['v2.31.1']) });
     world.onWorkflowRun = () => { Object.assign(world.runs[0], { status: 'completed', conclusion: 'success' }); world.tags.push({ sha: TIP, version: '2.32.0' }); world.releases.add('v2.32.0'); world.releaseAssets['v2.32.0'] = ['ContextSpace.vsix']; };
     const result = await ship(ctx, FAST);
     expect(result.code).toBe(1);
     expect(result.message).toMatch(/missing: .*AppImage/);
-    expect(result.message).toMatch(/npm does not show/);
+  });
+
+  it('fails verification when checkNpm is explicitly enabled and npm does not have the version', async () => {
+    const { world, ctx } = setup({ version: '2.32.0', releases: new Set(['v2.31.1']) });
+    world.onWorkflowRun = () => { Object.assign(world.runs[0], { status: 'completed', conclusion: 'success' }); world.tags.push({ sha: TIP, version: '2.32.0' }); world.releases.add('v2.32.0'); world.releaseAssets['v2.32.0'] = expectedAssets('2.32.0'); };
+    const result = await ship(ctx, { ...FAST, checkNpm: true });
+    expect(result.code).toBe(1);
+    expect(result.message).toContain('npm does not show @x/pkg@2.32.0');
   });
 
   it('stops when the same step fails twice in a row, with the real error', async () => {
@@ -532,9 +539,16 @@ describe('gatherFacts and verifyRelease', () => {
     expect(result.problems[0]).toContain(`tag v2.32.0 is at ${OLD}`);
   });
 
-  it('flags an npm latest that did not move', async () => {
-    const { ctx } = setup({ tags: [{ sha: TIP, version: '2.32.0' }], releases: new Set(['v2.32.0']), releaseAssets: { 'v2.32.0': expectedAssets('2.32.0') }, npmVersions: new Set(['2.32.0']), npmLatest: '2.31.1' });
+  it('verifies the GitHub Release without requiring npm package publication', async () => {
+    const { ctx } = setup({ tags: [{ sha: TIP, version: '2.32.0' }], releases: new Set(['v2.32.0']), releaseAssets: { 'v2.32.0': expectedAssets('2.32.0') }, npmVersions: new Set(['2.31.1']), npmLatest: '2.31.1' });
     const result = await verifyRelease(ctx as never, { version: '2.32.0', tipSha: TIP, packageName: '@x/pkg' });
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it('flags an npm latest that did not move when checkNpm is explicitly enabled', async () => {
+    const { ctx } = setup({ tags: [{ sha: TIP, version: '2.32.0' }], releases: new Set(['v2.32.0']), releaseAssets: { 'v2.32.0': expectedAssets('2.32.0') }, npmVersions: new Set(['2.32.0']), npmLatest: '2.31.1' });
+    const result = await verifyRelease(ctx as never, { version: '2.32.0', tipSha: TIP, packageName: '@x/pkg', checkNpm: true });
     expect(result.problems).toEqual(['npm "latest" is 2.31.1, not 2.32.0']);
   });
 

@@ -354,6 +354,20 @@ describe('release workflow wiring', () => {
     const report = jobs['github-release'].steps.find((step: any) => step.id === 'channel-status');
     expect(report.run).toContain('exit 1');
   });
+
+  it('publishes GitHub Releases regardless of whether npm runs, is skipped, or fails', () => {
+    const ghRelease = jobs['github-release'];
+    expect(ghRelease.if).not.toContain("needs.npm.result == 'success'");
+    const npm = jobs.npm;
+    expect(npm.if).toContain("vars.NPM_PUBLISHING_ENABLED == 'true'");
+    const npmPublish = npm.steps.find((step: any) => step.id === 'npm-publish');
+    expect(npmPublish['continue-on-error']).toBe(true);
+    expect(npm.outputs.status).toBe('${{ steps.npm-status.outputs.status }}');
+    const channelStatus = ghRelease.steps.find((step: any) => step.id === 'channel-status');
+    expect(channelStatus.run).toContain('npm_status="disabled"');
+    expect(channelStatus.run).toContain('npm_status="failed"');
+    expect(channelStatus.run).toContain('npm_status="cancelled"');
+  });
 });
 
 describe('release-guard CLI', () => {

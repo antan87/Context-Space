@@ -23,6 +23,7 @@ const { values: args } = parseArgs({
     timeout: { type: 'string', default: '120' },
     poll: { type: 'string', default: '30' },
     repo: { type: 'string' },
+    'check-npm': { type: 'boolean', default: false },
   },
 });
 
@@ -75,6 +76,7 @@ const result = await ship(ctx, {
   dryRun: args['dry-run'],
   timeoutMs: minutes * 60_000,
   pollMs: seconds * 1000,
+  checkNpm: args['check-npm'],
 });
 console.log(result.code === 0 ? `\nOK: ${result.message}` : `\nSTOPPED (${result.code}): ${result.message}`);
 process.exit(result.code);

@@ -302,8 +302,8 @@ export async function dispatchAndWatch(ctx, step, { timeoutMs, pollMs }) {
   }
 }
 
-/** Confirm what was actually published agrees: tag, GitHub Release assets, and npm. */
-export async function verifyRelease(ctx, { version, tipSha, packageName }) {
+/** Confirm what was actually published agrees: tag and GitHub Release assets. */
+export async function verifyRelease(ctx, { version, tipSha, packageName, checkNpm = false }) {
   const problems = [];
   const tagSha = (await ctx.git(['ls-remote', '--refs', 'origin', `refs/tags/v${version}`])).split(/\s+/)[0];
   if (tagSha !== tipSha) problems.push(`tag v${version} is at ${tagSha || '(missing)'}, not ${tipSha}`);
@@ -319,16 +319,19 @@ export async function verifyRelease(ctx, { version, tipSha, packageName }) {
     problems.push(`the GitHub Release could not be read: ${failureText(error)}`);
   }
 
-  let published = '';
-  for (let attempt = 0; attempt < 6 && published !== version; attempt += 1) {
-    if (attempt > 0) await ctx.sleep(10_000);
-    published = await ctx.npm(['view', `${packageName}@${version}`, 'version']).then((out) => out.trim()).catch(() => '');
+  if (checkNpm && packageName) {
+    let published = '';
+    for (let attempt = 0; attempt < 6 && published !== version; attempt += 1) {
+      if (attempt > 0) await ctx.sleep(10_000);
+      published = await ctx.npm(['view', `${packageName}@${version}`, 'version']).then((out) => out.trim()).catch(() => '');
+    }
+    if (published !== version) problems.push(`npm does not show ${packageName}@${version}`);
+    else {
+      const latest = (await ctx.npm(['view', packageName, 'dist-tags.latest']).catch(() => '')).trim();
+      if (latest !== version) problems.push(`npm "latest" is ${latest || '(unreadable)'}, not ${version}`);
+    }
   }
-  if (published !== version) problems.push(`npm does not show ${packageName}@${version}`);
-  else {
-    const latest = (await ctx.npm(['view', packageName, 'dist-tags.latest']).catch(() => '')).trim();
-    if (latest !== version) problems.push(`npm "latest" is ${latest || '(unreadable)'}, not ${version}`);
-  }
+
   return { ok: problems.length === 0, problems };
 }
 
@@ -352,7 +355,7 @@ export function describeStep(step) {
  * Exit codes: 0 released or nothing to release, 1 failed or needs a person,
  * 2 paused, 3 timed out while waiting (run it again to resume).
  */
-export async function ship(ctx, { requestedBump, dryRun = false, timeoutMs = 120 * 60_000, pollMs = 30_000 } = {}) {
+export async function ship(ctx, { requestedBump, dryRun = false, timeoutMs = 120 * 60_000, pollMs = 30_000, checkNpm = false } = {}) {
   const deadline = ctx.now() + timeoutMs;
   let actions = 0;
   let lastWait = '';
@@ -398,9 +401,9 @@ export async function ship(ctx, { requestedBump, dryRun = false, timeoutMs = 120
       else if (step.action === 'close-release-pr') await closeReleasePr(ctx, step);
       else if (step.action === 'dispatch') {
         const { runId } = await dispatchAndWatch(ctx, step, { timeoutMs: Math.max(deadline - ctx.now(), pollMs), pollMs });
-        const verified = await verifyRelease(ctx, { version: step.version, tipSha: step.tipSha, packageName: facts.packageName });
+        const verified = await verifyRelease(ctx, { version: step.version, tipSha: step.tipSha, packageName: facts.packageName, checkNpm });
         if (!verified.ok) return { code: 1, message: `Run ${runId} succeeded but the published result does not agree:\n  - ${verified.problems.join('\n  - ')}` };
-        return { code: 0, message: `Released v${step.version} from ${step.tipSha.slice(0, 7)} (run ${runId}); tag, GitHub Release assets and npm all agree.` };
+        return { code: 0, message: `Released v${step.version} from ${step.tipSha.slice(0, 7)} (run ${runId}); tag and GitHub Release assets agree.` };
       }
     } catch (error) {
       if (error.timedOut) return { code: 3, message: error.message };

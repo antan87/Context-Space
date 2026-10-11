@@ -49,43 +49,30 @@ or `ctxspace data`.
 
 | Requirement | Version | Platform Notes |
 |:---|:---|:---|
-| [Node.js](https://nodejs.org) | 22.13 or later | Needed for the CLI, source setup, or `npx` bootstrap; **not required by packaged desktop installers** |
+| [Node.js](https://nodejs.org) | 22.13 or later | Needed for source setup or CLI development; **not required by packaged desktop installers** |
 | [Git](https://git-scm.com) | 2.20 or later | Required for worktree and multi-git operations |
-| npm | Bundled with Node.js | Standard package manager |
+| npm | Bundled with Node.js | Standard package manager (for source development) |
 | `xdg-utils` | Recommended | Linux only (for auto-opening the web dashboard) |
 
-### Desktop installers (recommended)
+### Desktop installers & standalone binaries (recommended)
 
-Download the first-class Windows NSIS installer or Linux AppImage from the
+Download the first-class Windows NSIS installer, Linux AppImage standalone binary, or VS Code extension from the
 [ContextSpace GitHub Releases](https://github.com/antan87/Context-Space/releases). Each
 release includes `latest.yml`/`latest-linux.yml` update metadata and a required
 SHA-256 sidecar. The desktop app is the primary distribution and includes the
 full GUI plus optional, user-controlled native updates.
 
-After a release is published, the new explicit bootstrap command can download
-and verify the matching asset for the current x64 OS:
-
-```bash
-npx @mrpatronz/nexusflow desktop install
-```
-
-It launches the Windows installer, or installs a stable Linux AppImage under
-`~/.local/share/contextspace/` and creates a desktop entry (existing NexusFlow installs keep their launcher and install directory). It never runs from
-`npm install`/postinstall and does not support macOS or ARM assets yet.
-
-**To start ContextSpace Desktop on Ubuntu / Linux:**
-- **Application Menu:** Open Activities / App Grid (press `Super` / Windows key), search for **ContextSpace**, and launch.
-- **Terminal:** Run `gtk-launch contextspace` or execute `~/.local/share/contextspace/ContextSpace.AppImage`.
+- **Windows:** Run `ContextSpaceSetup.exe` to install and launch ContextSpace Desktop.
+- **Linux:** Download `ContextSpace-<version>.AppImage` (standalone portable executable), make it executable (`chmod +x ContextSpace-*.AppImage`), and run it directly (`./ContextSpace-*.AppImage`), or place it under `~/.local/share/contextspace/ContextSpace.AppImage`.
+- **VS Code Extension:** Download `ContextSpace.vsix` and install with `code --install-extension ContextSpace.vsix`.
+- **Application Menu (Linux):** Open Activities / App Grid (press `Super` / Windows key), search for **ContextSpace**, and launch.
+- **Terminal (Linux):** Run `gtk-launch contextspace` or execute `~/.local/share/contextspace/ContextSpace.AppImage`.
 - **CLI Shortcut:** Run `ctxspace desktop` anytime.
 
-### Install the secondary npm CLI
+### npm package (deprecated)
 
-ContextSpace continues to use the existing `@mrpatronz/nexusflow` npm package.
-It provides `ctxspace` plus the compatible command aliases.
-
-```bash
-npm install -g @mrpatronz/nexusflow
-```
+> [!WARNING]
+> The `@mrpatronz/nexusflow` npm package is deprecated in favor of [ContextSpace GitHub Releases](https://github.com/antan87/Context-Space/releases). ContextSpace is distributed solely through GitHub Releases (desktop installers, standalone binaries, and installable VSIX). Do not install via `npm install -g @mrpatronz/nexusflow`.
 
 ### Install from source (CLI, GUI, desktop, and extension development)
 
@@ -112,12 +99,7 @@ After linking, the `ctxspace` (and aliases `contextspace`, `cs`, `nexusflow`) co
 
 On Windows or Linux, download the latest NSIS installer/AppImage from
 [GitHub Releases](https://github.com/antan87/Context-Space/releases) and launch the
-app. No Node.js or npm installation is needed. If Node.js is already available,
-the explicit post-release bootstrap is also convenient:
-
-```bash
-npx @mrpatronz/nexusflow desktop install
-```
+app. No Node.js or npm installation is needed.
 
 ### CLI and browser dashboard
 
@@ -366,7 +348,7 @@ A milestone gate (`ctxspace flow --step <id> --action complete`) runs that miles
 - **AI agents:** Claude Code, Codex, Antigravity (`agy`), and Pi (which needs the `pi-mcp-adapter` package). One server is registered per agent at user level, so it works in every workspace and finds the workspace from the agent's working directory.
 - **Editors and desktop apps:** Claude Desktop, Cursor, and VS Code.
 
-Registrations run `npx -y @mrpatronz/nexusflow@latest`, so they follow new releases (npx would reuse a cached copy of a bare package name indefinitely). An existing ContextSpace entry is never replaced for an agent. Run `ctxspace mcp setup --dry-run` to see what would be registered with each agent without changing anything, or `--no-agents` to configure editors and desktop apps only. `ctxspace doctor` lists installed agents that have no registration. Registering agents is not yet available on native Windows.
+Registrations run `npx -y @mrpatronz/nexusflow@latest` by default (or can point to `ctxspace mcp run --role interactive` locally). An existing ContextSpace entry is never replaced for an agent. Run `ctxspace mcp setup --dry-run` to see what would be registered with each agent without changing anything, or `--no-agents` to configure editors and desktop apps only. `ctxspace doctor` lists installed agents that have no registration. Registering agents is not yet available on native Windows.
 
 An ad-hoc `nexusflow mcp run` with no `--role` fails closed to the `readonly` tool surface. The explicit `nexusflow mcp setup` command installs `--role interactive` for the full workspace-management experience, including committing, finishing, and archiving workspaces; use `--role readonly` or `--role review` for untrusted or inspection-only agents. The server exposes:
 

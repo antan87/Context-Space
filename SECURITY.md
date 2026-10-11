@@ -29,7 +29,7 @@ Please include:
 
 - **Initial Response:** Within 48 hours of receiving the report.
 - **Status Updates:** Regular updates during investigation and fix development.
-- **Public Disclosure:** Coordinated disclosure after a fix has been released across all supported channels (npm, GitHub releases, VS Code extension).
+- **Public Disclosure:** Coordinated disclosure after a fix has been released across supported release channels (GitHub releases, desktop installers, VS Code extension).
 
 ## Security Architecture & Threat Model
 
