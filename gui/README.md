@@ -1,73 +1,49 @@
-# React + TypeScript + Vite
+# ContextSpace Web Dashboard GUI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The frontend interface for ContextSpace, built with [React](https://react.dev/), [TypeScript](https://www.typescriptlang.org/), [Tailwind CSS](https://tailwindcss.com/), and [Vite](https://vite.dev/).
 
-Currently, two official plugins are available:
+It provides a dark-themed GUI for multi-repo workspace management, interactive AI agent chat, real-time log streaming, teamwork strategy inspection, and service orchestration.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 📦 Distribution & Installation
 
-## React Compiler
+The GUI is not distributed as an independent npm package. Instead, it is packaged and distributed directly through [ContextSpace GitHub Releases](https://github.com/antan87/Context-Space/releases):
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. **Packaged Desktop Application (Recommended):** The GUI is bundled inside the native Electron desktop application distributed via [GitHub Releases](https://github.com/antan87/Context-Space/releases) (`ContextSpaceSetup.exe` for Windows, `ContextSpace-<version>.AppImage` for Linux). End users download and launch the installer or AppImage directly without needing Node.js or npm.
+2. **Local Backend Server:** The compiled assets (`dist/`) are bundled into the release and served locally by the ContextSpace server on port 3000 when running `ctxspace dashboard` or `ctxspace ui`.
 
-## Expanding the ESLint configuration
+> [!NOTE]
+> End-user installation via `npm install -g @mrpatronz/nexusflow` is deprecated. Users should download pre-built desktop installers or release binaries directly from [GitHub Releases](https://github.com/antan87/Context-Space/releases).
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 🛠️ Development
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+For frontend development on the GUI:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+```bash
+# Install dependencies
+cd gui
+npm install
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Start the Vite development server with HMR
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+When running the Vite dev server separately on `http://localhost:5173`, ensure the backend server is running with `NEXUSFLOW_DASHBOARD_ORIGIN=http://localhost:5173`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+### Building
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+# Typecheck and build production assets into dist/
+npm run build
+```
+
+Production assets are output to `gui/dist/` and served by the ContextSpace backend.
+
+### Testing & Linting
+
+```bash
+# Lint the codebase
+npm run lint
+
+# Run Playwright end-to-end tests
+npm run test:e2e
 ```

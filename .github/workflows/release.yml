@@ -157,12 +157,16 @@ jobs:
           fi
 
   # ── npm ──────────────────────────────────────────────────────────────────────
+  # npm package publishing is optional / deprecated in favor of GitHub Releases.
+  # To enable npm publishing: set the repository variable NPM_PUBLISHING_ENABLED=true.
+  # An npm publish failure does not block the other channels.
   npm:
     needs: guard
+    if: vars.NPM_PUBLISHING_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: release
     outputs:
-      status: ${{ steps.npm-publish.outputs.status }}
+      status: ${{ steps.npm-status.outputs.status }}
     permissions:
       id-token: write   # npm trusted publishing and provenance
       contents: read
@@ -186,6 +190,7 @@ jobs:
 
       - name: Publish to npm
         id: npm-publish
+        continue-on-error: true
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           PRERELEASE: ${{ needs.guard.outputs.prerelease }}
@@ -201,6 +206,21 @@ jobs:
             npm publish
           fi
           echo "status=published" >> "$GITHUB_OUTPUT"
+
+      - name: Record npm channel status
+        id: npm-status
+        if: always()
+        env:
+          PUBLISH: ${{ steps.npm-publish.outcome }}
+          RESULT: ${{ steps.npm-publish.outputs.status }}
+        run: |
+          if [ "$PUBLISH" != "success" ]; then
+            status="failed"
+            echo "::warning::npm publish failed; the other channels continue."
+          else
+            status="${RESULT:-published}"
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
 
   # ── VS Code Marketplace ───────────────────────────────────────────────────────
   # Stable releases always include a VSIX. Marketplace publishing alone is gated
@@ -382,8 +402,8 @@ jobs:
   # ── One GitHub Release for the tag, with every artifact attached ───────────────
   github-release:
     needs: [guard, npm, vscode, desktop]
-    # Run even if the Marketplace job was skipped (prereleases) but not if it failed.
-    if: always() && needs.guard.result == 'success' && needs.npm.result == 'success' && needs.desktop.result == 'success' && (needs.vscode.result == 'success' || needs.vscode.result == 'skipped')
+    # Run even if npm was skipped or failed, and even if the Marketplace job was skipped (prereleases).
+    if: always() && needs.guard.result == 'success' && needs.desktop.result == 'success' && (needs.vscode.result == 'success' || needs.vscode.result == 'skipped')
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -421,6 +441,7 @@ jobs:
         env:
           TAG: ${{ needs.guard.outputs.tag }}
           SHA: ${{ needs.guard.outputs.sha }}
+          NPM_JOB: ${{ needs.npm.result }}
           NPM: ${{ needs.npm.outputs.status }}
           VSCODE_JOB: ${{ needs.vscode.result }}
           MARKETPLACE: ${{ needs.vscode.outputs.marketplace }}
@@ -430,12 +451,23 @@ jobs:
           else
             vsix="attached"; marketplace="${MARKETPLACE:-unknown}"
           fi
+          if [ "$NPM_JOB" = "skipped" ]; then
+            npm_status="disabled"
+          elif [ "$NPM_JOB" = "failure" ] || [ "$NPM" = "failed" ]; then
+            npm_status="failed"
+          elif [ "$NPM_JOB" = "cancelled" ]; then
+            npm_status="cancelled"
+          elif [ "$NPM_JOB" = "success" ]; then
+            npm_status="${NPM:-published}"
+          else
+            npm_status="disabled"
+          fi
           {
             echo "### Release $TAG from \`$SHA\`"
             echo ""
             echo "| Channel | Status |"
             echo "| --- | --- |"
-            echo "| npm | ${NPM:-unknown} |"
+            echo "| npm | $npm_status |"
             echo "| Desktop installers | attached |"
             echo "| VSIX | $vsix |"
             echo "| VS Code Marketplace | $marketplace |"
