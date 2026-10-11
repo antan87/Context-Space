@@ -121,7 +121,7 @@ entering the version and the SHA) or via `gh`:
 ```bash
 VERSION=$(node -p "require('./package.json').version")
 SHA=$(git rev-parse origin/main)   # the commit whose checks you verified
-gh api "repos/antan87/NexusFlow/dispatches" \
+gh api "repos/antan87/Context-Space/dispatches" \
   -f event_type=release \
   -F "client_payload[version]=$VERSION" \
   -F "client_payload[expected_sha]=$SHA"
@@ -186,7 +186,7 @@ Check what the guard would decide, without publishing:
 
 ```bash
 GH_TOKEN=$(gh auth token) node scripts/release-guard.mjs checks \
-  --sha "$(git rev-parse origin/main)" --repo antan87/NexusFlow
+  --sha "$(git rev-parse origin/main)" --repo antan87/Context-Space
 ```
 
 ### Several releases at once
@@ -242,11 +242,11 @@ The workflow cannot configure these itself. Apply and review them as the reposit
    ```bash
    jq '{strict: false, checks: [.checks[] | {context: ., app_id: 15368}]}' \
      .github/release-required-checks.json |
-     gh api -X PATCH repos/antan87/NexusFlow/branches/main/protection/required_status_checks --input -
+     gh api -X PATCH repos/antan87/Context-Space/branches/main/protection/required_status_checks --input -
    ```
 
    (`15368` is the GitHub Actions app ID; confirm it with
-   `gh api repos/antan87/NexusFlow/commits/<sha>/check-runs --jq '.check_runs[0].app.id'`.)
+   `gh api repos/antan87/Context-Space/commits/<sha>/check-runs --jq '.check_runs[0].app.id'`.)
 2. **Include administrators** (`enforce_admins`) so direct pushes cannot skip those checks.
 3. **`release` environment**: deployment branches limited to `main`. The branch policy is what
    stops a workflow edited on another branch from reaching the credentials; the guard's ref check
@@ -259,16 +259,16 @@ The workflow cannot configure these itself. Apply and review them as the reposit
      and the brake. To remove the reviewers and keep the branch policy:
 
      ```bash
-     gh api -X PUT repos/antan87/NexusFlow/environments/release --input - <<'JSON'
+     gh api -X PUT repos/antan87/Context-Space/environments/release --input - <<'JSON'
      {"reviewers": [], "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
      JSON
      ```
 
-     Check the result with `gh api repos/antan87/NexusFlow/environments/release`. Put the reviewer
+     Check the result with `gh api repos/antan87/Context-Space/environments/release`. Put the reviewer
      back with `{"reviewers": [{"type": "User", "id": <your user id>}], ...}` if you want the click again.
 4. **Credentials bound to the environment**: set the npm trusted publisher's environment
    to `release`. If Marketplace publishing is enabled, give the Azure federated credential
-   the subject `repo:antan87/NexusFlow:environment:release`. Keep no long-lived publish
+   the subject `repo:antan87/Context-Space:environment:release`. Keep no long-lived publish
    tokens as repository secrets; any workflow run can read those.
 
 ### Emergency releases

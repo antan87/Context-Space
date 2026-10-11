@@ -10,6 +10,8 @@ describe('classifyMarkdownLink', () => {
   });
 
   it('opens public web and mail links outside the app', () => {
+    expect(classifyMarkdownLink('https://github.com/antan87/Context-Space/blob/main/README.md#L453', context))
+      .toEqual({ kind: 'external', href: 'https://github.com/antan87/Context-Space/blob/main/README.md#L453' });
     expect(classifyMarkdownLink('https://github.com/antan87/NexusFlow/blob/main/README.md#L453', context))
       .toEqual({ kind: 'external', href: 'https://github.com/antan87/NexusFlow/blob/main/README.md#L453' });
     expect(classifyMarkdownLink('mailto:team@example.com')).toEqual({ kind: 'external', href: 'mailto:team@example.com' });

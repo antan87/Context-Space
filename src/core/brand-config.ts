@@ -108,8 +108,11 @@ export interface BrandConfigSchema {
     readonly repo: string;
     readonly legacyRepo: string;
     readonly repoUrl: string;
+    readonly legacyRepoUrl: string;
     readonly releaseApiUrl: string;
+    readonly legacyReleaseApiUrl: string;
     readonly releasePageUrl: string;
+    readonly legacyReleasePageUrl: string;
     readonly userAgent: string;
     readonly legacyUserAgent: string;
     readonly desktopInstallerUserAgent: string;
@@ -314,11 +317,14 @@ export const BRAND_CONFIG: BrandConfigSchema = {
   },
   github: {
     owner: 'antan87',
-    repo: 'NexusFlow',
+    repo: 'Context-Space',
     legacyRepo: 'NexusFlow',
-    repoUrl: 'https://github.com/antan87/NexusFlow',
-    releaseApiUrl: 'https://api.github.com/repos/antan87/NexusFlow/releases/latest',
-    releasePageUrl: 'https://github.com/antan87/NexusFlow/releases/latest',
+    repoUrl: 'https://github.com/antan87/Context-Space',
+    legacyRepoUrl: 'https://github.com/antan87/NexusFlow',
+    releaseApiUrl: 'https://api.github.com/repos/antan87/Context-Space/releases/latest',
+    legacyReleaseApiUrl: 'https://api.github.com/repos/antan87/NexusFlow/releases/latest',
+    releasePageUrl: 'https://github.com/antan87/Context-Space/releases/latest',
+    legacyReleasePageUrl: 'https://github.com/antan87/NexusFlow/releases/latest',
     userAgent: 'ContextSpace-Updater',
     legacyUserAgent: 'NexusFlow-Updater',
     desktopInstallerUserAgent: 'ContextSpace-Desktop-Installer',

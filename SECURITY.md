@@ -17,7 +17,7 @@ The ContextSpace team takes the security of our application and its users seriou
 Please **do not** report security vulnerabilities through public GitHub issues.
 
 Instead, please report security issues through one of the following methods:
-1. **GitHub Security Advisory:** Submit a private vulnerability report via the [ContextSpace Security Advisories](https://github.com/antan87/NexusFlow/security/advisories/new) page.
+1. **GitHub Security Advisory:** Submit a private vulnerability report via the [ContextSpace Security Advisories](https://github.com/antan87/Context-Space/security/advisories/new) page.
 2. **Email:** Send details to the project maintainers at `patronant@gmail.com` with the subject line `[SECURITY] ContextSpace Vulnerability Report`.
 
 Please include:

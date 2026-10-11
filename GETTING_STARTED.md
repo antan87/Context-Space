@@ -31,7 +31,7 @@ flowchart TD
 ### 0. Install
 
 The recommended path for most users is the **desktop app** (Windows NSIS installer or
-Linux AppImage from [GitHub Releases](https://github.com/antan87/NexusFlow/releases));
+Linux AppImage from [GitHub Releases](https://github.com/antan87/Context-Space/releases));
 see the [README installation section](./README.md#-installation). It needs no Node.js.
 
 This guide follows the **CLI** path, which needs Node.js 22.13 or later and Git 2.20 or later:

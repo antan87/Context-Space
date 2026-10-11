@@ -27,7 +27,7 @@ import { ContextSpaceIcon } from '../components/icons/ContextSpaceIcon.js';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../components/ui/menu.js';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { cn } from '../lib/utils.js';
-import { BRAND_NAME } from '../brand.js';
+import { BRAND_NAME, GITHUB_REPO_URL } from '../brand.js';
 import { Sheet, SheetPopup, SheetTitle, SheetTrigger } from '../components/ui/sheet.js';
 import { useIsMobile, useMediaQuery } from '../components/ui/use-mobile.js';
 import { QuickSwitch } from './QuickSwitch.js';
@@ -800,7 +800,7 @@ function SidebarContents({
           <NavLink to="/settings" aria-label="Settings" className={linkClass(pathname.startsWith('/settings'))}>
             <SettingsIcon size={14} /><span>Settings</span>
           </NavLink>
-          <a href="https://github.com/antan87/NexusFlow#readme" target="_blank" rel="noreferrer"
+          <a href={`${GITHUB_REPO_URL}#readme`} target="_blank" rel="noreferrer"
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
             <BookOpen size={14} /><span>Guide</span>
           </a>

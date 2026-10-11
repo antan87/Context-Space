@@ -29,13 +29,22 @@ const git = async (cwd: string, ...args: string[]) => (await execa('git', args, 
 describe('repository identity', () => {
   it('normalizes the common remote spellings of one repository to one identity', () => {
     const same = [
+      'https://github.com/Antan87/Context-Space.git',
+      'https://user:token@github.com/antan87/context-space',
+      'git@github.com:antan87/Context-Space.git',
+      'ssh://git@github.com:22/antan87/Context-Space.git',
+      'https://github.com/antan87/Context-Space/',
+    ];
+    expect(new Set(same.map(normalizeRemoteIdentity))).toEqual(new Set(['github.com/antan87/context-space']));
+
+    const legacy = [
       'https://github.com/Antan87/NexusFlow.git',
       'https://user:token@github.com/antan87/nexusflow',
       'git@github.com:antan87/NexusFlow.git',
       'ssh://git@github.com:22/antan87/NexusFlow.git',
       'https://github.com/antan87/NexusFlow/',
     ];
-    expect(new Set(same.map(normalizeRemoteIdentity))).toEqual(new Set(['github.com/antan87/nexusflow']));
+    expect(new Set(legacy.map(normalizeRemoteIdentity))).toEqual(new Set(['github.com/antan87/nexusflow']));
   });
 
   it('treats local paths and file URLs as no remote identity', () => {

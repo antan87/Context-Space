@@ -12,7 +12,7 @@ $installRoot = Join-Path $fixtureRoot 'Existing NexusFlow Install'
 New-Item -ItemType Directory -Force $fixtureRoot | Out-Null
 
 $oldInstaller = Join-Path $fixtureRoot 'NexusFlowSetup.exe'
-$releaseUrl = 'https://github.com/antan87/NexusFlow/releases/download/v2.9.0/NexusFlowSetup.exe'
+$releaseUrl = 'https://github.com/antan87/Context-Space/releases/download/v2.9.0/NexusFlowSetup.exe'
 Invoke-WebRequest $releaseUrl -OutFile $oldInstaller
 Invoke-WebRequest "$releaseUrl.sha256" -OutFile "$oldInstaller.sha256"
 $checksum = (Get-Content "$oldInstaller.sha256" -Raw).Trim().Split()[0]
