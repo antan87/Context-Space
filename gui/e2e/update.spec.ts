@@ -103,7 +103,7 @@ test.describe('desktop update controls', () => {
         currentVersion: '2.10.0',
         latestVersion: '2.11.0',
         updateAvailable: true,
-        releaseUrl: 'https://github.com/antan87/NexusFlow/releases/latest',
+        releaseUrl: 'https://github.com/antan87/Context-Space/releases/latest',
         releaseNotes: 'Browser can read these notes',
       },
     });

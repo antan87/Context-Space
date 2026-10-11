@@ -53,13 +53,40 @@ describe('desktop release installer', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('accepts case-insensitive safe release API URLs for Context-Space and legacy paths', async () => {
+    const binary = 'test-binary';
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(releaseResponse())
+      .mockResolvedValueOnce(new Response(`${digest(binary)}  NexusFlow-9.9.9.AppImage\n`))
+      .mockResolvedValueOnce(new Response(binary));
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'cs-api-check-'));
+    try {
+      await installDesktop({
+        platform: 'linux',
+        arch: 'x64',
+        releaseApiUrl: 'https://api.github.com/repos/antan87/context-space/releases/latest',
+        fetchImpl,
+        tmpDir,
+        homeDir: tmpDir,
+      });
+      expect(fetchImpl).toHaveBeenCalledWith('https://api.github.com/repos/antan87/context-space/releases/latest', expect.any(Object));
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('accepts only HTTPS GitHub release asset hosts', () => {
     expect(isAllowedDesktopReleaseUrl(assetUrl)).toBe(true);
+    expect(isAllowedDesktopReleaseUrl('https://github.com/antan87/Context-Space/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage')).toBe(true);
+    expect(isAllowedDesktopReleaseUrl('https://github.com/antan87/context-space/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage')).toBe(true);
+    expect(isAllowedDesktopReleaseUrl('https://github.com/Antan87/Context-Space/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage')).toBe(true);
+    expect(isAllowedDesktopReleaseUrl('https://github.com/antan87/ContextSpace/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage')).toBe(true);
     expect(isAllowedDesktopReleaseUrl('https://objects.githubusercontent.com/signed/asset')).toBe(true);
     expect(isAllowedDesktopReleaseUrl('https://release-assets.githubusercontent.com/github-production-release-asset/asset')).toBe(true);
     expect(isAllowedDesktopReleaseUrl('https://evil.example/NexusFlow.AppImage')).toBe(false);
     expect(isAllowedDesktopReleaseUrl('https://release-assets.githubusercontent.com:8443/asset')).toBe(false);
     expect(isAllowedDesktopReleaseUrl('http://github.com/antan87/NexusFlow/releases/download/v1/NexusFlow.exe')).toBe(false);
+    expect(isAllowedDesktopReleaseUrl('http://github.com/antan87/Context-Space/releases/download/v1/ContextSpace.exe')).toBe(false);
   });
 
   it('requires a checksum sidecar and rejects mismatched content', async () => {
@@ -103,7 +130,7 @@ describe('desktop release installer', () => {
 
   it('verifies and installs a ContextSpace Linux AppImage into contextspace directory', async () => {
     const binary = 'verified-contextspace-appimage';
-    const csAssetUrl = 'https://github.com/antan87/ContextSpace/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage';
+    const csAssetUrl = 'https://github.com/antan87/Context-Space/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage';
     const csSidecarUrl = `${csAssetUrl}.sha256`;
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(releaseResponse('ContextSpace-2.10.0.AppImage', csAssetUrl, csSidecarUrl))
@@ -221,6 +248,31 @@ describe('desktop release installer', () => {
     }
   });
 
+  it('verifies and launches a ContextSpace Windows installer from Context-Space release assets', async () => {
+    const binary = 'verified-contextspace-installer';
+    const winAssetUrl = 'https://github.com/antan87/Context-Space/releases/download/v2.10.0/ContextSpaceSetup.exe';
+    const winSidecarUrl = `${winAssetUrl}.sha256`;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(releaseResponse('ContextSpaceSetup.exe', winAssetUrl, winSidecarUrl))
+      .mockResolvedValueOnce(new Response(`${digest(binary)}  ContextSpaceSetup.exe\n`))
+      .mockResolvedValueOnce(new Response(binary));
+    const spawnImpl = vi.fn(() => {
+      const child = new EventEmitter() as EventEmitter & { unref: () => void };
+      child.unref = vi.fn();
+      queueMicrotask(() => child.emit('spawn'));
+      return child as any;
+    });
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'contextspace-win-test-'));
+    try {
+      const result = await installDesktop({ platform: 'win32', arch: 'x64', fetchImpl, tmpDir, spawnImpl });
+      expect(result.assetName).toBe('ContextSpaceSetup.exe');
+      expect(spawnImpl).toHaveBeenCalledWith(result.installedPath, [], expect.objectContaining({ detached: true, stdio: 'ignore' }));
+      expect((spawnImpl.mock.results[0]?.value as { unref: ReturnType<typeof vi.fn> }).unref).toHaveBeenCalled();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports a Windows installer launch error instead of claiming success', async () => {
     const binary = 'verified-installer';
     const winAssetUrl = 'https://github.com/antan87/NexusFlow/releases/download/v9.9.9/NexusFlowSetup.exe';
@@ -318,7 +370,7 @@ describe('desktop release installer', () => {
       });
 
       const binary = 'verified-contextspace-appimage';
-      const csAssetUrl = 'https://github.com/antan87/ContextSpace/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage';
+      const csAssetUrl = 'https://github.com/antan87/Context-Space/releases/download/v2.10.0/ContextSpace-2.10.0.AppImage';
       const csSidecarUrl = `${csAssetUrl}.sha256`;
       const fetchImpl = vi.fn()
         .mockResolvedValueOnce(releaseResponse('ContextSpace-2.10.0.AppImage', csAssetUrl, csSidecarUrl))

@@ -34,9 +34,16 @@ export const BRAND_CONFIG = {
   },
   github: {
     owner: 'antan87',
-    repo: 'NexusFlow',
-    repoUrl: 'https://github.com/antan87/NexusFlow',
-    releaseUrl: 'https://github.com/antan87/NexusFlow/releases/latest',
+    repo: 'Context-Space',
+    legacyRepo: 'NexusFlow',
+    repoUrl: 'https://github.com/antan87/Context-Space',
+    legacyRepoUrl: 'https://github.com/antan87/NexusFlow',
+    releaseUrl: 'https://github.com/antan87/Context-Space/releases/latest',
+    legacyReleaseUrl: 'https://github.com/antan87/NexusFlow/releases/latest',
+    releasePageUrl: 'https://github.com/antan87/Context-Space/releases/latest',
+    legacyReleasePageUrl: 'https://github.com/antan87/NexusFlow/releases/latest',
+    releaseApiUrl: 'https://api.github.com/repos/antan87/Context-Space/releases/latest',
+    legacyReleaseApiUrl: 'https://api.github.com/repos/antan87/NexusFlow/releases/latest',
   },
   headers: {
     workroomBootstrap: 'X-ContextSpace-Workroom-Bootstrap',
@@ -92,8 +99,16 @@ export const LEGACY_PLAN_FILE = BRAND_CONFIG.files.legacyPlan;
 export const CONFIG_DIR = BRAND_CONFIG.files.configDir;
 export const LEGACY_CONFIG_DIR = BRAND_CONFIG.files.legacyConfigDir;
 
+export const GITHUB_REPO = BRAND_CONFIG.github.repo;
+export const LEGACY_GITHUB_REPO = BRAND_CONFIG.github.legacyRepo;
 export const GITHUB_REPO_URL = BRAND_CONFIG.github.repoUrl;
+export const LEGACY_GITHUB_REPO_URL = BRAND_CONFIG.github.legacyRepoUrl;
 export const GITHUB_RELEASE_URL = BRAND_CONFIG.github.releaseUrl;
+export const LEGACY_GITHUB_RELEASE_URL = BRAND_CONFIG.github.legacyReleaseUrl;
+export const GITHUB_RELEASE_PAGE_URL = BRAND_CONFIG.github.releasePageUrl;
+export const LEGACY_GITHUB_RELEASE_PAGE_URL = BRAND_CONFIG.github.legacyReleasePageUrl;
+export const GITHUB_RELEASE_API_URL = BRAND_CONFIG.github.releaseApiUrl;
+export const LEGACY_GITHUB_RELEASE_API_URL = BRAND_CONFIG.github.legacyReleaseApiUrl;
 
 export const WORKROOM_BOOTSTRAP_HEADER = BRAND_CONFIG.headers.workroomBootstrap;
 export const LEGACY_WORKROOM_BOOTSTRAP_HEADER = BRAND_CONFIG.headers.legacyWorkroomBootstrap;

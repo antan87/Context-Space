@@ -75,10 +75,13 @@ const LINUX_ICON_NAME = BRAND_NAME.toLowerCase();
 function isSafeReleaseApiUrl(candidate: string): boolean {
   try {
     const url = new URL(candidate);
+    const pathname = url.pathname.toLowerCase();
     return url.protocol === 'https:'
       && url.hostname.toLowerCase() === 'api.github.com'
       && !url.port
-      && (url.pathname === '/repos/antan87/NexusFlow/releases/latest' || url.pathname === '/repos/antan87/ContextSpace/releases/latest')
+      && (pathname === '/repos/antan87/context-space/releases/latest'
+        || pathname === '/repos/antan87/nexusflow/releases/latest'
+        || pathname === '/repos/antan87/contextspace/releases/latest')
       && !url.username
       && !url.password;
   } catch {
@@ -97,7 +100,7 @@ export function isAllowedDesktopReleaseUrl(candidate: string): boolean {
     if (url.protocol !== 'https:' || url.port || url.username || url.password) return false;
     const host = url.hostname.toLowerCase();
     if (host === 'github.com') {
-      return /^\/antan87\/(NexusFlow|ContextSpace)\/releases\/download\/[^/]+\/[^/]+$/.test(url.pathname);
+      return /^\/antan87\/(Context-Space|ContextSpace|NexusFlow)\/releases\/download\/[^/]+\/[^/]+$/i.test(url.pathname);
     }
     return host === 'objects.githubusercontent.com'
       || host === 'github-releases.githubusercontent.com'

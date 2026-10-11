@@ -77,9 +77,13 @@ export const LEGACY_RESOURCE_METADATA_KEY = BRAND_CONFIG.resources.legacyMetadat
 // GitHub Repository & Releases
 export const GITHUB_OWNER = BRAND_CONFIG.github.owner;
 export const GITHUB_REPO = BRAND_CONFIG.github.repo;
+export const LEGACY_GITHUB_REPO = BRAND_CONFIG.github.legacyRepo;
 export const GITHUB_REPO_URL = BRAND_CONFIG.github.repoUrl;
+export const LEGACY_GITHUB_REPO_URL = BRAND_CONFIG.github.legacyRepoUrl;
 export const GITHUB_RELEASE_API_URL = BRAND_CONFIG.github.releaseApiUrl;
+export const LEGACY_GITHUB_RELEASE_API_URL = BRAND_CONFIG.github.legacyReleaseApiUrl;
 export const GITHUB_RELEASE_PAGE_URL = BRAND_CONFIG.github.releasePageUrl;
+export const LEGACY_GITHUB_RELEASE_PAGE_URL = BRAND_CONFIG.github.legacyReleasePageUrl;
 export const GITHUB_USER_AGENT = BRAND_CONFIG.github.userAgent;
 export const LEGACY_GITHUB_USER_AGENT = BRAND_CONFIG.github.legacyUserAgent;
 export const DESKTOP_INSTALLER_USER_AGENT = BRAND_CONFIG.github.desktopInstallerUserAgent;

@@ -44,6 +44,7 @@ describe('desktop navigation guard', () => {
   });
 
   it('hands only public web and mail links to the system handler', () => {
+    expect(externalLinkTarget('https://github.com/antan87/Context-Space/releases/latest')).toBe('https://github.com/antan87/Context-Space/releases/latest');
     expect(externalLinkTarget('https://github.com/antan87/NexusFlow/releases/latest')).toBe('https://github.com/antan87/NexusFlow/releases/latest');
     expect(externalLinkTarget('https://www.w3.org/WAI/WCAG22/Understanding/labels-or-instructions.html')).toContain('w3.org');
     expect(externalLinkTarget('mailto:team@example.com')).toBe('mailto:team@example.com');

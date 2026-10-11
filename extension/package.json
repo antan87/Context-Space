@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/antan87/NexusFlow.git"
+    "url": "https://github.com/antan87/Context-Space.git"
   },
   "files": [
     "dist/**/*.js",

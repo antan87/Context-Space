@@ -66,7 +66,7 @@ globalThis.fetch = async (url, options) => {
     expect(await fs.readFile(log, 'utf8')).toBe('');
     expect((await tty('config', 'get', 'scanDepth')).exitCode).toBe(0);
     const requests = (await fs.readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-    expect(requests).toEqual([{ url: 'https://api.github.com/repos/antan87/NexusFlow/releases/latest', headers: { 'User-Agent': 'ContextSpace-Updater' }, body: null }]);
+    expect(requests).toEqual([{ url: 'https://api.github.com/repos/antan87/Context-Space/releases/latest', headers: { 'User-Agent': 'ContextSpace-Updater' }, body: null }]);
     expect((await tty('config', 'get', 'scanDepth')).exitCode).toBe(0);
     expect((await fs.readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
   });

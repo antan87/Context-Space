@@ -72,7 +72,7 @@ export function getCurrentVersion(): string {
 }
 
 /**
- * Checks for updates from the GitHub Releases API (antan87/NexusFlow).
+ * Checks for updates from the GitHub Releases API (antan87/Context-Space).
  * Employs a 24-hour cache unless forced.
  *
  * @param force - If true, ignores the 24-hour cache and fetches immediately.

@@ -46,6 +46,18 @@ describe('Brand Configuration System', () => {
     expect(BRAND_CONFIG.files.knowledge.legacy).toBe('nexusflow-knowledge.md');
   });
 
+  it('defines GitHub repository and release URLs pointing to Context-Space with legacy fallbacks', () => {
+    expect(BRAND_CONFIG.github.owner).toBe('antan87');
+    expect(BRAND_CONFIG.github.repo).toBe('Context-Space');
+    expect(BRAND_CONFIG.github.legacyRepo).toBe('NexusFlow');
+    expect(BRAND_CONFIG.github.repoUrl).toBe('https://github.com/antan87/Context-Space');
+    expect(BRAND_CONFIG.github.legacyRepoUrl).toBe('https://github.com/antan87/NexusFlow');
+    expect(BRAND_CONFIG.github.releaseApiUrl).toBe('https://api.github.com/repos/antan87/Context-Space/releases/latest');
+    expect(BRAND_CONFIG.github.legacyReleaseApiUrl).toBe('https://api.github.com/repos/antan87/NexusFlow/releases/latest');
+    expect(BRAND_CONFIG.github.releasePageUrl).toBe('https://github.com/antan87/Context-Space/releases/latest');
+    expect(BRAND_CONFIG.github.legacyReleasePageUrl).toBe('https://github.com/antan87/NexusFlow/releases/latest');
+  });
+
   it('defines the canonical Tropical Sunset Hex-CW theme palette', () => {
     expect(BRAND_CONFIG.theme.primary).toBe('#F97316');
     expect(BRAND_CONFIG.theme.sunset.gold).toBe('#FDE047');
