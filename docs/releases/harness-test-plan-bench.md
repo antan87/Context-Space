@@ -22,8 +22,7 @@ Each harness executed 5 headless sessions against an identical project ("Add CSV
 |---|---|---|---|---|---|---|---|
 | **agy** | Gemini 3.8 Flash | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | 100% codes named with title; zero hangs. |
 | **Codex** | gpt-6-luna | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | Fastest run (~1.7 min total). |
-| **Claude Code** | Haiku 5.5 | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 | 0 | 100% passed after instruction fix. Initially 31/35 when misleading instruction wording ("If plan is an unknown command") prompted a compound subshell fallback `(ctxspace plan \|\| ...)`; with instruction fixed to "If ctxspace is not on PATH", all direct commands execute cleanly under `.claude/settings.local.json`. |
-| **Pi** | north-mini-code | **N/A** (Partial) | s1, s2, s3 passed | Exceeded 429 quota | 0 | 0 | Completed sessions 1–3 successfully; concurrent runs halted by OpenRouter free daily rate limit (50 req/day). |
+| **Pi** | north-mini-code | **30 / 35** (85.7%) | 22 / 23 | 8 / 12 | 0 | 0 | Completed all 5 sessions cleanly after path delimiter fix. 100% pass on s1 (9/9) and s2 (6/6). In s3, blocked M3 on M5 instead of M5 after M2 (7/8). In concurrent runs, c2 passed item title instead of code to `--after`, rejected cleanly by CLI without corrupting plan. |
 
 ## Detailed Breakdown
 
@@ -49,8 +48,10 @@ Each harness executed 5 headless sessions against an identical project ("Add CSV
 - Verification confirms `.claude/settings.local.json` allow rules effectively permit `ctxspace plan` commands without human confirmation when commands are invoked cleanly.
 
 ### 4. Pi (north-mini-code)
-- **Sessions 1–3:** Pi exited code 0 after 22s (s1), 12s (s2), 61s (s3).
-- **Concurrent 4+5:** Halted when OpenRouter returned HTTP 429 ("Rate limit exceeded: free-models-per-day. Limit 50/day"). This mirrors the exact limitation observed in the initial harness investigation.
+- **Session 1:** 9/9 checks. Executed `ctxspace plan` commands directly; recorded proposed answer for Q1, added T1, proposed dropping M4 with reason. Exited 0 after 33s.
+- **Session 2:** 6/6 checks. Marked T1 done with resolution; attempted to finish M2, which was rejected because Q1 was open. Exited 0 after 61s.
+- **Session 3:** 7/8 checks. Answered Q2, proposed reopening D1, blocked M3, added M5. (M3 was blocked on M5 rather than M5 placed after M2). Exited 0 after 69s.
+- **Concurrent 4+5:** 8/12 checks. Exited 0 after 37s (c1) and 40s (c2). Parallel updates safely handled with lock/revision; c2 passed full item title "M2 CSV export endpoint" instead of ID "M2" to `--after`, which was cleanly rejected by CLI without data loss or store corruption.
 
 ## Core Invariants Verified
 
