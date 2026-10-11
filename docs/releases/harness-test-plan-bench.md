@@ -22,7 +22,7 @@ Each harness executed 5 headless sessions against an identical project ("Add CSV
 |---|---|---|---|---|---|---|---|
 | **agy** | Gemini 3.8 Flash | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | 100% codes named with title; zero hangs. |
 | **Codex** | gpt-6-luna | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | Fastest run (~1.7 min total). |
-| **Pi** | north-mini-code | **30 / 35** (85.7%) | 22 / 23 | 8 / 12 | 0 | 0 | Completed all 5 sessions cleanly after path delimiter fix. 100% pass on s1 (9/9) and s2 (6/6). In s3, blocked M3 on M5 instead of M5 after M2 (7/8). In concurrent runs, c2 passed item title instead of code to `--after`, rejected cleanly by CLI without corrupting plan. |
+| **Pi** | north-mini-code | **30 / 35** (85.7%) | 22 / 23 | 8 / 12 | 0 | 0 | Completed all 5 sessions cleanly after path delimiter fix. 100% pass on s1 (9/9) and s2 (6/6). In s3, blocked M3 on M5 instead of M5 after M2 (7/8). In concurrent runs, c2 passed full item label to `--before`/`--after`; CLI code resolution has since been enhanced to resolve full labels and titles flexibly. |
 
 ## Detailed Breakdown
 
@@ -51,7 +51,7 @@ Each harness executed 5 headless sessions against an identical project ("Add CSV
 - **Session 1:** 9/9 checks. Executed `ctxspace plan` commands directly; recorded proposed answer for Q1, added T1, proposed dropping M4 with reason. Exited 0 after 33s.
 - **Session 2:** 6/6 checks. Marked T1 done with resolution; attempted to finish M2, which was rejected because Q1 was open. Exited 0 after 61s.
 - **Session 3:** 7/8 checks. Answered Q2, proposed reopening D1, blocked M3, added M5. (M3 was blocked on M5 rather than M5 placed after M2). Exited 0 after 69s.
-- **Concurrent 4+5:** 8/12 checks. Exited 0 after 37s (c1) and 40s (c2). Parallel updates safely handled with lock/revision; c2 passed full item title "M2 CSV export endpoint" instead of ID "M2" to `--after`, which was cleanly rejected by CLI without data loss or store corruption.
+- **Concurrent 4+5:** 8/12 checks. Exited 0 after 37s (c1) and 40s (c2). Parallel updates safely handled with lock/revision. In c2, Pi passed the full item label "M2 CSV export endpoint" instead of ID "M2" to `--before`, which was initially rejected by strict exact-ID matching. `findItem` code resolution was subsequently added in `src/core/plan.ts` to flexibly match labels, code prefixes, and exact titles without breaking data safety or invariants.
 
 ## Core Invariants Verified
 
