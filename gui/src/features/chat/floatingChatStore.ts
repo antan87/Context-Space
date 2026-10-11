@@ -250,7 +250,7 @@ export function useFloatingChat(): FloatingChatState & typeof floatingChatStore 
   const state = useSyncExternalStore(
     floatingChatStore.subscribe,
     floatingChatStore.getState,
-    () => DEFAULT_STATE,
+    floatingChatStore.getState,
   );
 
   return {
