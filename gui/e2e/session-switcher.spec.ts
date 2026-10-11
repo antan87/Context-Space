@@ -203,3 +203,20 @@ test.describe('the keyboard', () => {
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
   });
 });
+
+test.describe('a session with a long name', () => {
+  const longName = 'Better create workspace experience';
+  test.use({ workspacesData: [[{ ...workspace('long'), name: longName }], { option: true }] });
+
+  test('is read in full, wrapping onto a second line instead of being cut off', async ({ page }) => {
+    await page.goto('/#/workspaces/long/chat');
+    await expect(session(page, 'long')).toBeVisible();
+    const title = session(page, 'long').getByText(longName, { exact: true });
+    await expect(title).toBeVisible();
+    const clipped = () => title.evaluate((el) => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
+    expect(await clipped()).toBe(false);
+    // The row's buttons float over its corner, so reaching for one never takes the name's room.
+    await session(page, 'long').hover();
+    expect(await clipped()).toBe(false);
+  });
+});

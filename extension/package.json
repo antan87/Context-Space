@@ -2,7 +2,7 @@
   "name": "contextspace-vscode",
   "displayName": "ContextSpace Multi-Repo Workspace Orchestrator",
   "description": "Manage multiple repositories as a single feature workspace, orchestrate background services, and align AI coding contexts natively inside VS Code.",
-  "version": "2.38.0",
+  "version": "2.39.0",
   "publisher": "contextspace",
   "license": "MIT",
   "repository": {

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, type CSSProperties } from 'react';
 import {
   Menu as MenuIcon,
   FolderGit2,
@@ -47,12 +47,14 @@ import { liveText, runningFirst } from '../features/chat/liveSessions.js';
 import { LiveDot, LiveMarker } from '../features/chat/LiveMarker.js';
 import type { Feature, WorkspaceStatus } from '../types.js';
 import { RepositoriesPanel, RepositoriesToggle } from './WorkspaceRepositories.js';
+import { SidebarResizeHandle } from './SidebarResizeHandle.js';
 import { hasUnpreparedRepo } from '../features/worktrees/normalizeWorktrees.js';
 import { normalizeWorktreeGroups } from '../features/worktrees/normalizeWorktrees.js';
 import { hasBranchDrift } from '../features/worktrees/branchDrift.js';
 import { PrepareRepoDialog } from '../features/worktrees/PrepareRepoDialog.js';
 import { useWorkspaceRepositories } from '../lib/api/queries.js';
 import { useWorktreeNavigationState } from '../features/worktrees/worktreeStore.js';
+import { useSidebarWidth } from '../features/worktrees/sidebarWidth.js';
 
 export type WorkspaceSortOption =
   | 'created-desc'
@@ -149,6 +151,9 @@ function SidebarContents({
     else toggleSaved();
   }, [narrow, toggleSaved]);
   useEffect(() => { setNarrowExpanded(false); }, [pathname]);
+  // The width the person dragged it to. The rails and the narrow window keep their own, so it applies only to the full sidebar.
+  const { width: sidebarWidth, setWidth: setSidebarWidth, reset: resetSidebarWidth } = useSidebarWidth();
+  const [resizingSidebar, setResizingSidebar] = useState(false);
 
   // The sidebar is the only place that shows what each open chat is working on, so it reads that: while it is the
   // full sidebar (the rail shows no summaries) and the window is being looked at. A closed mobile sheet is not mounted.
@@ -403,9 +408,17 @@ function SidebarContents({
     );
   }
 
-  // ─── EXPANDED COCKPIT MODE (240px / w-60) ──────────────────────────────────
+  // ─── EXPANDED COCKPIT MODE (256px by default, w-64; the person can drag it wider) ──
   return (
-    <aside className="context-sidebar flex w-64 shrink-0 flex-col border-r border-border bg-card select-none h-screen overflow-hidden transition-[width] duration-200">
+    <>
+    <aside
+      className={cn(
+        'context-sidebar flex w-[min(var(--sidebar-width,16rem),45vw)] shrink-0 flex-col border-r border-border bg-card select-none h-screen overflow-hidden',
+        // It follows the pointer while dragged, and eases only when it changes any other way.
+        !resizingSidebar && 'transition-[width] duration-200',
+      )}
+      style={narrow ? undefined : ({ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties)}
+    >
       {/* Top Header */}
       <div className="flex h-11 items-center justify-between px-3 border-b border-border/60">
         <Link to="/overview" className="flex items-center gap-2 group">
@@ -480,7 +493,7 @@ function SidebarContents({
                       <div key={`open-session-${tab}`}>
                         <div
                           className={cn(
-                            'group relative flex items-start gap-1 rounded-lg px-2.5 py-1.5 text-xs transition-colors border',
+                            'group relative flex items-start gap-1 rounded-lg px-2.5 pb-2.5 pt-1.5 text-xs transition-colors border',
                             isSelected
                               ? 'bg-primary/10 text-foreground border-primary/30 font-semibold shadow-2xs pl-3'
                               : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground border-transparent'
@@ -496,25 +509,27 @@ function SidebarContents({
                             data-sidebar-session={tab}
                             aria-keyshortcuts="Delete"
                             aria-current={isSelected ? 'page' : undefined}
-                            className="flex min-w-0 flex-1 flex-col gap-0.5"
+                            className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(hover:none)]:pr-20"
                           >
-                            <div className="flex items-center gap-1.5 min-w-0">
+                            {/* The name is what tells sessions apart, so it takes the room and wraps to a second line before
+                                it is cut. The row's buttons float over its corner on hover instead of taking width from it. */}
+                            <div className="flex items-start gap-1.5 min-w-0">
                               {isSelected ? (
-                                <span className="size-2 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                                <span className="mt-[3px] size-2 shrink-0 rounded-full bg-primary" aria-hidden="true" />
                               ) : (
-                                <FolderGit2 size={13} className="shrink-0 text-muted-foreground" />
+                                <FolderGit2 size={13} className="mt-px shrink-0 text-muted-foreground" />
                               )}
-                              <span className={cn('truncate font-medium', isSelected ? 'text-foreground' : 'text-foreground/90')} title={label}>
+                              <span className={cn('min-w-0 flex-1 break-words line-clamp-2 font-medium leading-snug', isSelected ? 'text-foreground' : 'text-foreground/90')} title={label}>
                                 {label}
                               </span>
-                              <ActivityDots activity={activity[tab]} />
+                              <ActivityDots activity={activity[tab]} className="mt-[5px]" />
                               {shortcutNum && (
-                                <span className="ml-auto text-[9px] font-mono font-normal text-muted-foreground bg-muted/60 px-1 py-0.2 rounded [@media(hover:none)]:hidden" title={`Shortcut: ${modifierName}+${shortcutNum}`}>
+                                <span className="shrink-0 text-[9px] font-mono font-normal text-muted-foreground bg-muted/60 px-1 py-0.2 rounded [@media(hover:none)]:hidden" title={`Shortcut: ${modifierName}+${shortcutNum}`}>
                                   {jumpKeyLabel(shortcutNum, apple)}
                                 </span>
                               )}
                               {live && (
-                                <span className={cn('shrink-0', shortcutNum ? 'ml-1' : 'ml-auto')}>
+                                <span className="mt-[3px] shrink-0">
                                   <LiveDot state={live.state} title={liveText(live, liveNow)} />
                                 </span>
                               )}
@@ -538,15 +553,24 @@ function SidebarContents({
                               {hasChanges && <span className="shrink-0 whitespace-nowrap text-warning-foreground font-semibold">• ±{st!.changedFiles}</span>}
                             </span>
                           </Link>
-                          <div className="flex items-center gap-1 shrink-0">
-                            {isSelected && activeWorkspace && (
+                          {/* Kept in the row on the selected session: its dot says a repository needs preparing or moved branch. */}
+                          {isSelected && activeWorkspace && (
+                            <div className="shrink-0">
                               <RepositoriesToggle branch={tab} open={repositoriesOpen} needsPreparing={needsPreparing} branchChanged={branchChanged} onToggle={() => setRepositoriesOpen((open) => !open)} />
-                            )}
+                            </div>
+                          )}
+                          {/* Floats over the row's corner while it is hovered or focused, so the name keeps the width. On a
+                              touch screen there is no hover, so it stays shown and the link leaves room for it. */}
+                          <div className={cn(
+                            'absolute bottom-0.5 z-10 flex items-center gap-1 rounded-md bg-popover px-0.5 shadow-xs ring-1 ring-border/60 opacity-0 transition-opacity',
+                            'group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
+                            isSelected && activeWorkspace ? 'right-9' : 'right-1.5',
+                          )}>
                             {!ws?.archivedAt && (
                               <button
                                 type="button"
                                 onClick={() => openCli(tab)}
-                                className="p-1 rounded hover:bg-background text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary cursor-pointer"
+                                className="inline-flex size-6 items-center justify-center rounded hover:bg-background text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary cursor-pointer"
                                 title={`Resume CLI chat for ${tab}`}
                                 aria-label={`Resume CLI chat for ${tab}`}
                               >
@@ -563,7 +587,7 @@ function SidebarContents({
                               }}
                               aria-label={`Close session ${label}`}
                               title={`Close session ${label}`}
-                              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 p-1 rounded hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-primary hover:text-destructive text-muted-foreground transition-opacity cursor-pointer shrink-0"
+                              className="inline-flex size-6 items-center justify-center rounded hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-primary hover:text-destructive text-muted-foreground cursor-pointer shrink-0"
                             >
                               <X size={12} />
                             </button>
@@ -679,7 +703,7 @@ function SidebarContents({
                               aria-current={isSelected ? 'page' : undefined}
                               className="flex min-w-0 flex-1 flex-col gap-0.5"
                             >
-                              <span className="truncate font-medium text-foreground" title={w.name || w.branchName}>
+                              <span className="break-words line-clamp-2 font-medium leading-snug text-foreground" title={w.name || w.branchName}>
                                 {w.name || w.branchName}
                               </span>
                               <span className="flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
@@ -816,6 +840,8 @@ function SidebarContents({
         </button>
       </div>
     </aside>
+    {!narrow && <SidebarResizeHandle width={sidebarWidth} onResize={setSidebarWidth} onReset={resetSidebarWidth} onDraggingChange={setResizingSidebar} />}
+    </>
   );
 }
 
