@@ -57,7 +57,7 @@ or `ctxspace data`.
 ### Desktop installers (recommended)
 
 Download the first-class Windows NSIS installer or Linux AppImage from the
-[NexusFlow GitHub Releases](https://github.com/antan87/NexusFlow/releases). Each
+[ContextSpace GitHub Releases](https://github.com/antan87/Context-Space/releases). Each
 release includes `latest.yml`/`latest-linux.yml` update metadata and a required
 SHA-256 sidecar. The desktop app is the primary distribution and includes the
 full GUI plus optional, user-controlled native updates.
@@ -90,8 +90,8 @@ npm install -g @mrpatronz/nexusflow
 ### Install from source (CLI, GUI, desktop, and extension development)
 
 ```bash
-git clone https://github.com/antan87/NexusFlow.git
-cd NexusFlow
+git clone https://github.com/antan87/Context-Space.git
+cd Context-Space
 
 # Install root dependencies, then GUI/desktop/extension dependencies
 npm install
@@ -111,7 +111,7 @@ After linking, the `ctxspace` (and aliases `contextspace`, `cs`, `nexusflow`) co
 ### Desktop (recommended)
 
 On Windows or Linux, download the latest NSIS installer/AppImage from
-[GitHub Releases](https://github.com/antan87/NexusFlow/releases) and launch the
+[GitHub Releases](https://github.com/antan87/Context-Space/releases) and launch the
 app. No Node.js or npm installation is needed. If Node.js is already available,
 the explicit post-release bootstrap is also convenient:
 
@@ -726,8 +726,8 @@ Contributions are welcome! Here's how to get set up:
 
 ```bash
 # Clone the repo
-git clone https://github.com/antan87/NexusFlow.git
-cd NexusFlow
+git clone https://github.com/antan87/Context-Space.git
+cd Context-Space
 
 # Install all source dependencies
 npm install
