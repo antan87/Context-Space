@@ -11,6 +11,7 @@ import {
   applyPlanChange,
   changePlan,
   emptyPlan,
+  findItem,
   heldUpBy,
   mutatePlan,
   planSections,
@@ -351,6 +352,35 @@ describe('reopening and editing', () => {
 
   it('reports an unknown code plainly', async () => {
     await expect(change({ type: 'start', id: 'M9' })).rejects.toMatchObject({ code: 'not_found', message: 'There is no item "M9" in the plan. Read the plan to see the codes.' });
+  });
+
+  it('resolves items flexibly by case-insensitive code, full label, code prefix, or exact title', async () => {
+    await seedExample();
+    const plan = await readPlan(root);
+
+    // findItem direct checks
+    expect(findItem(plan, 'm2')?.id).toBe('M2');
+    expect(findItem(plan, 'M2 CSV export endpoint')?.id).toBe('M2');
+    expect(findItem(plan, 'M2: CSV export endpoint')?.id).toBe('M2');
+    expect(findItem(plan, 'CSV export endpoint')?.id).toBe('M2');
+    expect(findItem(plan, 'Non-existent')).toBeUndefined();
+
+    // changePlan with case-insensitive code
+    const started = await change({ type: 'start', id: 't1' }, claude);
+    expect(started.item.id).toBe('T1');
+    expect(started.item.status).toBe('in_progress');
+
+    // changePlan with code prefix / label
+    const done = await change({ type: 'done', id: 'T1 Background job queue', resolution: 'Queue is ready' }, claude);
+    expect(done.item.id).toBe('T1');
+    expect(done.item.status).toBe('done');
+
+    // adding new work with --before pointing to full label
+    const added = await change({ type: 'add', kind: 'question', title: 'Export format?', before: ['M2 CSV export endpoint'] });
+    expect(added.item.id).toBe('Q2');
+    const updatedPlan = await readPlan(root);
+    expect(updatedPlan.items.find((item) => item.id === 'M2')!.waitsFor).toContain('Q2');
+    expect(heldUpBy(updatedPlan, 'Q2 Export format?').map((item) => item.id)).toEqual(['M2']);
   });
 });
 

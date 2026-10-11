@@ -23,6 +23,7 @@ import {
   PlanError,
   agentMayClose,
   changePlan,
+  findItem,
   planSections,
   readPlan,
   type PlanActor,
@@ -145,7 +146,7 @@ export async function planShow(context: PlanCommandContext, options: { all?: boo
 export async function planLog(context: PlanCommandContext, id?: string): Promise<void> {
   const plan = await preparePlan(context.workspacePath);
   if (id) {
-    const item = plan.items.find((candidate) => candidate.id === id);
+    const item = findItem(plan, id);
     if (!item) throw new PlanError(`There is no item "${id}" in the plan. Read the plan to see the codes.`, 'not_found');
     context.print(context.json ? JSON.stringify({ item: itemToJson(plan, item), history: item.history }, null, 2) : renderHistory(plan, item, context.now));
     return;
@@ -184,7 +185,7 @@ export async function planChange(context: PlanCommandContext, change: PlanChange
   await preparePlan(context.workspacePath);
   if (context.interactive && context.actor.by === 'user' && change.type !== 'add') {
     const plan = await readPlan(context.workspacePath);
-    const item = plan.items.find((candidate) => candidate.id === change.id);
+    const item = findItem(plan, change.id);
     const usersCall = change.type === 'accept' || change.type === 'reject'
       || (item !== undefined && CLOSING.has(change.type) && !agentMayClose(item, { by: 'agent' }));
     if (item && usersCall) {

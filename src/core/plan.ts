@@ -406,7 +406,7 @@ export async function changePlan(
       throw new PlanError(`The plan changed since it was read (revision ${options.ifRevision}, now ${current.revision}). Read it again and retry.`, 'conflict');
     }
     if (options.ifItemUpdatedAt !== undefined && change.type !== 'add') {
-      const item = current.items.find((candidate) => candidate.id === change.id);
+      const item = findItem(current, change.id);
       if (item && item.updatedAt !== options.ifItemUpdatedAt) {
         throw new PlanError(`${itemLabel(item)} changed since it was read. Read the plan again and retry.`, 'conflict');
       }
@@ -448,8 +448,38 @@ function cleanDetail(value: string): string | undefined {
   return text || undefined;
 }
 
+export function findItem(plan: PlanDocument, query: string): PlanItem | undefined {
+  const raw = query.trim();
+  if (!raw) return undefined;
+
+  // 1. Exact ID match (case-sensitive)
+  const exact = plan.items.find((candidate) => candidate.id === raw);
+  if (exact) return exact;
+
+  // 2. Exact ID match (case-insensitive)
+  const caseInsensitiveId = plan.items.find((candidate) => candidate.id.toLowerCase() === raw.toLowerCase());
+  if (caseInsensitiveId) return caseInsensitiveId;
+
+  // 3. Leading ID code (e.g. "M2 CSV export endpoint", "M2: ...", "[M2] ...")
+  const leadingMatch = /^\[?([A-Za-z]\d+)\]?(?:[:\s–—\-]|$)/.exec(raw);
+  if (leadingMatch) {
+    const candidate = plan.items.find((c) => c.id.toLowerCase() === leadingMatch[1].toLowerCase());
+    if (candidate) return candidate;
+  }
+
+  // 4. Exact match on full item label ("M2 CSV export endpoint")
+  const labelMatch = plan.items.find((candidate) => itemLabel(candidate).toLowerCase() === raw.toLowerCase());
+  if (labelMatch) return labelMatch;
+
+  // 5. Unambiguous exact match on title ("CSV export endpoint")
+  const titleMatches = plan.items.filter((candidate) => candidate.title.toLowerCase() === raw.toLowerCase());
+  if (titleMatches.length === 1) return titleMatches[0];
+
+  return undefined;
+}
+
 function find(plan: PlanDocument, id: string): PlanItem {
-  const item = plan.items.find((candidate) => candidate.id === id);
+  const item = findItem(plan, id);
   if (!item) throw new PlanError(`There is no item "${id}" in the plan. Read the plan to see the codes.`, 'not_found');
   return item;
 }
@@ -852,5 +882,7 @@ export function planSections(plan: PlanDocument, options: { changes?: number } =
 
 /** The items that wait for this one: what it holds up. */
 export function heldUpBy(plan: PlanDocument, id: string): PlanItem[] {
-  return plan.items.filter((item) => item.waitsFor.includes(id));
+  const item = findItem(plan, id);
+  const targetId = item ? item.id : id;
+  return plan.items.filter((candidate) => candidate.waitsFor.includes(targetId));
 }
