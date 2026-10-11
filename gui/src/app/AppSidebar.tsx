@@ -111,12 +111,31 @@ function SidebarContents({
   const modifierName = sessionModifierName(apple);
 
   const getSessionRoute = useCallback((branchName: string) => pathForSwitchingTo(branchName, pathname), [pathname]);
+  // Detect if on a workspace route
+  const workspaceRouteMatch = pathname.match(/\/workspaces\/([^/]+)/);
+  const currentWsId = workspaceRouteMatch ? decodeURIComponent(workspaceRouteMatch[1]!) : activeWsId;
+  const isWorkspaceRoute = Boolean(currentWsId);
+
+  const activeWorkspace = useMemo(() => {
+    if (!currentWsId) return null;
+    return workspaces.find((w) => w.branchName === currentWsId || w.id === currentWsId) || null;
+  }, [workspaces, currentWsId]);
+
+  // The active workspace's repositories are folded away until asked for. Nothing opens them by itself: when one needs
+  // preparing for editing, the icon says so with a dot.
+  const [repositoriesOpen, setRepositoriesOpen] = useState(false);
+  const activeBranch = activeWorkspace?.branchName;
+  useEffect(() => { setRepositoriesOpen(false); }, [activeBranch]);
+
   // Closing a session from the list hands keyboard focus to its neighbour, so it is not dropped on the page.
   const closeSession = useCallback((branchName: string) => {
     const next = sessionToFocusAfterClose(openTabs, branchName);
+    if (activeWorkspace?.branchName === branchName || activeWorkspace?.id === branchName) {
+      setRepositoriesOpen(false);
+    }
     removeTab(branchName);
     if (next) requestAnimationFrame(() => focusSessionLink(next));
-  }, [openTabs, removeTab]);
+  }, [openTabs, removeTab, activeWorkspace?.branchName, activeWorkspace?.id]);
   const closeOnDelete = useCallback((event: React.KeyboardEvent, branchName: string) => {
     if (event.key !== 'Delete') return;
     event.preventDefault();
@@ -135,6 +154,7 @@ function SidebarContents({
   // Archived workspaces are records, listed separately so they stay out of the way.
   const [showArchived, setShowArchived] = useState(false);
   const archivedCount = useMemo(() => workspaces.filter((w) => w.archivedAt).length, [workspaces]);
+  const [sessionsExpanded, setSessionsExpanded] = useState(true);
   const [workspacesExpanded, setWorkspacesExpanded] = useState(true);
   const isWorkspacesListOpen = workspacesExpanded || search.trim().length > 0;
   const [appearanceExpanded, setAppearanceExpanded] = useState(false);
@@ -160,23 +180,8 @@ function SidebarContents({
   const windowAttentive = useWindowAttentive();
   const chatThreads = useChatThreads(workspaces, shouldReadThreads({ sidebarExpanded: !isCollapsed, windowAttentive }));
 
-  // Detect if on a workspace route
-  const workspaceRouteMatch = pathname.match(/\/workspaces\/([^/]+)/);
-  const currentWsId = workspaceRouteMatch ? decodeURIComponent(workspaceRouteMatch[1]!) : activeWsId;
-  const isWorkspaceRoute = Boolean(currentWsId);
-
-  const activeWorkspace = useMemo(() => {
-    if (!currentWsId) return null;
-    return workspaces.find((w) => w.branchName === currentWsId || w.id === currentWsId) || null;
-  }, [workspaces, currentWsId]);
-
   const liveRepositories = useWorkspaceRepositories(activeWorkspace?.branchName ?? null);
   const [preparingRepo, setPreparingRepo] = useState<string | null>(null);
-  // The active workspace's repositories are folded away until asked for. Nothing opens them by itself: when one needs
-  // preparing for editing, the icon says so with a dot.
-  const [repositoriesOpen, setRepositoriesOpen] = useState(false);
-  const activeBranch = activeWorkspace?.branchName;
-  useEffect(() => { setRepositoriesOpen(false); }, [activeBranch]);
   const repoGroups = useMemo(() => {
     if (!activeWorkspace) return [];
     return normalizeWorktreeGroups(activeWorkspace, workspaceStatuses[activeWorkspace.branchName], liveRepositories.data);
@@ -341,10 +346,17 @@ function SidebarContents({
                       </Link>
                       <button
                         type="button"
-                        onClick={() => closeSession(tab)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          closeSession(tab);
+                        }}
                         aria-label={`Close session ${label}`}
                         title={`Close session ${label}`}
-                        className="absolute left-0 -top-0.5 z-20 grid size-4 place-items-center rounded-full border border-border bg-card text-muted-foreground opacity-0 shadow-xs transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-hover:opacity-100 group-focus-within:opacity-100 cursor-pointer"
+                        className={cn(
+                          'absolute left-0 -top-0.5 z-20 grid size-4 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-xs transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-hover:opacity-100 group-focus-within:opacity-100 cursor-pointer',
+                          isSelected ? 'opacity-90' : 'opacity-0'
+                        )}
                       >
                         <X size={10} aria-hidden="true" />
                       </button>
@@ -461,145 +473,155 @@ function SidebarContents({
             {/* Open Sessions Section */}
             {openTabs.length > 0 && (
               <div className="pt-2 border-t border-border/60">
-                <div className="flex items-center justify-between pb-1 px-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                <button
+                  type="button"
+                  onClick={() => setSessionsExpanded((open) => !open)}
+                  aria-expanded={sessionsExpanded}
+                  className="flex w-full items-center justify-between pb-1.5 px-1 text-left rounded hover:bg-accent/40 transition-colors group cursor-pointer"
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <ChevronDown
+                      size={12}
+                      className={cn('shrink-0 text-muted-foreground transition-transform duration-200', !sessionsExpanded && '-rotate-90')}
+                    />
+                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider group-hover:text-foreground transition-colors">
                       Open Sessions
                     </span>
                     <span className="text-[10px] font-mono text-muted-foreground [@media(hover:none)]:hidden">
                       ({cycleKeysLabel(apple)})
                     </span>
                   </div>
-                  <span className="text-[10px] font-mono text-muted-foreground bg-muted/60 px-1.5 py-0.2 rounded-full">
+                  <span className="text-[10px] font-mono text-muted-foreground bg-muted/60 px-1.5 py-0.2 rounded-full shrink-0">
                     {openTabs.length}
                   </span>
-                </div>
-                <div className="flex flex-col gap-1" role="group" aria-label="Open sessions list">
-                  {openTabs.map((tab, idx) => {
-                    const ws = workspaces.find((w) => w.branchName === tab || w.id === tab);
-                    const isSelected = currentWsId === tab || activeWsId === tab;
-                    const live = liveSessions.get(tab);
-                    const question = questions.get(tab);
-                    const thread = chatThreads.summaries.get(tab);
-                    const needsYou = question !== undefined ? 'Waiting for you' : thread?.tone === 'needs' ? thread.label : '';
-                    const line = question || thread?.goal || '';
-                    const st = workspaceStatuses[tab];
-                    const hasChanges = Boolean(st && st.changedFiles > 0);
-                    const label = ws?.name || tab;
-                    const shortcutNum = idx < 9 ? idx + 1 : null;
-                    const showRepositories = isSelected && repositoriesOpen && Boolean(activeWorkspace);
+                </button>
+                {sessionsExpanded && (
+                  <div className="flex flex-col gap-1" role="group" aria-label="Open sessions list">
+                    {openTabs.map((tab, idx) => {
+                      const ws = workspaces.find((w) => w.branchName === tab || w.id === tab);
+                      const isSelected = currentWsId === tab || activeWsId === tab;
+                      const live = liveSessions.get(tab);
+                      const question = questions.get(tab);
+                      const thread = chatThreads.summaries.get(tab);
+                      const needsYou = question !== undefined ? 'Waiting for you' : thread?.tone === 'needs' ? thread.label : '';
+                      const line = question || thread?.goal || '';
+                      const st = workspaceStatuses[tab];
+                      const hasChanges = Boolean(st && st.changedFiles > 0);
+                      const label = ws?.name || tab;
+                      const shortcutNum = idx < 9 ? idx + 1 : null;
+                      const showRepositories = isSelected && repositoriesOpen && Boolean(activeWorkspace);
 
-                    return (
-                      <div key={`open-session-${tab}`}>
-                        <div
-                          className={cn(
-                            'group relative flex items-start gap-1 rounded-lg px-2.5 pb-2.5 pt-1.5 text-xs transition-colors border',
-                            isSelected
-                              ? 'bg-primary/10 text-foreground border-primary/30 font-semibold shadow-2xs pl-3'
-                              : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground border-transparent'
-                          )}
-                        >
-                          {isSelected && (
-                            <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-primary" aria-hidden="true" />
-                          )}
-                          <Link
-                            to={getSessionRoute(tab)}
-                            onClick={() => onSelectWorkspace?.(tab)}
-                            onKeyDown={(event) => closeOnDelete(event, tab)}
-                            data-sidebar-session={tab}
-                            aria-keyshortcuts="Delete"
-                            aria-current={isSelected ? 'page' : undefined}
-                            className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(hover:none)]:pr-20"
+                      return (
+                        <div key={`open-session-${tab}`}>
+                          <div
+                            className={cn(
+                              'group relative flex items-start gap-1 rounded-lg px-2.5 pb-2.5 pt-1.5 text-xs transition-colors border',
+                              isSelected
+                                ? 'bg-primary/10 text-foreground border-primary/30 font-semibold shadow-2xs pl-3'
+                                : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground border-transparent'
+                            )}
                           >
-                            {/* The name is what tells sessions apart, so it takes the room and wraps to a second line before
-                                it is cut. The row's buttons float over its corner on hover instead of taking width from it. */}
-                            <div className="flex items-start gap-1.5 min-w-0">
-                              {isSelected ? (
-                                <span className="mt-[3px] size-2 shrink-0 rounded-full bg-primary" aria-hidden="true" />
-                              ) : (
-                                <FolderGit2 size={13} className="mt-px shrink-0 text-muted-foreground" />
-                              )}
-                              <span className={cn('min-w-0 flex-1 break-words line-clamp-2 font-medium leading-snug', isSelected ? 'text-foreground' : 'text-foreground/90')} title={label}>
-                                {label}
+                            {isSelected && (
+                              <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-primary" aria-hidden="true" />
+                            )}
+                            <Link
+                              to={getSessionRoute(tab)}
+                              onClick={() => onSelectWorkspace?.(tab)}
+                              onKeyDown={(event) => closeOnDelete(event, tab)}
+                              data-sidebar-session={tab}
+                              aria-keyshortcuts="Delete"
+                              aria-current={isSelected ? 'page' : undefined}
+                              className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(hover:none)]:pr-20"
+                            >
+                              {/* The name is what tells sessions apart, so it takes the room and wraps to a second line before
+                                  it is cut. The row's buttons float over its corner on hover instead of taking width from it. */}
+                              <div className="flex items-start gap-1.5 min-w-0">
+                                {isSelected ? (
+                                  <span className="mt-[3px] size-2 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                                ) : (
+                                  <FolderGit2 size={13} className="mt-px shrink-0 text-muted-foreground" />
+                                )}
+                                <span className={cn('min-w-0 flex-1 break-words line-clamp-2 font-medium leading-snug', isSelected ? 'text-foreground' : 'text-foreground/90')} title={label}>
+                                  {label}
+                                </span>
+                                <ActivityDots activity={activity[tab]} className="mt-[5px]" />
+                                {shortcutNum && (
+                                  <span className="shrink-0 text-[9px] font-mono font-normal text-muted-foreground bg-muted/60 px-1 py-0.2 rounded [@media(hover:none)]:hidden" title={`Shortcut: ${modifierName}+${shortcutNum}`}>
+                                    {jumpKeyLabel(shortcutNum, apple)}
+                                  </span>
+                                )}
+                                {live && (
+                                  <span className="mt-[3px] shrink-0">
+                                    <LiveDot state={live.state} title={liveText(live, liveNow)} />
+                                  </span>
+                                )}
+                              </div>
+                              <span className={cn('flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground', isSelected && 'pr-20')}>
+                                {question ? (
+                                  <span className="truncate font-medium text-[var(--state-needs)]" title={question}>
+                                    <span className="sr-only">Waiting for you: </span>{question}
+                                  </span>
+                                ) : line || needsYou ? (
+                                  <>
+                                    {needsYou && <span className="state-chip shrink-0" data-tone="needs">{needsYou}</span>}
+                                    {line && <span className="truncate" title={line}>{line}</span>}
+                                  </>
+                                ) : (
+                                  <>
+                                    {ws?.name && <span className="truncate font-mono" title={tab}>{tab}</span>}
+                                    <span className="shrink-0 whitespace-nowrap">{ws?.repos.length ?? 0} {ws?.repos.length === 1 ? 'repo' : 'repos'}</span>
+                                  </>
+                                )}
+                                {hasChanges && <span className="shrink-0 whitespace-nowrap text-warning-foreground font-semibold">• ±{st!.changedFiles}</span>}
                               </span>
-                              <ActivityDots activity={activity[tab]} className="mt-[5px]" />
-                              {shortcutNum && (
-                                <span className="shrink-0 text-[9px] font-mono font-normal text-muted-foreground bg-muted/60 px-1 py-0.2 rounded [@media(hover:none)]:hidden" title={`Shortcut: ${modifierName}+${shortcutNum}`}>
-                                  {jumpKeyLabel(shortcutNum, apple)}
-                                </span>
+                            </Link>
+                            {/* Action controls for the session: On the active session, controls are clearly discoverable
+                                and accessible. RepositoriesToggle sits to the left of the close button, keeping the close 'X'
+                                consistently anchored at the far right. */}
+                            <div className={cn(
+                              'absolute bottom-0.5 right-1.5 z-10 flex items-center gap-1 rounded-md bg-popover px-0.5 shadow-xs ring-1 ring-border/60 transition-opacity',
+                              isSelected
+                                ? 'opacity-100'
+                                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
+                            )}>
+                              {isSelected && activeWorkspace && (
+                                <RepositoriesToggle branch={tab} open={repositoriesOpen} needsPreparing={needsPreparing} branchChanged={branchChanged} onToggle={() => setRepositoriesOpen((open) => !open)} />
                               )}
-                              {live && (
-                                <span className="mt-[3px] shrink-0">
-                                  <LiveDot state={live.state} title={liveText(live, liveNow)} />
-                                </span>
+                              {!ws?.archivedAt && (
+                                <button
+                                  type="button"
+                                  onClick={() => openCli(tab)}
+                                  className="inline-flex size-6 items-center justify-center rounded hover:bg-background text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary cursor-pointer"
+                                  title={`Resume CLI chat for ${tab}`}
+                                  aria-label={`Resume CLI chat for ${tab}`}
+                                >
+                                  <History size={12} aria-hidden="true" />
+                                </button>
                               )}
-                            </div>
-                            <span className="flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
-                              {question ? (
-                                <span className="truncate font-medium text-[var(--state-needs)]" title={question}>
-                                  <span className="sr-only">Waiting for you: </span>{question}
-                                </span>
-                              ) : line || needsYou ? (
-                                <>
-                                  {needsYou && <span className="state-chip shrink-0" data-tone="needs">{needsYou}</span>}
-                                  {line && <span className="truncate" title={line}>{line}</span>}
-                                </>
-                              ) : (
-                                <>
-                                  {ws?.name && <span className="truncate font-mono" title={tab}>{tab}</span>}
-                                  <span className="shrink-0 whitespace-nowrap">{ws?.repos.length ?? 0} {ws?.repos.length === 1 ? 'repo' : 'repos'}</span>
-                                </>
-                              )}
-                              {hasChanges && <span className="shrink-0 whitespace-nowrap text-warning-foreground font-semibold">• ±{st!.changedFiles}</span>}
-                            </span>
-                          </Link>
-                          {/* Kept in the row on the selected session: its dot says a repository needs preparing or moved branch. */}
-                          {isSelected && activeWorkspace && (
-                            <div className="shrink-0">
-                              <RepositoriesToggle branch={tab} open={repositoriesOpen} needsPreparing={needsPreparing} branchChanged={branchChanged} onToggle={() => setRepositoriesOpen((open) => !open)} />
-                            </div>
-                          )}
-                          {/* Floats over the row's corner while it is hovered or focused, so the name keeps the width. On a
-                              touch screen there is no hover, so it stays shown and the link leaves room for it. */}
-                          <div className={cn(
-                            'absolute bottom-0.5 z-10 flex items-center gap-1 rounded-md bg-popover px-0.5 shadow-xs ring-1 ring-border/60 opacity-0 transition-opacity',
-                            'group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
-                            isSelected && activeWorkspace ? 'right-9' : 'right-1.5',
-                          )}>
-                            {!ws?.archivedAt && (
+                              {live && <LiveMarker live={live} now={liveNow} />}
                               <button
                                 type="button"
-                                onClick={() => openCli(tab)}
-                                className="inline-flex size-6 items-center justify-center rounded hover:bg-background text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary cursor-pointer"
-                                title={`Resume CLI chat for ${tab}`}
-                                aria-label={`Resume CLI chat for ${tab}`}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  closeSession(tab);
+                                }}
+                                aria-label={`Close session ${label}`}
+                                title={`Close session ${label}`}
+                                className="inline-flex size-6 items-center justify-center rounded hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-primary hover:text-destructive text-muted-foreground cursor-pointer shrink-0"
                               >
-                                <History size={12} aria-hidden="true" />
+                                <X size={12} />
                               </button>
-                            )}
-                            {live && <LiveMarker live={live} now={liveNow} />}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                closeSession(tab);
-                              }}
-                              aria-label={`Close session ${label}`}
-                              title={`Close session ${label}`}
-                              className="inline-flex size-6 items-center justify-center rounded hover:bg-destructive/10 focus-visible:outline-2 focus-visible:outline-primary hover:text-destructive text-muted-foreground cursor-pointer shrink-0"
-                            >
-                              <X size={12} />
-                            </button>
+                            </div>
                           </div>
+                          {showRepositories && activeWorkspace && (
+                            <RepositoriesPanel groups={repoGroups} archived={Boolean(activeWorkspace.archivedAt)} onPrepare={setPreparingRepo} />
+                          )}
                         </div>
-                        {showRepositories && activeWorkspace && (
-                          <RepositoriesPanel groups={repoGroups} archived={Boolean(activeWorkspace.archivedAt)} onPrepare={setPreparingRepo} />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 

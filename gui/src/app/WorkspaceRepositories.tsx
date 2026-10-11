@@ -24,9 +24,13 @@ export function RepositoriesToggle({ branch, open, needsPreparing, branchChanged
   return (
     <button
       type="button"
-      onClick={onToggle}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onToggle();
+      }}
       aria-expanded={open}
-      className="relative p-1 rounded hover:bg-background text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary cursor-pointer"
+      className="relative inline-flex size-6 items-center justify-center rounded hover:bg-background text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary cursor-pointer"
       title={toggleTitle(needsPreparing, branchChanged)}
       aria-label={`${open ? 'Hide' : 'Show'} repositories and branches for ${branch}${branchChanged ? ' (a branch has changed)' : ''}`}
     >
