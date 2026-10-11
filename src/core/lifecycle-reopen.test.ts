@@ -12,7 +12,8 @@ import {
   reopenLifecycleStep,
   updateLifecyclePlan,
 } from './lifecycle.js';
-import { loadWorkspaceState, saveWorkspaceState } from './workspace-state.js';
+import { saveWorkspaceState } from './workspace-state.js';
+import { readPlan } from './plan.js';
 import type { LifecycleStep } from '../types.js';
 
 vi.mock('./workspace.js', () => ({
@@ -35,8 +36,9 @@ const finished = (id: string, over: Partial<LifecycleStep> = {}): LifecycleStep 
   lastVerificationStatus: 'pass', lastVerificationSha: 'abc123', ...over,
 });
 
+/** The steps as stored: the lifecycle is a view over the plan store. */
 async function stepsNow() {
-  return (await loadWorkspaceState(workspacePath)).lifecycle!.steps;
+  return (await loadWorkspaceLifecycle(workspacePath, { includeFleet: false })).steps;
 }
 
 beforeEach(async () => {
@@ -60,11 +62,21 @@ describe('reopenLifecycleStep', () => {
 
   it('clears the old completion and its verification proof, because they no longer describe the work', async () => {
     await seed([finished('plan')]);
-    const [plan] = (await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Redo it', by: 'agent' })).steps;
+    const [plan] = (await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Redo it', by: 'user' })).steps;
     expect(plan).not.toHaveProperty('completedAt');
     expect(plan).not.toHaveProperty('lastVerificationSha');
     expect(plan).not.toHaveProperty('lastVerificationStatus');
-    expect(plan!.reopenedBy).toBe('agent');
+    expect(plan!.reopenedBy).toBe('user');
+  });
+
+  it('from the AI side only proposes it: nothing changes until the user decides', async () => {
+    await seed([finished('plan')], { revision: 3 });
+    const lifecycle = await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Tests were too narrow', by: 'agent' });
+    expect(lifecycle.steps[0]).toMatchObject({ status: 'completed', lastVerificationSha: 'abc123' });
+    expect(lifecycle.steps[0]).not.toHaveProperty('reopenedAt');
+    const item = (await readPlan(workspacePath)).items[0]!;
+    expect(item.proposal).toMatchObject({ action: 'reopen', by: 'agent', note: 'Tests were too narrow' });
+    expect(item.status).toBe('done');
   });
 
   it('reopens a verified milestone as well', async () => {
@@ -73,15 +85,19 @@ describe('reopenLifecycleStep', () => {
     expect(plan!.status).toBe('in_progress');
   });
 
-  it.each(['pending', 'in_progress', 'blocked'] as const)('refuses a %s milestone and leaves it untouched', async (status) => {
-    await seed([{ id: 'plan', title: 'Plan', status }], { revision: 2 });
+  it.each<LifecycleStep>([
+    { id: 'plan', title: 'Plan', status: 'pending' },
+    { id: 'plan', title: 'Plan', status: 'in_progress' },
+    { id: 'plan', title: 'Plan', status: 'blocked', blockedReason: 'Keys', blockedAt: '2026-10-01T10:00:00.000Z' },
+  ])('refuses a $status milestone and leaves it untouched', async (step) => {
+    await seed([step], { revision: 2 });
     const error = await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Why not', by: 'user' }).catch((e) => e);
     expect(error).toBeInstanceOf(LifecycleStepError);
     expect(error.code).toBe('not_reopenable');
     expect(error.message).toContain('nothing to reopen');
-    const state = await loadWorkspaceState(workspacePath);
-    expect(state.lifecycle!.steps[0]).toEqual({ id: 'plan', title: 'Plan', status });
-    expect(state.lifecycle!.revision).toBe(2);
+    const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
+    expect(lifecycle.steps[0]).toEqual(step);
+    expect(lifecycle.revision).toBe(2);
   });
 
   it('reports an unknown milestone as not found', async () => {
@@ -119,7 +135,7 @@ describe('reopenLifecycleStep', () => {
     await seed([finished('plan')]);
     const results = await Promise.allSettled([
       reopenLifecycleStep(workspacePath, 'plan', { reason: 'first', by: 'user' }),
-      reopenLifecycleStep(workspacePath, 'plan', { reason: 'second', by: 'agent' }),
+      reopenLifecycleStep(workspacePath, 'plan', { reason: 'second', by: 'user' }),
     ]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     const loser = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
@@ -131,8 +147,8 @@ describe('reopenLifecycleStep', () => {
     await seed([finished('plan')]);
     await reopenLifecycleStep(workspacePath, 'plan', { reason: 'first rework', by: 'user' });
     await advanceLifecycleStep(workspacePath, 'plan', 'complete');
-    const [plan] = (await reopenLifecycleStep(workspacePath, 'plan', { reason: 'second rework', by: 'agent' })).steps;
-    expect(plan).toMatchObject({ status: 'in_progress', reopenReason: 'second rework', reopenedBy: 'agent', reopenCount: 2 });
+    const [plan] = (await reopenLifecycleStep(workspacePath, 'plan', { reason: 'second rework', by: 'user' })).steps;
+    expect(plan).toMatchObject({ status: 'in_progress', reopenReason: 'second rework', reopenedBy: 'user', reopenCount: 2 });
   });
 
   it('gives the loser of a simultaneous reopen a clear way to recover: reload and see it already reopened', async () => {
@@ -202,8 +218,12 @@ describe('the milestone plan the AI reads', () => {
   });
 
   it('names an agent when an agent reopened it, and does not mention reopening in the definitions-only view', async () => {
-    await seed([finished('plan')]);
-    const lifecycle = await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Tests were too narrow', by: 'agent' });
+    // Reopened by an agent before reopening became a proposal; the record moves into the plan as it was.
+    await seed([{
+      id: 'plan', title: 'PLAN', status: 'in_progress', reopenedAt: '2026-10-02T10:00:00.000Z',
+      reopenReason: 'Tests were too narrow', reopenedBy: 'agent', reopenCount: 1,
+    }]);
+    const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
     expect(renderLifecyclePlan(lifecycle)).toContain('Reopened by an agent: Tests were too narrow');
     expect(renderLifecyclePlan(lifecycle, false)).not.toContain('Reopened');
   });

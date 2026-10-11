@@ -6,6 +6,7 @@ import type { PermissionMode } from '../harness/types.js';
 import type { AgentExecutionProfile, AgentHarness } from './ProviderRegistry.js';
 import { isValidSessionUuid, type AgentSession } from './session.js';
 import { getLocalMcpServerConfig } from './mcp-config.js';
+import { isPlainPlanCommand } from '../utils/ai-tool.js';
 import {
   MCP_SERVER_NAME,
   LEGACY_MCP_SERVER_NAME,
@@ -86,6 +87,7 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
           permissionMode,
           model: this.session?.model || process.env.ANTHROPIC_MODEL || process.env.CLAUDE_MODEL || undefined,
           env: {
+            CTXSPACE_HARNESS: 'claude',
             CLAUDE_CODE_PROJECT_DIR_NAME: workspaceId,
             CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || process.env.USERPROFILE || '.', '.claude'),
           },
@@ -174,7 +176,9 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
               const toolPrefixPattern = new RegExp(`^(?:mcp__)?(?:${MCP_ADAPTER_SERVER_NAME}|${LEGACY_MCP_ADAPTER_SERVER_NAME}|${MCP_SERVER_NAME}|${LEGACY_MCP_SERVER_NAME})__`);
               const toolName = event.tool.replace(toolPrefixPattern, '');
 
-              if (this.currentExecutionProfile === 'workspace-write' && (CORE_ALLOWED_TOOLS.has(toolName) || READONLY_MCP_TOOLS.has(toolName) || WORKSPACE_EDIT_MCP_TOOLS.has(toolName))) {
+              // A plain `ctxspace plan …` only changes the plan, as the AI, so it needs no prompt each time.
+              const planCommand = toolName === 'Bash' && isPlainPlanCommand(String((event as any).input?.command ?? ''));
+              if (this.currentExecutionProfile === 'workspace-write' && (CORE_ALLOWED_TOOLS.has(toolName) || READONLY_MCP_TOOLS.has(toolName) || WORKSPACE_EDIT_MCP_TOOLS.has(toolName) || planCommand)) {
                 handle.respondToApproval(event.requestId, { behavior: 'allow' });
               } else if (this.listenerCount('approval_request') > 0) {
                 // Interactive human-in-the-loop approval: forward to UI client

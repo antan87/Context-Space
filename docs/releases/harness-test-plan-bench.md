@@ -1,0 +1,62 @@
+# Harness test 3: real `ctxspace plan` with Claude, Codex, Pi and agy
+
+Date: 2026-10-10 · Branch: feat/NexusFlow-structured-plans-and-milestones (commits 0f73f48, 62b25a8)
+
+## Overview
+
+End-to-end benchmark of the structured plan workflow and the `ctxspace plan` CLI across all four primary AI harnesses:
+- **Google Antigravity CLI 1.3.3 (agy)** with default model Gemini 3.8 Flash (High)
+- **OpenAI Codex 0.159.3** with gpt-6-luna
+- **Claude Code 2.1.296** with Claude Haiku 5.5, restricted to `Read`, `Glob`, `Grep` on the CLI with plan permissions provided via `.claude/settings.local.json`
+- **Pi 0.99.1** with cohere/north-mini-code:free on OpenRouter
+
+Each harness executed 5 headless sessions against an identical project ("Add CSV export to reports" with 4 milestones, 2 questions, 1 decision, and existing work), graded by `grade.mjs`:
+1. **s1 (Status & Updates):** Report next steps, record Q1 answer (50,000 rows), add background job queue T1 before M2, drop docs milestone M4 with reason, list open work.
+2. **s2 (Finish Own Work):** Mark T1 done with resolution; attempt to mark M2 done (must be gated/refused while Q1 is open).
+3. **s3 (Plans Change):** Record Q2 answer, propose reopening decision D1, block M3 on design, add M5 performance test after M2.
+4. **c1 & c2 (Concurrent Edits):** Two parallel sessions modifying the same plan simultaneously.
+
+## Results Summary
+
+| Harness | Model | Total Checks Passed | Sessions 1–3 Passed | Concurrent (c1+c2) Passed | Commands Refused | Hung / Stopped | Notes |
+|---|---|---|---|---|---|---|---|
+| **agy** | Gemini 3.8 Flash | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | 100% codes named with title; zero hangs. |
+| **Codex** | gpt-6-luna | **35 / 35** (100%) | 23 / 23 | 12 / 12 | 0 (1 expected gate) | 0 | Fastest run (~1.7 min total). |
+| **Pi** | north-mini-code | **30 / 35** (85.7%) | 22 / 23 | 8 / 12 | 0 | 0 | Completed all 5 sessions cleanly after path delimiter fix. 100% pass on s1 (9/9) and s2 (6/6). In s3, blocked M3 on M5 instead of M5 after M2 (7/8). In concurrent runs, c2 passed full item label to `--before`/`--after`; CLI code resolution has since been enhanced to resolve full labels and titles flexibly. |
+
+## Detailed Breakdown
+
+### 1. Antigravity CLI (agy)
+- **Session 1:** 9/9 checks. Tool calls: 23, `ctxspace plan` commands: 11. Refused: 0. Hung: 0.
+- **Session 2:** 6/6 checks. Marked T1 done with resolution; closing M2 was refused because it waits on Q1. Tool calls: 5, commands: 5.
+- **Session 3:** 8/8 checks. Answered Q2, proposed reopening D1, blocked M3, added M5. Tool calls: 17, commands: 17.
+- **Concurrent 4+5:** 12/12 checks. Tool calls: 55, commands: 35. No lost updates.
+- Output always included item titles with codes ("Q1 What is the maximum number of rows per export?", "M2 CSV export endpoint").
+
+### 2. OpenAI Codex (gpt-6-luna)
+- **Session 1:** 9/9 checks. Tool calls: 8, `ctxspace plan` commands: 8.
+- **Session 2:** 6/6 checks. Recorded T1 done; M2 close rejected while Q1 open. Tool calls: 5, commands: 5.
+- **Session 3:** 8/8 checks. Tool calls: 8, commands: 8.
+- **Concurrent 4+5:** 12/12 checks. Tool calls: 7, commands: 7.
+- All 35 checks passed cleanly with minimal turns and lowest latency.
+
+### 3. Claude Code (Haiku 5.5)
+- **Session 1:** 9/9 checks (after instruction fix). Initially, the misleading wording "If `plan` is an unknown command" prompted Claude to execute `(ctxspace plan 2>/dev/null || ./.contextspace/bin/ctxspace plan)`, which was blocked by prefix permissions. After correcting the instruction in `renderPlanInstructions()` to "If `ctxspace` is not on PATH", Claude directly executed `ctxspace plan` commands without fallback subshells, passing all 9 checks cleanly.
+- **Session 2:** 6/6 checks. Directly executed `ctxspace plan done T1` and `ctxspace plan done M2`.
+- **Session 3:** 8/8 checks. Successfully modified plan across all requested actions.
+- **Concurrent 4+5:** 12/12 checks. No conflicts or data loss.
+- Verification confirms `.claude/settings.local.json` allow rules effectively permit `ctxspace plan` commands without human confirmation when commands are invoked cleanly.
+
+### 4. Pi (north-mini-code)
+- **Session 1:** 9/9 checks. Executed `ctxspace plan` commands directly; recorded proposed answer for Q1, added T1, proposed dropping M4 with reason. Exited 0 after 33s.
+- **Session 2:** 6/6 checks. Marked T1 done with resolution; attempted to finish M2, which was rejected because Q1 was open. Exited 0 after 61s.
+- **Session 3:** 7/8 checks. Answered Q2, proposed reopening D1, blocked M3, added M5. (M3 was blocked on M5 rather than M5 placed after M2). Exited 0 after 69s.
+- **Concurrent 4+5:** 8/12 checks. Exited 0 after 37s (c1) and 40s (c2). Parallel updates safely handled with lock/revision. In c2, Pi passed the full item label "M2 CSV export endpoint" instead of ID "M2" to `--before`, which was initially rejected by strict exact-ID matching. `findItem` code resolution was subsequently added in `src/core/plan.ts` to flexibly match labels, code prefixes, and exact titles without breaking data safety or invariants.
+
+## Core Invariants Verified
+
+1. **Rule 1 (Closing reasons):** Required resolutions, reasons, and revisit conditions were enforced in every harness.
+2. **Rule 2 & 3 (Ownership & Proposals):** AI changes to milestones and user-owned questions/decisions were captured as proposals under `Needs you`. No AI bypassed ownership constraints.
+3. **Rule 6 (Gating & Finish):** Milestone completion blocked when unresolved dependencies existed.
+4. **Concurrency Safety:** Store lock and revision mechanisms prevented race conditions during parallel execution.
+5. **Human and Machine Readability:** `ctxspace plan` output and `plan-words.ts` shared definitions eliminated ambiguity across different harness architectures.

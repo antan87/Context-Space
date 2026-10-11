@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { findExecutable, getAugmentedPath } from '../utils/user-paths.js';
-import { CLI_HARNESSES, isCliHarnessId, type CliHarnessId } from '../utils/cli-harnesses.js';
+import { CLI_HARNESSES, harnessPromptArgs, isCliHarnessId, type CliHarnessId } from '../utils/cli-harnesses.js';
 
 export type TerminalTarget = 'shell' | CliHarnessId;
 export interface LaunchSpec { file: string; args: string[]; env: NodeJS.ProcessEnv; label: string }
@@ -45,13 +45,21 @@ export function resolveShell(env = terminalEnvironment(), platform = process.pla
   throw new Error('No interactive shell was found.');
 }
 
-export function resolveLaunch(target: string, sessionId?: string, env = terminalEnvironment(), platform = process.platform): LaunchSpec {
+/**
+ * How to start a target. `prompt` is a first message for a new session (not a resumed one): the tool
+ * starts with it as its first turn. A tool that cannot take one starts without it.
+ */
+export function resolveLaunch(target: string, sessionId?: string, baseEnv = terminalEnvironment(), platform = process.platform, prompt?: string): LaunchSpec {
+  // An AI tool learns it is one, so `ctxspace plan` acts as the AI and names the tool; a shell is a person.
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  delete env.CTXSPACE_HARNESS;
   if (target === 'shell') {
     if (sessionId) throw new Error('Shells do not have saved assistant sessions.');
     const file = resolveShell(env, platform);
     return { file, args: platform === 'win32' ? ['-NoLogo'] : ['-l'], env, label: path.basename(file) };
   }
   if (!isCliHarnessId(target)) throw new Error('This harness does not have an embedded terminal target.');
+  env.CTXSPACE_HARNESS = target;
   const harness = CLI_HARNESSES[target];
   let file: string | null | undefined;
   for (const binary of ('terminalBinaries' in harness ? harness.terminalBinaries : [harness.binary])) {
@@ -63,6 +71,8 @@ export function resolveLaunch(target: string, sessionId?: string, env = terminal
   if (sessionId) {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)) throw new Error('Invalid saved session ID.');
     args = harness.resumeArgs(sessionId);
+  } else if (prompt) {
+    args = harnessPromptArgs(target, prompt) ?? [];
   }
   if (platform === 'win32' && !/\.exe$/i.test(file)) {
     // npm shims cannot be passed directly to CreateProcess. PowerShell's call

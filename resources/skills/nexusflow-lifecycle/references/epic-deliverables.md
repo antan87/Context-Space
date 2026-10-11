@@ -16,21 +16,24 @@ when isolation and ownership are clear. Each mergeable increment must build and 
 its applicable gates. For stacked PRs, record the base branch and merge order; recheck
 dependent PRs after their base changes.
 
-Preserve milestone IDs referenced by documents and assignments. The current editor
-can add/edit milestones but does not delete existing ones. Record canceled outcomes
-explicitly rather than marking unimplemented behavior as delivered; if restructuring
-requires unsupported operations, explain the limitation and agree a supported plan.
+Preserve milestone codes referenced by documents and assignments. Nothing in the plan is
+deleted: drop a canceled outcome with `ctxspace plan drop <code> --reason`, or move it with
+`later`, rather than marking unimplemented behavior as delivered. Dropping or deferring a
+milestone is the user's decision, so from an AI it becomes a proposal.
 
 Before replanning, inventory existing work with repo, branch/PR/commit, status
-(merged, on branch, or no change needed), and evidence. Record the remaining work
-in `contextspace-milestones.md`. Keep questions with their owner, blocking impact,
-open/resolved status, and resolution; distinguish flag-only findings from authorized
-implementation. Use applicable enabled skill templates for explicitly requested
-PBI/spec drafts, save them as source documents, and link them to milestone IDs.
+(merged, on branch, or no change needed), and evidence: `ctxspace plan add existing "<name>"`,
+then close it with what was found. Add the remaining work as tasks or milestones, and each
+open question with `add question --owner <who answers> --before <code it holds up>`, so what
+it blocks is a wait, not a note. Record a flag-only finding as a decision closed with
+"Flag only"; distinguish it from authorized implementation. Use applicable enabled skill
+templates for explicitly requested PBI/spec drafts, save them as source documents, and link
+them to milestone codes.
 Enabling a skill does not generate or approve those documents automatically.
 
-Circular package dependencies can be valid service relationships. Record an authored
-release sequence: build the changed producer against compatible published clients,
-publish the package, then bump and verify consumers. Plan a compatible transition
-for breaking contracts. Package topology alone cannot determine that sequence;
-lifecycle milestone dependencies must still form an executable, acyclic plan.
+Circular package dependencies can be valid service relationships. Record the release
+sequence as milestones that wait for each other: build the changed producer against
+compatible published clients, publish the package, then bump and verify consumers. Plan a
+compatible transition for breaking contracts. Package topology alone cannot determine that
+sequence; what milestones wait for must still form an executable plan without circles, and
+`ctxspace plan` refuses a circle.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Columns2, History, Plus, X } from 'lucide-react';
+import { Columns2, History, ListChecks, Plus, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 import { HarnessIcon, harnessName } from '../../components/icons/HarnessIcon.js';
 import { IconButton } from '../../components/ui/icon-button.js';
@@ -75,6 +76,13 @@ export function SessionDeck({ workspace, active, launch, consumeLaunch, fillProm
   useEffect(() => {
     if (!launch || seenLaunch.current === launch.id) return;
     seenLaunch.current = launch.id;
+    // Showing a running terminal opens nothing: its tab is brought on screen, if it has one yet.
+    if (launch.terminalId) {
+      const shown = deckRef.current.slots.find((slot) => slot.terminalId === launch.terminalId || infosRef.current[slot.key]?.id === launch.terminalId);
+      if (shown) show(shown.key);
+      consumeLaunch(launch.id);
+      return;
+    }
     // A conversation already running in a tab is shown, not opened twice.
     const running = launch.sessionId && status.data?.sessions.find((session) => session.state === 'running' && session.target === launch.target && session.sessionId === launch.sessionId);
     const holder = running && deckRef.current.slots.find((slot) => slot.terminalId === running.id || infosRef.current[slot.key]?.id === running.id);
@@ -151,8 +159,14 @@ export function SessionDeck({ workspace, active, launch, consumeLaunch, fillProm
   useEffect(() => { if (shownStatus) statusChangeRef.current?.(shownStatus); }, [shownStatus]);
 
   const targets = (status.data?.targets ?? []).filter((target) => target.available);
+  const navigate = useNavigate();
   const tabs = (
     <div className="flex min-w-0 shrink items-center gap-0.5">
+      {/* The plan is the workspace's first tab: the sessions open beside it. */}
+      <button type="button" onClick={() => navigate(`/workspaces/${encodeURIComponent(workspace)}/plan`)} title="The plan: what needs you, the milestones, and what is next"
+        className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground">
+        <ListChecks aria-hidden="true" className="size-3.5" />Plan
+      </button>
       {/* Only tabs in the tab list; Delete closes the focused one and the cross is the same for the mouse. */}
       <div role="tablist" aria-label="CLI sessions" className="flex min-w-0 items-center gap-0.5 overflow-x-auto no-scrollbar">
         {deck.slots.map((slot) => {

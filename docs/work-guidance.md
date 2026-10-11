@@ -1,14 +1,14 @@
-# Documents, assignments, and milestones
+# Documents, assignments, and the plan
 
-Open a workspace's **Plan** tab to manage its sources, current AI assignment,
-and milestones. These serve different purposes:
+A workspace opens on its **Plan** tab: the goal, the plan, and the sources, with the
+AI sessions one click away beside them. These serve different purposes:
 
 | Information | Where it belongs |
 | --- | --- |
 | Short reason for the workspace | Task brief |
 | Product requirements, designs, measurements, background | Source documents |
-| What the AI should do now and where it should stop | AI assignment |
-| Deliverables, dependencies, branches, verification and progress | Milestone plan |
+| What the AI should do now and where it should stop | AI assignment (the goal) |
+| Milestones, tasks, questions, decisions and existing work, with their status and history | The plan |
 | Decisions and lessons discovered during development | Knowledge |
 
 Avoid copying an entire product specification into the brief, plan, and knowledge.
@@ -46,8 +46,7 @@ Set **work type**, **size**, and **current stage** independently:
 - Size describes its scope: small task, standard change, or epic.
 - Stage describes today's assignment: investigate, design, implement, verify, review, or release.
 
-Changing type or size does not reset progress or replace milestones. New-work size
-presets supply an initial plan; use **Edit milestones** to adapt it later.
+Changing type or size does not reset progress or replace milestones.
 
 State the current objective, expected output, and stopping point. Select a milestone
 when the assignment concerns only that deliverable. Workspace and project sources
@@ -62,33 +61,65 @@ The same sources and milestone progress remain available throughout.
 
 ### Unsaved edits are kept
 
-Edits to the assignment, the milestones and the delivery notes are kept on this
-device as you type, so switching sections, leaving the workspace or reloading the
-app does not lose them. The state next to **Save** reads Saved, Unsaved, Saving or
-Conflict. Saving or **Discard unsaved … changes** removes the kept draft; unread
-drafts expire after 30 days. A half-filled **Add document** form is kept only until
-the window closes, because pasted source text may be sensitive. If the browser
-blocks or fills its storage, the page says the draft was not kept.
+Edits to the goal are kept on this device as you type, so switching sections, leaving
+the workspace or reloading the app does not lose them. The state next to **Save** reads
+Saved, Unsaved, Saving or Conflict. Saving or **Discard unsaved … changes** removes the
+kept draft; unread drafts expire after 30 days. A half-filled **Add document** form is
+kept only until the window closes, because pasted source text may be sensitive. If the
+browser blocks or fills its storage, the page says the draft was not kept.
 
 A kept draft remembers the saved version it started from. If someone saved a newer
 version meanwhile, edits to fields they did not change are combined with it and shown
 as unsaved. Edits to a field they also changed open a choice (**Keep my edits** or
 **Use the saved version**); nothing is applied, and the editing controls stay
-locked, until you pick. A milestone plan or the delivery notes saved differently
-are chosen as a whole. Workflow progress, which a plan save
-ignores, never counts as a conflict.
+locked, until you pick.
 
-## Split larger work into deliverables
+## The plan
 
-Edit milestone titles, outcomes, branches, dependencies, and verification gates.
-Add milestones for separate increments or PRs. The editor preserves existing IDs
-and progress; existing milestones cannot currently be deleted. Branch labels
-describe the intended work; saving them does not create branches or PRs.
+The plan holds the milestones, the tasks, the questions with who answers them, the
+decisions, and the work that already exists. It is one store, `contextspace-plan.json`,
+committed with the workspace. You change it in the Plan tab; AI tools change it with
+`ctxspace plan`. Both use the same items and the same words.
 
-Circular dependencies, stale saves, and changes to completed verification gates
-are rejected. Visual Flow and the displayed Markdown plan use the same saved
-milestones. The generated plan file contains milestone definitions; live progress
-is available in the UI and CLI.
+| Status | Means |
+| --- | --- |
+| To do | Not started yet. |
+| In progress | Someone is working on it, and it says who. |
+| Blocked | Stuck, and it always says why. |
+| Done | Finished, with what came out of it or the answer. |
+| Dropped | Not needed any more, with why. |
+| Later | Not now, with when to look again. |
+
+**Needs you** is not a status: it collects the questions waiting for your answer and
+the AI's proposals waiting for your OK. The rules:
+
+1. Every close has a reason. Nothing is deleted.
+2. The AI closes only its own items. For your items, and for milestones, it asks: you
+   see it under Needs you, and accept it or send it back with what still needs doing.
+3. A milestone is done when everything it waits for is done and its check passes on the
+   latest code. Closing a milestone, or accepting an AI's "done" on one, runs its check.
+4. Nothing starts by itself. When a milestone is done, the next one is suggested.
+5. Plans change: anyone can add, move, block or reopen an item at any time. Each item
+   keeps its history: who did what, and when.
+6. Before the workspace is finished, everything a milestone waits for must be handled.
+   Other open items only warn. Finishing anyway needs a reason.
+
+Every item has a code and a name, "M2 CSV export endpoint"; the name always comes first.
+A row in the Plan tab opens the item: what it must deliver, what it waits for and holds
+up, its check and the last result, where the work is, and its history. **How it works**
+shows the statuses and rules again. Branch labels describe the intended work; they do not
+create branches or PRs.
+
+### Start a session from the plan
+
+With no session running, a **Start a session** card sits beside the plan: pick a tool and
+what to work on, then **Start**. A ready item has its own **Start**, which starts your
+last-used tool on it. A session started on an item begins with a first message that names
+it and tells the AI to read the plan with `ctxspace plan` (Claude Code, Codex, Pi and agy
+take it; Copilot and Cursor start without it); the AI then marks the item started itself,
+so the history names the tool. Running sessions show as tabs beside **Plan**, named after
+the item they work on, and **Continue where you left off** resumes a saved conversation.
+`/chat` and `/sessions` still open the sessions directly.
 
 ## Give an AI the current context
 
@@ -99,23 +130,24 @@ ctxspace flow --assignment
 ctxspace flow --assignment --json
 ```
 
-MCP clients can call `get_work_context`, then `read_work_document` using document
-IDs in the assignment. Read originals before relying on summaries. Approved
+AI tools read the plan with `ctxspace plan` and change it one item at a time with
+`ctxspace plan add|start|done|answer|block|later|drop|reopen|edit` (`--help` shows how,
+`--json` gives every field). The generated `AGENTS.md` gives them the rules and a short
+work routine. MCP clients can call `get_work_context`, which also returns the plan as
+`ctxspace plan` prints it, then `read_work_document` using document IDs in the assignment. Read originals before relying on summaries. Approved
 requirements establish intended behavior; drafts are proposals. Conflicting
 sources should be surfaced to the owner.
 
 ### Planning through MCP
 
-The `interactive`, `developer`, and `full` MCP roles can manage planning directly.
-The `readonly`, `review`, and `ci` roles can read planning context but cannot edit it.
+AIs change the plan only with `ctxspace plan`; there are no MCP plan tools. The
+`interactive`, `developer`, and `full` MCP roles can edit the assignment and sources.
+The `readonly`, `review`, and `ci` roles can read them but cannot edit them.
 Reconnect an already running MCP server after upgrading to discover new tools.
 
 - `get_work_context` returns `guidance` (including the assignment, documents, and
-  revision), `lifecycle`, shared project sources, and the rendered assignment.
-- `update_milestone_plan` accepts `revision` from `lifecycle.revision` (0 when
-  absent) and the complete desired `steps` array. Retained IDs preserve progress;
-  omitted IDs are removed. `steps: []` disables milestones. Move any assignment
-  and source-document scopes before deleting milestones they reference.
+  revision), the milestones as `lifecycle`, `plan` as `ctxspace plan` prints it,
+  shared project sources, and the rendered assignment.
 - `update_work_assignment` accepts `guidance.revision`, `workType`, `size`, and
   the complete `assignment`. Omit `milestoneId` to use workspace scope. Saving a
   stage is not authorization to exceed the user's requested scope.
@@ -125,53 +157,45 @@ Reconnect an already running MCP server after upgrading to discover new tools.
 - `update_work_document` accepts `guidance.revision`, `documentId`, and the full
   document metadata. It preserves original text and URLs. Use `scope: {}` for
   workspace scope and `status: "superseded"` to retain a source as history.
-- `save_planning_notes` accepts the revision hash from `get_planning_notes` and
-  the complete revised `content`.
+- `update_milestone_plan`, `set_milestone`, `get_planning_notes` and
+  `save_planning_notes` still work for one release; their descriptions and results
+  name the `ctxspace plan` command that replaces them.
 
 All writes reject stale revisions. Reread and merge after a conflict rather than
-retrying an old replacement. Write results return the new revision. Call
-`refresh_context` after editing milestone definitions to regenerate the Markdown
-plan. These tools manage workspace planning; Workroom completion proposals still
-use the separate Workroom approval flow.
+retrying an old replacement. Write results return the new revision. Workroom
+completion proposals still use the separate Workroom approval flow.
 
 For maintainers, `npm run build:backend` followed by
 `node scripts/smoke-mcp-planning.mjs` checks actual stdio discovery, planning edits,
-read-only denials, and conflict recovery in temporary workspaces without model calls.
+the plan text, read-only denials, and conflict recovery in temporary workspaces
+without model calls.
 
 `contextspace-work.json` is the authoritative assignment and document index.
 Original text and metadata use the configured workspace storage adapter.
-`contextspace-assignment.md` is a derived view. Prefer live CLI/MCP reads because
-another project workspace can update a shared source after that view was written.
-Run `ctxspace refresh` to update generated context pointers in older workspaces
-and regenerate derived views. Generated context is not a second place to edit the assignment.
+`contextspace-plan.md` is a generated summary of the goal and the plan, rewritten after
+every change; do not edit it. Prefer live CLI/MCP reads. Run `ctxspace refresh` to
+update generated context in older workspaces. Generated context is not a second place to
+edit the assignment or the plan.
 
-## Keep authored planning across refresh
+## Older planning files
 
-**Delivery notes & questions** edits `contextspace-milestones.md`. Refresh creates
-this document once and preserves subsequent edits. It contains release sequencing,
-questions with owners and open/resolved status, existing work with branch/PR/commit
-evidence, and flag-only or deferred decisions. Record what is already merged, on a
-branch, or needs no change before defining new work. Link these rows to milestone
-IDs and source documents instead of copying their contents. This register is
-Markdown; saving it does not automatically complete lifecycle gates or execute work.
+Workspaces from before the plan kept authored notes in `contextspace-milestones.md` and a
+copy of the assignment in `contextspace-assignment.md`. The first refresh or `ctxspace plan`
+command moves the notes into the plan, once and safely repeatable:
 
-Use **Edit milestones** for executable dependencies and verification gates. Each
-milestone can name a repository, branch, work item or PR, and unblock condition.
-Circular milestone dependencies are invalid, but circular *package* dependencies
-can be legitimate. The dependency analysis does not invent a release order for
-cycles: record producer build, package publication, and consumer-version bumps in
-the authored plan, including compatibility transitions for breaking contracts.
+- outcome rows add detail and waits to their milestones, or become new milestones;
+- open questions, existing work, and flagged or deferred decisions become questions,
+  existing items and decisions, with their owner, status and what they hold up;
+- rows that cannot be read and any other text become one question for you, "Is anything
+  in the notes kept from contextspace-milestones.md still needed?", so nothing is lost.
 
-When upgrading, a manually appended `## Milestones` section in the old generated
-plan is copied into the new authored document before regenerating the plan. Review
-that imported section once. Other custom sections should be moved into the authored
-document before refresh. Do not edit generated `contextspace-plan.md` directly.
+The file is kept in `.contextspace/archive/` for one release and committed there.
+`contextspace-assignment.md` is no longer written; refresh removes it.
 
-Notes saves use a revision check. A conflicting save keeps the editor draft.
-**Reload delivery notes** fetches the latest saved text and keeps your draft; if
-the saved notes changed meanwhile, both versions are shown side by side and you
-choose which to continue with. **Discard unsaved delivery notes** drops the draft.
-MCP exposes the document through `get_planning_notes`.
+Circular *package* dependencies can be legitimate, but what milestones wait for cannot
+form a circle. Record a release order (producer build, package publication, consumer
+version bumps) as milestones that wait for each other, including compatibility
+transitions for breaking contracts.
 
 For skill-based PBI generation, select the applicable skill and make the assignment
 explicit, for example: “Use the enabled PBI template; inventory existing work, draft
@@ -181,7 +205,15 @@ enabling one does not run it or make its output approved.
 
 Knowledge already supports typed `decision`, `question`, and `gotcha` entries,
 rendered with their type labels. Use knowledge for compact reasons and lessons;
-use delivery notes for the evolving question owner, status, and resolution register.
+use the plan for questions with their owner, status and answer.
+
+## Finish the workspace
+
+Finishing checks the latest verification of every editable repository, and the plan:
+anything a milestone still waits for, directly or through what that waits for, stops
+finishing, and so does an AI's close still waiting for your OK. Other open items only
+warn; items for later count as handled. The finish panel lists both. Handle them in the
+plan, or choose **Finish anyway, with a reason**; the reason is recorded with the finish.
 
 ## Access tools from a desktop-created workspace
 

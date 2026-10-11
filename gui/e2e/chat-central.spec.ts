@@ -31,6 +31,10 @@ test.beforeEach(async ({ page }) => {
     const id = route.request().url().split('/api/terminals/')[1]!.split('/')[0]!;
     return route.fulfill({ json: { available: true, sessions: [{ id: `term-${id}`, workspace: id, target: 'shell', label: 'bash', cwd: `/tmp/${id}`, state: 'running' }], targets: [{ id: 'shell', name: 'Shell', available: true, reason: null }] } });
   });
+  // The same shells, as this browser's running terminals: a running session shows beside the plan.
+  await page.route('**/api/terminals/running', (route) => route.fulfill({ json: { sessions: ['alpha', 'beta'].map((id) => ({
+    id: `term-${id}`, workspace: id, target: 'shell', label: 'bash', cwd: `/tmp/${id}`, state: 'running', startedAt: '2026-09-24T00:00:00Z', attached: true,
+  })) } }));
   await page.route('**/api/workspace/*/sessions', (route) => route.fulfill({ json: { sessions: [] } }));
   await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
   await page.routeWebSocket('**/ws/terminal', (socket) => {

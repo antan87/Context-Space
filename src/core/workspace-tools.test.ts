@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 import { parse } from 'smol-toml';
 import { BRAND_CONFIG } from './constants.js';
-import { generateWorkspaceTools, CLI_LAUNCHER, CLI_ALIAS_LAUNCHER } from './workspace-tools.js';
+import { generateWorkspaceTools, CLI_LAUNCHER, CLI_ALIAS_LAUNCHER, CLAUDE_PLAN_PERMISSIONS } from './workspace-tools.js';
 let root: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-tools-')); });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
@@ -62,4 +62,27 @@ it('removes only the legacy generated Cursor entry when Cursor is unselected', a
   await fs.writeFile(target, JSON.stringify({ mcpServers: { [BRAND_CONFIG.mcp.serverName]: legacy } }));
   await generateWorkspaceTools(root, [], runtime);
   await expect(fs.stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('lets Claude Code run ctxspace plan without asking, keeping the settings already there', async () => {
+  const settings = path.join(root, '.claude/settings.local.json');
+  await fs.mkdir(path.dirname(settings));
+  await fs.writeFile(settings, JSON.stringify({ model: 'opus', permissions: { allow: ['Bash(npm test:*)'], deny: ['Bash(rm:*)'] } }));
+  await generateWorkspaceTools(root, ['claude'], runtime);
+  // A committed local file would wait for the folder's trust again, so it is never in the list to commit.
+  expect(await generateWorkspaceTools(root, ['claude'], runtime)).not.toContain('.claude/settings.local.json');
+  expect(JSON.parse(await fs.readFile(settings, 'utf8'))).toEqual({
+    model: 'opus',
+    permissions: { allow: ['Bash(npm test:*)', ...CLAUDE_PLAN_PERMISSIONS], deny: ['Bash(rm:*)'] },
+  });
+  expect(CLAUDE_PLAN_PERMISSIONS).toEqual(['Bash(ctxspace plan:*)', 'Bash(./.contextspace/bin/ctxspace plan:*)']);
+
+  await fs.writeFile(settings, JSON.stringify({ permissions: { allow: 'everything' } }));
+  await expect(generateWorkspaceTools(root, ['claude'], runtime)).rejects.toThrow('Invalid Claude settings');
+  expect(JSON.parse(await fs.readFile(settings, 'utf8'))).toEqual({ permissions: { allow: 'everything' } });
+});
+
+it('writes no Claude settings when Claude is not selected', async () => {
+  await generateWorkspaceTools(root, ['codex'], runtime);
+  await expect(fs.stat(path.join(root, '.claude/settings.local.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });

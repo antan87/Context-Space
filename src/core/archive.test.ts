@@ -93,7 +93,7 @@ async function inPlaceWorkspace(root: string, repos: string[]): Promise<string> 
     createdAt: new Date().toISOString(),
   };
   await saveFeatureConfig(workspacePath, feature);
-  await fs.writeFile(path.join(workspacePath, 'contextspace-milestones.md'), '# notes\n');
+  await fs.writeFile(path.join(workspacePath, 'release-notes.md'), '# notes\n');
   return workspacePath;
 }
 
@@ -139,7 +139,7 @@ describe('archiveWorkspace (real git)', { timeout: 90_000 }, () => {
     const preview = await planArchive(workspacePath, { dryRun: true });
     expect(preview.ready).toBe(true);
     expect(preview.repos[0]).toMatchObject({ action: 'remove-worktree', branchState: 'merged', mergeEvidence: 'ancestor' });
-    expect(preview.kept).toContain('contextspace-milestones.md');
+    expect(preview.kept).toContain('release-notes.md');
     expect(preview.kept).not.toContain('api');
     expect(await exists(worktreePath)).toBe(true);
 
@@ -157,7 +157,7 @@ describe('archiveWorkspace (real git)', { timeout: 90_000 }, () => {
     // The remote branch stays unless deleting it was asked for.
     expect(await git(host, 'ls-remote', '--heads', 'origin', 'feat/archive')).toContain(tip);
     expect(await git(host, 'worktree', 'list', '--porcelain')).not.toContain(worktreePath);
-    expect(await fs.readFile(path.join(workspacePath, 'contextspace-milestones.md'), 'utf-8')).toBe('# notes\n');
+    expect(await fs.readFile(path.join(workspacePath, 'release-notes.md'), 'utf-8')).toBe('# notes\n');
 
     const feature = (await loadFeatureConfig(workspacePath))!;
     expect(feature.archivedAt).toBe(report.archivedAt);

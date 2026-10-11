@@ -1,7 +1,7 @@
 /**
  * The sections of a workspace. Each id is its URL segment (`/workspaces/:id/:section`), so every deep link from before
- * the shell redesign still resolves. A workspace with no section in its URL opens on the chat, which is where most work
- * happens; the rest open beside it, from the rail.
+ * the shell redesign still resolves. A workspace with no section in its URL opens on its plan, with the sessions one
+ * click away; `/chat` and `/sessions` still open the sessions directly.
  */
 export type WorkspaceSection = 'chat' | 'overview' | 'plan' | 'documents' | 'knowledge' | 'skills' | 'changes' | 'sessions' | 'services';
 
@@ -20,11 +20,11 @@ export const SECTION_LABELS: Record<WorkspaceSection, string> = {
 const ALL_SECTIONS = new Set<string>(Object.keys(SECTION_LABELS));
 
 /**
- * No segment opens the chat. An unknown one (an old or mistyped link) falls back
+ * No segment opens the plan. An unknown one (an old or mistyped link) falls back
  * to the overview instead of a blank page.
  */
 export function parseSection(segment: string | undefined | null): WorkspaceSection {
-  if (!segment) return 'chat';
+  if (!segment) return 'plan';
   return ALL_SECTIONS.has(segment) ? segment as WorkspaceSection : 'overview';
 }
 

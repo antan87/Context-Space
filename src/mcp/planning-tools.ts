@@ -40,15 +40,28 @@ function planningTool<T extends z.ZodObject>(
   };
 }
 
+/** The command that replaces each old planning tool. AIs change the plan only with `ctxspace plan`. */
+const PLAN_COMMAND_INSTEAD = {
+  get_planning_notes: '`ctxspace plan`',
+  save_planning_notes: '`ctxspace plan add question|decision|existing "<name>"`',
+  update_milestone_plan: '`ctxspace plan add milestone "<name>"`, `ctxspace plan edit <code>` or `ctxspace plan drop <code> --reason "<why>"`',
+  set_milestone: '`ctxspace plan start|block|done <code>`',
+} as const;
+
+/** Said by an old planning tool in its description and its result, for one release before it goes away. */
+export function useThePlanCommand(tool: keyof typeof PLAN_COMMAND_INSTEAD): string {
+  return `Deprecated: run ${PLAN_COMMAND_INSTEAD[tool]} in your shell instead (\`ctxspace plan --help\` shows how). This tool goes away in the next release.`;
+}
+
 const revision = z.number().int().nonnegative();
 const addDocumentSchema = documentInputSchema.safeExtend({ revision });
 const updateDocumentSchema = documentMetadataSchema.extend({ revision, documentId: z.string().uuid() });
 
 export const planningTools: NexusFlowTool[] = [
   planningTool('update_milestone_plan',
-    'Create, edit, reorder, or remove feature-specific workspace milestones. Read get_work_context first and send lifecycle.revision (0 when absent) plus the entire desired steps array. Omitted steps are removed; [] disables milestones. Retained steps keep progress and verification. Reassign document/assignment scopes before removing referenced milestones. On conflict, reread and merge. Do not invent generic steps. Refresh context after saving to update generated files.',
+    `${useThePlanCommand('update_milestone_plan')} Create, edit, reorder, or remove feature-specific workspace milestones. Read get_work_context first and send lifecycle.revision (0 when absent) plus the entire desired steps array. Omitted steps are removed; [] disables milestones. Retained steps keep progress and verification. Reassign document/assignment scopes before removing referenced milestones. On conflict, reread and merge. Do not invent generic steps. Refresh context after saving to update generated files.`,
     lifecyclePlanSchema,
-    async (input, root) => ({ lifecycle: await updateLifecyclePlan(root, input), ...(await refreshPlanningContext(root)) }), true),
+    async (input, root) => ({ deprecated: useThePlanCommand('update_milestone_plan'), lifecycle: await updateLifecyclePlan(root, input, { by: 'agent' }), ...(await refreshPlanningContext(root)) }), true),
   planningTool('update_work_assignment',
     'Update work type, size, and the current AI assignment, including stage, objective, expected output, stopping point, and optional milestone scope. Read get_work_context first and use guidance.revision. Supply the complete assignment; omit milestoneId for workspace scope. Follow the user-authorized scope; changing a saved stage does not itself grant permission to proceed. Returns the updated context and revision.',
     guidanceUpdateSchema,
@@ -62,7 +75,7 @@ export const planningTools: NexusFlowTool[] = [
     updateDocumentSchema,
     async ({ revision, documentId, ...input }, root) => { await updateWorkDocument(root, documentId, revision, input); return { ...(await getWorkContext(root)), ...(await refreshPlanningContext(root)) }; }),
   planningTool('save_planning_notes',
-    'Replace authored delivery notes, questions, and deferred decisions in contextspace-milestones.md. First read get_planning_notes and supply its revision hash plus the entire revised content. On conflict, reread and merge instead of overwriting newer notes. Use update_milestone_plan for structured milestones.',
+    `${useThePlanCommand('save_planning_notes')} Replace authored delivery notes, questions, and deferred decisions in contextspace-milestones.md. First read get_planning_notes and supply its revision hash plus the entire revised content. The refresh after saving moves the notes into the plan and archives the file.`,
     z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().max(500_000) }),
-    async (input, root) => ({ ...(await savePlanningNotes(root, input.revision, input.content)), ...(await refreshPlanningContext(root)) }), true),
+    async (input, root) => ({ deprecated: useThePlanCommand('save_planning_notes'), ...(await savePlanningNotes(root, input.revision, input.content)), ...(await refreshPlanningContext(root)) }), true),
 ];

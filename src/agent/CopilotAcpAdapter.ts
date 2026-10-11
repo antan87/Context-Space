@@ -22,6 +22,7 @@ export class CopilotAcpAdapter extends AcpCliAdapter {
       executable: findExecutable('copilot') ?? 'copilot',
       args: buildCopilotAcpArgs(),
       label: 'GitHub Copilot CLI',
+      harness: 'copilot',
       loginCommand: 'copilot login',
       validateSessionId: (id) => isValidSessionUuid(id) || isSafeAcpSessionId(id),
       transportFactory,

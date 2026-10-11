@@ -1,4 +1,5 @@
 import { test as base, expect, type Route } from '@playwright/test';
+import { planView } from './planData';
 
 export type MockDataOptions = {
   configData: any;
@@ -84,6 +85,9 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     const json = (body: unknown) => async (route: Route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
+    // How the plan works opens by itself on a first visit; a spec about it clears this.
+    await page.addInitScript(() => { try { window.localStorage.setItem('contextspace.plan.how-it-works-seen', '1'); } catch { /* no storage */ } });
+
     await page.route('**/api/config', json(configData));
     await page.route('**/api/adapters', json(adaptersData));
     await page.route('**/api/workspaces', json(workspacesData));
@@ -132,6 +136,8 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
       lifecycle: null, assignment: '', sharedDocuments: [],
     }));
     await page.route('**/api/workspace/*/changes', json({ changes: [] }));
+    // An empty plan for the Plan tab; a spec about the plan routes its own.
+    await page.route('**/api/workspace/*/plan/items', json(planView([])));
     // The Where Are We strip above the chat: an empty plan and a live feed with nothing in it. A spec that
     // exercises the strip registers its own routes, which win over these.
     await page.route('**/api/workspace/*/progress-facts', async (route) => {

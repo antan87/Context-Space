@@ -232,6 +232,7 @@ export class ClaudeJsonlDecoder {
 export class ClaudeCliAdapter extends CliAdapterBase {
   protected override readonly binary = findExecutable('claude') ?? 'claude';
   protected readonly label = 'claude CLI';
+  protected override readonly harness = 'claude';
   // On Windows, claude is an npm .cmd shim requiring shell: true.
   // On POSIX, running via /bin/sh strips the environment and drops NVM/local binaries,
   // so spawn directly with the augmented PATH.

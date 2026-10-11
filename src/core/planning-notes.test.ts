@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ensurePlanningNotes, readPlanningNotes, savePlanningNotes, hasAuthoredPlanningRows, planningNotesAreAuthored, PLANNING_NOTES_FILE } from './planning-notes.js';
+import { readPlanningNotes, savePlanningNotes, hasAuthoredPlanningRows, planningNotesAreAuthored, PLANNING_NOTES_FILE } from './planning-notes.js';
 import { ensureWorkGuidance, loadWorkGuidance, WORK_GUIDANCE_FILE } from './work-guidance.js';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
@@ -13,14 +13,12 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ id: 'notes', branchName: 'notes', description: 'Plan', repos: [], assistants: [] }));
 });
 afterEach(async () => { vi.restoreAllMocks(); setActiveStorageProvider(new LocalStorageAdapter()); await fs.rm(root, { recursive: true, force: true }); });
-it('initializes durable planning and assignment records once, preserving authored content on refresh', async () => {
-  await fs.writeFile(path.join(root, 'contextspace-plan.md'), '# Generated\n\n## Milestones\n\nShip the producer first.\n');
-  await ensurePlanningNotes(root, 'notes');
+it('reads the template while no notes file exists, never creates one, and initializes the brief once', async () => {
+  // The notes file is retired: refresh moves it into the plan instead of creating it.
   const initial = await readPlanningNotes(root);
-  expect(initial.content).toContain('Ship the producer first.');
   expect(initial.content).toContain('Owner');
+  await expect(fs.stat(path.join(root, PLANNING_NOTES_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
   await savePlanningNotes(root, initial.revision, '# My authored release sequence\n');
-  await ensurePlanningNotes(root, 'notes');
   expect((await readPlanningNotes(root)).content).toBe('# My authored release sequence\n');
   await ensureWorkGuidance(root);
   const saved = await fs.readFile(path.join(root, WORK_GUIDANCE_FILE), 'utf8');
@@ -45,7 +43,6 @@ it('routes authored documents through configured storage and recovers from write
   });
   const write = vi.spyOn(adapter, 'writeWorkspaceFile').mockImplementation(async (_root, _id, filename, content) => { documents.set(filename, content); });
   setActiveStorageProvider(adapter);
-  await ensurePlanningNotes(root, 'notes');
   const current = await readPlanningNotes(root);
   write.mockRejectedValueOnce(new Error('Offline'));
   await expect(savePlanningNotes(root, current.revision, 'new')).rejects.toThrow('Offline');
@@ -56,7 +53,6 @@ it('routes authored documents through configured storage and recovers from write
   await expect(fs.stat(path.join(root, PLANNING_NOTES_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
 });
 it('tells the empty planning-notes template from notes that have been written', async () => {
-  await ensurePlanningNotes(root, 'notes');
   const initial = await readPlanningNotes(root);
   expect(hasAuthoredPlanningRows(initial.content)).toBe(false);
   expect(await planningNotesAreAuthored(root)).toBe(false);

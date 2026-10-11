@@ -77,6 +77,15 @@ describe('source documents and assignments', () => {
     expect((await readWorkDocument(root, doc.id)).content).toBe(source().content);
   });
 
+  it('returns the plan text without moving an older lifecycle into the store', async () => {
+    const context = await getWorkContext(root);
+    expect(context.plan).toContain('MILESTONES');
+    expect(context.plan).toContain('step_discovery');
+    expect(context.assignment).toContain('`ctxspace plan`');
+    expect(context.assignment).not.toContain('get_planning_notes');
+    await expect(fs.stat(path.join(root, 'contextspace-plan.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('includes only workspace and active milestone sources', async () => {
     let guidance = await addWorkDocument(root, 0, source('Shared'));
     guidance = await addWorkDocument(root, guidance.revision, { ...source('Implementation-only'), scope: { milestoneId: 'step_implementation' } });
@@ -154,20 +163,22 @@ describe('source documents and assignments', () => {
     setActiveStorageProvider(new InMemoryAdapter());
     const guidance = await addWorkDocument(root, 0, source());
     expect(files.has(WORK_GUIDANCE_FILE)).toBe(true);
-    expect(files.has(WORK_ASSIGNMENT_FILE)).toBe(true);
+    // The brief is written into the plan summary; the old assignment file is no longer written.
+    expect(files.get('contextspace-plan.md')).toContain('Goal');
+    expect(files.has(WORK_ASSIGNMENT_FILE)).toBe(false);
     expect((await readWorkDocument(root, guidance.documents[0].id)).location).toContain('https://storage.example/');
     expect((await getWorkContext(root)).assignment).toContain('https://storage.example/');
   });
 
-  it('reports a projection write failure without losing the authoritative saved assignment', async () => {
+  it('saves the brief even when the plan summary cannot be written, since the next change rewrites it', async () => {
     class FailingProjection extends LocalStorageAdapter {
       override async writeWorkspaceFile(root: string, id: string, filename: string, content: string) {
-        if (filename === WORK_ASSIGNMENT_FILE) throw new Error('read only projection');
+        if (filename === 'contextspace-plan.md') throw new Error('read only projection');
         return super.writeWorkspaceFile(root, id, filename, content);
       }
     }
     setActiveStorageProvider(new FailingProjection());
-    await expect(addWorkDocument(root, 0, source())).rejects.toThrow('Brief saved');
+    await addWorkDocument(root, 0, source());
     expect((await getWorkContext(root)).guidance.documents).toHaveLength(1);
     expect((await getWorkContext(root)).assignment).toContain('PO requirements');
   });
@@ -175,7 +186,7 @@ describe('source documents and assignments', () => {
 
 describe('editable milestone definitions', () => {
   it('clears a custom verification command so the default gate can be used again', async () => {
-    let lifecycle = (await loadWorkspaceState(root)).lifecycle!;
+    let lifecycle = (await loadWorkspaceLifecycle(root, { includeFleet: false }));
     lifecycle = await updateLifecyclePlan(root, { revision: 0, steps: lifecycle.steps.map((step) => ({ ...step,
       ...(step.id === 'step_implementation' ? { requiresVerification: true, verificationCommand: 'npm run special-test' } : {}),
     })) });
@@ -183,7 +194,7 @@ describe('editable milestone definitions', () => {
       ...(step.id === 'step_implementation' ? { verificationCommand: '' } : {}),
     })) });
     expect(lifecycle.steps.find((step) => step.id === 'step_implementation')).toMatchObject({ requiresVerification: true });
-    expect((await loadWorkspaceState(root)).lifecycle?.steps.find((step) => step.id === 'step_implementation')?.verificationCommand).toBeUndefined();
+    expect((await loadWorkspaceLifecycle(root, { includeFleet: false })).steps.find((step) => step.id === 'step_implementation')?.verificationCommand).toBeUndefined();
   });
 
   it('preserves progress and exports the same milestone definitions', async () => {
@@ -191,28 +202,29 @@ describe('editable milestone definitions', () => {
     const steps = lifecycle.steps.map((step) => ({ ...step, title: step.id === 'step_implementation' ? 'Optimize invoice lookup' : step.title }));
     lifecycle = await updateLifecyclePlan(root, { revision: lifecycle.revision, steps: [...steps, { id: 'rollout', title: 'Roll out gradually', dependsOn: ['step_ship'] }] });
     expect(lifecycle.steps[0].status).toBe('completed');
-    expect(lifecycle.steps[1].status).toBe('in_progress');
+    // Nothing starts by itself: the next milestone is ready, not started.
+    expect(lifecycle.steps[1].status).toBe('pending');
     expect(lifecycle.steps.at(-1)?.status).toBe('pending');
     expect(renderLifecyclePlan(lifecycle)).toContain('Optimize invoice lookup');
     expect(renderLifecyclePlan(lifecycle)).toContain('Roll out gradually');
   });
 
   it('rejects cycles and stale plan revisions without losing saved steps', async () => {
-    const lifecycle = (await loadWorkspaceState(root)).lifecycle!;
+    const lifecycle = (await loadWorkspaceLifecycle(root, { includeFleet: false }));
     const cycle = lifecycle.steps.map((step) => ({ ...step, dependsOn: step.id === 'step_discovery' ? ['step_ship'] : step.dependsOn }));
     await expect(updateLifecyclePlan(root, { revision: 0, steps: cycle })).rejects.toThrow('cycle');
     await updateLifecyclePlan(root, { revision: 0, steps: lifecycle.steps });
     await expect(updateLifecyclePlan(root, { revision: 0, steps: lifecycle.steps })).rejects.toThrow('another session');
-    expect((await loadWorkspaceState(root)).lifecycle?.steps).toHaveLength(4);
+    expect((await loadWorkspaceLifecycle(root, { includeFleet: false })).steps).toHaveLength(4);
   });
 
   it('validates retained dependencies when optional fields are omitted from an edit', async () => {
-    const lifecycle = (await loadWorkspaceState(root)).lifecycle!;
+    const lifecycle = (await loadWorkspaceLifecycle(root, { includeFleet: false }));
     const steps = lifecycle.steps.map((step) => ({ id: step.id, title: step.title,
       ...(step.id === 'step_discovery' ? { dependsOn: ['step_ship'] } : {}),
     }));
     await expect(updateLifecyclePlan(root, { revision: 0, steps })).rejects.toThrow('cycle');
-    expect((await loadWorkspaceState(root)).lifecycle?.revision ?? 0).toBe(0);
+    expect((await loadWorkspaceLifecycle(root, { includeFleet: false })).revision ?? 0).toBe(0);
   });
 
   it('blocks changing completed gate dependencies', async () => {

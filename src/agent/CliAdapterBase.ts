@@ -27,6 +27,8 @@ export abstract class CliAdapterBase extends EventEmitter {
   protected abstract readonly binary: string;
   /** Short label for stderr/error diagnostics. */
   protected abstract readonly label: string;
+  /** The AI tool's name, given to it as CTXSPACE_HARNESS so `ctxspace plan` records which tool made a change. */
+  protected readonly harness?: string;
   /** Spawn through a shell (needed to resolve a `.cmd` shim on Windows). */
   protected readonly useShell: boolean = false;
   /** Pipe the prompt to stdin (true) vs. include it in argv via buildArgs (false). */
@@ -98,6 +100,7 @@ export abstract class CliAdapterBase extends EventEmitter {
   /** Subclasses can customize environment variables for the CLI subprocess. */
   protected buildEnv(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0' }; // Strip colors for easier parsing
+    if (this.harness) env.CTXSPACE_HARNESS = this.harness;
     const augmented = getAugmentedPath(env);
     env.PATH = augmented;
     if (process.platform === 'win32') {

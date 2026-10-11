@@ -3,20 +3,22 @@ import type { NavigateFunction } from 'react-router-dom';
 /** Where a workspace's chat is. The address is the source of truth for which chat is on screen. */
 export const chatPath = (branchName: string) => `/workspaces/${encodeURIComponent(branchName)}/chat`;
 
-/** The workspace and section an address names. No section means the chat. Null for any other address. */
+/** Where a workspace opens: its plan, with the sessions one click away. */
+export const WORKSPACE_HOME = 'plan';
+
+/** The workspace and section an address names. No section means the workspace's home, the plan. Null for any other address. */
 export function parseWorkspacePath(pathname: string): { workspace: string; section: string } | null {
   const match = /^\/workspaces\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathname);
   if (!match) return null;
   try {
-    return { workspace: decodeURIComponent(match[1]!), section: match[2] ?? 'chat' };
+    return { workspace: decodeURIComponent(match[1]!), section: match[2] ?? WORKSPACE_HOME };
   } catch {
     return null;
   }
 }
 
 /**
- * Whether the address already shows this workspace's chat: its chat section, or no
- * section at all, which opens the chat. Going there again would only change the
+ * Whether the address already shows this workspace's chat: its chat section. Going there again would only change the
  * address under the user for nothing.
  */
 export function showsChatOf(pathname: string, branchName: string): boolean {
@@ -106,11 +108,11 @@ export function workspacePath(branchName: string, section = 'chat'): string {
 }
 
 /**
- * Where choosing a workspace from the sidebar goes: the same part of that workspace as the one being read, or its chat
- * from any other page. The session shortcuts use the same rule, so a click and a key land in the same place.
+ * Where choosing a workspace from the sidebar goes: the same part of that workspace as the one being read, or its home,
+ * the plan, from any other page. The session shortcuts use the same rule, so a click and a key land in the same place.
  */
 export function pathForSwitchingTo(branchName: string, currentPathname: string): string {
-  return workspacePath(branchName, parseWorkspacePath(currentPathname)?.section ?? 'chat');
+  return workspacePath(branchName, parseWorkspacePath(currentPathname)?.section ?? WORKSPACE_HOME);
 }
 
 /** Goes to a part of a workspace as the dock: marked, so its landing can be told from the user's own. */

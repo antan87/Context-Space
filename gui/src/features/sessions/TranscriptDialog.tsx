@@ -14,7 +14,8 @@ import {
 import { Spinner } from '../../components/ui/spinner.js';
 import { StatusBadge } from '../../components/ui/status-badge.js';
 import { findWorkspaceForSession } from '../../lib/status.js';
-import { useWorkspaceLaunchTargets, useLaunchTerminal } from '../../lib/api/queries.js';
+import { useWorkspaceLaunchTargets, useLaunchTerminal, usePlan } from '../../lib/api/queries.js';
+import { planNames } from '../plan/planView.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import type { AISession, Feature, TranscriptMessage } from '../../types.js';
 
@@ -74,6 +75,9 @@ export function TranscriptDialog({
   handleOpenDesktopSession,
   showToast,
 }: TranscriptDialogProps) {
+  // Codes in the transcript show their names, from the plan of the workspace this session belongs to.
+  const plan = usePlan((workspace ?? findWorkspaceForSession(workspaces, activeSession.workspacePath))?.branchName ?? null);
+  const planCodeNames = useMemo(() => planNames(plan.data), [plan.data]);
   const launchTargets = useWorkspaceLaunchTargets();
   const launchTerminalMutation = useLaunchTerminal();
   const codexDesktop = launchTargets.data?.find((target) => target.id === 'codex-desktop');
@@ -210,7 +214,7 @@ export function TranscriptDialog({
                     ? 'rounded-tr-none border-primary/30 bg-primary/10 text-foreground dark:border-primary/40 dark:bg-primary/20'
                     : 'rounded-tl-none border-border bg-card text-foreground shadow-xs dark:bg-muted/30'
                 }`}>
-                  <ChatMarkdown content={msg.content} />
+                  <ChatMarkdown content={msg.content} planNames={planCodeNames} />
                   {msg.usage && (
                     <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground font-mono">
                       <span>{(msg.usage.inputTokens ?? 0).toLocaleString()} in</span>

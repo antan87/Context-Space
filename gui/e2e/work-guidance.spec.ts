@@ -45,12 +45,6 @@ async function setupWork(page: import('@playwright/test').Page, empty = false) {
     }
     await route.fulfill({ json: { document: guidance.documents.find((doc: any) => doc.id === id), content: originals.get(id), location: 'source.md' } });
   });
-  await page.route('**/api/workspace/demo/lifecycle/plan', async (route) => {
-    const body = route.request().postDataJSON();
-    expect(body.revision).toBe(lifecycle.revision);
-    lifecycle = { ...lifecycle, steps: body.steps, revision: lifecycle.revision + 1 };
-    await route.fulfill({ json: { lifecycle } });
-  });
   await page.goto('/#/workspaces/demo/plan');
   // The plan is read first; editing the goal opens its form in place.
   await expect(page.getByRole('heading', { name: 'Goal', exact: true })).toBeVisible();
@@ -58,9 +52,8 @@ async function setupWork(page: import('@playwright/test').Page, empty = false) {
   await expect(page.getByLabel('Current objective')).toHaveValue('Find the bottleneck');
   return {
     guidance: () => guidance, lifecycle: () => lifecycle,
-    /** Another session saves: the brief or the plan moves to a new revision. */
+    /** Another session saves: the brief moves to a new revision. */
     otherSessionSavesBrief: (patch: Record<string, unknown>) => { guidance = { ...guidance, ...patch, revision: guidance.revision + 1 }; },
-    otherSessionSavesPlan: (steps: any[]) => { lifecycle = { ...lifecycle, steps, revision: lifecycle.revision + 1 }; },
   };
 }
 
@@ -73,22 +66,6 @@ async function leaveAndReturn(page: import('@playwright/test').Page) {
 }
 // Panels that are mounted but hidden also carry a state label; only the one on screen counts.
 const draftState = (page: import('@playwright/test').Page) => page.locator('[data-draft-state]:visible');
-
-/** The delivery notes document, with a revision that changes whenever anyone saves. */
-async function mockNotes(page: import('@playwright/test').Page, content = '# Delivery order\nProducer, publish, consumer.') {
-  let saved = { content, revision: '0'.repeat(64) };
-  let version = 0;
-  const save = (next: string) => { saved = { content: next, revision: (++version).toString(16).padStart(64, '0') }; };
-  await page.route('**/api/workspace/demo/planning-notes', async (route) => {
-    if (route.request().method() === 'PUT') {
-      const body = route.request().postDataJSON();
-      if (body.revision !== saved.revision) return route.fulfill({ status: 409, json: { error: 'Planning notes changed in another session. Reload before saving.' } });
-      save(body.content);
-    }
-    return route.fulfill({ json: saved });
-  });
-  return { saved: () => saved, otherSessionSaves: save };
-}
 
 test('uploads and labels a project source, reads the original, and supersedes it', async ({ page }) => {
   const state = await setupWork(page);
@@ -124,26 +101,6 @@ test('saves independent type, size, stage, scope, and stopping point', async ({ 
   await expect(page.getByRole('button', { name: 'Copy the goal for an assistant' })).toBeEnabled();
 });
 
-test('adds a dependent milestone without resetting existing progress', async ({ page }) => {
-  const state = await setupWork(page);
-  await page.getByRole('button', { name: 'Edit milestones' }).click();
-  await page.getByRole('button', { name: 'Remove milestone 1', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('depend on it');
-  await expect(page.getByLabel('Milestone 1 title')).toHaveValue('Measure baseline');
-  await page.getByRole('button', { name: 'Add milestone', exact: true }).click();
-  await page.getByLabel('Milestone 3 title').fill('Roll out gradually');
-  await page.getByLabel('Milestone 3 outcome').fill('Compare production timings');
-  await page.getByRole('group', { name: 'Milestone 3 dependencies', exact: true }).getByLabel('Improve lookup').check();
-  await page.getByLabel('Milestone 3 repository (optional)').fill('billing-api');
-  await page.getByLabel('Milestone 3 work item / PR (optional)').fill('PBI-123');
-  await page.getByLabel('Milestone 3 unblock condition (optional)').fill('Package published');
-  await page.getByRole('button', { name: 'Save milestones', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Milestones saved');
-  expect(state.lifecycle().steps[0].status).toBe('in_progress');
-  expect(state.lifecycle().steps[2]).toMatchObject({ title: 'Roll out gradually', repo: 'billing-api', workItem: 'PBI-123', unblockCondition: 'Package published', dependsOn: ['improve'], status: 'pending' });
-  await expect(page.getByText('Roll out gradually', { exact: true }).last()).toBeVisible();
-});
-
 test('keeps the assignment draft when another session changed the saved revision', async ({ page }) => {
   await setupWork(page);
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ status: 409, json: { error: 'The brief changed in another session. Reload before saving.' } }));
@@ -151,79 +108,6 @@ test('keeps the assignment draft when another session changed the saved revision
   await page.getByRole('button', { name: 'Save goal' }).click();
   await expect(page.getByRole('alert')).toContainText('another session');
   await expect(page.getByLabel('Current objective')).toHaveValue('My unsaved objective');
-});
-
-test('keeps delivery notes through section switches and save conflicts, then reloads and saves', async ({ page }) => {
-  await setupWork(page);
-  let saved = { content: '# Delivery order\nProducer, publish, consumer.', revision: 'a'.repeat(64) };
-  let conflict = true;
-  await page.route('**/api/workspace/demo/planning-notes', async (route) => {
-    if (route.request().method() === 'PUT') {
-      if (conflict) return route.fulfill({ status: 409, json: { error: 'Planning notes changed in another session. Reload before saving.' } });
-      expect(route.request().postDataJSON().revision).toBe(saved.revision);
-      saved = { content: route.request().postDataJSON().content, revision: 'b'.repeat(64) };
-    }
-    return route.fulfill({ json: saved });
-  });
-  await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-  await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue(saved.content);
-  await page.getByLabel('Delivery notes', { exact: true }).fill('# My draft');
-  await page.getByRole('button', { name: 'Edit the goal' }).click();
-  await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-  await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# My draft');
-  await page.getByRole('button', { name: 'Save delivery notes' }).click();
-  await expect(page.getByRole('alert')).toContainText('Your draft is kept');
-  await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# My draft');
-  await page.getByRole('button', { name: 'Reload delivery notes' }).click();
-  // Reload fetches the saved notes but never throws the draft away: discarding it is its own choice.
-  await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# My draft');
-  await page.getByRole('button', { name: 'Discard unsaved delivery notes' }).click();
-  await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue(saved.content);
-  conflict = false;
-  await page.getByLabel('Delivery notes', { exact: true }).fill('# Agreed delivery order');
-  await page.getByRole('button', { name: 'Save delivery notes' }).click();
-  await expect(page.getByRole('status')).toContainText('Delivery notes saved');
-  expect(saved.content).toBe('# Agreed delivery order');
-  await page.getByRole('heading', { name: 'Goal', exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: '/tmp/contextspace-delivery-notes.png', fullPage: true });
-});
-
-
-test('hides unused milestones and supports an empty plan after removing custom outcomes', async ({ page }) => {
-  const state = await setupWork(page, true);
-  await expect(page.getByText('Iterations:', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Visual Flow', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Add milestones', exact: true }).click();
-  await expect(page.getByLabel('Milestone 1 title')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Add milestone', exact: true }).click();
-  await page.getByLabel('Milestone 1 title').fill('Browse root documents');
-  await page.getByRole('button', { name: 'Save milestones', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Visual Flow', exact: true })).toBeVisible();
-  expect(state.lifecycle().steps[0].dependsOn).toEqual([]);
-  await page.getByRole('button', { name: 'Remove milestone 1', exact: true }).click();
-  await page.getByRole('button', { name: 'Save milestones', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Visual Flow', exact: true })).toHaveCount(0);
-  expect(state.lifecycle().steps).toEqual([]);
-  await page.screenshot({ path: 'test-results/optional-milestones.png', fullPage: true });
-});
-
-test('offers an unsaved first milestone from the assignment without starting work', async ({ page }) => {
-  const state = await setupWork(page, true);
-  await expect(page.getByText('No milestones. Most work does not need them', { exact: false })).toBeVisible();
-  await page.getByLabel('Current objective').fill('Unsaved objective');
-  await expect(page.getByRole('button', { name: 'Draft first milestone' })).toBeDisabled();
-  await expect(page.getByText('Save the goal before drafting from it.')).toBeVisible();
-  await page.getByLabel('Current objective').fill('Find the bottleneck');
-  await page.getByRole('button', { name: 'Draft first milestone' }).click();
-  await expect(page.getByLabel('Milestone 1 title')).toHaveValue('Find the bottleneck');
-  await expect(page.getByText('This milestone is an unsaved draft')).toBeVisible();
-  expect(state.lifecycle().steps).toEqual([]);
-  await page.getByLabel('Milestone 1 outcome').fill('A measured latency profile');
-  await page.getByRole('heading', { name: 'Goal', exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: 'test-results/first-milestone-draft.png', fullPage: true });
-  await page.getByRole('button', { name: 'Save milestones' }).click();
-  expect(state.lifecycle().steps[0]).toMatchObject({ title: 'Find the bottleneck', description: 'A measured latency profile', status: 'pending' });
-  await expect(page.getByRole('button', { name: 'Visual Flow' })).toBeVisible();
 });
 
 test.describe('unsaved brief drafts', () => {
@@ -363,44 +247,6 @@ test.describe('unsaved brief drafts', () => {
     expect(state.guidance().assignment.expectedOutput).toBe('My output');
   });
 
-  test('keep an unsaved milestone draft, and ask before it replaces a plan saved meanwhile', async ({ page }) => {
-    const state = await setupWork(page);
-    await page.getByRole('button', { name: 'Edit milestones' }).click();
-    await page.getByRole('button', { name: 'Add milestone', exact: true }).click();
-    await page.getByLabel('Milestone 3 title').fill('Roll out gradually');
-    await expect(draftState(page)).toHaveText('Unsaved changes — kept on this device');
-    await leaveAndReturn(page);
-    await expect(page.getByRole('status')).toContainText('Unsaved milestone edits kept');
-    // Kept edits open where they can be finished.
-    await expect(page.getByLabel('Milestone 3 title')).toHaveValue('Roll out gradually');
-    expect(state.lifecycle().steps).toHaveLength(2);
-
-    // Progress is recorded by the workflow and is not part of a plan edit: the draft is restored over the current progress.
-    await page.goto('/#/projects');
-    state.otherSessionSavesPlan([{ id: 'baseline', title: 'Measure baseline', status: 'completed' }, { id: 'improve', title: 'Improve lookup', status: 'pending', dependsOn: ['baseline'] }]);
-    await page.goto('/#/workspaces/demo/plan');
-    await expect(page.getByRole('region', { name: 'Unsaved milestones edits conflict' })).toHaveCount(0);
-    await expect(page.getByLabel('Milestone 3 title')).toHaveValue('Roll out gradually');
-    await expect(page.getByText('Milestone 1 · completed')).toBeVisible();
-
-    // A different saved plan is a conflict, and nothing is applied until the user chooses.
-    await page.goto('/#/projects');
-    state.otherSessionSavesPlan([{ id: 'baseline', title: 'Measure baseline', description: 'Their outcome', status: 'completed' }, { id: 'improve', title: 'Improve lookup', status: 'pending', dependsOn: ['baseline'] }]);
-    await page.goto('/#/workspaces/demo/plan');
-    const notice = page.getByRole('region', { name: 'Unsaved milestones edits conflict' });
-    await expect(notice).toContainText('Roll out gradually');
-    await expect(notice).toContainText('Not in the saved plan');
-    await expect(notice).toContainText('Measure baseline — Their outcome');
-    await expect(page.getByLabel('Milestone 1 title')).toBeDisabled();
-    await page.getByRole('button', { name: 'Use the saved milestones' }).click();
-    await expect(page.getByLabel('Milestone 3 title')).toHaveCount(0);
-    await expect(draftState(page)).toHaveText('Saved');
-    await page.reload();
-    await expect(page.getByRole('region', { name: 'Unsaved milestones edits conflict' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Edit milestones' }).click();
-    await expect(page.getByLabel('Milestone 3 title')).toHaveCount(0);
-  });
-
   test('say so, and keep the draft in this page, when the device cannot store drafts', async ({ page }) => {
     await page.addInitScript(() => {
       const setItem = Storage.prototype.setItem;
@@ -415,81 +261,6 @@ test.describe('unsaved brief drafts', () => {
     await page.getByRole('button', { name: 'Reload the plan' }).click();
     await expect(page.getByLabel('Expected output')).toHaveValue('Only in memory');
   });
-  test('keep unsaved delivery notes, flag them on their tab, and clear them once saved', async ({ page }) => {
-    const notes = await mockNotes(page);
-    await setupWork(page);
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await page.getByLabel('Delivery notes', { exact: true }).fill('# My draft');
-    await expect(draftState(page)).toHaveText('Unsaved changes — kept on this device');
-    await page.getByRole('button', { name: 'Edit the goal' }).click();
-    await expect(page.locator('[data-notes-state="unsaved"]')).toBeVisible();
-    await leaveAndReturn(page);
-    // The notes are loaded for them, so the tab says there is a draft without visiting it.
-    await expect(page.locator('[data-notes-state="unsaved"]')).toBeVisible();
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# My draft');
-    await expect(page.getByRole('status')).toContainText('Unsaved delivery notes kept');
-    expect(notes.saved().content).toContain('# Delivery order');
-    await page.reload();
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# My draft');
-    await page.getByRole('button', { name: 'Save delivery notes' }).click();
-    await expect(page.getByRole('status')).toContainText('Delivery notes saved');
-    expect(notes.saved().content).toBe('# My draft');
-    await expect(draftState(page)).toHaveText('Saved');
-    await page.reload();
-    await expect(page.locator('[data-notes-state="unsaved"]')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# My draft');
-    await expect(page.getByRole('status')).toHaveCount(0);
-  });
-
-  test('show both versions when delivery notes were saved elsewhere, and apply neither until chosen', async ({ page }) => {
-    const notes = await mockNotes(page);
-    await setupWork(page);
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await page.getByLabel('Delivery notes', { exact: true }).fill('# Mine');
-    await page.goto('/#/projects');
-    notes.otherSessionSaves('# Theirs');
-    await page.goto('/#/workspaces/demo/plan');
-    await expect(page.locator('[data-notes-state="conflict"]')).toBeVisible();
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    const notice = page.getByRole('region', { name: 'Unsaved delivery notes conflict' });
-    await expect(notice).toBeVisible();
-    await expect(page.getByLabel('Your unsaved delivery notes')).toHaveValue('# Mine');
-    await expect(page.getByLabel('Latest saved delivery notes')).toHaveValue('# Theirs');
-    await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# Theirs');
-    await expect(page.getByLabel('Delivery notes', { exact: true })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Save delivery notes' })).toBeDisabled();
-    const results = await new AxeBuilder({ page }).include('section[aria-label="Unsaved delivery notes conflict"]')
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze();
-    expect(results.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([]);
-    await page.reload();
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await expect(notice).toBeVisible();
-    await page.getByRole('button', { name: 'Keep my delivery notes' }).click();
-    await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# Mine');
-    await page.getByRole('button', { name: 'Save delivery notes' }).click();
-    await expect(page.getByRole('status')).toContainText('Delivery notes saved');
-    expect(notes.saved().content).toBe('# Mine');
-  });
-
-  test('use the saved delivery notes when that is the choice', async ({ page }) => {
-    const notes = await mockNotes(page);
-    await setupWork(page);
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await page.getByLabel('Delivery notes', { exact: true }).fill('# Mine');
-    await page.goto('/#/projects');
-    notes.otherSessionSaves('# Theirs');
-    await page.goto('/#/workspaces/demo/plan');
-    await page.getByRole('button', { name: 'Edit notes and questions' }).click();
-    await page.getByRole('button', { name: 'Use the saved delivery notes' }).click();
-    await expect(page.getByLabel('Delivery notes', { exact: true })).toHaveValue('# Theirs');
-    await expect(draftState(page)).toHaveText('Saved');
-    await page.reload();
-    await expect(page.locator('[data-notes-state="conflict"]')).toHaveCount(0);
-  });
-
   test('keep a half-filled source document through leaving and reloading, for this window only', async ({ page }) => {
     await setupWork(page);
     await page.getByRole('button', { name: 'Edit sources' }).click();

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 import { fork } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { asPersonEnv } from '../../src/utils/ai-tool.js';
 
 let root: string;
 const cli = path.resolve('dist/index.js');
@@ -58,9 +59,11 @@ globalThis.fetch = async (url, options) => {
   return new Response(JSON.stringify({ tag_name: 'v2.23.0', body: '', assets: [] }), { status: 200 });
 };`);
     const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
-    const tty = (...args: string[]) => execa('script', ['-qec', [process.execPath, '--import', probe, cli, ...args].map(quote).join(' '), '/dev/null'], {
-      cwd: root, reject: false, env: { CONTEXTSPACE_HOME: path.join(root, 'profile'), NEXUSFLOW_HOME: path.join(root, 'profile') },
+    const ttyWith = (extra: Record<string, string>, ...args: string[]) => execa('script', ['-qec', [process.execPath, '--import', probe, cli, ...args].map(quote).join(' '), '/dev/null'], {
+      // A person's terminal: the variables of an AI tool running these tests would hide the update check.
+      cwd: root, reject: false, env: { ...asPersonEnv(), CONTEXTSPACE_HOME: path.join(root, 'profile'), NEXUSFLOW_HOME: path.join(root, 'profile'), ...extra },
     });
+    const tty = (...args: string[]) => ttyWith({}, ...args);
     expect((await tty('data')).exitCode).toBe(0);
     expect((await tty('diagnostics', 'preview')).exitCode).toBe(0);
     expect(await fs.readFile(log, 'utf8')).toBe('');
@@ -68,6 +71,12 @@ globalThis.fetch = async (url, options) => {
     const requests = (await fs.readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(requests).toEqual([{ url: 'https://api.github.com/repos/antan87/Context-Space/releases/latest', headers: { 'User-Agent': 'ContextSpace-Updater' }, body: null }]);
     expect((await tty('config', 'get', 'scanDepth')).exitCode).toBe(0);
+    expect((await fs.readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
+    // Some AI tools run commands in a terminal too. There, a cold profile still checks nothing and shows no banner.
+    const profile = path.join(root, 'profile-ai');
+    const inAiTool = await ttyWith({ CLAUDECODE: '1', CONTEXTSPACE_HOME: profile, NEXUSFLOW_HOME: profile }, 'config', 'get', 'scanDepth');
+    expect(inAiTool.exitCode).toBe(0);
+    expect(inAiTool.stdout).not.toContain('Update available');
     expect((await fs.readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 

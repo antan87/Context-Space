@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   loadWorkspaceLifecycle,
   advanceLifecycleStep,
@@ -6,6 +9,7 @@ import {
   DEFAULT_GATE_TIMEOUT_SECONDS,
   lifecyclePlanSchema,
 } from './lifecycle.js';
+import { readPlan } from './plan.js';
 import { legacyDefaultSteps } from './legacy-lifecycle.js';
 import * as workspaceState from './workspace-state.js';
 import * as workspaceCore from './workspace.js';
@@ -19,11 +23,16 @@ vi.mock('../utils/feature.js');
 vi.mock('../utils/multi-git.js');
 vi.mock('./verify.js');
 
+// The plan store is a real file in a temporary workspace folder; the state file stays mocked.
+let ws: string;
+
 describe('core/lifecycle', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    ws = await mkdtemp(path.join(os.tmpdir(), 'lifecycle-unit-'));
     vi.mocked(workspaceState.mutateWorkspaceState).mockImplementation(async (workspacePath, mutation) => mutation(await workspaceState.loadWorkspaceState(workspacePath)));
   });
+  afterEach(async () => { await rm(ws, { recursive: true, force: true }); });
 
   describe('legacyDefaultSteps', () => {
     it('creates 2-step pipeline for quick flow', () => {
@@ -64,7 +73,7 @@ describe('core/lifecycle', () => {
       };
 
       vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({
-        workspacePath: '/ws',
+        workspacePath: ws,
         repos: {},
         lifecycle: existing,
         updatedAt: '2026-09-11T12:00:00.000Z',
@@ -75,14 +84,14 @@ describe('core/lifecycle', () => {
         repos: [],
       } as any);
 
-      const lifecycle = await loadWorkspaceLifecycle('/ws');
+      const lifecycle = await loadWorkspaceLifecycle(ws);
       expect(lifecycle.workspaceId).toBe('ws-1');
       expect(lifecycle.steps).toHaveLength(1);
     });
 
     it('initializes an empty lifecycle when absent', async () => {
       vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({
-        workspacePath: '/ws',
+        workspacePath: ws,
         repos: {},
         updatedAt: '2026-09-11T12:00:00.000Z',
       });
@@ -92,7 +101,7 @@ describe('core/lifecycle', () => {
         repos: [],
       } as any);
 
-      const lifecycle = await loadWorkspaceLifecycle('/ws');
+      const lifecycle = await loadWorkspaceLifecycle(ws);
       expect(lifecycle.workspaceId).toBe('ws-new');
       expect(lifecycle.steps).toEqual([]);
       expect(lifecycle.currentStepId).toBeUndefined();
@@ -112,7 +121,7 @@ describe('core/lifecycle', () => {
       };
 
       vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({
-        workspacePath: '/ws',
+        workspacePath: ws,
         repos: {},
         lifecycle: existing,
         updatedAt: '2026-09-11T12:00:00.000Z',
@@ -123,12 +132,12 @@ describe('core/lifecycle', () => {
         repos: [],
       } as any);
 
-      const updated = await advanceLifecycleStep('/ws', 'step-1', 'start');
+      const updated = await advanceLifecycleStep(ws, 'step-1', 'start');
       expect(updated.steps[0]!.status).toBe('in_progress');
       expect(updated.currentStepId).toBe('step-1');
     });
 
-    it('unblocks downstream dependent steps when a step completes', async () => {
+    it('does not start the next step when a step completes: it is ready, and someone starts it', async () => {
       const existing = {
         workspaceId: 'ws-1',
         flowType: 'feature' as const,
@@ -140,7 +149,7 @@ describe('core/lifecycle', () => {
       };
 
       vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({
-        workspacePath: '/ws',
+        workspacePath: ws,
         repos: {},
         lifecycle: existing,
         updatedAt: '2026-09-11T12:00:00.000Z',
@@ -151,15 +160,20 @@ describe('core/lifecycle', () => {
         repos: [],
       } as any);
 
-      const updated = await advanceLifecycleStep('/ws', 'step-1', 'complete');
+      const updated = await advanceLifecycleStep(ws, 'step-1', 'complete');
       expect(updated.steps[0]!.status).toBe('completed');
-      expect(updated.steps[1]!.status).toBe('in_progress'); // unblocked from blocked -> pending -> in_progress
+      // A block without a reason only meant "waits for step 1"; now it is simply ready.
+      expect(updated.steps[1]!.status).toBe('pending');
+      expect(updated.currentStepId).toBeUndefined();
+      const plan = await readPlan(ws);
+      expect(plan.items.map((item) => [item.id, item.status])).toEqual([['step-1', 'done'], ['step-2', 'todo']]);
+      expect(plan.items[0]!.resolution).toBe('Marked done');
     });
 
     it('sets step to verified when verify reports pass_dirty', async () => {
       const verifyModule = await import('./verify.js');
       vi.mocked(verifyModule.verifyWorkspace).mockResolvedValue({
-        workspacePath: '/ws',
+        workspacePath: ws,
         overallStatus: 'pass_dirty',
         canProgress: true,
         verifiedAt: new Date().toISOString(),
@@ -177,7 +191,7 @@ describe('core/lifecycle', () => {
       };
 
       vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({
-        workspacePath: '/ws',
+        workspacePath: ws,
         repos: {},
         lifecycle: existing,
         updatedAt: '2026-09-11T12:00:00.000Z',
@@ -188,7 +202,7 @@ describe('core/lifecycle', () => {
         repos: ['repoA'],
       } as any);
 
-      const updated = await advanceLifecycleStep('/ws', 'step-verify', 'verify');
+      const updated = await advanceLifecycleStep(ws, 'step-verify', 'verify');
       expect(updated.steps[0]!.status).toBe('verified');
       expect(updated.steps[0]!.lastVerificationSha).toBe('abc999');
     });
@@ -198,40 +212,44 @@ describe('core/lifecycle', () => {
     beforeEach(() => {
       vi.mocked(workspaceCore.loadFeatureConfig).mockResolvedValue({ id: 'ws', branchName: 'fix/example', repos: [] } as any);
       vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({
-        workspacePath: '/ws', repos: {}, updatedAt: '',
+        workspacePath: ws, repos: {}, updatedAt: '',
         lifecycle: { workspaceId: 'ws', flowType: 'quick', revision: 1, currentStepId: 'reproduce_and_fix',
           steps: legacyDefaultSteps('quick', 'ws', 'fix/example'), updatedAt: '' },
       });
     });
 
     it.each(['start', 'verify', 'complete'] as const)('rejects %s when dependencies are unfinished', async (action) => {
-      await expect(advanceLifecycleStep('/ws', 'verify_and_ship', action)).rejects.toThrow(/dependencies/);
-      expect(workspaceState.mutateWorkspaceState).not.toHaveBeenCalled();
+      await expect(advanceLifecycleStep(ws, 'verify_and_ship', action)).rejects.toThrow(/dependencies/);
+      const { verifyWorkspace } = await import('./verify.js');
+      expect(verifyWorkspace).not.toHaveBeenCalled();
+      expect((await readPlan(ws)).items.find((item) => item.id === 'verify_and_ship')?.status).toBe('todo');
     });
 
     it('rejects unknown actions', async () => {
-      await expect(advanceLifecycleStep('/ws', 'reproduce_and_fix', 'skip' as any)).rejects.toThrow(/Unknown/);
+      await expect(advanceLifecycleStep(ws, 'reproduce_and_fix', 'skip' as any)).rejects.toThrow(/Unknown/);
     });
 
     it('does not accept dirty verification without progress permission, or retain stale verified status', async () => {
       const { verifyWorkspace } = await import('./verify.js');
-      const state = await workspaceState.loadWorkspaceState('/ws');
+      const state = await workspaceState.loadWorkspaceState(ws);
       state.lifecycle!.steps[0].status = 'verified';
       vi.mocked(verifyWorkspace).mockResolvedValue({ canProgress: false, overallStatus: 'pass_dirty', repos: [] } as any);
-      const result = await advanceLifecycleStep('/ws', 'reproduce_and_fix', 'verify');
+      const result = await advanceLifecycleStep(ws, 'reproduce_and_fix', 'verify');
       expect(result.steps[0].status).toBe('in_progress');
     });
 
     it('runs the gate before completion, persists a failure, and allows recovery', async () => {
       const { verifyWorkspace } = await import('./verify.js');
-      await advanceLifecycleStep('/ws', 'reproduce_and_fix', 'complete');
+      await advanceLifecycleStep(ws, 'reproduce_and_fix', 'complete');
+      // Nothing starts by itself: the next milestone is started on purpose.
+      await advanceLifecycleStep(ws, 'verify_and_ship', 'start');
       vi.mocked(verifyWorkspace).mockResolvedValueOnce({ canProgress: false, overallStatus: 'fail', repos: [] } as any);
-      await expect(advanceLifecycleStep('/ws', 'verify_and_ship', 'complete')).rejects.toThrow(/Verification/);
-      const state = await workspaceState.loadWorkspaceState('/ws');
-      expect(state.lifecycle!.steps[1].status).toBe('in_progress');
-      expect(state.lifecycle!.steps[1].lastVerificationStatus).toBe('fail');
+      await expect(advanceLifecycleStep(ws, 'verify_and_ship', 'complete')).rejects.toThrow(/Verification/);
+      const failed = await loadWorkspaceLifecycle(ws, { includeFleet: false });
+      expect(failed.steps[1].status).toBe('in_progress');
+      expect(failed.steps[1].lastVerificationStatus).toBe('fail');
       vi.mocked(verifyWorkspace).mockResolvedValueOnce({ canProgress: true, overallStatus: 'pass', repos: [] } as any);
-      const result = await advanceLifecycleStep('/ws', 'verify_and_ship', 'complete');
+      const result = await advanceLifecycleStep(ws, 'verify_and_ship', 'complete');
       expect(result.steps.every((step) => step.status === 'completed')).toBe(true);
       expect(result.currentStepId).toBeUndefined();
     });
@@ -241,7 +259,7 @@ describe('core/lifecycle', () => {
     beforeEach(() => {
       vi.mocked(workspaceCore.loadFeatureConfig).mockResolvedValue({ id: 'ws', branchName: 'fix/example', repos: [] } as any);
       vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({
-        workspacePath: '/ws', repos: {}, updatedAt: '',
+        workspacePath: ws, repos: {}, updatedAt: '',
         lifecycle: { workspaceId: 'ws', flowType: 'quick', revision: 1, currentStepId: 'gate', updatedAt: '',
           steps: [{ id: 'gate', title: 'Full journey', status: 'in_progress', verificationCommand: 'npm test && npm run test:e2e' }] },
       });
@@ -250,18 +268,18 @@ describe('core/lifecycle', () => {
     it('gives milestone gates 30 minutes by default, far more than an ad-hoc verify', async () => {
       const { verifyWorkspace } = await import('./verify.js');
       vi.mocked(verifyWorkspace).mockResolvedValue({ canProgress: true, overallStatus: 'pass', repos: [] } as any);
-      await advanceLifecycleStep('/ws', 'gate', 'complete');
-      expect(verifyWorkspace).toHaveBeenCalledWith('/ws', { command: 'npm test && npm run test:e2e', timeoutMs: DEFAULT_GATE_TIMEOUT_SECONDS * 1000 });
+      await advanceLifecycleStep(ws, 'gate', 'complete');
+      expect(verifyWorkspace).toHaveBeenCalledWith(ws, { command: 'npm test && npm run test:e2e', timeoutMs: DEFAULT_GATE_TIMEOUT_SECONDS * 1000 });
       expect(DEFAULT_GATE_TIMEOUT_SECONDS).toBe(1800);
     });
 
     it("uses the milestone's own limit, and says how to raise it when the gate times out", async () => {
       const { verifyWorkspace } = await import('./verify.js');
-      const state = await workspaceState.loadWorkspaceState('/ws');
+      const state = await workspaceState.loadWorkspaceState(ws);
       state.lifecycle!.steps[0].verificationTimeoutSeconds = 600;
       vi.mocked(verifyWorkspace).mockResolvedValue({ canProgress: false, overallStatus: 'timeout', repos: [] } as any);
-      await expect(advanceLifecycleStep('/ws', 'gate', 'complete')).rejects.toThrow(/stopped after 10 minutes; raise this milestone's verification time limit/);
-      expect(verifyWorkspace).toHaveBeenCalledWith('/ws', { command: 'npm test && npm run test:e2e', timeoutMs: 600_000 });
+      await expect(advanceLifecycleStep(ws, 'gate', 'complete')).rejects.toThrow(/stopped after 10 minutes; raise this milestone's verification time limit/);
+      expect(verifyWorkspace).toHaveBeenCalledWith(ws, { command: 'npm test && npm run test:e2e', timeoutMs: 600_000 });
     });
 
     it('accepts a bounded limit in the plan and rejects one outside it', () => {
@@ -273,18 +291,18 @@ describe('core/lifecycle', () => {
   });
 
   it.each(['quick', 'feature', 'epic'] as const)('preserves explicit %s flow despite branch naming', async (flowType) => {
-    vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({ workspacePath: '/ws', repos: {}, updatedAt: '' });
+    vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({ workspacePath: ws, repos: {}, updatedAt: '' });
     vi.mocked(workspaceCore.loadFeatureConfig).mockResolvedValue({ id: 'ws', branchName: 'fix/example', flowType, repos: [] } as any);
-    const lifecycle = await loadWorkspaceLifecycle('/ws');
+    const lifecycle = await loadWorkspaceLifecycle(ws);
     expect(lifecycle.flowType).toBe(flowType);
     expect(lifecycle.steps.some((step) => step.status === 'completed' || step.completedAt)).toBe(false);
     expect(lifecycle.steps.every((step) => step.branch === 'fix/example')).toBe(true);
   });
 
   it('does not invent a branch for an in-place workspace without branch information', async () => {
-    vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({ workspacePath: '/ws', repos: {}, updatedAt: '' });
+    vi.mocked(workspaceState.loadWorkspaceState).mockResolvedValue({ workspacePath: ws, repos: {}, updatedAt: '' });
     vi.mocked(workspaceCore.loadFeatureConfig).mockResolvedValue({ id: 'ws', branchName: 'workspace-name', mode: 'in-place', repos: [] } as any);
-    const lifecycle = await loadWorkspaceLifecycle('/ws');
+    const lifecycle = await loadWorkspaceLifecycle(ws);
     expect(lifecycle.steps.every((step) => step.branch === undefined)).toBe(true);
   });
 
@@ -312,7 +330,7 @@ describe('core/lifecycle', () => {
         return { stdout: 'feat/fleet' } as any;
       });
 
-      const fleet = await getBranchFleet('/ws');
+      const fleet = await getBranchFleet(ws);
       expect(fleet.length).toBeGreaterThan(0);
       expect(fleet[0]!.lastCommitMessage).toBe('feat(api): support JSON | YAML configs');
       expect(fleet[0]!.lastCommitAuthor).toBe('Alice');
@@ -352,7 +370,7 @@ describe('core/lifecycle', () => {
         return { stdout: 'feat/fleet' } as any;
       });
 
-      const fleet = await getBranchFleet('/ws');
+      const fleet = await getBranchFleet(ws);
       expect(passedArgs).toContain(
         '--format=%(refname:short)\x1f%(objectname:short)\x1f%(subject)\x1f%(authorname)\x1f%(committerdate:iso-strict)\x1f%(symref)',
       );
@@ -388,7 +406,7 @@ describe('core/lifecycle', () => {
         return { stdout: '' } as any;
       });
 
-      const fleet = await getBranchFleet('/ws');
+      const fleet = await getBranchFleet(ws);
       expect(fleet).toHaveLength(4);
       expect(fleet[0]!.repoName).toBe('repo1');
       expect(fleet[1]!.repoName).toBe('repo1');

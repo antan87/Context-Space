@@ -458,7 +458,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
   const start = useCallback(async (request: TerminalLaunch) => {
     lastLaunch.current = request; setRetryLaunch(request); setBusy(true); setError(''); setTarget(request.target);
     try {
-      const { terminal: created } = await terminalRequest<{ terminal: TerminalInfo }>(workspace, 'create', { launchId: request.id, target: request.target, sessionId: request.sessionId, cwd: request.cwd });
+      const { terminal: created } = await terminalRequest<{ terminal: TerminalInfo }>(workspace, 'create', { launchId: request.id, target: request.target, sessionId: request.sessionId, cwd: request.cwd, ...(request.prompt ? { prompt: request.prompt } : {}) });
       setStatus(current => current && ({ ...current, sessions: [...current.sessions.filter(s => s.id !== created.id), created] }));
       setTerminal(created);
       setShowHistory(false);

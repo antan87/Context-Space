@@ -3,6 +3,7 @@ import { resolveFileReference } from './core/file-reference-resolve.js';
 import { decodeImageAttachment, InvalidImageAttachment } from './services/image-attachment.js';
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
+import { registerPlanRoutes } from './http/plan-routes.js';
 import { extractAstSymbols } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
 /**
@@ -2920,13 +2921,19 @@ app.get('/api/workspace/:id/plan', async (c) => {
     }
 
     const state = await loadWorkspaceState(workspacePath);
-    if (state.lifecycle) {
-      const { renderLifecyclePlan, loadWorkspaceLifecycle } = await import('./core/lifecycle.js');
-      const { isUnusedLegacyPlan } = await import('./core/legacy-lifecycle.js');
-      const lifecycle = isUnusedLegacyPlan(state.lifecycle) ? await loadWorkspaceLifecycle(workspacePath) : state.lifecycle;
-      const milestones = renderLifecyclePlan(lifecycle);
+    const { planStoreExists } = await import('./core/plan.js');
+    if (state.lifecycle || await planStoreExists(workspacePath)) {
       const marker = /<!-- CONTEXTSPACE:MILESTONES:START -->[\s\S]*?<!-- CONTEXTSPACE:MILESTONES:END -->/;
-      content = marker.test(content) ? content.replace(marker, () => milestones) : `${milestones}\n\n${content}`;
+      if (marker.test(content)) {
+        // A file from before the plan summary: its milestone block is replaced with the live one.
+        const { renderLifecyclePlan, loadWorkspaceLifecycle } = await import('./core/lifecycle.js');
+        const milestones = renderLifecyclePlan(await loadWorkspaceLifecycle(workspacePath, { includeFleet: false }));
+        content = content.replace(marker, () => milestones);
+      } else {
+        // The summary as it reads now, keeping the build order the last refresh wrote.
+        const { buildPlanSummary, buildOrderOf } = await import('./core/plan-summary.js');
+        content = await buildPlanSummary(workspacePath, { buildOrder: buildOrderOf(content) ?? '' });
+      }
     }
     return c.json({ content });
   } catch (error) {
@@ -2935,6 +2942,10 @@ app.get('/api/workspace/:id/plan', async (c) => {
 });
 
 registerWorkGuidanceRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerPlanRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

@@ -1,4 +1,4 @@
-import { ensurePlanningNotes } from '../core/planning-notes.js';
+import { importPlanningNotes } from '../core/plan-import.js';
 import { generateWorkspaceTools } from '../core/workspace-tools.js';
 import chalk from 'chalk';
 import path from 'node:path';
@@ -10,11 +10,11 @@ import { generateCodexConfig } from './codex.js';
 import { generateCopilotConfig } from './copilot.js';
 import { generateCursorConfig } from './cursor.js';
 import { buildContextContent } from './base.js';
-import { getWorkContext, ensureWorkGuidance, WORK_GUIDANCE_FILE, WORK_ASSIGNMENT_FILE } from '../core/work-guidance.js';
+import { ensureWorkGuidance, WORK_ASSIGNMENT_FILE } from '../core/work-guidance.js';
 import { generateImplementationPlan } from './plan-generator.js';
 import { generateSkills } from './skills-generator.js';
 import { resolveResourceLockPath } from '../resources/materializer.js';
-import { readWorkspaceFile, writeWorkspaceFile, workspaceFileExists } from '../core/storage.js';
+import { deleteWorkspaceFile, readWorkspaceFile, writeWorkspaceFile, workspaceFileExists } from '../core/storage.js';
 import {
   captureGenerationSnapshot,
   GENERATED_SNAPSHOT_HEADER,
@@ -75,11 +75,13 @@ ${repos || '_None._'}
 | \`AGENTS.md\` | The context your assistant loads: projects, relationships, verification commands |
 | \`CLAUDE.md\` | A one-line \`@AGENTS.md\` import, plus anything Claude-specific |
 | \`${PRIMARY_KNOWLEDGE_FILE}\` | Accumulated decisions and gotchas, one per \`###\` heading. Search it; do not read it whole |
-| \`${PRIMARY_PLAN_FILE}\` | Dependency-ordered implementation phases |
+| \`contextspace-plan.json\` | The plan: milestones, tasks, questions, decisions and existing work. Change it with \`${CLI_NAME} plan\`, never by hand |
+| \`${PRIMARY_PLAN_FILE}\` | The brief and the plan in short, plus the build order between repos. Generated |
 
 ## Useful commands
 
 \`\`\`
+${CLI_NAME} plan        # the plan: what needs you, the milestones, what is next
 ${CLI_NAME} status      # what changed, across every repo
 ${CLI_NAME} diff        # the actual changes
 ${CLI_NAME} refresh     # regenerate these files
@@ -276,13 +278,14 @@ export async function generateContextFiles(
     }
   }
 
-  await ensurePlanningNotes(workspacePath, ctx.feature.id);
+  // The old notes file moves into the plan once; the plan then holds everything it held.
+  await importPlanningNotes(workspacePath);
   await ensureWorkGuidance(workspacePath);
 
-  // Generate implementation plan from dependency analysis (if analysis data available)
+  // The plan summary follows the plan, which changes between refreshes, so the lock does not
+  // record it as a snapshot: a plan change would read as drift. It is still committed.
   try {
     await generateImplementationPlan(renderCtx, workspacePath);
-    generatedOutputs.push({ path: PRIMARY_PLAN_FILE, source: 'workspace snapshot', location: 'workspace' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(
@@ -292,9 +295,8 @@ export async function generateContextFiles(
     throw error;
   }
 
-  if (await workspaceFileExists(workspacePath, ctx.feature.id, WORK_GUIDANCE_FILE)) {
-    await writeWorkspaceFile(workspacePath, ctx.feature.id, WORK_ASSIGNMENT_FILE, (await getWorkContext(workspacePath)).assignment);
-  }
+  // Retired: the brief is at the top of contextspace-plan.md, and `ctxspace flow --assignment` prints it in full.
+  await deleteWorkspaceFile(workspacePath, ctx.feature.id, WORK_ASSIGNMENT_FILE);
 
   // Resource materialization
   await generateSkills(renderCtx, resourceAssistants, workspacePath);

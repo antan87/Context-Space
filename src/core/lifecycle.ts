@@ -2,8 +2,9 @@
  * @module core/lifecycle
  * Active lifecycle state machine and multi-branch fleet radar for ContextSpace.
  *
- * Manages discrete development milestones/steps, dependency gating,
- * non-destructive origin branch fleet tracking, and test gate transitions.
+ * The lifecycle is a view over the plan store (`core/plan`): its steps are the plan's milestones,
+ * and every change goes through the plan's rules. Check results stay machine-local in the state
+ * file. Manages dependency gating, non-destructive origin branch fleet tracking, and test gates.
  */
 
 import { z } from 'zod';
@@ -13,8 +14,24 @@ import { execa } from 'execa';
 import type {
   BranchFleetMember,
   LifecycleStep,
+  PlanEvidence,
   WorkspaceLifecycle,
+  WorkspaceState,
 } from '../types.js';
+import {
+  PLAN_HISTORY_LIMIT,
+  PlanError,
+  changePlan,
+  emptyPlan,
+  mutatePlan,
+  readPlanIfExists,
+  readPlan,
+  unsettledWaits,
+  type PlanActor,
+  type PlanDocument,
+  type PlanItem,
+} from './plan.js';
+import { itemLabel } from './plan-words.js';
 import { loadFeatureConfig, resolveRepoInfos } from './workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
 import { getRepoBranch, getAheadBehind } from '../utils/multi-git.js';
@@ -115,106 +132,308 @@ export async function getBranchFleet(workspacePath: string): Promise<BranchFleet
 }
 
 /**
- * Loads or initializes the active lifecycle for a workspace.
+ * The milestones of a lifecycle saved before the plan store, as plan items. Their codes stay the
+ * same, so assignments, documents and links that name a milestone keep working.
+ */
+export function planFromLifecycle(lifecycle: WorkspaceLifecycle, now = new Date().toISOString()): PlanDocument {
+  const plan = emptyPlan();
+  plan.revision = lifecycle.revision ?? 0;
+  plan.updatedAt = now;
+  const ids = new Set(lifecycle.steps.map((step) => step.id));
+  for (const step of lifecycle.steps) {
+    // A block with a reason, or with a condition to wait for, stays a block. A bare block only meant
+    // "waits for its dependencies", which waitsFor now says.
+    const blockedOn = step.blockedReason ?? (step.unblockCondition ? `Waiting until ${step.unblockCondition}` : undefined);
+    const status: PlanItem['status'] = step.status === 'completed' ? 'done'
+      : step.status === 'in_progress' || step.status === 'verified' ? 'in_progress'
+        : step.status === 'blocked' && blockedOn ? 'blocked' : 'todo';
+    const item: PlanItem = {
+      id: step.id,
+      kind: 'milestone',
+      title: step.title.trim().slice(0, 200) || step.id,
+      status,
+      waitsFor: [...new Set(step.dependsOn ?? [])].filter((id) => ids.has(id) && id !== step.id),
+      createdAt: now,
+      updatedAt: now,
+      history: [{ at: now, by: 'contextspace', action: 'imported', note: 'Moved from the milestone plan' }],
+    };
+    if (step.description) item.detail = step.description.slice(0, 4000);
+    if (step.owner) item.owner = step.owner;
+    const links = { repo: step.repo, branch: step.branch, workItem: step.workItem };
+    if (links.repo || links.branch || links.workItem) {
+      item.links = Object.fromEntries(Object.entries(links).filter(([, value]) => value)) as PlanItem['links'];
+    }
+    if (step.unblockCondition) item.unblockCondition = step.unblockCondition;
+    if (step.requiresVerification !== undefined || step.verificationCommand || step.verificationTimeoutSeconds) {
+      item.gate = { required: Boolean(step.requiresVerification) };
+      if (step.verificationCommand) item.gate.command = step.verificationCommand;
+      if (step.verificationTimeoutSeconds) item.gate.timeoutSeconds = step.verificationTimeoutSeconds;
+    }
+    if (status === 'done') {
+      item.resolution = step.lastVerificationSha ? `Passed its check on ${step.lastVerificationSha}` : 'Completed before the plan moved to its own file';
+      if (step.completedAt) item.closedAt = step.completedAt;
+    }
+    if (status === 'blocked') {
+      item.blockedReason = blockedOn;
+      item.blockedAt = step.blockedAt ?? now;
+    }
+    if (step.reopenCount) item.reopenCount = step.reopenCount;
+    if (step.reopenedAt) item.reopenedAt = step.reopenedAt;
+    if (step.reopenReason) item.reopenReason = step.reopenReason;
+    if (step.reopenedBy) item.reopenedBy = step.reopenedBy;
+    plan.items.push(item);
+  }
+  return plan;
+}
+
+function evidenceFromStep(step: LifecycleStep | undefined): PlanEvidence | undefined {
+  if (!step || (!step.lastVerificationSha && !step.lastVerificationStatus && step.status !== 'verified')) return undefined;
+  return {
+    ...(step.lastVerificationSha ? { lastVerificationSha: step.lastVerificationSha } : {}),
+    ...(step.lastVerificationStatus ? { lastVerificationStatus: step.lastVerificationStatus } : {}),
+    // A verified or completed step got there by passing its check.
+    canProgress: step.status === 'verified' || step.status === 'completed',
+    at: step.completedAt ?? new Date(0).toISOString(),
+  };
+}
+
+/**
+ * Moves a lifecycle saved in the state file into the plan store, once. The plan is written first;
+ * until the state is cleaned up, the view reads check results from either place, so a crash in
+ * between loses nothing. A second caller finds the store and leaves it alone.
+ */
+async function moveLifecycleToPlan(workspacePath: string): Promise<PlanDocument> {
+  const state = await loadWorkspaceState(workspacePath, { strict: true });
+  const legacy = state.lifecycle;
+  if (!legacy?.steps.length || legacy.movedToPlanAt) return readPlan(workspacePath);
+  const { plan } = await mutatePlan(workspacePath, (current, { exists }) => {
+    if (exists) return;
+    const imported = planFromLifecycle(legacy);
+    current.revision = imported.revision;
+    current.items = imported.items;
+  }, { keepRevision: true });
+  await mutateWorkspaceState(workspacePath, (current) => {
+    const lifecycle = current.lifecycle;
+    if (!lifecycle || lifecycle.movedToPlanAt) return;
+    const evidence: Record<string, PlanEvidence> = {};
+    for (const step of lifecycle.steps) {
+      const found = evidenceFromStep(step);
+      if (found) evidence[step.id] = found;
+    }
+    current.planEvidence = { ...evidence, ...current.planEvidence };
+    lifecycle.steps = [];
+    lifecycle.currentStepId = undefined;
+    lifecycle.movedToPlanAt = new Date().toISOString();
+  });
+  return plan;
+}
+
+/**
+ * The plan, after moving an older lifecycle into it if needed. An untouched template plan from an
+ * older release is dropped instead, unless the brief or a document still names one of its steps.
+ * Everything that changes the plan calls this first, so milestones saved by an older release are
+ * never missing from it.
+ */
+export async function ensurePlanStore(workspacePath: string): Promise<PlanDocument> {
+  const stored = await readPlanIfExists(workspacePath);
+  if (stored) return stored;
+  const legacy = (await loadWorkspaceState(workspacePath)).lifecycle;
+  if (!legacy?.steps.length || legacy.movedToPlanAt) return emptyPlan();
+  if (isUnusedLegacyPlan(legacy)) {
+    const release = await lockWorkGuidance(workspacePath);
+    try {
+      const guidance = await loadWorkGuidance(workspacePath);
+      const referenced = Boolean(guidance.assignment.milestoneId || guidance.documents.some((doc) => doc.scope.milestoneId));
+      if (!referenced) {
+        await mutateWorkspaceState(workspacePath, (current) => {
+          if (current.lifecycle && isUnusedLegacyPlan(current.lifecycle)) {
+            current.lifecycle.steps = [];
+            current.lifecycle.currentStepId = undefined;
+            current.lifecycle.movedToPlanAt = new Date().toISOString();
+            current.lifecycle.updatedAt = new Date().toISOString();
+          }
+        });
+        return readPlan(workspacePath);
+      }
+    } finally { await release(); }
+  }
+  return moveLifecycleToPlan(workspacePath);
+}
+
+/**
+ * The plan as a read-only consumer sees it: an older lifecycle that has not been moved yet is shown
+ * as it will be moved, and nothing is written.
+ */
+/** The plan as it reads now, without writing anything: the store, or an older lifecycle as it will be moved. */
+export async function readPlanReadOnly(workspacePath: string): Promise<PlanDocument> {
+  return readPlanForView(workspacePath, await loadWorkspaceState(workspacePath));
+}
+
+async function readPlanForView(workspacePath: string, state: WorkspaceState): Promise<PlanDocument> {
+  const stored = await readPlanIfExists(workspacePath);
+  if (stored) return stored;
+  const legacy = state.lifecycle;
+  if (!legacy?.steps.length || legacy.movedToPlanAt) return emptyPlan();
+  if (isUnusedLegacyPlan(legacy)) {
+    // Obsolete template steps are only kept when the brief or a document still names one.
+    const guidance = await loadWorkGuidance(workspacePath).catch(() => null);
+    if (!guidance?.assignment.milestoneId && !guidance?.documents.some((doc) => doc.scope.milestoneId)) return emptyPlan();
+  }
+  return planFromLifecycle(legacy, legacy.updatedAt || new Date(0).toISOString());
+}
+
+function detectFlowType(feature: Awaited<ReturnType<typeof loadFeatureConfig>>): WorkspaceLifecycle['flowType'] {
+  if (feature?.flowType) return feature.flowType;
+  if (feature?.branchName.startsWith('fix/') || feature?.branchName.startsWith('quick/')) return 'quick';
+  if ((feature?.repos.length ?? 0) > 2 || feature?.branchName.startsWith('epic/') || feature?.branchName.startsWith('flow/')) return 'epic';
+  return 'feature';
+}
+
+/** The milestones shown as lifecycle steps: dropped and parked ones are not part of the active flow. */
+function shownInLifecycle(item: PlanItem): boolean {
+  return item.kind === 'milestone' && item.status !== 'dropped' && item.status !== 'later';
+}
+
+function stepFromItem(plan: PlanDocument, item: PlanItem, evidence: PlanEvidence | undefined): LifecycleStep {
+  const status: LifecycleStep['status'] = item.status === 'done' ? 'completed'
+    : item.status === 'blocked' ? 'blocked'
+      : item.status === 'in_progress' ? (evidence?.canProgress ? 'verified' : 'in_progress')
+        : 'pending';
+  const step: LifecycleStep = { id: item.id, title: item.title, status };
+  if (item.detail) step.description = item.detail;
+  if (item.owner) step.owner = item.owner;
+  if (item.links?.branch) step.branch = item.links.branch;
+  if (item.links?.repo) step.repo = item.links.repo;
+  if (item.links?.workItem) step.workItem = item.links.workItem;
+  if (item.unblockCondition) step.unblockCondition = item.unblockCondition;
+  // What it waits for, except work that was dropped: that no longer holds anything up.
+  const dependsOn = item.waitsFor.filter((id) => plan.items.find((candidate) => candidate.id === id)?.status !== 'dropped');
+  if (dependsOn.length) step.dependsOn = dependsOn;
+  if (item.gate?.required) step.requiresVerification = true;
+  else if (item.gate && !item.gate.command && !item.gate.timeoutSeconds) step.requiresVerification = false;
+  if (item.gate?.command) step.verificationCommand = item.gate.command;
+  if (item.gate?.timeoutSeconds) step.verificationTimeoutSeconds = item.gate.timeoutSeconds;
+  if (evidence?.lastVerificationSha) step.lastVerificationSha = evidence.lastVerificationSha;
+  if (evidence?.lastVerificationStatus) step.lastVerificationStatus = evidence.lastVerificationStatus;
+  if (item.status === 'done' && item.closedAt) step.completedAt = item.closedAt;
+  if (item.reopenedAt) step.reopenedAt = item.reopenedAt;
+  if (item.reopenReason) step.reopenReason = item.reopenReason;
+  if (item.reopenedBy) step.reopenedBy = item.reopenedBy;
+  if (item.reopenCount) step.reopenCount = item.reopenCount;
+  if (item.status === 'blocked' && item.blockedReason) step.blockedReason = item.blockedReason;
+  if (item.status === 'blocked' && item.blockedAt) step.blockedAt = item.blockedAt;
+  return step;
+}
+
+/** The lifecycle as a view over the plan store plus this machine's check results. */
+export function lifecycleView(
+  plan: PlanDocument,
+  state: WorkspaceState,
+  base: { workspaceId: string; flowType: WorkspaceLifecycle['flowType'] },
+): WorkspaceLifecycle {
+  const legacy = new Map((state.lifecycle?.steps ?? []).map((step) => [step.id, step]));
+  const steps = plan.items.filter(shownInLifecycle)
+    .map((item) => stepFromItem(plan, item, state.planEvidence?.[item.id] ?? evidenceFromStep(legacy.get(item.id))));
+  const lifecycle: WorkspaceLifecycle = {
+    workspaceId: base.workspaceId,
+    flowType: base.flowType,
+    steps,
+    updatedAt: plan.updatedAt,
+    revision: plan.revision,
+  };
+  // Nothing starts by itself, so the current step is simply the one being worked on, if any.
+  const current = steps.find((step) => step.status === 'in_progress' || step.status === 'verified');
+  if (current) lifecycle.currentStepId = current.id;
+  return lifecycle;
+}
+
+async function loadView(workspacePath: string, options: { write: boolean }): Promise<{ plan: PlanDocument; lifecycle: WorkspaceLifecycle }> {
+  const plan = options.write ? await ensurePlanStore(workspacePath) : undefined;
+  let state = await loadWorkspaceState(workspacePath);
+  const feature = await loadFeatureConfig(workspacePath);
+  if (options.write && !state.lifecycle) {
+    // The flow type is recorded once, as before, so later readers agree on it.
+    const created: WorkspaceLifecycle = {
+      workspaceId: feature?.id ?? 'workspace', flowType: detectFlowType(feature), steps: [],
+      updatedAt: new Date().toISOString(), movedToPlanAt: new Date().toISOString(),
+    };
+    await mutateWorkspaceState(workspacePath, (current) => { current.lifecycle ??= created; });
+    state = await loadWorkspaceState(workspacePath);
+  }
+  const resolvedPlan = plan ?? await readPlanForView(workspacePath, state);
+  const flowType = feature?.flowType ?? state.lifecycle?.flowType ?? detectFlowType(feature);
+  return { plan: resolvedPlan, lifecycle: lifecycleView(resolvedPlan, state, { workspaceId: feature?.id ?? state.lifecycle?.workspaceId ?? 'workspace', flowType }) };
+}
+
+/**
+ * Loads the workspace lifecycle: a view over the plan store. A lifecycle saved by an older release
+ * is moved into the store on first load.
  */
 export async function loadWorkspaceLifecycle(
   workspacePath: string,
   options: { includeFleet?: boolean } = {},
 ): Promise<WorkspaceLifecycle> {
   const includeFleet = options.includeFleet ?? true;
-  const state = await loadWorkspaceState(workspacePath);
-  const feature = await loadFeatureConfig(workspacePath);
-
-  if (state.lifecycle) {
-    if (isUnusedLegacyPlan(state.lifecycle)) {
-      const release = await lockWorkGuidance(workspacePath);
-      try {
-        const guidance = await loadWorkGuidance(workspacePath);
-        const referenced = Boolean(guidance.assignment.milestoneId || guidance.documents.some((doc) => doc.scope.milestoneId));
-        state.lifecycle = await mutateWorkspaceState(workspacePath, (current) => {
-          if (!referenced && current.lifecycle && isUnusedLegacyPlan(current.lifecycle)) {
-            current.lifecycle.steps = [];
-            current.lifecycle.currentStepId = undefined;
-            current.lifecycle.revision = (current.lifecycle.revision ?? 0) + 1;
-            current.lifecycle.updatedAt = new Date().toISOString();
-          }
-          return current.lifecycle!;
-        });
-      } finally { await release(); }
-    }
-    // Refresh branch fleet asynchronously. It can query remotes, so a caller that polls skips it.
-    if (includeFleet) {
-      try {
-        state.lifecycle.fleet = await getBranchFleet(workspacePath);
-      } catch {
-        // Best-effort
-      }
-    }
-    return state.lifecycle;
-  }
-
-  // Determine flow type
-  let flowType: 'quick' | 'feature' | 'epic' = feature?.flowType ?? 'feature';
-  if (!feature?.flowType && (feature?.branchName.startsWith('fix/') || feature?.branchName.startsWith('quick/'))) {
-    flowType = 'quick';
-  } else if (!feature?.flowType && (
-    (feature?.repos.length ?? 0) > 2 ||
-    feature?.branchName.startsWith('epic/') ||
-    feature?.branchName.startsWith('flow/')
-  )) {
-    flowType = 'epic';
-  }
-
-  let fleet: BranchFleetMember[] = [];
+  const { lifecycle } = await loadView(workspacePath, { write: true });
+  // Refresh the branch fleet. It can query remotes, so a caller that polls skips it.
   if (includeFleet) {
     try {
-      fleet = await getBranchFleet(workspacePath);
+      lifecycle.fleet = await getBranchFleet(workspacePath);
     } catch {
       // Best-effort
     }
   }
+  return lifecycle;
+}
 
-  const lifecycle: WorkspaceLifecycle = {
-    workspaceId: feature?.id ?? 'workspace',
-    flowType,
-    steps: [],
-    fleet,
-    updatedAt: new Date().toISOString(),
-  };
+/** The lifecycle for read-only consumers: never writes, even to move an older lifecycle. */
+export async function readWorkspaceLifecycle(workspacePath: string): Promise<WorkspaceLifecycle> {
+  return (await loadView(workspacePath, { write: false })).lifecycle;
+}
 
-  return mutateWorkspaceState(workspacePath, (current) => {
-    // Another reader may have initialized or advanced it while fleet data loaded.
-    current.lifecycle ??= lifecycle;
-    return current.lifecycle;
+async function recordEvidence(workspacePath: string, stepId: string, evidence: PlanEvidence | null): Promise<void> {
+  await mutateWorkspaceState(workspacePath, (state) => {
+    if (evidence) {
+      state.planEvidence = { ...state.planEvidence, [stepId]: evidence };
+    } else if (state.planEvidence) {
+      delete state.planEvidence[stepId];
+    }
+    // A copy left in an older lifecycle record must not come back.
+    const legacy = state.lifecycle?.steps.find((step) => step.id === stepId);
+    if (legacy) {
+      delete legacy.lastVerificationSha;
+      delete legacy.lastVerificationStatus;
+    }
   });
 }
 
-function dependenciesAreComplete(steps: LifecycleStep[], candidate: LifecycleStep): boolean {
-  return (candidate.dependsOn ?? []).every((id) => steps.some((step) => step.id === id && step.status === 'completed'));
+function stepChanged(stepId: string): Error {
+  return new Error(`Step "${stepId}" changed during this operation. Reload the flow and retry.`);
 }
 
 /**
- * Advances or transitions a step in the workspace lifecycle.
+ * Advances or transitions a step in the workspace lifecycle. Finishing a milestone does not start
+ * the next one: the plan suggests what is ready, and a person or an AI starts it.
  */
 export async function advanceLifecycleStep(
   workspacePath: string,
   stepId: string,
   action: 'start' | 'verify' | 'complete',
+  actor: PlanActor = { by: 'user' },
+  /** For complete: what came out of it, kept with the check's result. */
+  options: { resolution?: string } = {},
 ): Promise<WorkspaceLifecycle> {
-  const lifecycle = await loadWorkspaceLifecycle(workspacePath);
-  const stepIndex = lifecycle.steps.findIndex((s) => s.id === stepId);
+  const { plan, lifecycle } = await loadView(workspacePath, { write: true });
+  const step = lifecycle.steps.find((s) => s.id === stepId);
+  const item = plan.items.find((candidate) => candidate.id === stepId);
 
-  if (stepIndex < 0) {
+  if (!step || !item) {
     throw new Error(`Step "${stepId}" not found in workspace lifecycle.`);
   }
-
-  const step = structuredClone(lifecycle.steps[stepIndex]!);
-  const originalStep = JSON.stringify(step);
-
   if (!['start', 'verify', 'complete'].includes(action)) {
     throw new Error(`Unknown lifecycle action "${action}".`);
   }
-  if (!dependenciesAreComplete(lifecycle.steps, step)) {
+  if (unsettledWaits(plan, item).length) {
     throw new Error(`Complete dependencies before advancing step "${stepId}".`);
   }
   if (step.status === 'completed') {
@@ -225,65 +444,49 @@ export async function advanceLifecycleStep(
   }
 
   // Recognize gates in lifecycles saved before requiresVerification existed.
-  const requiresVerification = step.requiresVerification || Boolean(step.verificationCommand) || Boolean(step.lastVerificationStatus) ||
+  const requiresVerification = Boolean(item.gate?.required) || Boolean(item.gate?.command) || Boolean(step.lastVerificationStatus) ||
     ['verify_and_ship', 'step_verification', 'epic_slice_4'].includes(step.id);
+  const timeoutSeconds = item.gate?.timeoutSeconds ?? DEFAULT_GATE_TIMEOUT_SECONDS;
   let gateFailed = false;
+  let checkedSha: string | undefined;
+  let checkStatus: PlanEvidence['lastVerificationStatus'];
   if (action === 'verify' || (action === 'complete' && requiresVerification)) {
-    const timeoutSeconds = step.verificationTimeoutSeconds ?? DEFAULT_GATE_TIMEOUT_SECONDS;
-    const report = await verifyWorkspace(workspacePath, { command: step.verificationCommand, timeoutMs: timeoutSeconds * 1000 });
-    step.lastVerificationStatus = report.overallStatus;
-    step.lastVerificationSha = report.repos[0]?.headSha;
+    const report = await verifyWorkspace(workspacePath, { command: item.gate?.command, timeoutMs: timeoutSeconds * 1000 });
+    checkedSha = report.repos[0]?.headSha;
+    checkStatus = report.overallStatus;
     gateFailed = !report.canProgress;
-    step.status = gateFailed ? 'in_progress' : 'verified';
+    // A result for a milestone that moved on meanwhile describes nothing.
+    const now = (await readPlan(workspacePath)).items.find((candidate) => candidate.id === stepId);
+    if (!now || now.updatedAt !== item.updatedAt) throw stepChanged(stepId);
+    await recordEvidence(workspacePath, stepId, {
+      ...(checkedSha ? { lastVerificationSha: checkedSha } : {}),
+      lastVerificationStatus: checkStatus,
+      canProgress: report.canProgress,
+      at: new Date().toISOString(),
+    });
   }
 
-  const updated = await mutateWorkspaceState(workspacePath, (state) => {
-    const lifecycle = state.lifecycle;
-    const currentStep = lifecycle?.steps.find((candidate) => candidate.id === stepId);
-    if (!lifecycle || !currentStep || JSON.stringify(currentStep) !== originalStep) {
-      throw new Error(`Step "${stepId}" changed during this operation. Reload the flow and retry.`);
-    }
-    if (!dependenciesAreComplete(lifecycle.steps, step)) {
-      throw new Error(`Dependencies changed for step "${stepId}". Reload the flow and retry.`);
-    }
-    Object.assign(currentStep, step);
+  try {
     if (action === 'start') {
-      currentStep.status = 'in_progress';
-      // Starting again ends a block.
-      delete currentStep.blockedReason;
-      delete currentStep.blockedAt;
-      lifecycle.currentStepId = step.id;
+      await changePlan(workspacePath, { type: 'start', id: stepId }, { actor, ifItemUpdatedAt: item.updatedAt });
     } else if (action === 'complete' && !gateFailed) {
-      currentStep.status = 'completed';
-      currentStep.completedAt = new Date().toISOString();
-      // Finished again: the rework is over. The count stays as history.
-      delete currentStep.reopenedAt;
-      delete currentStep.reopenReason;
-      delete currentStep.reopenedBy;
-      for (const nextStep of lifecycle.steps) {
-        // A block with a reason was set deliberately; only starting the milestone again ends it.
-        if (nextStep.status === 'blocked' && !nextStep.blockedReason && dependenciesAreComplete(lifecycle.steps, nextStep)) {
-          nextStep.status = 'pending';
-        }
-      }
-      const active = lifecycle.steps.find((s) => s.status === 'in_progress' || s.status === 'verified');
-      const next = active ?? lifecycle.steps.find((s) => s.status === 'pending' && dependenciesAreComplete(lifecycle.steps, s));
-      if (next && !active) next.status = 'in_progress';
-      lifecycle.currentStepId = next?.id;
+      const checked = requiresVerification ? `Passed its check on ${checkedSha ?? 'the latest code'}` : '';
+      const resolution = [options.resolution?.trim(), checked].filter(Boolean).join('. ') || 'Marked done';
+      await changePlan(workspacePath, { type: 'done', id: stepId, resolution, checkPassed: true }, { actor, ifItemUpdatedAt: item.updatedAt });
     }
-
-    lifecycle.revision = (lifecycle.revision ?? 0) + 1;
-    lifecycle.updatedAt = new Date().toISOString();
-    return lifecycle;
-  });
+  } catch (error) {
+    if (error instanceof PlanError && error.code === 'conflict') throw stepChanged(stepId);
+    if (error instanceof PlanError && error.code === 'waiting') throw new Error(`Dependencies changed for step "${stepId}". Reload the flow and retry.`);
+    throw error;
+  }
   if (gateFailed && action === 'complete') {
-    const hint = step.lastVerificationStatus === 'timeout'
-      ? ` The gate stopped after ${Math.round((step.verificationTimeoutSeconds ?? DEFAULT_GATE_TIMEOUT_SECONDS) / 60)} minutes; raise this milestone's verification time limit (verificationTimeoutSeconds) if the command needs longer.`
+    const hint = checkStatus === 'timeout'
+      ? ` The gate stopped after ${Math.round(timeoutSeconds / 60)} minutes; raise this milestone's verification time limit (verificationTimeoutSeconds) if the command needs longer.`
       : '';
-    throw new Error(`Verification did not permit progress for step "${stepId}" (${step.lastVerificationStatus}).${hint}`);
+    throw new Error(`Verification did not permit progress for step "${stepId}" (${checkStatus}).${hint}`);
   }
 
-  return updated;
+  return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
 }
 
 /** A reopen request that cannot be carried out, with a code the server maps to an HTTP status. */
@@ -320,7 +523,8 @@ const blockSchema = z.object({ reason: reasonText('Say what the milestone is blo
  * so this is a first-class, checkable fact on the step (when, why, by whom, how
  * many times) and not a silent status flip. Only a completed or verified
  * milestone can be reopened. The earlier completion and its verification proof
- * no longer describe the work, so both are cleared.
+ * no longer describe the work, so both are cleared. From the AI side this is a
+ * proposal: the user decides.
  */
 export async function reopenLifecycleStep(
   workspacePath: string,
@@ -328,35 +532,26 @@ export async function reopenLifecycleStep(
   input: { reason: string; by: 'user' | 'agent' },
 ): Promise<WorkspaceLifecycle> {
   const { reason, by } = reopenSchema.parse(input);
-  const lifecycle = await loadWorkspaceLifecycle(workspacePath);
+  const { plan, lifecycle } = await loadView(workspacePath, { write: true });
   const step = lifecycle.steps.find((candidate) => candidate.id === stepId);
-  if (!step) throw new LifecycleStepError(`Step "${stepId}" not found in workspace lifecycle.`, 'not_found');
-  const reopenable = (status: LifecycleStep['status']) => status === 'completed' || status === 'verified';
-  if (!reopenable(step.status)) {
+  const item = plan.items.find((candidate) => candidate.id === stepId);
+  if (!step || !item) throw new LifecycleStepError(`Step "${stepId}" not found in workspace lifecycle.`, 'not_found');
+  if (step.status !== 'completed' && step.status !== 'verified') {
     throw new LifecycleStepError(`Step "${stepId}" is ${step.status.replace('_', ' ')}, so there is nothing to reopen. Only a finished milestone can be reopened.`, 'not_reopenable');
   }
-  const originalStep = JSON.stringify(step);
-
-  return mutateWorkspaceState(workspacePath, (state) => {
-    const current = state.lifecycle;
-    const currentStep = current?.steps.find((candidate) => candidate.id === stepId);
+  let outcome: 'applied' | 'proposed';
+  try {
+    ({ outcome } = await changePlan(workspacePath, { type: 'reopen', id: stepId, reason },
+      { actor: by === 'user' ? { by: 'user' } : { by: 'agent' }, ifItemUpdatedAt: item.updatedAt }));
+  } catch (error) {
     // Another session may have changed or reopened it while this call was waiting.
-    if (!current || !currentStep || JSON.stringify(currentStep) !== originalStep || !reopenable(currentStep.status)) {
+    if (error instanceof PlanError && error.code === 'conflict') {
       throw new LifecycleStepError(`Step "${stepId}" changed during this operation. Reload the flow and retry.`, 'conflict');
     }
-    currentStep.status = 'in_progress';
-    delete currentStep.completedAt;
-    delete currentStep.lastVerificationSha;
-    delete currentStep.lastVerificationStatus;
-    currentStep.reopenedAt = new Date().toISOString();
-    currentStep.reopenReason = reason;
-    currentStep.reopenedBy = by;
-    currentStep.reopenCount = (currentStep.reopenCount ?? 0) + 1;
-    current.currentStepId = currentStep.id;
-    current.revision = (current.revision ?? 0) + 1;
-    current.updatedAt = new Date().toISOString();
-    return current;
-  });
+    throw error;
+  }
+  if (outcome === 'applied') await recordEvidence(workspacePath, stepId, null);
+  return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
 }
 
 /**
@@ -368,30 +563,25 @@ export async function blockLifecycleStep(
   workspacePath: string,
   stepId: string,
   input: { reason: string },
+  actor: PlanActor = { by: 'user' },
 ): Promise<WorkspaceLifecycle> {
   const { reason } = blockSchema.parse(input);
-  const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
+  const { plan, lifecycle } = await loadView(workspacePath, { write: true });
   const step = lifecycle.steps.find((candidate) => candidate.id === stepId);
-  if (!step) throw new LifecycleStepError(`Step "${stepId}" not found in workspace lifecycle.`, 'not_found');
+  const item = plan.items.find((candidate) => candidate.id === stepId);
+  if (!step || !item) throw new LifecycleStepError(`Step "${stepId}" not found in workspace lifecycle.`, 'not_found');
   if (step.status === 'completed') {
     throw new LifecycleStepError(`Step "${stepId}" is already completed, so it cannot be blocked.`, 'not_blockable');
   }
-  const originalStep = JSON.stringify(step);
-
-  return mutateWorkspaceState(workspacePath, (state) => {
-    const current = state.lifecycle;
-    const currentStep = current?.steps.find((candidate) => candidate.id === stepId);
-    if (!current || !currentStep || JSON.stringify(currentStep) !== originalStep) {
+  try {
+    await changePlan(workspacePath, { type: 'block', id: stepId, reason }, { actor, ifItemUpdatedAt: item.updatedAt });
+  } catch (error) {
+    if (error instanceof PlanError && error.code === 'conflict') {
       throw new LifecycleStepError(`Step "${stepId}" changed during this operation. Reload the flow and retry.`, 'conflict');
     }
-    currentStep.status = 'blocked';
-    currentStep.blockedReason = reason;
-    // Saying it again with a new reason keeps when it first became blocked.
-    currentStep.blockedAt ??= new Date().toISOString();
-    current.revision = (current.revision ?? 0) + 1;
-    current.updatedAt = new Date().toISOString();
-    return current;
-  });
+    throw error;
+  }
+  return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
 }
 
 /**
@@ -415,67 +605,146 @@ const planStepSchema = z.object({
 });
 export const lifecyclePlanSchema = z.object({ revision: z.number().int().nonnegative(), steps: z.array(planStepSchema).max(100) });
 
-/** Update definitions while retaining the authoritative milestone progress and proofs. */
-export async function updateLifecyclePlan(workspacePath: string, input: unknown): Promise<WorkspaceLifecycle> {
+/**
+ * Updates the milestone definitions in the plan store while retaining their progress and proofs.
+ * A milestone left out is dropped, not deleted: it keeps its history and leaves the active flow.
+ */
+export async function updateLifecyclePlan(
+  workspacePath: string,
+  input: unknown,
+  actor: PlanActor = { by: 'user' },
+): Promise<WorkspaceLifecycle> {
   const update = lifecyclePlanSchema.parse(input);
-  await loadWorkspaceLifecycle(workspacePath);
+  await ensurePlanStore(workspacePath);
   const release = await lockWorkGuidance(workspacePath);
   try {
     const guidance = await loadWorkGuidance(workspacePath);
-    return await mutateWorkspaceState(workspacePath, (state) => {
-      const lifecycle = state.lifecycle!;
-      if ((lifecycle.revision ?? 0) !== update.revision) throw new Error('The plan changed in another session. Reload before saving.');
-      const definitions = update.steps.map((definition) => ({
-        ...lifecycle.steps.find((step) => step.id === definition.id), ...definition,
-        ...(definition.verificationCommand === '' ? { verificationCommand: undefined } : {}),
-      }));
-      const byId = new Map(definitions.map((step) => [step.id, step]));
-      if (byId.size !== definitions.length) throw new Error('Milestone IDs must be unique.');
-      const removed = new Set(lifecycle.steps.filter((step) => !byId.has(step.id)).map((step) => step.id));
-      if ((guidance.assignment.milestoneId && removed.has(guidance.assignment.milestoneId)) ||
-        guidance.documents.some((doc) => doc.scope.milestoneId && removed.has(doc.scope.milestoneId))) {
+    const gateChanged: string[] = [];
+    await mutatePlan(workspacePath, (plan) => {
+      if (plan.revision !== update.revision) throw new Error('The plan changed in another session. Reload before saving.');
+      const now = new Date().toISOString();
+      const who = actor.by === 'user' ? 'user' : (actor.harness?.trim().toLowerCase() || 'agent');
+      const note = (item: PlanItem, action: string, text?: string) => {
+        item.history.push({ at: now, by: who, action, ...(text ? { note: text } : {}) });
+        if (item.history.length > PLAN_HISTORY_LIMIT) item.history.splice(0, item.history.length - PLAN_HISTORY_LIMIT);
+        item.updatedAt = now;
+      };
+      const byId = new Map(update.steps.map((step) => [step.id, step]));
+      if (byId.size !== update.steps.length) throw new Error('Milestone IDs must be unique.');
+      for (const definition of update.steps) {
+        const taken = plan.items.find((item) => item.id === definition.id && item.kind !== 'milestone');
+        if (taken) throw new Error(`"${definition.id}" is already the code of ${itemLabel(taken)}. Choose another milestone ID.`);
+      }
+      const removed = plan.items.filter((item) => shownInLifecycle(item) && !byId.has(item.id));
+      const removedIds = new Set(removed.map((item) => item.id));
+      if ((guidance.assignment.milestoneId && removedIds.has(guidance.assignment.milestoneId)) ||
+        guidance.documents.some((doc) => doc.scope.milestoneId && removedIds.has(doc.scope.milestoneId))) {
         throw new Error('Move the assignment and document scopes to the workspace or another milestone before removing their milestone.');
       }
-      // Validate the merged definitions: omitted optional fields retain their saved values.
+
+      // The merged definitions: omitted optional fields retain their saved values.
+      const merged = update.steps.map((definition) => {
+        const existing = plan.items.find((item) => item.id === definition.id);
+        const required = definition.requiresVerification ?? existing?.gate?.required;
+        const command = definition.verificationCommand === '' ? undefined : definition.verificationCommand ?? existing?.gate?.command;
+        const timeoutSeconds = definition.verificationTimeoutSeconds ?? existing?.gate?.timeoutSeconds;
+        const visibleWaits = existing ? existing.waitsFor.filter((id) => plan.items.find((item) => item.id === id)?.status !== 'dropped') : [];
+        const waitsFor = [...new Set(definition.dependsOn ?? visibleWaits)];
+        return { definition, existing, required, command, timeoutSeconds, waitsFor, visibleWaits };
+      });
+
+      // Validate the dependency graph the save would produce.
+      const graph = new Map(plan.items.map((item) => [item.id, item.waitsFor]));
+      for (const { definition, waitsFor } of merged) graph.set(definition.id, waitsFor);
+      // A milestone this save removes cannot be waited for; other items, and milestones already out of the flow, can.
+      const waitable = (id: string) => byId.has(id) || (graph.has(id) && !removedIds.has(id));
+      for (const { waitsFor } of merged) {
+        for (const id of waitsFor) if (!waitable(id)) throw new Error(`Dependency "${id}" does not name a milestone.`);
+      }
       const visiting = new Set<string>();
       const visited = new Set<string>();
       const visit = (id: string) => {
         if (visiting.has(id)) throw new Error('Milestone dependencies contain a cycle.');
         if (visited.has(id)) return;
-        const step = byId.get(id);
-        if (!step) throw new Error(`Dependency "${id}" does not name a milestone.`);
         visiting.add(id);
-        for (const dependency of step.dependsOn ?? []) visit(dependency);
+        for (const dependency of graph.get(id) ?? []) visit(dependency);
         visiting.delete(id); visited.add(id);
       };
-      for (const step of definitions) visit(step.id);
-      lifecycle.steps = definitions.map((definition) => {
-        const existing = lifecycle.steps.find((step) => step.id === definition.id);
-        if (!existing) return { ...definition, status: 'pending' as const };
-        const gateChanged = Boolean(existing.requiresVerification) !== Boolean(definition.requiresVerification)
-          || existing.verificationCommand !== definition.verificationCommand;
-        const dependenciesChanged = JSON.stringify(existing.dependsOn ?? []) !== JSON.stringify(definition.dependsOn ?? []);
-        if (existing.status === 'completed' && (gateChanged || dependenciesChanged)) {
+      for (const { definition } of merged) visit(definition.id);
+
+      const settled = (id: string) => {
+        const status = plan.items.find((item) => item.id === id)?.status;
+        return status === 'done' || status === 'dropped';
+      };
+      const ordered: PlanItem[] = [];
+      for (const { definition, existing, required, command, timeoutSeconds, waitsFor, visibleWaits } of merged) {
+        const item: PlanItem = existing ?? {
+          id: definition.id, kind: 'milestone', title: definition.title, status: 'todo', waitsFor: [],
+          createdAt: now, updatedAt: now, history: [],
+        };
+        const changedGate = Boolean(existing?.gate?.required) !== Boolean(required) || existing?.gate?.command !== command;
+        const changedWaits = JSON.stringify(visibleWaits) !== JSON.stringify(waitsFor);
+        if (existing?.status === 'done' && (changedGate || changedWaits)) {
           throw new Error(`Completed milestone "${existing.title}" cannot change its gate or dependencies.`);
         }
-        if (['in_progress', 'verified'].includes(existing.status) &&
-          (definition.dependsOn ?? []).some((id) => lifecycle.steps.find((step) => step.id === id)?.status !== 'completed')) {
+        if (existing?.status === 'in_progress' && waitsFor.some((id) => !settled(id))) {
           throw new Error(`Active milestone "${existing.title}" cannot depend on unfinished work.`);
         }
-        return { ...existing, ...definition,
-          ...(gateChanged ? { lastVerificationSha: undefined, lastVerificationStatus: undefined,
-            status: existing.status === 'verified' ? 'in_progress' as const : existing.status } : {}),
+        const before = JSON.stringify(item);
+        item.title = definition.title;
+        const set = <K extends keyof PlanItem>(key: K, value: PlanItem[K] | undefined) => {
+          if (value === undefined || value === '') delete item[key]; else item[key] = value;
         };
-      });
-      if (!lifecycle.steps.some((step) => step.id === lifecycle.currentStepId)) {
-        lifecycle.currentStepId = lifecycle.steps.find((step) => ['in_progress', 'verified'].includes(step.status))?.id;
+        set('detail', definition.description ?? existing?.detail);
+        set('owner', definition.owner ?? existing?.owner);
+        set('unblockCondition', definition.unblockCondition ?? existing?.unblockCondition);
+        const links = {
+          repo: definition.repo ?? existing?.links?.repo, branch: definition.branch ?? existing?.links?.branch,
+          workItem: definition.workItem ?? existing?.links?.workItem,
+        };
+        set('links', links.repo || links.branch || links.workItem
+          ? Object.fromEntries(Object.entries(links).filter(([, value]) => value)) as PlanItem['links'] : undefined);
+        set('gate', required !== undefined || command || timeoutSeconds ? {
+          required: Boolean(required), ...(command ? { command } : {}), ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        } : undefined);
+        // Dropped work it waited for stays in its history but holds nothing up any more.
+        const droppedWaits = item.waitsFor.filter((id) => plan.items.find((candidate) => candidate.id === id)?.status === 'dropped');
+        item.waitsFor = [...new Set([...waitsFor, ...(definition.dependsOn ? [] : droppedWaits)])];
+        if (!existing) {
+          note(item, 'added');
+        } else if (!shownInLifecycle(existing)) {
+          // Back in the milestone plan: it is work to do again.
+          item.status = 'todo';
+          delete item.resolution;
+          delete item.closedAt;
+          delete item.revisitWhen;
+          note(item, 'reopened', 'Added back to the milestone plan');
+        } else if (JSON.stringify(item) !== before) {
+          note(item, 'edited', 'Milestone plan changed');
+        }
+        if (existing && changedGate) gateChanged.push(item.id);
+        ordered.push(item);
       }
-      lifecycle.revision = (lifecycle.revision ?? 0) + 1;
-      lifecycle.updatedAt = new Date().toISOString();
-      return lifecycle;
-    });
+      for (const item of removed) {
+        item.status = 'dropped';
+        item.resolution = 'Removed from the milestone plan';
+        item.closedAt = now;
+        delete item.proposal;
+        note(item, 'dropped', 'Removed from the milestone plan');
+      }
+      const placed = new Set(ordered.map((item) => item.id));
+      plan.items = [
+        ...ordered,
+        ...plan.items.filter((item) => item.kind === 'milestone' && !placed.has(item.id)),
+        ...plan.items.filter((item) => item.kind !== 'milestone'),
+      ];
+    }, { alwaysWrite: true });
+    // A changed gate makes earlier check results meaningless.
+    for (const id of gateChanged) await recordEvidence(workspacePath, id, null);
+    return await loadWorkspaceLifecycle(workspacePath);
   } finally { await release(); }
 }
+
 
 export function renderLifecyclePlan(lifecycle: WorkspaceLifecycle, live = true): string {
   if (!lifecycle.steps.length) return '';

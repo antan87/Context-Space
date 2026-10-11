@@ -1,27 +1,21 @@
 /**
  * @module plan-generator
- * Analyzes inter-repo dependencies within a workspace and generates a
- * `nexusflow-plan.md` implementation plan with build-order phases.
+ * Writes contextspace-plan.md: the plan summary (core/plan-summary), and for a workspace with
+ * several repositories the build order between them, from their package dependencies.
  */
 
 import chalk from 'chalk';
-import { loadWorkspaceState } from '../core/workspace-state.js';
-import { loadWorkspaceLifecycle, renderLifecyclePlan } from '../core/lifecycle.js';
-import { loadWorkGuidance } from '../core/work-guidance.js';
-import { isUnusedLegacyPlan } from '../core/legacy-lifecycle.js';
-import { PLANNING_NOTES_FILE, planningNotesAreAuthored } from '../core/planning-notes.js';
-import { writeWorkspaceFile } from '../core/storage.js';
-import { findInterRepoDependencies } from '../analyzers/detect-deps.js';
+import { BUILD_ORDER_HEADING, writePlanSummary } from '../core/plan-summary.js';
 import type {
   WorkspaceContext,
   ProjectAnalysis,
   RepoInfo,
   DependencyNode,
   DependencyGraph,
-  WorkspaceLifecycle,
 } from '../types.js';
-import { GENERATED_SNAPSHOT_HEADER, renderFreshnessBanner } from '../core/generation-lock.js';
-import { PRIMARY_PLAN_FILE, PRIMARY_KNOWLEDGE_FILE, PRIMARY_CHAT_LEDGER_FILE, BRAND_NAME, CLI_NAME } from '../core/constants.js';
+import { renderFreshnessBanner } from '../core/generation-lock.js';
+import { PRIMARY_PLAN_FILE, BRAND_NAME, CLI_NAME } from '../core/constants.js';
+import { findInterRepoDependencies } from '../analyzers/detect-deps.js';
 
 // ─── Dependency Graph Builder ─────────────────────────────────────────────
 
@@ -137,73 +131,131 @@ export function topologicalSort(graph: DependencyGraph): string[][] {
 
 // ─── Plan Generator ───────────────────────────────────────────────────────
 
-/** Stated near the top of every layout, so nobody takes a build order for a delivery plan. */
-const PLAN_SCOPE_NOTE =
-  `> **Scope:** Any package-dependency order in this file is supporting technical information, not a feature delivery plan. Release order: ${PLANNING_NOTES_FILE}. Runtime and intra-repo contracts are not inferred; see knowledge.`;
-
 /**
- * The "Current work and next action" block: what this workspace is for, where the authoritative
- * assignment lives, and whether a delivery plan exists. Rendered for every repo count, ahead of
- * any package-dependency material, so a reader who opens this file for "the plan" finds the work
- * before the build order.
- *
- * @param authoredNotes  Whether contextspace-milestones.md holds more than its empty template.
+ * The build order between the workspace's repositories, as the last section of contextspace-plan.md,
+ * or an empty string for one repository or none: there is nothing to order. It is supporting
+ * technical information, not the delivery plan, which is the plan's milestones.
  */
-function workspaceWorkGuidance(
-  ctx: WorkspaceContext,
-  lifecycle: WorkspaceLifecycle | undefined,
-  guidance: Awaited<ReturnType<typeof loadWorkGuidance>>,
-  authoredNotes: boolean,
-): string[] {
-  const assignment = guidance.assignment;
-  const inline = (value: string) => value.replace(/\s+/g, ' ').trim();
-  const objective = inline(assignment.objective || ctx.feature.description);
-  const current = lifecycle?.steps.find((step) => step.id === lifecycle.currentStepId && step.status !== 'completed')
-    ?? lifecycle?.steps.find((step) => step.status === 'in_progress' || step.status === 'verified')
-    ?? lifecycle?.steps.find((step) => step.status !== 'completed');
-  const lines = ['## Current work and next action', ''];
-  lines.push(`- **Assignment (${assignment.stage}):** ${objective || 'Define the current objective in the AI assignment.'}`);
-  lines.push(`- **Expected output:** ${inline(assignment.expectedOutput) || 'Define this in the AI assignment before starting work.'}`);
-  lines.push(`- **Stop when:** ${inline(assignment.stopCondition) || 'Define this in the AI assignment before starting work.'}`);
-  if (!ctx.repos.length) lines.push(`- **Repository:** None attached. Add one with \`${CLI_NAME} add-repo\`, then refresh before implementation.`);
-  if (current) {
-    const milestoneTitle = inline(current.title);
-    lines.push(`- **Milestone:** ${milestoneTitle} (${current.status.replaceAll('_', ' ')}).`);
-    const action = current.status === 'blocked'
-      ? `Resolve the milestone blocker before continuing: ${inline(current.unblockCondition || '') || 'review the unblock condition in Visual Flow'}.`
-      : current.status === 'pending'
-        ? `Review ${milestoneTitle}, then start it in Visual Flow or with \`${CLI_NAME} flow --step ${current.id} --action start\`. Starting records progress; it does not run the work.`
-        : current.status === 'verified'
-          ? `Review the verification evidence, then complete ${milestoneTitle} in Visual Flow or with \`${CLI_NAME} flow --step ${current.id} --action complete\`.`
-          : `Work toward ${milestoneTitle}; check the assignment's stop condition, then verify before completing the milestone.`;
-    lines.push(`- **Next action:** ${action}`);
-  } else if (lifecycle?.steps.length) {
-    lines.push('- **Next action:** All saved milestones are complete. Review the assignment and add another outcome only if work remains.');
-  } else if (authoredNotes) {
-    lines.push(`- **Delivery plan:** No milestones are saved in Visual Flow, but authored planning notes exist in ${PLANNING_NOTES_FILE}. They are proposals until the owner approves them.`);
-    lines.push(`- **Next action:** Read ${PLANNING_NOTES_FILE} before planning anything new. To track its outcomes as milestones, use Plan → Add milestones; saving them does not start work or approve anything.`);
-  } else {
-    const title = objective ? `${objective.slice(0, 100).trimEnd()}${objective.length > 100 ? '…' : ''}` : 'Define the first reviewable outcome';
-    lines.push(`- **Delivery plan:** Feature delivery plan not yet defined. No milestones are saved and ${PLANNING_NOTES_FILE} is still empty.`);
-    lines.push('- **Next action:** Check the live Visual Flow. If no milestone is saved, review the example below and use Plan → Add milestones to draft one.');
-    lines.push('', '### Example first milestone draft', '');
-    lines.push(`- **Title:** ${title}`);
-    lines.push('- **Outcome and check:** Describe one observable result and how you will verify it.');
-    lines.push('- This example is not a saved milestone. Saving your edited draft creates a pending milestone; it does not start work or approve any source document.');
+export function renderBuildOrder(ctx: WorkspaceContext): string {
+  const { repos, analysis } = ctx;
+  if (repos.length < 2) return '';
+  const md: string[] = [BUILD_ORDER_HEADING, ''];
+  if (ctx.generation) md.push(renderFreshnessBanner(ctx.generation), '');
+
+  if (!analysis || analysis.size === 0) {
+    md.push(`No project analysis was available, so no order is known. Repos: ${repos.map((r) => r.name).sort().join(', ')}.`, '');
+    return md.join('\n');
   }
-  lines.push('', `Run ${CLI_NAME} flow for live milestone progress. Read contextspace-assignment.md or run ${CLI_NAME} flow --assignment for the full, current brief.`, '');
-  return lines;
+
+  const graph = buildDependencyGraph(analysis, repos);
+  const phases = topologicalSort(graph);
+  const hasEdges = [...graph.values()].some((n) => n.dependsOn.length > 0);
+  // Restricted to the repos the graph was built from, so the contracts and the phases agree.
+  const contracts = findPackageRelations(analysis, repos).filter((rel) => rel.consumers.length > 0);
+
+  if (!hasEdges && contracts.length === 0) {
+    md.push(
+      `No package dependencies were detected between the ${repos.length} repos in this workspace, so no build order is forced — work in whichever order suits the task.`,
+      `If you add a dependency from one of these repos to another, run \`${CLI_NAME} refresh\` and this section will describe the resulting order.`, '');
+    return md.join('\n');
+  }
+
+  /** Repos in this phase that depend on another repo in the same phase. */
+  const cycleMembers = (phase: string[]): string[] => {
+    const inPhase = new Set(phase);
+    return phase.filter((name) => (graph.get(name)?.dependsOn ?? []).some((dep) => inPhase.has(dep)));
+  };
+  const hasCycles = phases.some((phase) => cycleMembers(phase).length > 0);
+
+  md.push(`> Worked out by ${BRAND_NAME} from the package dependencies between repos. It is not the delivery plan: that is the milestones above. Runtime and intra-repo contracts are not inferred; see knowledge.`);
+  md.push(hasEdges && !hasCycles
+    ? '> Follow the phase order to avoid blocking yourself on cross-repo dependencies.'
+    : '> No build order could be resolved, so the packages below are listed without one.');
+  md.push('');
+
+  if (hasEdges) {
+    if (!hasCycles) {
+      md.push('### Dependency diagram', '', '```mermaid', 'graph TD');
+      const alias = buildAliasMap(graph);
+      for (const [name, node] of graph) {
+        if (node.dependsOn.length === 0 && node.dependedOnBy.length === 0) md.push(`    ${alias.get(name)}["${name}"]`);
+        // Arrow: dependency → dependent (dep is built first)
+        for (const dep of node.dependsOn) md.push(`    ${alias.get(dep)}["${dep}"] --> ${alias.get(name)}["${name}"]`);
+      }
+      md.push('```', '');
+      md.push('> Derived from detected package dependencies (`package.json`, `.csproj`, etc.) only. If you changed a package, the producing repo must release or build before consumer repos can merge.', '');
+
+      md.push('### Suggested order', '');
+      for (let i = 0; i < phases.length; i++) {
+        const phase = phases[i]!;
+        md.push(`#### Phase ${i + 1}`, '', `**Repos:** ${phase.join(', ')}`, '');
+        if (i === 0) {
+          // Only claim downstream consumers for the repos that actually have them.
+          const consumed = phase.filter((name) => (graph.get(name)?.dependedOnBy.length ?? 0) > 0);
+          md.push(consumed.length > 0
+            ? `**Why first:** No dependencies on other workspace repos, and ${consumed.join(', ')} ${consumed.length === 1 ? 'is' : 'are'} depended on by a later phase.`
+            : '**Why first:** No dependencies on other workspace repos.');
+        } else if (i === phases.length - 1) {
+          md.push(`**Why ${ordinalWord(i + 1)}:** Depends on APIs and types from earlier phases.`);
+        } else {
+          const prevPhases = phases.slice(0, i).flat().join(', ');
+          md.push(`**Why ${ordinalWord(i + 1)}:** Depends on Phase ${i === 1 ? '1' : `1–${i}`} repos (${prevPhases}). Build these before the consumers.`);
+        }
+        md.push('');
+      }
+    } else {
+      md.push('### Release coordination', '',
+        'These repositories contain circular package dependencies; that does not require removing valid service relationships.',
+        `Record the intended release order in the plan, one milestone per step (\`${CLI_NAME} plan add milestone\`): build the changed producer against compatible published clients, publish its new package, then bump and verify consumers.`,
+        'For breaking contracts, introduce a compatible transition or coordinate releases explicitly. Package edges alone cannot determine a safe release order.', '');
+    }
+
+    md.push('### Dependency table', '', '| Repo | Depends On | Depended On By |', '|:---|:---|:---|');
+    for (const name of phases.flat()) {
+      const node = graph.get(name)!;
+      md.push(`| ${name} | ${node.dependsOn.join(', ') || '—'} | ${node.dependedOnBy.join(', ') || '—'} |`);
+    }
+    md.push('');
+  }
+
+  // Only packages a sibling repo actually consumes: a package nobody in the workspace uses is not a contract.
+  if (contracts.length > 0) {
+    const anyContributing = contracts.some((c) => (c.contributing?.length ?? 0) > 0);
+    md.push('### Contracts and clients', '');
+    md.push(anyContributing
+      ? '| Package | Contributing Projects | Producing Repo | Consuming Repos | Type |'
+      : '| Package | Producing Repo | Consuming Repos | Type |');
+    md.push(anyContributing ? '|:---|:---|:---|:---|:---|' : '|:---|:---|:---|:---|');
+    for (const rel of contracts) {
+      const cells = [`\`${rel.pkgName}\``];
+      if (anyContributing) cells.push(rel.contributing?.length ? rel.contributing.map((c) => `\`${c}\``).join(', ') : '—');
+      cells.push(`\`${rel.producer}\``, rel.consumers.map((c) => `\`${c.repoName}\``).join(', '), `\`${rel.type}\``);
+      md.push(`| ${cells.join(' | ')} |`);
+    }
+    md.push('');
+
+    // Only the ecosystems the shared packages use.
+    const types = new Set(contracts.map((c) => c.type));
+    md.push('### Local package development loop', '', 'When changing a shared package, verify its consumers against a local build before pushing:', '');
+    if (types.has('nuget')) {
+      md.push('#### .NET / NuGet',
+        '1. `dotnet pack -c Release -o ./local-packages` in the producing project.',
+        '2. Point a local feed in the consumer\'s `NuGet.config` at `./local-packages`.',
+        '3. Reference a local version (e.g. `3.41.0-local`) in the consuming `.csproj`.',
+        '4. **Revert the version reference to the official release before merging.**', '');
+    }
+    if (types.has('npm')) {
+      md.push('#### Node.js / npm',
+        '1. `npm link` in the producing package, then `npm link <package-name>` in the consumer.',
+        '2. **Unlink and reinstall the published version before committing.**', '');
+    }
+  }
+  return md.join('\n');
 }
 
 /**
- * Generate a `nexusflow-plan.md` implementation plan for the workspace.
- *
- * The plan includes:
- * - A Mermaid dependency diagram
- * - Phased implementation order derived from topological sort
- * - A dependency cross-reference table
- * - A package relations table
- * - Actionable local dev tips
+ * Writes contextspace-plan.md: the brief and the plan in the Plan tab's words (core/plan-summary),
+ * then the build order between repositories, which needs the analysis only a refresh has.
  *
  * @param ctx            The current workspace context (feature + repos + analysis).
  * @param workspacePath  Absolute path to the workspace root directory.
@@ -213,303 +265,11 @@ export async function generateImplementationPlan(
   workspacePath: string,
 ): Promise<void> {
   try {
-    const { feature, repos, analysis } = ctx;
-    const state = await loadWorkspaceState(workspacePath);
-    const lifecycle = state.lifecycle && isUnusedLegacyPlan(state.lifecycle)
-      ? await loadWorkspaceLifecycle(workspacePath) : state.lifecycle;
-    const milestonePlan = lifecycle ? renderLifecyclePlan(lifecycle, false) : '';
-    // Every repo count gets the current work. Gating this on a single repo left a multi-repo
-    // workspace, which needs its objective at least as much, with only a build order.
-    const workGuidance = workspaceWorkGuidance(
-      ctx,
-      lifecycle,
-      await loadWorkGuidance(workspacePath),
-      await planningNotesAreAuthored(workspacePath),
-    );
-
-
-    // ── Fallback: no analysis available ─────────────────────────────────
-    if (!analysis || analysis.size === 0 || repos.length === 0) {
-      const lines = [
-        GENERATED_SNAPSHOT_HEADER,
-        '',
-        `# Implementation Plan — ${feature.id}`,
-        '', milestonePlan, '', ...workGuidance,
-        ...(ctx.generation ? [renderFreshnessBanner(ctx.generation), ''] : []),
-        `> Auto-generated by ${BRAND_NAME}.`,
-        '> No project analysis data was available, so repos are listed alphabetically.',
-        PLAN_SCOPE_NOTE,
-        '',
-        '## Repos',
-        '',
-        ...repos
-          .map((r) => r.name)
-          .sort()
-          .map((n) => `- ${n}`),
-        ...(!repos.length ? ['- No repository attached yet.'] : []),
-        '',
-      ];
-      await writeWorkspaceFile(
-        workspacePath,
-        feature.id,
-        PRIMARY_PLAN_FILE,
-        lines.join('\n'),
-      );
-      console.log(chalk.green('  ✔'), `Generated ${PRIMARY_PLAN_FILE}`);
-      return;
-    }
-
-    // ── Build graph & sort ──────────────────────────────────────────────
-    const graph = buildDependencyGraph(analysis, repos);
-    const phases = topologicalSort(graph);
-
-    // ── What this plan can actually say ─────────────────────────────────
-    // Everything below describes cross-repo structure. With no dependency edges
-    // and no shared packages there is nothing to order, and this file used to
-    // say so five separate ways: a single-node diagram, a phase whose rationale
-    // claimed "other repos depend on them" when none did, an all-dashes table,
-    // a contracts table of packages nobody consumed, and a local-package loop
-    // for packages with no consumers. One honest sentence replaces all of it.
-    const hasEdges = [...graph.values()].some((n) => n.dependsOn.length > 0);
-    // Restricted to the repos the graph was built from. Derived from the whole
-    // analysis map, a stray entry could produce contracts with no matching edge,
-    // so the file promised a phase order it then never printed.
-    const contracts = findPackageRelations(analysis, repos).filter((rel) => rel.consumers.length > 0);
-
-    /** Repos in this phase that depend on another repo in the same phase. */
-    const cycleMembers = (phase: string[]): string[] => {
-      const inPhase = new Set(phase);
-      return phase.filter((name) =>
-        (graph.get(name)?.dependsOn ?? []).some((dep) => inPhase.has(dep)),
-      );
-    };
-
-    const md: string[] = [];
-
-    md.push(GENERATED_SNAPSHOT_HEADER);
-    md.push('');
-    md.push(`# Implementation Plan — ${feature.id}`);
-    md.push('', milestonePlan);
-    md.push('');
-    if (ctx.generation) {
-      md.push(renderFreshnessBanner(ctx.generation));
-      md.push('');
-    }
-    md.push(`> **Refresh:** Run \`${CLI_NAME} refresh\`.`);
-    md.push(PLAN_SCOPE_NOTE);
-    md.push('');
-
-    if (!hasEdges && contracts.length === 0) {
-      // Worded per repo count: "between the single repo" and "from one of these
-      // repos to another" both read as nonsense for a one-repo workspace.
-      md.push(
-        repos.length === 1
-          ? 'This workspace has one repo. Follow the assignment and milestone below; cross-repo build order does not apply.'
-          : `No package dependencies were detected between the ${repos.length} repos in this workspace, so no build order is forced — work in whichever order suits the task.`,
-      );
-      md.push('');
-      md.push(...workGuidance);
-      if (repos.length === 1) {
-        md.push('## Implementation Guidance');
-        md.push('');
-        md.push('- **Vertical Slice**: Implement in small, testable increments and verify tests pass after each step.');
-        md.push(`- **Non-Linear Iteration**: If unexpected constraints or gotchas emerge, record them with \`${CLI_NAME} knowledge add\` or MCP \`add_knowledge\` (or read/append \`${PRIMARY_KNOWLEDGE_FILE}\` directly if MCP is not connected or CLI is not on PATH).`);
-        md.push(`- **Cross-Harness Handoff**: If the MCP server is connected, use \`post_workroom_handoff\` to post milestone updates; otherwise record handoffs in \`${PRIMARY_CHAT_LEDGER_FILE}\` or generate a bundle with \`${CLI_NAME} handoff\`.`);
-        md.push('');
-      } else {
-        md.push(`If you add a dependency from one of these repos to another, run \`${CLI_NAME} refresh\` and this plan will describe the resulting order.`, '');
-      }
-      await writeWorkspaceFile(workspacePath, feature.id, PRIMARY_PLAN_FILE, md.join('\n'));
-      console.log(chalk.green('  ✔'), `Generated ${PRIMARY_PLAN_FILE}`);
-      return;
-    }
-
-    // The current work comes first; the build order below is the supporting part.
-    md.push(...workGuidance);
-    md.push('## Package dependency order', '');
-    md.push(
-      `> Auto-generated by ${BRAND_NAME} based on dependency analysis between repos.`,
-    );
-    if (hasEdges && !phases.some((phase) => cycleMembers(phase).length > 0)) {
-      // Promised only when the phases below actually exist. Gating this on having
-      // got past the early return instead meant a workspace with a shared package
-      // but no resolvable edge — two repos both claiming to publish it, so the
-      // only match is a repo on itself and no edge is added — was told to follow
-      // an order the file never printed.
-      md.push(
-        '> Follow the phase order to avoid blocking yourself on cross-repo dependencies.',
-      );
-    } else {
-      md.push(
-        '> No build order could be resolved, so the packages below are listed without one.',
-      );
-    }
-    md.push('');
-
-    if (hasEdges) {
-      const hasCycles = phases.some((phase) => cycleMembers(phase).length > 0);
-      if (!hasCycles) {
-        // ── Mermaid diagram ───────────────────────────────────────────────
-        md.push('## Dependency Diagram');
-        md.push('');
-        md.push('```mermaid');
-        md.push('graph TD');
-
-        const alias = buildAliasMap(graph);
-
-        for (const [name, node] of graph) {
-          if (node.dependsOn.length === 0 && node.dependedOnBy.length === 0) {
-            // Isolated node — still show it
-            md.push(`    ${alias.get(name)}["${name}"]`);
-          }
-          for (const dep of node.dependsOn) {
-            // Arrow: dependency → dependent (dep is built first)
-            md.push(
-              `    ${alias.get(dep)}["${dep}"] --> ${alias.get(name)}["${name}"]`,
-            );
-          }
-        }
-
-        md.push('```');
-        md.push('');
-        md.push('> ⚠️ This diagram is derived from detected package dependencies (`package.json`, `.csproj`, etc.) only.');
-        md.push('> If you changed a package, the producing repo must release/build before consumer repos can merge.');
-        md.push('');
-
-        // ── Phase descriptions ────────────────────────────────────────────
-        md.push('## Suggested Implementation Order');
-        md.push('');
-
-        for (let i = 0; i < phases.length; i++) {
-          const phase = phases[i]!;
-          const ordinal = ordinalWord(i + 1);
-
-          md.push(`### Phase ${i + 1}`);
-          md.push('');
-          md.push(`**Repos:** ${phase.join(', ')}`);
-          md.push('');
-
-          if (i === 0) {
-            // Only claim downstream consumers for the repos that actually have
-            // them. The old wording asserted it for every phase-1 repo.
-            const consumed = phase.filter((name) => (graph.get(name)?.dependedOnBy.length ?? 0) > 0);
-            md.push(
-              consumed.length > 0
-                ? `**Why first:** No dependencies on other workspace repos, and ${consumed.join(', ')} ${consumed.length === 1 ? 'is' : 'are'} depended on by a later phase.`
-                : '**Why first:** No dependencies on other workspace repos.',
-            );
-          } else if (i === phases.length - 1) {
-            md.push(
-              `**Why ${ordinal}:** Depends on APIs and types from earlier phases.`,
-            );
-          } else {
-            const prevPhases = phases
-              .slice(0, i)
-              .flat()
-              .join(', ');
-            md.push(
-              `**Why ${ordinal}:** Depends on Phase ${i === 1 ? '1' : `1–${i}`} repos (${prevPhases}). Build these before the consumers.`,
-            );
-          }
-
-          md.push('');
-        }
-
-      } else {
-        md.push('## Release coordination', '',
-          'These repositories contain circular package dependencies; that does not require removing valid service relationships.',
-          'Record the intended release sequence in `contextspace-milestones.md`: build the changed producer against compatible published clients, publish its new package, then bump and verify consumers.',
-          'For breaking contracts, introduce a compatible transition or coordinate releases explicitly. Package edges alone cannot determine a safe release order.', '');
-      }
-
-      // ── Dependency table ──────────────────────────────────────────────
-      md.push('## Dependency Table');
-      md.push('');
-      md.push('| Repo | Depends On | Depended On By |');
-      md.push('|:---|:---|:---|');
-
-      // Sort repos by phase order for a natural reading experience
-      for (const name of phases.flat()) {
-        const node = graph.get(name)!;
-        const deps = node.dependsOn.length > 0 ? node.dependsOn.join(', ') : '—';
-        const rdeps =
-          node.dependedOnBy.length > 0 ? node.dependedOnBy.join(', ') : '—';
-        md.push(`| ${name} | ${deps} | ${rdeps} |`);
-      }
-
-      md.push('');
-    }
-
-    // ── Contracts & Clients ─────────────────────────────────────────────
-    // Only packages a sibling repo actually consumes. A published package with
-    // no workspace consumer is not a cross-repo contract, and rendering it with
-    // "_None_" in the consumers column was the largest block of the old file.
-    if (contracts.length > 0) {
-      const anyContributing = contracts.some((c) => (c.contributing?.length ?? 0) > 0);
-
-      md.push('## 📦 Contracts & Clients');
-      md.push('');
-      md.push(
-        anyContributing
-          ? '| Package | Contributing Projects | Producing Repo | Consuming Repos | Type |'
-          : '| Package | Producing Repo | Consuming Repos | Type |',
-      );
-      md.push(anyContributing ? '|:---|:---|:---|:---|:---|' : '|:---|:---|:---|:---|');
-
-      for (const rel of contracts) {
-        const cells = [`\`${rel.pkgName}\``];
-        if (anyContributing) {
-          cells.push(
-            rel.contributing && rel.contributing.length > 0
-              ? rel.contributing.map((c) => `\`${c}\``).join(', ')
-              : '—',
-          );
-        }
-        cells.push(`\`${rel.producer}\``);
-        cells.push(rel.consumers.map((c) => `\`${c.repoName}\``).join(', '));
-        cells.push(`\`${rel.type}\``);
-        md.push(`| ${cells.join(' | ')} |`);
-      }
-      md.push('');
-
-      // ── Local Package Development Loop ────────────────────────────────
-      // Gated on a shared package existing at all, and on the ecosystems those
-      // packages actually use. It used to emit both branches whenever the
-      // workspace merely contained the language, so a TypeScript-only workspace
-      // carried four .NET/NuGet steps — 47% of the plan, none of it applicable.
-      const types = new Set(contracts.map((c) => c.type));
-
-      md.push('## 💡 Local Package Development Loop');
-      md.push('');
-      md.push('When changing a shared package, verify its consumers against a local build before pushing:');
-      md.push('');
-
-      if (types.has('nuget')) {
-        md.push('### .NET / NuGet');
-        md.push('1. `dotnet pack -c Release -o ./local-packages` in the producing project.');
-        md.push('2. Point a local feed in the consumer\'s `NuGet.config` at `./local-packages`.');
-        md.push('3. Reference a local version (e.g. `3.41.0-local`) in the consuming `.csproj`.');
-        md.push('4. **Revert the version reference to the official release before merging.**');
-        md.push('');
-      }
-
-      if (types.has('npm')) {
-        md.push('### Node.js / npm');
-        md.push('1. `npm link` in the producing package, then `npm link <package-name>` in the consumer.');
-        md.push('2. **Unlink and reinstall the published version before committing.**');
-        md.push('');
-      }
-    }
-
-    // ── Write file ──────────────────────────────────────────────────────
-    await writeWorkspaceFile(workspacePath, feature.id, PRIMARY_PLAN_FILE, md.join('\n'));
+    await writePlanSummary(workspacePath, { buildOrder: renderBuildOrder(ctx) });
     console.log(chalk.green('  ✔'), `Generated ${PRIMARY_PLAN_FILE}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(
-      chalk.red('  ✖'),
-      `Failed to generate implementation plan: ${message}`,
-    );
+    console.error(chalk.red('  ✖'), `Failed to generate implementation plan: ${message}`);
     throw error;
   }
 }

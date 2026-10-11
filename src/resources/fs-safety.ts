@@ -106,6 +106,28 @@ export async function assertPathIsNotLink(targetPath: string): Promise<void> {
   }
 }
 
+async function safeRename(source: string, destination: string): Promise<void> {
+  const maxAttempts = 12;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await fs.rename(source, destination);
+      return;
+    } catch (error) {
+      const code = errorCode(error);
+      if ((code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') && attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 15));
+        continue;
+      }
+      if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') {
+        await fs.copyFile(source, destination);
+        await fs.unlink(source).catch(() => {});
+        return;
+      }
+      throw error;
+    }
+  }
+}
+
 export async function atomicWriteFile(
   filePath: string,
   data: string | Uint8Array,
@@ -116,7 +138,7 @@ export async function atomicWriteFile(
   try {
     await fs.writeFile(tempPath, data);
     await beforeCommit?.();
-    await fs.rename(tempPath, filePath);
+    await safeRename(tempPath, filePath);
   } catch (error) {
     await fs.unlink(tempPath).catch(() => {});
     throw error;

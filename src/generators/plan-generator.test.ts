@@ -6,7 +6,9 @@ import * as path from 'node:path';
 import { generateImplementationPlan } from './plan-generator.js';
 import { loadWorkspaceState, saveWorkspaceState } from '../core/workspace-state.js';
 import { updateWorkGuidance } from '../core/work-guidance.js';
-import { PLANNING_NOTES_FILE, ensurePlanningNotes } from '../core/planning-notes.js';
+import { PLANNING_NOTES_FILE } from '../core/planning-notes.js';
+import { BUILD_ORDER_HEADING } from '../core/plan-summary.js';
+import { changePlan } from '../core/plan.js';
 import type { Feature, ProjectAnalysis, RepoInfo, WorkspaceContext } from '../types.js';
 
 import { PRIMARY_PLAN_FILE, BRAND_NAME, CLI_NAME } from '../core/constants.js';
@@ -100,35 +102,89 @@ describe('generateImplementationPlan', () => {
     ];
   }
 
-  describe('when no repo depends on another', () => {
-    it('exports saved milestone definitions without copying volatile progress', async () => {
+  describe('the plan summary', () => {
+    it('writes the brief and the plan in the Plan tab\'s words, with no HTML comments', async () => {
       await saveWorkspaceState({ workspacePath: dir, repos: {}, updatedAt: '', lifecycle: {
         workspaceId: 'feat', flowType: 'epic', fleet: [], updatedAt: '',
         steps: [{ id: 'measure', title: 'Measure latency', status: 'in_progress', branch: 'performance/baseline' },
           { id: 'improve', title: 'Improve lookup', status: 'pending', dependsOn: ['measure'] }],
       } });
       const content = await planFor(...unrelated());
-      expect(content).toContain('Measure latency');
-      expect(content).toContain('Depends on: Measure latency');
-      expect(content).toContain('performance/baseline');
-      expect(content).not.toContain('Recommended Lifecycle Phases');
-      // The exported definitions carry no progress. Only the current-work block, which names the one
-      // active milestone, says where it stands (as it already does for a single repo).
-      const [definitions, currentWork] = content.split('## Current work and next action');
-      expect(definitions).not.toContain('in progress');
-      expect(currentWork).toContain('Milestone:** Measure latency (in progress)');
+      expect(content.startsWith('# Plan — feat\n')).toBe(true);
+      expect(content).toContain('- **Goal:** add a discount code to checkout');
+      expect(content).toContain('```text\n');
+      expect(content).toContain('MILESTONES  in order');
+      expect(content).toContain('measure Measure latency · in progress');
+      expect(content).toContain('waits for: measure Measure latency (in progress)');
+      expect(content).toContain(`${CLI_NAME} plan`);
+      expect(content).not.toContain('<!--');
+      // Recent changes carry times like "3 min ago", which would change the file on every rewrite.
+      expect(content).not.toContain('WHAT CHANGED');
     });
 
+    it('takes the brief from the saved assignment', async () => {
+      const repo = path.join(dir, 'app');
+      await fs.writeFile(path.join(dir, 'contextspace.json'), JSON.stringify({ id: 'feat', branchName: 'feat', description: 'Improve checkout', repos: [repo], assistants: [] }));
+      await updateWorkGuidance(dir, { revision: 0, workType: 'feature', size: 'standard', assignment: {
+        stage: 'investigate', objective: 'Find the slow checkout step', expectedOutput: 'A measured profile', stopCondition: 'Before changing code',
+      } });
+      const content = await planFor([{ name: 'app', path: repo, defaultBranch: 'main' }], new Map([[repo, analysisFor('app', repo)]]));
+      expect(content).toContain('- **Goal:** Find the slow checkout step');
+      expect(content).toContain('- **Stage:** Investigate');
+      expect(content).toContain('- **Expected output:** A measured profile');
+      expect(content).toContain('- **Stop when:** Before changing code');
+      expect((await loadWorkspaceState(dir)).lifecycle).toBeUndefined();
+    });
+
+    it('says when the plan is empty, and how to add to it', async () => {
+      const content = await planFor(...unrelated());
+      expect(content).toContain('The plan has no items yet. Add one: ctxspace plan add milestone');
+    });
+
+    it('shows a blocked milestone with what it waits on', async () => {
+      const repo = path.join(dir, 'app');
+      await saveWorkspaceState({ workspacePath: dir, repos: {}, updatedAt: '', lifecycle: {
+        workspaceId: 'feat', flowType: 'feature', updatedAt: '',
+        steps: [{ id: 'access', title: 'Get test access', status: 'blocked', unblockCondition: 'the test account is available' }],
+      } });
+      const content = await planFor([{ name: 'app', path: repo, defaultBranch: 'main' }], new Map([[repo, analysisFor('app', repo)]]));
+      expect(content).toContain('access Get test access · blocked');
+      expect(content).toContain('the test account is available');
+    });
+
+    it('explains how to attach a repo to an empty workspace', async () => {
+      const content = await planFor([], new Map());
+      expect(content).toContain('- **Repository:** None yet.');
+      expect(content).toContain(`${CLI_NAME} add-repo`);
+      expect(content).not.toContain(BUILD_ORDER_HEADING);
+    });
+
+    it('reads the same when nothing changed, so a refresh makes no git change', async () => {
+      const first = await planFor(...related());
+      const second = await planFor(...related());
+      expect(second).toBe(first);
+    });
+
+    it('leaves the old planning notes exactly as they were: moving them is the refresh\'s job', async () => {
+      const authoredNotes = '# Delivery plan and open questions\n\n| Milestone ID | Outcome |\n| --- | --- |\n| m1 | Ship the discount code |\n';
+      await fs.writeFile(path.join(dir, PLANNING_NOTES_FILE), authoredNotes);
+      await planFor(...related());
+      expect(await fs.readFile(path.join(dir, PLANNING_NOTES_FILE), 'utf-8')).toBe(authoredNotes);
+    });
+  });
+
+  describe('when no repo depends on another', () => {
     it('says so once instead of five times', async () => {
       const content = await planFor(...unrelated());
 
+      expect(content).toContain(BUILD_ORDER_HEADING);
       expect(content).toContain('No package dependencies were detected');
       // Every section below existed only to describe cross-repo structure.
       expect(content).not.toContain('```mermaid');
-      expect(content).not.toContain('Suggested Implementation Order');
-      expect(content).not.toContain('Dependency Table');
-      expect(content).not.toContain('Contracts & Clients');
-      expect(content).not.toContain('Local Package Development Loop');
+      expect(content).not.toContain('Suggested order');
+      expect(content).not.toContain('Dependency table');
+      expect(content).not.toContain('Contracts and clients');
+      expect(content).not.toContain('Local package development loop');
     });
 
     it('never claims other repos depend on them, because none do', async () => {
@@ -138,7 +194,7 @@ describe('generateImplementationPlan', () => {
       expect(content).not.toContain('depended on by');
     });
 
-    it('words itself for the repo count instead of counting into one sentence', async () => {
+    it('words itself for the repo count, and says nothing about order for one repo', async () => {
       const [repos, analysis] = unrelated();
       const several = await planFor(repos, analysis);
       expect(several).toContain('between the 2 repos');
@@ -146,72 +202,20 @@ describe('generateImplementationPlan', () => {
 
       const [single] = repos;
       const one = await planFor([single!], new Map([[single!.path, analysis.get(single!.path)!]]));
-      expect(one).toContain('This workspace has one repo');
-      expect(one).toContain('Current work and next action');
-      expect(one).toContain('Example first milestone draft');
+      expect(one).not.toContain(BUILD_ORDER_HEADING);
       expect(one).not.toContain(`${CLI_NAME} add-repo`);
-      expect(one).toContain('Runtime and intra-repo contracts are not inferred');
-      expect(one).toContain(`AUTO-GENERATED by ${BRAND_NAME} from live workspace state`);
       expect(one).not.toContain('the single repo');
       expect(one).not.toContain('one of these repos to another');
     });
 
-    it('uses the saved assignment for an unsaved first milestone proposal', async () => {
-      const repo = path.join(dir, 'app');
-      await fs.writeFile(path.join(dir, 'contextspace.json'), JSON.stringify({ id: 'feat', branchName: 'feat', description: 'Improve checkout', repos: [repo], assistants: [] }));
-      await updateWorkGuidance(dir, { revision: 0, workType: 'feature', size: 'standard', assignment: {
-        stage: 'investigate', objective: 'Find the slow checkout step', expectedOutput: 'A measured profile', stopCondition: 'Before changing code',
-      } });
-      const content = await planFor([{ name: 'app', path: repo, defaultBranch: 'main' }], new Map([[repo, analysisFor('app', repo)]]));
-      expect(content).toContain('Assignment (investigate):** Find the slow checkout step');
-      expect(content).toContain('Expected output:** A measured profile');
-      expect(content).toContain('Stop when:** Before changing code');
-      expect(content).toContain('Title:** Find the slow checkout step');
-      expect(content).toContain('Saving your edited draft creates a pending milestone; it does not start work');
-      expect((await loadWorkspaceState(dir)).lifecycle).toBeUndefined();
-    });
-
-    it('points to the saved milestone instead of proposing another one', async () => {
-      const repo = path.join(dir, 'app');
-      await saveWorkspaceState({ workspacePath: dir, repos: {}, updatedAt: '', lifecycle: {
-        workspaceId: 'feat', flowType: 'feature', currentStepId: 'profile', updatedAt: '',
-        steps: [{ id: 'profile', title: 'Measure checkout latency', status: 'in_progress', requiresVerification: true }],
-      } });
-      const content = await planFor([{ name: 'app', path: repo, defaultBranch: 'main' }], new Map([[repo, analysisFor('app', repo)]]));
-      expect(content).toContain('Milestone:** Measure checkout latency (in progress)');
-      expect(content).toContain('verify before completing the milestone');
-      expect(content).not.toContain('Example first milestone draft');
-    });
-
-    it('does not call a blocked plan complete when no step is active', async () => {
-      const repo = path.join(dir, 'app');
-      await saveWorkspaceState({ workspacePath: dir, repos: {}, updatedAt: '', lifecycle: {
-        workspaceId: 'feat', flowType: 'feature', updatedAt: '',
-        steps: [{ id: 'access', title: 'Get test access', status: 'blocked', unblockCondition: 'the test account is available' }],
-      } });
-      const content = await planFor([{ name: 'app', path: repo, defaultBranch: 'main' }], new Map([[repo, analysisFor('app', repo)]]));
-      expect(content).toContain('Resolve the milestone blocker before continuing: the test account is available.');
-      expect(content).not.toContain('All saved milestones are complete');
-    });
-
-    it('stays short: the dependency part is one sentence and the rest is the current work', async () => {
+    it('stays short: the build order is one sentence', async () => {
       const content = await planFor(...unrelated());
 
-      // Was 600, when a multi-repo plan said nothing but the build order. The current-work block now
-      // makes up most of the file; this still stops the five-fold repetition coming back.
-      expect(content.length).toBeLessThan(2200);
+      expect(content.length).toBeLessThan(1600);
       expect(content.split('No package dependencies were detected').length - 1).toBe(1);
     });
 
-    it('shows the objective and that no delivery plan exists, even with several repos', async () => {
-      const content = await planFor(...unrelated());
-
-      expect(content).toContain('## Current work and next action');
-      expect(content).toContain('add a discount code to checkout');
-      expect(content).toContain('Feature delivery plan not yet defined');
-    });
-
-    it('says how to get a real plan', async () => {
+    it('says how to get a real build order', async () => {
       const content = await planFor(...unrelated());
 
       expect(content).toContain(`${CLI_NAME} refresh`);
@@ -223,8 +227,8 @@ describe('generateImplementationPlan', () => {
       const content = await planFor(...related());
 
       expect(content).toContain('```mermaid');
-      expect(content).toContain('Suggested Implementation Order');
-      expect(content).toContain('Dependency Table');
+      expect(content).toContain('### Suggested order');
+      expect(content).toContain('### Dependency table');
       expect(content.indexOf('**Repos:** core')).toBeLessThan(content.indexOf('**Repos:** web'));
     });
 
@@ -237,8 +241,7 @@ describe('generateImplementationPlan', () => {
     it('lists the shared package with its real consumer', async () => {
       const content = await planFor(...related());
 
-      expect(content).toContain('Contracts & Clients');
-      expect(content).toContain('`@acme/core`');
+      expect(content).toContain('### Contracts and clients');
       expect(content).toContain('| `@acme/core` | `core` | `web` | `npm` |');
       expect(content).not.toContain('^1.0.0');
       expect(content).not.toContain('_None_');
@@ -247,7 +250,7 @@ describe('generateImplementationPlan', () => {
     it('gives the npm dev loop and not the NuGet one', async () => {
       const content = await planFor(...related());
 
-      expect(content).toContain('Local Package Development Loop');
+      expect(content).toContain('### Local package development loop');
       expect(content).toContain('npm link');
       expect(content).not.toContain('dotnet pack');
     });
@@ -258,80 +261,23 @@ describe('generateImplementationPlan', () => {
 
       expect(content).not.toContain('Contributing Projects');
     });
-  });
 
-  describe('the current work comes before the build order, whatever the number of repos', () => {
-    const authoredNotes = [
-      '# Delivery plan and open questions', '',
-      '## Outcomes and release order', '',
-      '| Milestone ID | Outcome |', '| --- | --- |', '| m1 | Ship the discount code |', '',
-    ].join('\n');
-
-    it('leads with the objective, then labels the dependency order as supporting information', async () => {
+    it('puts the plan first and labels the build order as supporting information', async () => {
       const content = await planFor(...related());
 
-      const work = content.indexOf('## Current work and next action');
-      expect(work).toBeGreaterThan(-1);
-      expect(work).toBeLessThan(content.indexOf('## Dependency Diagram'));
-      expect(work).toBeLessThan(content.indexOf('## Package dependency order'));
-      expect(content).toContain('add a discount code to checkout');
-      expect(content).toContain('not a feature delivery plan');
-      expect(content).toContain('contextspace-assignment.md');
-      // The dependency material itself is unchanged.
-      expect(content).toContain('Suggested Implementation Order');
+      expect(content.indexOf('```text')).toBeLessThan(content.indexOf(BUILD_ORDER_HEADING));
+      expect(content).toContain(`Worked out by ${BRAND_NAME} from the package dependencies between repos. It is not the delivery plan`);
+      expect(content.trimEnd().endsWith('**Unlink and reinstall the published version before committing.**')).toBe(true);
     });
 
-    it('says plainly that no delivery plan exists when nothing has been written', async () => {
-      const content = await planFor(...related());
-
-      expect(content).toContain('Feature delivery plan not yet defined');
-      expect(content).toContain('Example first milestone draft');
-    });
-
-    it('treats the untouched planning-notes template as no plan', async () => {
-      await ensurePlanningNotes(dir, 'feat');
-      const content = await planFor(...related());
-
-      expect(content).toContain('Feature delivery plan not yet defined');
-    });
-
-    it('points at authored planning notes instead of claiming no plan exists', async () => {
-      await fs.writeFile(path.join(dir, PLANNING_NOTES_FILE), authoredNotes);
-      const content = await planFor(...related());
-
-      expect(content).toContain(`authored planning notes exist in ${PLANNING_NOTES_FILE}`);
-      expect(content).toContain('proposals until the owner approves them');
-      expect(content).not.toContain('not yet defined');
-      expect(content).not.toContain('Example first milestone draft');
-    });
-
-    it('leaves the authored planning notes exactly as they were', async () => {
-      await fs.writeFile(path.join(dir, PLANNING_NOTES_FILE), authoredNotes);
+    it('keeps the build order when the plan changes between refreshes', async () => {
       await planFor(...related());
+      await changePlan(dir, { type: 'add', kind: 'milestone', title: 'Add the discount field' }, { actor: { by: 'user' } });
 
-      expect(await fs.readFile(path.join(dir, PLANNING_NOTES_FILE), 'utf-8')).toBe(authoredNotes);
-    });
-
-    it('shows the saved milestone instead of the "not defined" line', async () => {
-      await saveWorkspaceState({ workspacePath: dir, repos: {}, updatedAt: '', lifecycle: {
-        workspaceId: 'feat', flowType: 'feature', currentStepId: 'code', updatedAt: '',
-        steps: [{ id: 'code', title: 'Add the discount field', status: 'pending' }],
-      } });
-      const content = await planFor(...related());
-
-      expect(content).toContain('Milestone:** Add the discount field (pending)');
-      expect(content).not.toContain('not yet defined');
-    });
-
-    it('uses the saved assignment for a workspace whose repos depend on each other', async () => {
-      await fs.writeFile(path.join(dir, 'contextspace.json'), JSON.stringify({ id: 'feat', branchName: 'feat', description: 'add a discount code to checkout', repos: [], assistants: [] }));
-      await updateWorkGuidance(dir, { revision: 0, workType: 'feature', size: 'standard', assignment: {
-        stage: 'investigate', objective: 'Find where totals are computed', expectedOutput: 'A short design', stopCondition: 'Before changing code',
-      } });
-      const content = await planFor(...related());
-
-      expect(content).toContain('Assignment (investigate):** Find where totals are computed');
-      expect(content).toContain('Stop when:** Before changing code');
+      const content = await fs.readFile(path.join(dir, PRIMARY_PLAN_FILE), 'utf-8');
+      expect(content).toContain('M1 Add the discount field');
+      expect(content).toContain('```mermaid');
+      expect(content.split(BUILD_ORDER_HEADING).length - 1).toBe(1);
     });
   });
 
@@ -354,8 +300,8 @@ describe('generateImplementationPlan', () => {
       );
 
       expect(content).not.toContain('@acme/lib');
-      expect(content).not.toContain('Local Package Development Loop');
-      expect(content).toContain('This workspace has one repo');
+      expect(content).not.toContain('Local package development loop');
+      expect(content).not.toContain(BUILD_ORDER_HEADING);
     });
   });
 
@@ -390,41 +336,32 @@ describe('generateImplementationPlan', () => {
       expect(content).not.toContain('No dependencies on other workspace repos');
     });
 
-    it('keeps circular package topology separate from authored release order', async () => {
+    it('keeps circular package topology separate from the release order, which goes in the plan', async () => {
       const content = await planFor(...cyclic());
 
       expect(content).toContain('circular package dependencies');
       expect(content).toContain('publish its new package, then bump and verify consumers');
-      expect(content).toContain('contextspace-milestones.md');
+      expect(content).toContain(`${CLI_NAME} plan add milestone`);
+      expect(content).not.toContain('contextspace-milestones.md');
       expect(content).not.toContain('break the cycle');
       expect(content).not.toContain('```mermaid');
-      expect(content).not.toContain('Suggested Implementation Order');
+      expect(content).not.toContain('Suggested order');
     });
   });
 
   describe('robustness', () => {
-    it('falls back to an alphabetical list when there is no analysis', async () => {
+    it('lists the repos in alphabetical order when there is no analysis', async () => {
       const [repos] = unrelated();
       const content = await planFor(repos, new Map());
 
-      expect(content).toContain('- tool');
-      expect(content).toContain('- web');
-      expect(content.indexOf('- tool')).toBeLessThan(content.indexOf('- web'));
+      expect(content).toContain('No project analysis was available, so no order is known. Repos: tool, web.');
     });
 
-    it('keeps the next action visible for one repo even when analysis is unavailable', async () => {
+    it('still writes the plan for one repo when analysis is unavailable', async () => {
       const repo = path.join(dir, 'solo');
       const content = await planFor([{ name: 'solo', path: repo, defaultBranch: 'main' }], new Map());
-      expect(content).toContain('Current work and next action');
-      expect(content).toContain('Example first milestone draft');
-      expect(content).toContain('- solo');
-    });
-
-    it('explains how to attach a repo to an empty workspace', async () => {
-      const content = await planFor([], new Map());
-      expect(content).toContain('No repository attached yet');
-      expect(content).toContain(`${CLI_NAME} add-repo`);
-      expect(content).toContain('Example first milestone draft');
+      expect(content).toContain('```text');
+      expect(content).not.toContain(BUILD_ORDER_HEADING);
     });
 
     it('survives an analysis carrying no dependency array', async () => {
@@ -437,7 +374,7 @@ describe('generateImplementationPlan', () => {
         new Map([[repo, analysis]]),
       );
 
-      expect(content).toContain('This workspace has one repo');
+      expect(content).toContain('# Plan — feat');
     });
   });
 });

@@ -21,7 +21,7 @@ export const DATA_INVENTORY: readonly DataClass[] = [
   },
   {
     id: 'authored-context', title: 'Briefs, assignments and sources', owner: 'ContextSpace, authored by you',
-    storage: 'Workspace manifest, contextspace-work.json, contextspace-document-*.md and contextspace-milestones.md. Documents use the selected storage adapter.',
+    storage: 'Workspace manifest, contextspace-work.json, the plan (contextspace-plan.json: milestones, tasks, questions and decisions, each with its last 20 changes), contextspace-document-*.md, and older planning files moved into the plan, kept in .contextspace/archive/ for one release. Documents and the plan use the selected storage adapter; check results stay in the local state file.',
     network: 'Local storage by default. Reading context with an assistant can send it through that assistant. Link attachments store the URL; viewing external links contacts their destination. Plugin adapters may use a remote store.',
     retention: 'No automatic expiry. Workspace deletion removes local documents; archiving keeps them readable. Active project-source owners cannot be deleted until sources are migrated or superseded.',
     controls: 'Manage sources in Plan. Shared project sources remain owned by their originating workspace; superseding a source does not erase its content.',

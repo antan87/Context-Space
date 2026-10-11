@@ -11,6 +11,8 @@ import type { Feature, NormalizedUsage, NormalizedRemainingQuota } from '../../t
 import { API_BASE } from '../../lib/apiBase.js';
 import { clipboardHtmlToText, safeCopyToClipboard } from '../../lib/clipboard.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
+import { usePlan } from '../../lib/api/queries.js';
+import { planNames } from '../plan/planView.js';
 import { loadChatStore, saveChatStore, clearChatStore, fetchRemoteChatStore, type ChatMessage, type ChatStore } from './chatStore.js';
 import { providerForAssistant, readChatLaunchIntent } from './chatLaunch.js';
 import { SessionPicker, type PickableSession } from './SessionPicker.js';
@@ -370,11 +372,14 @@ const MessageBubble = memo(function MessageBubble({
   idx,
   copied,
   onCopy,
+  planNames,
 }: {
   msg: ChatMessage;
   idx: number;
   copied: boolean;
   onCopy: (idx: number, content: string) => void;
+  /** The plan's codes and names, so codes in a reply show their names. */
+  planNames?: Map<string, string>;
 }) {
   if (msg.role === 'system') {
     return (
@@ -421,7 +426,7 @@ const MessageBubble = memo(function MessageBubble({
                 <Ansi>{msg.content}</Ansi>
               </div>
             ) : (
-              <ChatMarkdown content={msg.content} />
+              <ChatMarkdown content={msg.content} planNames={planNames} />
             )}
             {msg.filesChanged && msg.filesChanged.length > 0 && (
               <div className="mt-2 flex flex-col gap-1.5 rounded-md border border-border/70 bg-muted/30 p-2 text-xs">
@@ -480,6 +485,8 @@ const MessageBubble = memo(function MessageBubble({
 });
 
 export function AgentChat({ ws, draft, onDraftConsumed }: AgentChatProps) {
+  const plan = usePlan(ws.branchName);
+  const planCodeNames = useMemo(() => planNames(plan.data), [plan.data]);
   const location = useLocation();
   const navigate = useNavigate();
   const [providers, setProviders] = useState<ChatProvider[]>([]);
@@ -1794,6 +1801,7 @@ export function AgentChat({ ws, draft, onDraftConsumed }: AgentChatProps) {
             idx={idx}
             copied={copiedIdx === idx}
             onCopy={copyMessage}
+            planNames={planCodeNames}
           />
         ))}
         {showThinking && (

@@ -41,6 +41,8 @@ import { WorkspaceBackupNotice } from '../features/workspace-shell/WorkspaceBack
 import { BranchDriftNotice } from '../features/workspace-shell/BranchDriftNotice.js';
 import { WorkspaceRail } from '../features/workspace-shell/WorkspaceRail.js';
 import { SECTION_LABELS, visibleSection, type WorkspaceSection } from '../features/workspace-shell/destinations.js';
+import { useLocation } from 'react-router-dom';
+import { parseWorkspacePath } from '../features/chat/chatRoute.js';
 import { ArchivedNotice, ArchivedWorkspaceView } from '../features/workspace-shell/ArchivedWorkspaceView.js';
 import { useCockpitStore, cockpitStore, upcastWorkspaceToCockpit } from '../features/cockpit/cockpitStore.js';
 
@@ -110,6 +112,10 @@ import { KnowledgeBase } from '../features/knowledge/KnowledgeBase.js';
 import { ImplementationPlan } from '../features/plan/ImplementationPlan.js';
 import { RootDocumentsPanel } from '../features/work-guidance/RootDocumentsPanel.js';
 import { WorkspaceWorkPanel } from '../features/work-guidance/WorkspaceWorkPanel.js';
+import { HomePlan } from '../features/workspace-home/HomePlan.js';
+import { WorkspaceSessions } from '../features/workspace-home/WorkspaceSessions.js';
+import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
+import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
 import { ChatMarkdown } from '../components/ChatMarkdown.js';
 
@@ -174,9 +180,12 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
 
   const [planVersion, setPlanVersion] = useState(0);
   const selected = workspaces.find((w) => w.branchName === selectedId) ?? null;
-  // An archived workspace shows only its record; deep links elsewhere land on its overview.
+  // An archived workspace shows only its record; deep links elsewhere land on its overview. With no section in the
+  // address, it opens on that record rather than on the plan, where an active workspace opens.
   const archived = Boolean(selected?.archivedAt);
-  const subTab = visibleSection(requestedSubTab, archived);
+  const { pathname } = useLocation();
+  const bareAddress = parseWorkspacePath(pathname) !== null && !/^\/workspaces\/[^/]+\/[^/]+/.test(pathname);
+  const subTab = archived && bareAddress ? 'overview' : visibleSection(requestedSubTab, archived);
   const [restoring, setRestoring] = useState(false);
   const handleRestore = async () => {
     if (!selected || !handleUnarchiveWorkspace) return;
@@ -195,6 +204,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
   const { open: openChat, activeTab, splitTab, setSplitTab } = useFloatingChat();
   // The chat is the centre of the screen. Other parts open as a panel beside it when there is room, and by themselves when not.
   const layout = useChatLayout();
+  const runningTerminals = useRunningTerminals();
   const [body, setBody] = useState<HTMLDivElement | null>(null);
   const bodyWidth = useElementWidth(body);
   const roomBeside = hasRoomBeside(bodyWidth);
@@ -607,7 +617,11 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     const st = workspaceStatuses[selected.branchName];
     const totalChangedFiles = st?.changedFiles ?? 0;
     const showPanel = subTab !== 'chat';
-    const showChat = !archived && (subTab === 'chat' || (roomBeside && !layout.hidden));
+    // The plan is the workspace's home. A running session shows beside it when there is room; with none running, the
+    // plan has the sessions beside it instead, so starting one is a click.
+    const sessionRunning = (runningTerminals.data ?? []).some((terminal) => terminal.workspace === selected.branchName && terminal.state === 'running');
+    const showChat = !archived && (subTab === 'chat' || (roomBeside && !layout.hidden && (subTab !== 'plan' || sessionRunning)));
+    const sessionsOnPlan = !archived && subTab === 'plan' && !showChat;
 
     const panelActions = <>
       {roomBeside && !archived && (
@@ -796,8 +810,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                 Code and Docs carry these in their own toolbars, so each spends one row on controls instead of two. */}
             {subTab !== 'changes' && subTab !== 'documents' && (
             <div className="z-10 flex shrink-0 items-center gap-0.5 border-b border-border/60 bg-background/95 px-6 py-1.5 backdrop-blur">
-              {/* A label, not a heading: the part below names itself, and its region carries the same name. */}
-              <p className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{SECTION_LABELS[subTab]}</p>
+              {/* A label, not a heading: the part below names itself, and its region carries the same name. On the plan, the
+                  sessions sit beside it as tabs. */}
+              {sessionsOnPlan ? <WorkspaceTabs workspace={selected.branchName} />
+                : <p className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{SECTION_LABELS[subTab]}</p>}
               {panelActions}
             </div>
             )}
@@ -1396,12 +1412,17 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               )}
               {subTab === 'knowledge' && <KnowledgeBase ws={selected} {...knowledgeProps} readOnly={archived} />}
               {subTab === 'skills' && <WorkspaceSkillsTab ws={selected} showToast={showToast} />}
-              {visitedSections.has('plan') && <div hidden={subTab !== 'plan'} className="space-y-6">
-                <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onPlanChanged={() => {
-                  setPlanVersion((version) => version + 1);
-                  void planProps.handleRetryPlan(selected.branchName);
-                }} />
-                <ImplementationPlan key={`${selected.branchName}-${planVersion}`} workspaceId={selected.branchName} defaultViewMode="flow" {...planProps} readOnly={archived} />
+              {visitedSections.has('plan') && <div hidden={subTab !== 'plan'} className={sessionsOnPlan ? 'grid gap-6 xl:grid-cols-[minmax(0,1fr)_17rem]' : ''}>
+                <div className="min-w-0 space-y-6">
+                <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived}
+                  plan={<HomePlan key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onChanged={() => {
+                    // The Visual Flow and the plan summary follow the plan.
+                    setPlanVersion((version) => version + 1);
+                    void planProps.handleRetryPlan(selected.branchName);
+                  }} />} />
+                <ImplementationPlan key={`${selected.branchName}-${planVersion}`} workspaceId={selected.branchName} {...planProps} readOnly={archived} />
+                </div>
+                {sessionsOnPlan && <div className="min-w-0 xl:sticky xl:top-0 xl:self-start"><WorkspaceSessions workspace={selected.branchName} /></div>}
               </div>}
               {subTab === 'services' && <ServiceConsole ws={selected} />}
           </div>

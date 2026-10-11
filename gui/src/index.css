@@ -641,3 +641,6 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 24px;
 }
+
+/* A plan code in chat, shown with its name (ChatMarkdown). */
+.plan-code { display: inline-block; border-radius: 0.3rem; padding: 0 0.3rem; font-size: 0.85em; font-weight: 500; line-height: 1.5; background: var(--muted); color: var(--foreground); white-space: nowrap; }

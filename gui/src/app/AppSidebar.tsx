@@ -40,7 +40,7 @@ import { ActivityDots } from '../features/chat/ActivityDots.js';
 import { cycleKeysLabel, isApplePlatform, jumpKeyLabel, sessionModifierName } from '../features/workspace-shell/sessionShortcuts.js';
 import { sessionInitials } from '../features/workspace-shell/sessionInitials.js';
 import { focusSessionLink, sessionToFocusAfterClose } from '../features/workspace-shell/sessionFocus.js';
-import { pathForSwitchingTo } from '../features/chat/chatRoute.js';
+import { chatPath, pathForSwitchingTo } from '../features/chat/chatRoute.js';
 import { useChatAttention, useWindowAttentive } from '../features/chat/useChatAttention.js';
 import { useLiveSessions } from '../features/chat/useLiveSessions.js';
 import { liveText, runningFirst } from '../features/chat/liveSessions.js';
@@ -719,7 +719,8 @@ function SidebarContents({
                             )}
                           >
                             <Link
-                              to={`/workspaces/${encodeURIComponent(w.branchName)}`}
+                              // A workspace opens on its plan; one whose AI waits for an answer opens on the chat, where the question is.
+                              to={question !== undefined ? chatPath(w.branchName) : `/workspaces/${encodeURIComponent(w.branchName)}`}
                               onClick={() => onSelectWorkspace?.(w.branchName)}
                               aria-current={isSelected ? 'page' : undefined}
                               className="flex min-w-0 flex-1 flex-col gap-0.5"

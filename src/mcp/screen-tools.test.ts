@@ -9,6 +9,7 @@ import { PRIMARY_MANIFEST_FILE } from '../core/constants.js';
 import { SCREEN_EVENTS_FILE } from '../core/screen-events.js';
 import { setScreenSharing, saveScreenContext } from '../core/screen-context.js';
 import { loadWorkspaceState, saveWorkspaceState } from '../core/workspace-state.js';
+import { loadWorkspaceLifecycle } from '../core/lifecycle.js';
 import type { LifecycleStep, NexusFlowConfig } from '../types.js';
 
 vi.mock('../core/planning-refresh.js', () => ({ refreshPlanningContext: vi.fn(async () => ({ contextRefreshed: true })) }));
@@ -56,7 +57,8 @@ const call = async (name: string, args: Record<string, unknown>) => {
 };
 const screenLines = async () => (await fs.readFile(path.join(dir, '.contextspace', SCREEN_EVENTS_FILE), 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
 const seed = (steps: LifecycleStep[]) => saveWorkspaceState({ workspacePath: dir, repos: {}, updatedAt: '', lifecycle: { workspaceId: 'ws-one', flowType: 'feature', updatedAt: '', revision: 1, steps } });
-const stepsNow = async () => (await loadWorkspaceState(dir)).lifecycle!.steps;
+// The lifecycle is a view over the plan store.
+const stepsNow = async () => (await loadWorkspaceLifecycle(dir, { includeFleet: false })).steps;
 
 describe('registration', () => {
   const names = ['show_in_reader', 'annotate_document', 'suggest_next', 'set_milestone', 'get_screen_context'];
@@ -229,6 +231,8 @@ describe('set_milestone', () => {
     await seed([step('plan', 'pending')]);
     const { body } = await call('set_milestone', { id: 'plan', state: 'in_progress' });
     expect(body).toMatchObject({ status: 'started', milestone: 'plan', contextRefreshed: true });
+    // It still works for one release, and says which command replaces it.
+    expect(body.deprecated).toContain('`ctxspace plan start|block|done <code>`');
     expect((await stepsNow())[0]!.status).toBe('in_progress');
     expect((await screenLines())[0]).toMatchObject({ event: 'milestone', payload: { stepId: 'plan', state: 'in_progress' } });
     expect(refreshPlanningContext).toHaveBeenCalledTimes(1);

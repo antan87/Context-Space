@@ -4,7 +4,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { assertFileHandleMatchesPath, assertNoLinkedPathComponents, assertPathWithin, readFileHandleAtMost } from './fs-safety.js';
+import { assertFileHandleMatchesPath, assertNoLinkedPathComponents, assertPathWithin, atomicWriteFile, readFileHandleAtMost } from './fs-safety.js';
 
 const cleanupPaths: string[] = [];
 
@@ -81,5 +81,16 @@ describe('filesystem safety', () => {
     } finally {
       await handle.close();
     }
+  });
+
+  it('atomically creates and replaces files via atomicWriteFile', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-atomic-write-'));
+    cleanupPaths.push(root);
+    const filePath = path.join(root, 'target.txt');
+    await atomicWriteFile(filePath, 'hello world');
+    expect(await fs.readFile(filePath, 'utf8')).toBe('hello world');
+
+    await atomicWriteFile(filePath, 'updated content');
+    expect(await fs.readFile(filePath, 'utf8')).toBe('updated content');
   });
 });

@@ -156,6 +156,7 @@ export function buildCodexTurnArgs(
 export class CodexCliAdapter extends CliAdapterBase {
   protected readonly binary: string;
   protected readonly label = 'Codex CLI';
+  protected override readonly harness = 'codex';
   protected readonly useShell: boolean;
   protected readonly promptViaStdin = true;
 
