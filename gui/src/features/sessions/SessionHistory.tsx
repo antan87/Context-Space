@@ -1,6 +1,6 @@
 import { SessionActivity } from './SessionActivity.js';
 import { SessionKind, mainSessionFor } from './SessionKind.js';
-import React, { useRef, useState, useMemo, useCallback } from 'react';
+import React, { useRef, useState, useMemo, useCallback, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ChevronDown,
@@ -17,7 +17,7 @@ import {
 import { BsOpenai } from 'react-icons/bs';
 import { SiClaude, SiGithubcopilot } from 'react-icons/si';
 import { AntigravityIcon } from '../../components/icons/AntigravityIcon.js';
-import { HarnessIcon } from '../../components/icons/HarnessIcon.js';
+import { HarnessIcon, harnessName } from '../../components/icons/HarnessIcon.js';
 
 import type { AISession, Feature, TranscriptMessage } from '../../types.js';
 import { Button } from '../../components/ui/button.js';
@@ -51,6 +51,36 @@ interface SessionHistoryProps {
   showToast?: (message: string, type?: 'success' | 'error' | 'info', duration?: number) => void;
   initialSearch?: string;
   initialViewMode?: SessionViewMode;
+}
+
+export function matchesSessionQuery(
+  session: AISession,
+  query: string,
+  harness?: { name?: string; cliCommand?: string }
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+
+  const ast = session.assistant?.toLowerCase() ?? '';
+  const vendorAliases = ast === 'antigravity'
+    ? 'google antigravity agy'
+    : ast === 'claude'
+    ? 'claude code anthropic'
+    : ast === 'codex'
+    ? 'openai codex'
+    : ast === 'copilot'
+    ? 'github copilot microsoft'
+    : ast;
+
+  const hName = harness?.name?.toLowerCase() ?? '';
+  const hCli = harness?.cliCommand?.toLowerCase() ?? '';
+  const knownHarnessName = harnessName(session.assistant).toLowerCase();
+
+  const title = (session.title ?? '').toLowerCase();
+  const id = (session.id ?? '').toLowerCase();
+
+  const hay = `${title} ${id} ${ast} ${vendorAliases} ${knownHarnessName} ${hName} ${hCli}`;
+  return hay.includes(q);
 }
 
 const getResumeCliCommand = (assistant: string, sessionId: string): string => {
@@ -150,6 +180,10 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
 
   // Collapsed / expanded state per harness (default to false / collapsed)
   const [expandedHarnesses, setExpandedHarnesses] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setExpandedHarnesses({});
+  }, [searchQuery]);
 
   const toggleHarness = (id: string, currentlyExpanded: boolean) => {
     setExpandedHarnesses((prev) => ({ ...prev, [id]: !currentlyExpanded }));
@@ -274,11 +308,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       list = list.filter((s) => s.assistant === selectedAssistantFilter);
     }
     if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      list = list.filter((s) => {
-        const astName = s.assistant === 'antigravity' ? 'google antigravity agy' : s.assistant === 'claude' ? 'claude code' : s.assistant === 'codex' ? 'openai codex' : s.assistant === 'copilot' ? 'github copilot' : s.assistant;
-        return `${s.title ?? ''} ${s.id} ${s.assistant} ${astName}`.toLowerCase().includes(q);
-      });
+      list = list.filter((s) => matchesSessionQuery(s, searchQuery));
     }
     return sortSessions(list, sortBy);
   }, [sessions, selectedAssistantFilter, searchQuery, sortBy]);
@@ -456,10 +486,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
             </button>
             {installedHarnesses.map((harness) => {
               const count = searchQuery.trim()
-                ? harness.sessions.filter((s) => {
-                    const q = searchQuery.trim().toLowerCase();
-                    return `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q);
-                  }).length
+                ? harness.sessions.filter((s) => matchesSessionQuery(s, searchQuery, harness)).length
                 : harness.sessions.length;
               return (
                 <button
@@ -704,8 +731,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
         /* Grouped View (By Harness - Clean Flat Divided Card) */
         <div className="space-y-2.5">
           {searchQuery.trim() && visibleHarnesses.every((harness) => {
-            const q = searchQuery.trim().toLowerCase();
-            return !harness.sessions.some((s) => `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q));
+            return !harness.sessions.some((s) => matchesSessionQuery(s, searchQuery, harness));
           }) ? (
             <Card className="py-8 text-center text-xs text-muted-foreground surface-card">
               No chat sessions match your search filter.
@@ -714,14 +740,11 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
             visibleHarnesses
               .filter((harness) => {
                 if (!searchQuery.trim()) return true;
-                const q = searchQuery.trim().toLowerCase();
-                return harness.sessions.some((s) => `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q));
+                return harness.sessions.some((s) => matchesSessionQuery(s, searchQuery, harness));
               })
               .map((harness) => {
                 const harnessSessions = harness.sessions.filter((s) => {
-                  if (!searchQuery.trim()) return true;
-                  const q = searchQuery.trim().toLowerCase();
-                  return `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q);
+                  return matchesSessionQuery(s, searchQuery, harness);
                 });
                 const isExpanded = expandedHarnesses[harness.id] !== undefined
                   ? expandedHarnesses[harness.id]

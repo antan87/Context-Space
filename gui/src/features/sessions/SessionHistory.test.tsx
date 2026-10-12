@@ -132,4 +132,31 @@ describe('SessionHistory - Search and Filter', () => {
     });
     expect(html).toContain('No chat sessions match your search filter.');
   });
+
+  it('matches assistant by CLI command in grouped view and updates pill counts', () => {
+    // Search by CLI command 'agy' in grouped view
+    const htmlByCli = renderHistory({
+      initialSearch: 'agy',
+    });
+    expect(htmlByCli).toContain('CLI: agy');
+    expect(htmlByCli).toContain('Fix auth login bug');
+    expect(htmlByCli).not.toContain('Refactor search components');
+    // Antigravity pill shows count (1) and Claude shows (0)
+    expect(htmlByCli).toContain('Antigravity (1)');
+    expect(htmlByCli).toContain('Code (0)');
+  });
+
+  it('matches sessions by vendor names (google, anthropic, openai) in grouped view', () => {
+    const htmlGoogle = renderHistory({
+      initialSearch: 'google',
+    });
+    expect(htmlGoogle).toContain('Fix auth login bug');
+    expect(htmlGoogle).not.toContain('Refactor search components');
+
+    const htmlAnthropic = renderHistory({
+      initialSearch: 'anthropic',
+    });
+    expect(htmlAnthropic).toContain('Refactor search components');
+    expect(htmlAnthropic).not.toContain('Fix auth login bug');
+  });
 });

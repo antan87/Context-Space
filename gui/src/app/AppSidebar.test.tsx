@@ -278,5 +278,19 @@ describe('AppSidebar - Open Sessions and Close Controls', () => {
     expect(openSessionsIdx).toBeGreaterThan(-1);
     expect(searchIdx).toBeLessThan(openSessionsIdx);
   });
+
+  it('filters open sessions and workspaces by repository name', () => {
+    floatingChatStore.openCli('feat/alpha');
+    floatingChatStore.addTab('feat/beta');
+
+    const html = renderSidebar({
+      activeWsId: 'feat/alpha',
+      initialSearch: 'repo-a',
+    });
+
+    // Matches Alpha whose repos contains repo-a
+    expect(html).toContain('data-sidebar-session="feat/alpha"');
+    expect(html).not.toContain('data-sidebar-session="feat/beta"');
+  });
 });
 
