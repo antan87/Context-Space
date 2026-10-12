@@ -239,4 +239,44 @@ describe('AppSidebar - Open Sessions and Close Controls', () => {
     expect(html).toContain('aria-label="Close session Feature Alpha"');
     expect(html).not.toContain('Resume CLI chat for feat/alpha');
   });
+
+  it('filters open sessions when initialSearch is provided', () => {
+    floatingChatStore.openCli('feat/alpha');
+    floatingChatStore.addTab('feat/beta');
+
+    // Filter matching only Alpha
+    const htmlMatchingAlpha = renderSidebar({
+      activeWsId: 'feat/alpha',
+      initialSearch: 'Alpha',
+    });
+
+    expect(htmlMatchingAlpha).toContain('data-sidebar-session="feat/alpha"');
+    expect(htmlMatchingAlpha).not.toContain('data-sidebar-session="feat/beta"');
+    expect(htmlMatchingAlpha).toContain('aria-label="Close session Feature Alpha"');
+    expect(htmlMatchingAlpha).not.toContain('aria-label="Close session Feature Beta"');
+    expect(htmlMatchingAlpha).not.toContain('No open sessions match');
+
+    // Filter matching neither
+    const htmlMatchingNone = renderSidebar({
+      activeWsId: 'feat/alpha',
+      initialSearch: 'NonExistentXYZ',
+    });
+
+    expect(htmlMatchingNone).not.toContain('data-sidebar-session="feat/alpha"');
+    expect(htmlMatchingNone).not.toContain('data-sidebar-session="feat/beta"');
+    expect(htmlMatchingNone).toContain('No open sessions match');
+  });
+
+  it('renders filter search toolbar above Open Sessions', () => {
+    floatingChatStore.openCli('feat/alpha');
+
+    const html = renderSidebar({ activeWsId: 'feat/alpha' });
+    const searchIdx = html.indexOf('placeholder="Filter..."');
+    const openSessionsIdx = html.indexOf('Open Sessions');
+
+    expect(searchIdx).toBeGreaterThan(-1);
+    expect(openSessionsIdx).toBeGreaterThan(-1);
+    expect(searchIdx).toBeLessThan(openSessionsIdx);
+  });
 });
+

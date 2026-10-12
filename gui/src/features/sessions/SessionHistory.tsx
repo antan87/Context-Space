@@ -49,6 +49,8 @@ interface SessionHistoryProps {
   fetchSessionTranscript: (assistant: string, sessionId: string) => Promise<void>;
   handleOpenDesktopSession: (ws: Feature, sessionId: string, assistant: string) => Promise<boolean>;
   showToast?: (message: string, type?: 'success' | 'error' | 'info', duration?: number) => void;
+  initialSearch?: string;
+  initialViewMode?: SessionViewMode;
 }
 
 const getResumeCliCommand = (assistant: string, sessionId: string): string => {
@@ -116,6 +118,8 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
   fetchSessionTranscript,
   handleOpenDesktopSession,
   showToast,
+  initialSearch = '',
+  initialViewMode = 'harness',
 }) => {
   const [includeSubagents, setIncludeSubagents] = useState(false);
   const sessions = useMemo(() => allSessions.filter(s => includeSubagents || s.threadKind !== 'subagent'), [allSessions, includeSubagents]);
@@ -140,21 +144,15 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
 
   // Sorting & Filtering state
   const [sortBy, setSortBy] = useState<SessionSortOption>('updated-desc');
-  const [viewMode, setViewMode] = useState<SessionViewMode>('harness');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<SessionViewMode>(initialViewMode);
+  const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [selectedAssistantFilter, setSelectedAssistantFilter] = useState<string>('all');
 
   // Collapsed / expanded state per harness (default to false / collapsed)
-  const [expandedHarnesses, setExpandedHarnesses] = useState<Record<string, boolean>>({
-    antigravity: false,
-    claude: false,
-    codex: false,
-    copilot: false,
-    pi: false,
-  });
+  const [expandedHarnesses, setExpandedHarnesses] = useState<Record<string, boolean>>({});
 
-  const toggleHarness = (id: string) => {
-    setExpandedHarnesses((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleHarness = (id: string, currentlyExpanded: boolean) => {
+    setExpandedHarnesses((prev) => ({ ...prev, [id]: !currentlyExpanded }));
   };
 
   const resumingTerminalRef = useRef(false);
@@ -276,8 +274,11 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       list = list.filter((s) => s.assistant === selectedAssistantFilter);
     }
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter((s) => `${s.title} ${s.id} ${s.assistant}`.toLowerCase().includes(q));
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter((s) => {
+        const astName = s.assistant === 'antigravity' ? 'google antigravity agy' : s.assistant === 'claude' ? 'claude code' : s.assistant === 'codex' ? 'openai codex' : s.assistant === 'copilot' ? 'github copilot' : s.assistant;
+        return `${s.title ?? ''} ${s.id} ${s.assistant} ${astName}`.toLowerCase().includes(q);
+      });
     }
     return sortSessions(list, sortBy);
   }, [sessions, selectedAssistantFilter, searchQuery, sortBy]);
@@ -397,6 +398,14 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
     return allHarnesses.filter((h) => h.isDetected || h.sessions.length > 0);
   }, [allHarnesses]);
 
+  const visibleHarnesses = useMemo(() => {
+    let list = installedHarnesses;
+    if (selectedAssistantFilter !== 'all') {
+      list = list.filter((h) => h.id === selectedAssistantFilter);
+    }
+    return list;
+  }, [installedHarnesses, selectedAssistantFilter]);
+
   const sortLabelMap: Record<SessionSortOption, string> = {
     'created-desc': 'Newest',
     'created-asc': 'Oldest',
@@ -443,10 +452,15 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                   : 'bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted'
               )}
             >
-              All ({sessions.length})
+              All ({searchQuery.trim() ? filteredSessions.length : sessions.length})
             </button>
             {installedHarnesses.map((harness) => {
-              const count = harness.sessions.length;
+              const count = searchQuery.trim()
+                ? harness.sessions.filter((s) => {
+                    const q = searchQuery.trim().toLowerCase();
+                    return `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q);
+                  }).length
+                : harness.sessions.length;
               return (
                 <button
                   type="button"
@@ -689,97 +703,114 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       ) : (
         /* Grouped View (By Harness - Clean Flat Divided Card) */
         <div className="space-y-2.5">
-          {installedHarnesses.map((harness) => {
-            const isExpanded = expandedHarnesses[harness.id] ?? false;
-            const harnessSessions = harness.sessions.filter((s) => {
-              if (!searchQuery.trim()) return true;
-              const q = searchQuery.toLowerCase();
-              return `${s.title} ${s.id}`.toLowerCase().includes(q);
-            });
+          {searchQuery.trim() && visibleHarnesses.every((harness) => {
+            const q = searchQuery.trim().toLowerCase();
+            return !harness.sessions.some((s) => `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q));
+          }) ? (
+            <Card className="py-8 text-center text-xs text-muted-foreground surface-card">
+              No chat sessions match your search filter.
+            </Card>
+          ) : (
+            visibleHarnesses
+              .filter((harness) => {
+                if (!searchQuery.trim()) return true;
+                const q = searchQuery.trim().toLowerCase();
+                return harness.sessions.some((s) => `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q));
+              })
+              .map((harness) => {
+                const harnessSessions = harness.sessions.filter((s) => {
+                  if (!searchQuery.trim()) return true;
+                  const q = searchQuery.trim().toLowerCase();
+                  return `${s.title ?? ''} ${s.id} ${s.assistant} ${harness.name}`.toLowerCase().includes(q);
+                });
+                const isExpanded = expandedHarnesses[harness.id] !== undefined
+                  ? expandedHarnesses[harness.id]
+                  : Boolean(searchQuery.trim()) && harnessSessions.length > 0;
 
-            return (
-              <Card key={harness.id} className="overflow-hidden surface-card">
-                {/* Sleek Minimal Harness Header Bar */}
-                <div
-                  className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between bg-muted/20 hover:bg-muted/35 transition-colors cursor-pointer select-none"
-                  onClick={() => toggleHarness(harness.id)}
-                >
-                  <div className="flex flex-1 items-center gap-2.5 min-w-0">
-                    <span className="text-muted-foreground transition-transform">
-                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    </span>
-
-                    {harness.icon}
-
-                    <div className="flex flex-wrap items-center gap-2 min-w-0">
-                      <span className="font-bold text-xs text-foreground">{harness.name}</span>
-
-                      <StatusBadge tone={harness.isDetected ? 'success' : 'neutral'} dot={harness.isDetected}>
-                        CLI: {harness.cliCommand}
-                      </StatusBadge>
-
-                      {harness.hasApp && (
-                        <StatusBadge tone="running">
-                          {harness.appName}
-                        </StatusBadge>
-                      )}
-
-                      <span className="text-[11px] text-muted-foreground font-mono">
-                        ({harnessSessions.length})
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Uniform, Sleek Header Action Buttons */}
-                  <div className="flex items-center gap-1.5 shrink-0 pl-6 sm:pl-0" onClick={(e) => e.stopPropagation()}>
-                    <Button
-                      size="xs"
-                      variant="default"
-                      disabled={launchingNewAssistant === harness.id}
-                      onClick={() => void startNewSession(harness.id)}
-                      title={`Launch new ${harness.cliCommand} session in terminal`}
+                return (
+                  <Card key={harness.id} className="overflow-hidden surface-card">
+                    {/* Sleek Minimal Harness Header Bar */}
+                    <div
+                      className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between bg-muted/20 hover:bg-muted/35 transition-colors cursor-pointer select-none"
+                      onClick={() => toggleHarness(harness.id, isExpanded)}
+                      aria-expanded={isExpanded}
                     >
-                      {launchingNewAssistant === harness.id ? (
-                        <Spinner className="size-3" />
-                      ) : (
-                        <Plus size={12} />
-                      )}
-                      <span>New Session</span>
-                    </Button>
-
-                    {harness.hasApp && (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => void openAppTarget(harness.appTargetId)}
-                        title={`Open in ${harness.appName}`}
-                      >
-                        <ExternalLink size={12} />
-                        <span>{harness.appName}</span>
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Expanded Session Rows (Flat Divided List) */}
-                {isExpanded && (
-                  <div className="divide-y divide-border/60 border-t border-border">
-                    {harnessSessions.length === 0 ? (
-                      <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                        <span>
-                          {searchQuery ? 'No sessions match your search query.' : `No previous sessions recorded for ${harness.name}.`}
+                      <div className="flex flex-1 items-center gap-2.5 min-w-0">
+                        <span className="text-muted-foreground transition-transform">
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         </span>
-                        {!searchQuery && (
-                          <button
-                            type="button"
-                            onClick={() => void startNewSession(harness.id)}
-                            className="text-primary font-semibold hover:underline cursor-pointer inline-flex items-center gap-1 text-xs"
+
+                        {harness.icon}
+
+                        <div className="flex flex-wrap items-center gap-2 min-w-0">
+                          <span className="font-bold text-xs text-foreground">{harness.name}</span>
+
+                          <StatusBadge tone={harness.isDetected ? 'success' : 'neutral'} dot={harness.isDetected}>
+                            CLI: {harness.cliCommand}
+                          </StatusBadge>
+
+                          {harness.hasApp && (
+                            <StatusBadge tone="running">
+                              {harness.appName}
+                            </StatusBadge>
+                          )}
+
+                          <span className="text-[11px] text-muted-foreground font-mono">
+                            ({harnessSessions.length})
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Uniform, Sleek Header Action Buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0 pl-6 sm:pl-0" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          size="xs"
+                          variant="default"
+                          disabled={launchingNewAssistant === harness.id}
+                          onClick={() => void startNewSession(harness.id)}
+                          title={`Launch new ${harness.cliCommand} session in terminal`}
+                        >
+                          {launchingNewAssistant === harness.id ? (
+                            <Spinner className="size-3" />
+                          ) : (
+                            <Plus size={12} />
+                          )}
+                          <span>New Session</span>
+                        </Button>
+
+                        {harness.hasApp && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => void openAppTarget(harness.appTargetId)}
+                            title={`Open in ${harness.appName}`}
                           >
-                            <Plus size={11} /> Start session
-                          </button>
+                            <ExternalLink size={12} />
+                            <span>{harness.appName}</span>
+                          </Button>
                         )}
                       </div>
-                    ) : (
+                    </div>
+
+                    {/* Expanded Session Rows (Flat Divided List) */}
+                    {isExpanded && (
+                      <div className="divide-y divide-border/60 border-t border-border">
+                        {harnessSessions.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+                            <span>
+                              {searchQuery.trim() ? 'No sessions match your search query.' : `No previous sessions recorded for ${harness.name}.`}
+                            </span>
+                            {!searchQuery.trim() && (
+                              <button
+                                type="button"
+                                onClick={() => void startNewSession(harness.id)}
+                                className="text-primary font-semibold hover:underline cursor-pointer inline-flex items-center gap-1 text-xs"
+                              >
+                                <Plus size={11} /> Start session
+                              </button>
+                            )}
+                          </div>
+                        ) : (
                       harnessSessions.map((sess) => (
                         <div
                           key={sess.id}
@@ -879,7 +910,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                 )}
               </Card>
             );
-          })}
+          }))}
         </div>
       )}
     </div>

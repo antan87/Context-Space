@@ -92,6 +92,7 @@ export interface AppSidebarProps {
   /** Checks for a new version on request; updates never install without confirmation. */
   onCheckForUpdates?: () => void;
   checkingForUpdates?: boolean;
+  initialSearch?: string;
 }
 
 function SidebarContents({
@@ -103,6 +104,7 @@ function SidebarContents({
   onSelectWorkspace,
   onCheckForUpdates,
   checkingForUpdates = false,
+  initialSearch = '',
 }: AppSidebarProps) {
   const { pathname } = useLocation();
   const { theme, setTheme, colorTheme, setColorTheme } = useTheme();
@@ -148,7 +150,7 @@ function SidebarContents({
   // What each AI is waiting for: the first line of its question, until it is answered.
   const { open: openQuestions } = useChatAttention();
   const questions = useMemo(() => new Map(openQuestions.map((request) => [request.workspaceId, request.message.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? ''] as const)), [openQuestions]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialSearch);
   const [sortBy, setSortBy] = useState<WorkspaceSortOption>('created-desc');
   const [visibleWorkspaceCount, setVisibleWorkspaceCount] = useState(30);
   // Archived workspaces are records, listed separately so they stay out of the way.
@@ -156,6 +158,7 @@ function SidebarContents({
   const archivedCount = useMemo(() => workspaces.filter((w) => w.archivedAt).length, [workspaces]);
   const [sessionsExpanded, setSessionsExpanded] = useState(true);
   const [workspacesExpanded, setWorkspacesExpanded] = useState(true);
+  const isSessionsListOpen = sessionsExpanded || search.trim().length > 0;
   const isWorkspacesListOpen = workspacesExpanded || search.trim().length > 0;
   const [appearanceExpanded, setAppearanceExpanded] = useState(false);
 
@@ -209,7 +212,7 @@ function SidebarContents({
     let list = workspaces.filter((w) => Boolean(w.archivedAt) === showArchived);
     const q = search.trim().toLowerCase();
     if (q) {
-      list = list.filter((w) => `${w.name ?? ''} ${w.branchName} ${w.description}`.toLowerCase().includes(q));
+      list = list.filter((w) => `${w.name ?? ''} ${w.branchName} ${w.description ?? ''}`.toLowerCase().includes(q));
     }
 
     return [...list].sort((a, b) => {
@@ -240,6 +243,17 @@ function SidebarContents({
       }
     });
   }, [workspaces, search, sortBy, workspaceStatuses, showArchived]);
+
+  const filteredOpenTabs = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return openTabs;
+    return openTabs.filter((tab) => {
+      const ws = workspaces.find((w) => w.branchName === tab || w.id === tab);
+      const label = ws?.name || tab;
+      const desc = ws?.description ?? '';
+      return `${label} ${tab} ${desc}`.toLowerCase().includes(q);
+    });
+  }, [openTabs, search, workspaces]);
 
   const otherWorkspaces = useMemo(() => {
     return filteredWorkspaces.filter((w) => !openTabs.includes(w.branchName) && !openTabs.includes(w.id));
@@ -470,19 +484,62 @@ function SidebarContents({
               </NavLink>
             </div>
 
+            {/* Filter Search & Sort */}
+            <div className="pt-2 border-t border-border/60">
+              <div className="flex items-center gap-1 mb-1">
+                <div className="relative flex-1">
+                  <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none z-10" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => { setSearch(e.target.value); setVisibleWorkspaceCount(30); }}
+                    placeholder="Filter..."
+                    className="w-full rounded-md border border-border/60 bg-muted/30 pl-6 pr-6 py-1 text-xs text-foreground placeholder:text-muted-foreground/60 focus:bg-background focus:outline-hidden focus:ring-1 focus:ring-primary"
+                  />
+                  {search && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch('')}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-[10px] cursor-pointer"
+                      aria-label="Clear filter"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <Menu>
+                  <MenuTrigger
+                    aria-label="Sort workspaces"
+                    className="inline-flex size-6 items-center justify-center rounded-md border border-border/60 bg-muted/30 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    <ArrowUpDown size={11} />
+                  </MenuTrigger>
+                  <MenuPopup side="bottom" align="end" className="w-36 text-xs">
+                    {(Object.keys(sortLabelMap) as WorkspaceSortOption[]).map((key) => (
+                      <MenuItem key={key} onClick={() => { setSortBy(key); setVisibleWorkspaceCount(30); }} className="flex items-center justify-between">
+                        <span>{sortLabelMap[key]}</span>
+                        {sortBy === key && <Check size={12} className="text-primary" />}
+                      </MenuItem>
+                    ))}
+                  </MenuPopup>
+                </Menu>
+              </div>
+            </div>
+
             {/* Open Sessions Section */}
             {openTabs.length > 0 && (
               <div className="pt-2 border-t border-border/60">
                 <button
                   type="button"
                   onClick={() => setSessionsExpanded((open) => !open)}
-                  aria-expanded={sessionsExpanded}
+                  aria-expanded={isSessionsListOpen}
                   className="flex w-full items-center justify-between pb-1.5 px-1 text-left rounded hover:bg-accent/40 transition-colors group cursor-pointer"
                 >
                   <div className="flex items-center gap-1.5 min-w-0">
                     <ChevronDown
                       size={12}
-                      className={cn('shrink-0 text-muted-foreground transition-transform duration-200', !sessionsExpanded && '-rotate-90')}
+                      className={cn('shrink-0 text-muted-foreground transition-transform duration-200', !isSessionsListOpen && '-rotate-90')}
                     />
                     <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider group-hover:text-foreground transition-colors">
                       Open Sessions
@@ -492,12 +549,17 @@ function SidebarContents({
                     </span>
                   </div>
                   <span className="text-[10px] font-mono text-muted-foreground bg-muted/60 px-1.5 py-0.2 rounded-full shrink-0">
-                    {openTabs.length}
+                    {search.trim() ? filteredOpenTabs.length : openTabs.length}
                   </span>
                 </button>
-                {sessionsExpanded && (
+                {isSessionsListOpen && (
                   <div className="flex flex-col gap-1" role="group" aria-label="Open sessions list">
-                    {openTabs.map((tab, idx) => {
+                    {filteredOpenTabs.length === 0 ? (
+                      <div className="px-2 py-2 text-center text-xs text-muted-foreground italic">
+                        No open sessions match
+                      </div>
+                    ) : (
+                      filteredOpenTabs.map((tab, idx) => {
                       const ws = workspaces.find((w) => w.branchName === tab || w.id === tab);
                       const isSelected = currentWsId === tab || activeWsId === tab;
                       const live = liveSessions.get(tab);
@@ -619,7 +681,7 @@ function SidebarContents({
                           )}
                         </div>
                       );
-                    })}
+                    }))}
                   </div>
                 )}
               </div>
@@ -649,37 +711,6 @@ function SidebarContents({
 
               {isWorkspacesListOpen && (
                 <>
-                  {/* Filter Search & Sort */}
-                  <div className="flex items-center gap-1 mb-2 mt-1">
-                    <div className="relative flex-1">
-                      <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none z-10" />
-                      <input
-                        type="text"
-                        value={search}
-                        onChange={(e) => { setSearch(e.target.value); setVisibleWorkspaceCount(30); }}
-                        placeholder="Filter..."
-                        className="w-full rounded-md border border-border/60 bg-muted/30 pl-6 pr-2 py-1 text-xs text-foreground placeholder:text-muted-foreground/60 focus:bg-background focus:outline-hidden focus:ring-1 focus:ring-primary"
-                      />
-                    </div>
-
-                    <Menu>
-                      <MenuTrigger
-                        aria-label="Sort workspaces"
-                        className="inline-flex size-6 items-center justify-center rounded-md border border-border/60 bg-muted/30 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
-                      >
-                        <ArrowUpDown size={11} />
-                      </MenuTrigger>
-                      <MenuPopup side="bottom" align="end" className="w-36 text-xs">
-                        {(Object.keys(sortLabelMap) as WorkspaceSortOption[]).map((key) => (
-                          <MenuItem key={key} onClick={() => { setSortBy(key); setVisibleWorkspaceCount(30); }} className="flex items-center justify-between">
-                            <span>{sortLabelMap[key]}</span>
-                            {sortBy === key && <Check size={12} className="text-primary" />}
-                          </MenuItem>
-                        ))}
-                      </MenuPopup>
-                    </Menu>
-                  </div>
-
                   {/* Workspaces Rows */}
                   <div className="flex flex-col gap-1">
                     {workspacesLoading && workspaces.length === 0 ? (
