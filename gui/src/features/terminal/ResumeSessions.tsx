@@ -11,6 +11,23 @@ import type { TerminalStatus } from './client.js';
 import { useWorkspaceSessionSources } from './useWorkspaceSessionSources.js';
 import { perfMark } from '../../lib/perfMarks.js';
 
+export function matchesResumeSession(s: AISession, search: string): boolean {
+  const q = search.trim().toLowerCase();
+  if (!q) return true;
+  const ast = s.assistant?.toLowerCase() ?? '';
+  const vendorAliases = ast === 'antigravity'
+    ? 'google antigravity agy'
+    : ast === 'claude'
+    ? 'claude code anthropic'
+    : ast === 'codex'
+    ? 'openai codex'
+    : ast === 'copilot'
+    ? 'github copilot microsoft'
+    : ast;
+  const hay = `${s.title ?? ''} ${harnessName(s.assistant)} ${s.assistant} ${vendorAliases} ${s.id}`.toLowerCase();
+  return hay.includes(q);
+}
+
 /**
  * The saved conversations of a workspace, newest first, each one click from continuing. `embedded` is the start screen's
  * form: under the tool buttons, with no frame of its own and no "start new" button, since the tools are right above.
@@ -27,7 +44,7 @@ export function ResumeSessions({ workspace, active, busy, status, fill, embedded
     if (settled) perfMark('cs:sessions-settled', { workspace, sources: sourceCount, failed: sourcesFailed });
   }, [settled, workspace, sourceCount, sourcesFailed]);
   const children = sessions.filter(s => s.threadKind === 'subagent').length;
-  const visible = sessions.filter(s => (includeChildren || s.threadKind !== 'subagent') && `${s.title ?? ''} ${harnessName(s.assistant)} ${s.assistant} ${s.id}`.toLowerCase().includes(search.trim().toLowerCase()))
+  const visible = sessions.filter(s => (includeChildren || s.threadKind !== 'subagent') && matchesResumeSession(s, search))
     .sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
   return <section aria-label="Continue a conversation" className={`min-h-0 overflow-auto ${embedded ? 'px-4 pb-4 pt-2' : 'border-b border-border bg-card p-3'} ${fill ? 'flex-1' : 'max-h-[45%]'}`}>
     <div className="flex items-center justify-between gap-2"><h3 className="flex items-center gap-1.5 text-xs font-semibold"><History className="size-3.5 text-muted-foreground" />{embedded ? 'Or continue a saved conversation' : 'Continue a conversation'}</h3><span className="flex items-center gap-1">{embedded && <Link to={`/workspaces/${encodeURIComponent(workspace)}/sessions`} title="Every conversation, with its transcript and token use, beside the chat" className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">Full history</Link>}<Button size="xs" variant="ghost" aria-label="Refresh saved sessions" onClick={() => { for (const history of histories) void history.refetch(); }}><RefreshCw className="size-3" /></Button></span></div>

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, type CSSProperties } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, type CSSProperties } from 'react';
 import {
   Menu as MenuIcon,
   FolderGit2,
@@ -158,8 +158,18 @@ function SidebarContents({
   const archivedCount = useMemo(() => workspaces.filter((w) => w.archivedAt).length, [workspaces]);
   const [sessionsExpanded, setSessionsExpanded] = useState(true);
   const [workspacesExpanded, setWorkspacesExpanded] = useState(true);
-  const isSessionsListOpen = sessionsExpanded || search.trim().length > 0;
-  const isWorkspacesListOpen = workspacesExpanded || search.trim().length > 0;
+  const prevSearchRef = useRef(search);
+  useEffect(() => {
+    const prev = prevSearchRef.current.trim();
+    const curr = search.trim();
+    if (curr && curr !== prev) {
+      setSessionsExpanded(true);
+      setWorkspacesExpanded(true);
+    }
+    prevSearchRef.current = search;
+  }, [search]);
+  const isSessionsListOpen = sessionsExpanded;
+  const isWorkspacesListOpen = workspacesExpanded;
   const [appearanceExpanded, setAppearanceExpanded] = useState(false);
 
   // Worktree & Rail State
@@ -212,7 +222,10 @@ function SidebarContents({
     let list = workspaces.filter((w) => Boolean(w.archivedAt) === showArchived);
     const q = search.trim().toLowerCase();
     if (q) {
-      list = list.filter((w) => `${w.name ?? ''} ${w.branchName} ${w.description ?? ''}`.toLowerCase().includes(q));
+      list = list.filter((w) => {
+        const repos = w.repos?.join(' ') ?? '';
+        return `${w.name ?? ''} ${w.branchName} ${w.description ?? ''} ${repos}`.toLowerCase().includes(q);
+      });
     }
 
     return [...list].sort((a, b) => {
@@ -251,7 +264,8 @@ function SidebarContents({
       const ws = workspaces.find((w) => w.branchName === tab || w.id === tab);
       const label = ws?.name || tab;
       const desc = ws?.description ?? '';
-      return `${label} ${tab} ${desc}`.toLowerCase().includes(q);
+      const repos = ws?.repos?.join(' ') ?? '';
+      return `${label} ${tab} ${desc} ${repos}`.toLowerCase().includes(q);
     });
   }, [openTabs, search, workspaces]);
 
