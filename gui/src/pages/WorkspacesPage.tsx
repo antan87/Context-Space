@@ -652,23 +652,23 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           actions={<>
               {primaryEditor && !archived && (
                 availableEditors.length > 1 ? (
-                  <div className="inline-flex h-7 items-center rounded-md text-xs">
+                  <div className="inline-flex h-7 items-center rounded-md border border-border/40 bg-muted/20 text-xs transition-colors">
                     <button
                       type="button"
                       disabled={Boolean(openingEditor)}
                       onClick={() => void handleOpenEditor(primaryEditor.id)}
                       title={`Open in ${primaryEditor.name}`}
                       aria-label={`Open in ${primaryEditor.name}`}
-                      className="inline-flex h-full items-center px-1.5 text-foreground hover:bg-accent transition-colors cursor-pointer rounded-l-md disabled:opacity-50"
+                      className="inline-flex h-full items-center px-2 text-foreground hover:bg-muted/40 transition-colors cursor-pointer rounded-l-md disabled:opacity-50"
                     >
                       {openingEditor === primaryEditor.id ? <Spinner className="size-3.5" /> : renderEditorIcon(primaryEditor.id, primaryEditor.name)}
                     </button>
                     <Menu>
-                      <MenuTrigger aria-label="Choose editor" className="inline-flex h-full w-6 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer rounded-r-md">
+                      <MenuTrigger aria-label="Choose editor" className="inline-flex h-full w-6 items-center justify-center text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors cursor-pointer rounded-r-md border-l border-border/30">
                         <ChevronDown size={11} />
                       </MenuTrigger>
                       <MenuPopup align="end" className="w-52">
-                        <div className="px-2 py-1 text-[10px] font-mono font-bold text-muted-foreground uppercase tracking-wider">
+                        <div className="px-2 py-1 text-[10px] font-medium text-muted-foreground">
                           Open in Editor
                         </div>
                         {availableEditors.map((ed) => (
@@ -709,8 +709,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                   <MenuTrigger
                     aria-label="Dock a second workspace"
                     className={cn(
-                      'grid size-7 place-items-center rounded-md transition-colors cursor-pointer',
-                      splitTab ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      'grid size-7 place-items-center rounded-md border border-border/40 transition-colors cursor-pointer',
+                      splitTab ? 'text-primary bg-primary/10 border-primary/40' : 'text-muted-foreground bg-muted/20 hover:border-border/70 hover:bg-muted/40 hover:text-foreground'
                     )}
                     title="Show a second workspace beside this one"
                   >
@@ -870,7 +870,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                           <GitCompare size={14} />
                         </span>
                         <div className="min-w-0">
-                          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Git Status</div>
+                          <div className="text-[10px] font-medium text-muted-foreground">Git Status</div>
                           <div className="text-sm font-extrabold font-mono text-foreground truncate">
                             {totalChangedFiles > 0 ? (
                               <span className="text-warning-foreground">{totalChangedFiles} Modified</span>
@@ -890,7 +890,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                           <Workflow size={14} />
                         </span>
                         <div className="min-w-0">
-                          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Flow Mode</div>
+                          <div className="text-[10px] font-medium text-muted-foreground">Flow Mode</div>
                           <div className="text-sm font-extrabold text-foreground capitalize flex items-center gap-1.5 truncate">
                             <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
                             {selected.flowType ? selected.flowType.replace('-', ' ') : 'Feature Flow'}
@@ -910,7 +910,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                           <MessagesSquare size={14} />
                         </span>
                         <div className="min-w-0">
-                          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">AI Assistant</div>
+                          <div className="text-[10px] font-medium text-muted-foreground">AI Assistant</div>
                           <div className="text-sm font-extrabold text-foreground capitalize truncate">
                             {selected.assistants[0] || 'None chosen'}
                           </div>
@@ -929,7 +929,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                           <Puzzle size={14} />
                         </span>
                         <div className="min-w-0">
-                          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Skills Active</div>
+                          <div className="text-[10px] font-medium text-muted-foreground">Skills Active</div>
                           <div className="text-sm font-extrabold font-mono text-foreground truncate">
                             {activeSkills.length} <span className="text-xs font-semibold text-muted-foreground">toolkits</span>
                           </div>
@@ -1412,7 +1412,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               )}
               {subTab === 'knowledge' && <KnowledgeBase ws={selected} {...knowledgeProps} readOnly={archived} />}
               {subTab === 'skills' && <WorkspaceSkillsTab ws={selected} showToast={showToast} />}
-              {visitedSections.has('plan') && <div hidden={subTab !== 'plan'} className={sessionsOnPlan ? 'grid gap-6 xl:grid-cols-[minmax(0,1fr)_17rem]' : ''}>
+              {visitedSections.has('plan') && <div hidden={subTab !== 'plan'} className={sessionsOnPlan ? 'grid gap-6 xl:grid-cols-[minmax(0,1fr)_20.5rem]' : ''}>
                 <div className="min-w-0 space-y-6">
                 <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived}
                   plan={<HomePlan key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onChanged={() => {

@@ -464,58 +464,59 @@ export function WorkspaceSkillsTab({ ws, showToast }: WorkspaceSkillsTabProps) {
     <div className="flex flex-col gap-4">
       <SkillDiagnosticsPanel diagnostics={diagnostics} />
       {/* Top Banner / Actions Bar */}
-      <Card className="p-5 rounded-xl border border-border/80 bg-card/70 backdrop-blur-md shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-primary/10 text-primary">
-            <Boxes className="h-5 w-5" />
+      <Card className="p-3.5 sm:p-4 rounded-xl border border-border/40 bg-card/60 backdrop-blur-xs shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+          <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0 mt-0.5 sm:mt-0">
+            <Boxes className="h-4.5 w-4.5" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-foreground">Workspace Skills & Agents</h3>
-              <Badge variant="secondary" className="text-[10px] font-mono">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold text-foreground whitespace-nowrap">Workspace Skills &amp; Agents</h3>
+              <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0.5 shrink-0">
                 {enabledSkillSet.size} Skills Active
               </Badge>
               {enabledAgentSet.size > 0 && (
-                <Badge variant="secondary" className="text-[10px] font-mono">
+                <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0.5 shrink-0">
                   {enabledAgentSet.size} Agents Active
                 </Badge>
               )}
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
               Select skills to deploy to this workspace. Authored .agents/skills files remain discoverable by assistants even when deselected.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2 shrink-0">
           <Button
-            size="sm"
+            size="xs"
             variant="outline"
             onClick={handleOpenCreateSkill}
-            className="flex items-center gap-1.5 shadow-xs text-xs"
+            className="h-7 px-2.5 text-xs flex items-center gap-1.5 shadow-2xs"
           >
-            <Plus className="size-3.5" />
+            <Plus className="size-3" />
             <span>New Skill</span>
           </Button>
 
           <Button
-            size="sm"
+            size="xs"
+            variant={hasUnsavedChanges ? 'default' : 'outline'}
             onClick={handleSaveAndDeploy}
             disabled={isDeploying || (!hasUnsavedChanges && enabledSkillSet.size === 0 && enabledAgentSet.size === 0)}
-            className="flex items-center gap-1.5 shadow-sm text-xs"
+            className="h-7 px-3 text-xs font-medium flex items-center gap-1.5 shadow-2xs"
           >
-            {isDeploying ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
+            {isDeploying ? <Spinner className="size-3" /> : <Sparkles className="size-3" />}
             <span>{isDeploying ? 'Deploying…' : hasUnsavedChanges ? 'Save & Deploy Changes' : 'Re-Deploy to Workspace'}</span>
           </Button>
 
           <Button
             render={<Link to="/skills" />}
             variant="ghost"
-            size="sm"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            size="xs"
+            className="h-7 px-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
             title="Open Global Enterprise Catalog"
           >
-            <ExternalLink className="size-3.5" />
+            <ExternalLink className="size-3" />
             <span>Global Library</span>
           </Button>
         </div>

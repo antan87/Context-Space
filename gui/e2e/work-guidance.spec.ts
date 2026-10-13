@@ -7,7 +7,7 @@ test.use({ workspacesData: [{
 }] });
 
 async function setupWork(page: import('@playwright/test').Page, empty = false) {
-  let lifecycle: any = { workspaceId: 'demo', flowType: 'feature', revision: 0, steps: [
+  const lifecycle: any = { workspaceId: 'demo', flowType: 'feature', revision: 0, steps: [
     { id: 'baseline', title: 'Measure baseline', status: 'in_progress' },
     { id: 'improve', title: 'Improve lookup', status: 'pending', dependsOn: ['baseline'] },
   ], fleet: [], updatedAt: '' };

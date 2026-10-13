@@ -32,9 +32,9 @@ describe('workspace sections', () => {
 });
 
 describe('railSectionsFor', () => {
-  it('offers what can open beside the chat, and no place for the chat, the overview, the session history or knowledge', () => {
-    expect(railSectionsFor(false)).toEqual(['plan', 'changes', 'documents', 'skills', 'services']);
-    for (const gone of ['chat', 'overview', 'sessions', 'knowledge'] as const) expect(railSectionsFor(false)).not.toContain(gone);
+  it('offers what can open beside the chat, and no place for the chat, the overview or knowledge', () => {
+    expect(railSectionsFor(false)).toEqual(['plan', 'sessions', 'changes', 'documents', 'skills', 'services']);
+    for (const gone of ['chat', 'overview', 'knowledge'] as const) expect(railSectionsFor(false)).not.toContain(gone);
   });
 
   it('keeps old addresses working: every section still parses to itself', () => {

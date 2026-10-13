@@ -189,7 +189,6 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
     setExpandedHarnesses((prev) => ({ ...prev, [id]: !currentlyExpanded }));
   };
 
-  const resumingTerminalRef = useRef(false);
   const openingDesktopRef = useRef<string | null>(null);
 
   const openAppTarget = async (targetId: string) => {
@@ -230,8 +229,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
   };
 
   const resumeTerminalSession = async (sessionId: string, assistant: string, sessionCwd?: string) => {
-    if (resumingTerminalRef.current) return;
-    resumingTerminalRef.current = true;
+    if (resumingTerminalId) return;
     setResumingTerminalId(sessionId);
     try {
       await launchTerminalMutation.mutateAsync({
@@ -254,7 +252,6 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       showToast?.(`Copied resume command to clipboard: ${fallbackCmd}`, 'info');
     } finally {
       setResumingTerminalId(null);
-      resumingTerminalRef.current = false;
     }
   };
 
