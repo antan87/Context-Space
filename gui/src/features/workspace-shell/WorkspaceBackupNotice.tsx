@@ -25,11 +25,11 @@ function CommandButton({ command }: { command: string }) {
           setTimeout(() => setCopied(false), 1500);
         }
       }}
-      className="inline-flex items-center gap-1.5 rounded border border-border bg-background px-2 py-0.5 font-mono text-xs text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+      className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-background/80 px-2 py-0.5 font-mono text-xs text-foreground shadow-2xs transition-colors hover:border-amber-500/60 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
       aria-label={copied ? `Copied: ${command}` : `Copy command: ${command}`}
     >
-      {command}
-      {copied ? <Check aria-hidden="true" size={12} /> : <Copy aria-hidden="true" size={12} />}
+      <span>{command}</span>
+      {copied ? <Check aria-hidden="true" size={12} className="text-emerald-600 dark:text-emerald-400" /> : <Copy aria-hidden="true" size={12} className="text-muted-foreground" />}
     </button>
   );
 }
@@ -46,22 +46,26 @@ export function WorkspaceBackupNotice({ workspaceId }: { workspaceId: string }) 
   if (!data?.atRisk || !data.summary || dismissed) return null;
 
   return (
-    <div role="status" aria-label="Backup" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-amber-500/40 bg-amber-500/5 px-4 py-2 text-sm sm:px-6">
-      <HardDrive aria-hidden="true" size={16} className="shrink-0 text-amber-600" />
-      <p className="min-w-0 flex-1 basis-64">
-        <strong className="font-semibold">Not backed up.</strong> {data.summary}
-      </p>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <CommandButton command={`${CLI_NAME} remote add <git-url>`} />
-        <span aria-hidden="true" className="text-muted-foreground">then</span>
-        <CommandButton command={`${CLI_NAME} remote push`} />
-        <button
-          type="button"
-          onClick={() => { rememberDismissed(workspaceId); setDismissed(true); }}
-          className="ml-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          Dismiss
-        </button>
+    <div role="status" aria-label="Backup" className="border-b border-amber-500/20 bg-amber-500/[0.06] dark:bg-amber-950/25 px-4 py-1.5 text-xs text-amber-900 dark:text-amber-200/90 sm:px-6">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div className="flex min-w-0 flex-1 basis-64 items-center gap-2">
+          <HardDrive aria-hidden="true" size={14} className="shrink-0 text-amber-600 dark:text-amber-400" />
+          <p className="min-w-0 text-xs text-amber-900 dark:text-amber-200/90 leading-relaxed">
+            <strong className="font-semibold text-amber-950 dark:text-amber-300">Not backed up.</strong> {data.summary}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <CommandButton command={`${CLI_NAME} remote add <git-url>`} />
+          <span aria-hidden="true" className="text-xs text-amber-950 dark:text-amber-200 font-medium">then</span>
+          <CommandButton command={`${CLI_NAME} remote push`} />
+          <button
+            type="button"
+            onClick={() => { rememberDismissed(workspaceId); setDismissed(true); }}
+            className="ml-1.5 rounded-md px-2 py-0.5 text-xs text-amber-950 dark:text-amber-200 hover:bg-amber-500/10 hover:text-amber-950 dark:hover:text-amber-100 transition-colors focus-visible:outline-2 focus-visible:outline-ring font-medium"
+          >
+            Dismiss
+          </button>
+        </div>
       </div>
     </div>
   );

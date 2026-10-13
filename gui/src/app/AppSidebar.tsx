@@ -555,7 +555,7 @@ function SidebarContents({
                       size={12}
                       className={cn('shrink-0 text-muted-foreground transition-transform duration-200', !isSessionsListOpen && '-rotate-90')}
                     />
-                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider group-hover:text-foreground transition-colors">
+                    <span className="text-[11px] font-medium text-muted-foreground group-hover:text-foreground transition-colors">
                       Open Sessions
                     </span>
                     <span className="text-[10px] font-mono text-muted-foreground [@media(hover:none)]:hidden">
@@ -714,7 +714,7 @@ function SidebarContents({
                     size={12}
                     className={cn('shrink-0 text-muted-foreground transition-transform duration-200', !isWorkspacesListOpen && '-rotate-90')}
                   />
-                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider group-hover:text-foreground transition-colors">
+                  <span className="text-[11px] font-medium text-muted-foreground group-hover:text-foreground transition-colors">
                     {showArchived ? 'Archived workspaces' : 'Workspaces'}
                   </span>
                 </div>
@@ -753,7 +753,7 @@ function SidebarContents({
 
                         return (
                           <div key={w.id}>
-                          {startsRunning && <p className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Running now</p>}
+                          {startsRunning && <p className="px-2.5 pb-1 text-[10px] font-medium text-muted-foreground">Running now</p>}
                           {endsRunning && <div aria-hidden="true" className="mx-2.5 mb-2 mt-1 border-t border-border/70" />}
                           <div
                             className={cn(
@@ -846,7 +846,7 @@ function SidebarContents({
         {activeWorkspace && <PrepareRepoDialog wsId={activeWorkspace.branchName} repoName={preparingRepo} onClose={() => setPreparingRepo(null)} />}
 
         <div className="border-t border-border/60 pt-2">
-          <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Reusable setup</p>
+          <p className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">Reusable setup</p>
           {SETUP_ITEMS.map((item) => {
             const Icon = item.icon;
             return <NavLink key={item.to} to={item.to} aria-label={item.label} className={linkClass(item.match(pathname))}>
@@ -854,7 +854,7 @@ function SidebarContents({
               <span className="min-w-0"><span className="block">{item.label}</span><span className="block text-[10px] font-normal text-muted-foreground">{item.description}</span></span>
             </NavLink>;
           })}
-          <p className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Advanced tools</p>
+          <p className="px-2 pb-1 pt-3 text-[10px] font-medium text-muted-foreground">Advanced tools</p>
           {ADVANCED_ITEMS.map((item) => {
             const Icon = item.icon;
             return <NavLink key={item.to} to={item.to} aria-label={item.label} className={linkClass(item.match(pathname))}>

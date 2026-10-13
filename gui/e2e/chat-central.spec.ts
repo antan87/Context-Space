@@ -234,9 +234,9 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     const rail = await boxOf(destinations(page));
     expect(rail.x + rail.width).toBeGreaterThan(1440 - 2);
     expect(rail.width).toBeLessThanOrEqual(RAIL + 1);
-    // What can open beside the chat; the chat itself, the overview and the session history have no place on it.
+    // What can open beside the chat; the chat itself and the overview have no place on it.
     // Knowledge is read in Docs, with the other files ContextSpace keeps.
-    await expect(destinations(page).getByRole('link')).toHaveText(['Plan', 'Code', 'Docs', 'Skills', 'Services']);
+    await expect(destinations(page).getByRole('link')).toHaveText(['Plan', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']);
   });
 
   test('marks the part that is open, names it above the panel, and closes it when chosen again', async ({ page }) => {
@@ -254,8 +254,8 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
   });
 
   test('still opens an old address that has no place on the rail', async ({ page }) => {
-    await page.goto('/#/workspaces/alpha/sessions');
-    await expect(page.getByRole('region', { name: 'Sessions', exact: true })).toBeVisible();
+    await page.goto('/#/workspaces/alpha/overview');
+    await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible();
     await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
   });
 });

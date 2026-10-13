@@ -51,8 +51,8 @@ export function rememberHowItWorksSeen(): void {
 const sentenceCase = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** Who made a change, as the tab says it: You, the AI tool by name, or ContextSpace. */
-export function whoName(by: string): string {
-  const name = by.trim();
+export function whoName(by: string | undefined): string {
+  const name = (by ?? 'agent').trim();
   if (/^user$/i.test(name)) return 'You';
   if (/^agent$/i.test(name)) return 'The AI';
   if (/^contextspace$/i.test(name)) return 'ContextSpace';

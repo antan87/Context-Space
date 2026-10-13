@@ -13,6 +13,7 @@ import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
+import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import type { WorkDocument, WorkGuidance, WorkspaceLifecycle } from '../../types.js';
 
 type WorkContext = {
@@ -38,9 +39,9 @@ const SIZES: Record<WorkGuidance['size'], string> = { small: 'Small task', stand
 /** One part of the plan: what it says, with its pencil to edit it in place. */
 function PlanCard({ title, meta, action, children }: { title: string; meta?: ReactNode; action?: ReactNode; children?: ReactNode }) {
   const id = useId();
-  return <section aria-labelledby={id} className="rounded-xl border border-border bg-card px-4 py-3">
-    <header className="mb-2 flex min-h-7 items-center gap-2">
-      <h3 id={id} className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+  return <section aria-labelledby={id} className="rounded-xl border border-border/40 bg-card/60 backdrop-blur-xs px-4 py-3 shadow-2xs">
+    <header className="mb-2.5 flex min-h-7 items-center gap-2 border-b border-border/30 pb-2">
+      <h3 id={id} className="text-xs font-semibold text-foreground/80">{title}</h3>
       {meta}
       <span className="flex-1" />
       {action}
@@ -56,17 +57,43 @@ function GoalSummary({ guidance, scope }: { guidance: WorkGuidance; scope?: stri
   const delivers = guidance.assignment.expectedOutput?.trim();
   const stops = guidance.assignment.stopCondition?.trim();
   const stage = guidance.assignment.stage;
-  return <div className="space-y-2">
-    <p className="text-[15px] font-semibold leading-snug text-foreground">{opening || <span className="font-normal text-muted-foreground">No goal yet. Say what this work is for.</span>}</p>
-    <p className="text-xs text-muted-foreground">{[stage ? stage[0]!.toUpperCase() + stage.slice(1) : '', WORK_TYPES[guidance.workType], SIZES[guidance.size], scope ? `For ${scope}` : ''].filter(Boolean).join(' · ')}</p>
-    {objective.length > opening.length && <details className="text-sm">
-      <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">The whole goal</summary>
-      <p className="mt-1.5 whitespace-pre-wrap text-sm text-foreground">{objective}</p>
+  const metaText = [stage ? stage[0]!.toUpperCase() + stage.slice(1) : '', WORK_TYPES[guidance.workType], SIZES[guidance.size], scope ? `For ${scope}` : ''].filter(Boolean).join(' · ');
+
+  return <div className="space-y-3">
+    <div>
+      <h2 className="text-base sm:text-lg font-semibold leading-snug tracking-tight text-foreground">
+        {opening ? <InlinePlanMarkdown content={opening} /> : <span className="font-normal text-muted-foreground">No goal yet. Say what this work is for.</span>}
+      </h2>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <span className="inline-flex items-center rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 text-xs font-medium text-muted-foreground">
+          {metaText}
+        </span>
+      </div>
+    </div>
+    {objective.length > opening.length && <details className="group rounded-lg border border-border/30 bg-muted/15 px-3 py-2 text-sm">
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">The whole goal</summary>
+      <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/90 leading-relaxed">{objective}</p>
     </details>}
-    {(delivers || stops) && <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-      {delivers && <><dt className="text-muted-foreground">Delivers</dt><dd className="line-clamp-3 whitespace-pre-wrap" title={delivers}>{delivers}</dd></>}
-      {stops && <><dt className="text-muted-foreground">Stops when</dt><dd className="line-clamp-3 whitespace-pre-wrap" title={stops}>{stops}</dd></>}
-    </dl>}
+    {(delivers || stops) && <div className="grid gap-3 pt-1 sm:grid-cols-2">
+      {delivers && (
+        <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
+          <div className="flex items-center gap-1.5">
+            <span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
+            <h4 className="text-xs font-medium text-muted-foreground">Delivers</h4>
+          </div>
+          <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={delivers}><InlinePlanMarkdown content={delivers} /></p>
+        </div>
+      )}
+      {stops && (
+        <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
+          <div className="flex items-center gap-1.5">
+            <span className="size-1.5 rounded-full bg-amber-500 shrink-0" />
+            <h4 className="text-xs font-medium text-muted-foreground">Stops when</h4>
+          </div>
+          <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={stops}><InlinePlanMarkdown content={stops} /></p>
+        </div>
+      )}
+    </div>}
   </div>;
 }
 
@@ -224,17 +251,18 @@ export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { wo
   </div>;
 
   return <section className="mb-5 space-y-3" aria-label="Work brief and sources">
-    <div className="flex items-center gap-0.5">
-      <p className="min-w-0 flex-1 text-xs text-muted-foreground">What this work is for and how far it is. Edit a part with its pencil.</p>
-      <IconButton label="Copy the goal for an assistant" icon={<Copy />} className="text-muted-foreground" disabled={busy || !context || Boolean(assignmentDirty)} onClick={copyGoal} />
-      <IconButton label="Reload the plan" icon={<RefreshCw />} className="text-muted-foreground" disabled={busy} onClick={() => void load()} />
-    </div>
     {error && <p role="alert" className="text-sm text-destructive">{error} Your draft is kept. Reload to review the latest saved version.</p>}
     {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
     {!context || !draft ? <p className="text-sm">{error ? 'The plan is unavailable.' : 'Loading the plan…'}</p> : <>
       {conflicts.assignment && <DraftConflictNotice noun="goal" differences={assignmentConflicts(conflicts.assignment, pickAssignment(context.guidance))} onKeep={keepAssignmentDraft} onUseSaved={useSavedAssignment} />}
 
-      <PlanCard title="Goal" action={panel === 'assignment' ? close('the goal') : !readOnly && edit('Edit the goal', 'assignment')}
+      <PlanCard title="Goal" action={
+        <div className="flex items-center gap-0.5">
+          <IconButton label="Copy the goal for an assistant" icon={<Copy className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy || !context || Boolean(assignmentDirty)} onClick={copyGoal} />
+          <IconButton label="Reload the plan" icon={<RefreshCw className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy} onClick={() => void load()} />
+          {panel === 'assignment' ? close('the goal') : !readOnly && edit('Edit the goal', 'assignment')}
+        </div>
+      }
         meta={!readOnly && panel !== 'assignment' && assignmentState !== 'saved' ? <DraftStateLabel state={assignmentState} kept={!notKept.assignment} /> : null}>
         {panel === 'assignment' ? <div className="space-y-4">
           <fieldset disabled={readOnly || Boolean(conflicts.assignment)} className="m-0 min-w-0 border-0 p-0 space-y-4">

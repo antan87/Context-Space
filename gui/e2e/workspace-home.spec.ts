@@ -13,7 +13,7 @@ const SHOTS = process.env.HOME_SHOTS_DIR;
 const SAVED = '123e4567-e89b-42d3-a456-426614174000';
 type Terminal = { id: string; workspace: string; target: string; label: string; cwd: string; state: 'running' | 'exited'; startedAt: string; lastOutputAt?: string };
 const terminal = (id: string, target: string): Terminal => ({ id, workspace: 'feature-x', target, label: target, cwd: '/tmp/feature-x', state: 'running', startedAt: '2026-10-10T10:00:00.000Z' });
-const TARGETS = ['claude', 'codex', 'antigravity', 'pi', 'shell'].map((id) => ({ id, name: id, available: true, reason: null }));
+const TARGETS = ['claude', 'codex', 'antigravity', 'pi', 'copilot', 'shell'].map((id) => ({ id, name: id, available: true, reason: null }));
 
 function plan(startedBy?: string) {
   return planView([
@@ -58,7 +58,10 @@ test('opens on the plan, with a Start card beside it when no session runs', asyn
   await page.goto('/#/workspaces/feature-x');
   await expect(page.getByRole('region', { name: 'The plan', exact: true })).toBeVisible();
   const start = page.getByRole('region', { name: 'Start a session' });
-  await expect(start.getByRole('radio', { name: 'Claude Code' })).toBeChecked();
+  await expect(start.getByRole('button', { name: 'Start Claude Code' })).toBeVisible();
+  await expect(start.getByRole('button', { name: 'Start Codex' })).toBeVisible();
+  await expect(start.getByRole('button', { name: 'Start Antigravity' })).toBeVisible();
+  await expect(start.getByRole('button', { name: 'Start Pi' })).toBeVisible();
   await expect(start.getByRole('radio', { name: /CSV export endpoint/ })).toBeChecked();
   await expect(start.getByRole('radio', { name: 'Something else' })).not.toBeChecked();
   await expect(page.getByRole('region', { name: 'Continue where you left off' }).getByText('Plan the CSV export')).toBeVisible();
@@ -70,10 +73,19 @@ test('starts the chosen tool on the chosen item, with a first message that names
   const server = await mockServer(page);
   await page.goto('/#/workspaces/feature-x');
   const start = page.getByRole('region', { name: 'Start a session' });
-  await start.getByRole('radio', { name: 'Codex' }).click();
   await start.getByRole('button', { name: 'Start Codex' }).click();
   await expect(page).toHaveURL(/#\/workspaces\/feature-x\/chat$/);
   await expect.poll(() => server.created).toEqual([expect.objectContaining({ target: 'codex', prompt: FIRST_MESSAGE })]);
+});
+
+test('starts a non-pinned tool immediately from the more tools menu', async ({ page }) => {
+  const server = await mockServer(page);
+  await page.goto('/#/workspaces/feature-x');
+  const start = page.getByRole('region', { name: 'Start a session' });
+  await start.getByRole('button', { name: 'More tools' }).click();
+  await page.getByRole('menuitem', { name: 'GitHub Copilot' }).click();
+  await expect(page).toHaveURL(/#\/workspaces\/feature-x\/chat$/);
+  await expect.poll(() => server.created).toEqual([expect.objectContaining({ target: 'copilot', prompt: FIRST_MESSAGE })]);
 });
 
 test('starts the last-used tool on a ready item from its row, and without a first message for something else', async ({ page }) => {

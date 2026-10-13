@@ -35,11 +35,11 @@ export function parseSection(segment: string | undefined | null): WorkspaceSecti
 export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan', 'documents', 'knowledge'];
 
 /**
- * What can open beside the chat, in the rail's order. Overview, Sessions and Knowledge keep their addresses, so old
- * links still work, but have no place on the rail: the progress strip above the chat says where the work stands, saved
- * conversations open from the chat itself, and knowledge is read in Docs.
+ * What can open beside the chat, in the rail's order. Overview and Knowledge keep their addresses, so old
+ * links still work, but have no place on the rail: the progress strip above the chat says where the work stands,
+ * and knowledge is read in Docs.
  */
-export const RAIL_SECTIONS: readonly WorkspaceSection[] = ['plan', 'changes', 'documents', 'skills', 'services'];
+export const RAIL_SECTIONS: readonly WorkspaceSection[] = ['plan', 'sessions', 'changes', 'documents', 'skills', 'services'];
 
 /** The rail of an archived workspace is its record, its plan and its documents. */
 const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'plan', 'documents'];
