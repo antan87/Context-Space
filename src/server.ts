@@ -2979,7 +2979,7 @@ app.post('/api/workspace/:id/lifecycle/step', async (c) => {
       return c.json({ error: 'stepId and action (start|verify|complete) are required.' }, 400);
     }
     const { advanceLifecycleStep } = await import('./core/lifecycle.js');
-    const lifecycle = await advanceLifecycleStep(workspacePath, body.stepId, body.action);
+    const lifecycle = await advanceLifecycleStep(workspacePath, body.stepId, body.action, { by: 'user' });
     return c.json({ lifecycle });
   } catch (error) {
     return errorResponse(c, error);

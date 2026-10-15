@@ -51,7 +51,7 @@ export type PlanSectionKey = typeof PLAN_SECTIONS[number]['key'];
 /** The six rules, as the How it works panel, `ctxspace plan --help` and AGENTS.md state them. */
 export const PLAN_RULES = [
   'Every close has a reason. Nothing is deleted.',
-  "The AI closes only its own items. For the user's items, and for milestones, it asks: the user sees it under Needs you.",
+  'The AI closes items itself, milestones too, when it judges the work done, and says so in the chat. Anyone can reopen.',
   'A milestone is done when everything it waits for is done and its check passes on the latest code.',
   'Nothing starts by itself. When a milestone is done, the next one is suggested.',
   'Plans change: anyone can add, move, block or reopen an item at any time. History shows who did what, and when.',
@@ -71,16 +71,16 @@ export const PLAN_WORKFLOW: readonly { text: string; list?: readonly string[] }[
     'a question for the user: `ctxspace plan add question "<question>" --owner user --before <code it holds up>`',
     'stuck: `ctxspace plan block <code> --reason "<what you wait for>"`',
   ] },
-  { text: 'When the user tells you an answer or a decision, record it with the command. For the user\'s items and milestones it becomes a proposal: that is correct, and your part is done.' },
-  { text: 'Finish your own work with `ctxspace plan done <code> --resolution "<what came out of it>"`.' },
-  { text: 'Report back in three short parts: what you changed, what waits for the user (Needs you), and what is next. Write the name with every code: "M2 CSV export endpoint", never "M2" alone.' },
+  { text: 'When the user tells you an answer or a decision, record it: `ctxspace plan answer <code> "<the answer>"`. Never answer the user\'s question with your own guess.' },
+  { text: 'When you judge an item done, a milestone too, finish it: `ctxspace plan done <code> --resolution "<what came out of it>"`. A milestone\'s check runs first. Drop or put off what is no longer needed, with the reason.' },
+  { text: 'Report back in three short parts: what you changed or finished, what you need from the user, and what is next. Write the name with every code: "M2 CSV export endpoint", never "M2" alone.' },
 ];
 
 /** Who a change is made as, one sentence a line, for `ctxspace plan --help` and AGENTS.md. */
 export const WHO_ACTS = [
   'Who acts: every change is made as the AI and recorded with its name.',
-  'When a close is the user\'s (a milestone, or an item the user owns), it becomes a proposal: the user accepts it in the Plan tab.',
-  'That is the end of the AI\'s part, even when the user told you the answer: say it waits for them.',
+  'You may finish, drop, put off and reopen any item, milestones too. The user sees it in the chat and the plan, and can reopen it.',
+  'Record an answer to the user\'s question only when the user gave it.',
   'The user can act as themselves with --as user in their own terminal.',
 ] as const;
 

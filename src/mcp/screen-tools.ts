@@ -11,7 +11,7 @@
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
 
-import { advanceLifecycleStep, blockLifecycleStep, loadWorkspaceLifecycle, LifecycleStepError } from '../core/lifecycle.js';
+import { advanceLifecycleStep, blockLifecycleStep, loadWorkspaceLifecycle, reopenLifecycleStep, LifecycleStepError } from '../core/lifecycle.js';
 import { refreshPlanningContext } from '../core/planning-refresh.js';
 import { readScreenContext } from '../core/screen-context.js';
 import {
@@ -204,7 +204,7 @@ export const screenTools: NexusFlowTool[] = [
 
   screenTool(
     'set_milestone',
-    `${useThePlanCommand('set_milestone')} Report where a milestone stands. in_progress starts it (its dependencies must be finished). blocked says what it is waiting on; a note is required. reopened and done are only proposals: you cannot reopen or complete a milestone yourself, because the user decides and a finished milestone must pass its own check. The tool says which one happened. Read get_work_context for milestone ids.`,
+    `${useThePlanCommand('set_milestone')} Report where a milestone stands. in_progress starts it (its dependencies must be finished). blocked says what it is waiting on; a note is required. done finishes it when you judge the work done: its check runs first when it has one, and the note says what came out of it. reopened sends finished work back, with the note saying what is wrong. Tell the user in the chat what you finished or reopened; they can reopen it. Read get_work_context for milestone ids.`,
     milestoneSchema,
     async (input, { root, workspacePath }) => {
       const deprecated = useThePlanCommand('set_milestone');
@@ -216,7 +216,7 @@ export const screenTools: NexusFlowTool[] = [
       if (input.state === 'in_progress') {
         if (step.status === 'in_progress') return { deprecated, status: 'unchanged', milestone: input.id, message: 'It is already in progress.' };
         if (step.status === 'completed' || step.status === 'verified') {
-          throw new Error(`"${step.title}" is already ${step.status}. Only the user can reopen finished work.`);
+          throw new Error(`"${step.title}" is already ${step.status}. Reopen it with a note saying what is wrong.`);
         }
         try {
           await advanceLifecycleStep(workspacePath, input.id, 'start', { by: 'agent', harness: input.harness });
@@ -240,21 +240,29 @@ export const screenTools: NexusFlowTool[] = [
       }
 
       if (input.state === 'reopened') {
-        needNote('what is wrong, so the user can decide');
+        needNote('what is wrong with the finished work');
         // A verified milestone passed its check but is not finished, and the user sees it as in progress.
         if (step.status !== 'completed') {
           throw new Error(`"${step.title}" is ${step.status.replace('_', ' ')}, so there is nothing to reopen. Only a finished milestone can be reopened; say what is wrong in the chat.`);
         }
-        const { status } = await appendScreenEvent(root, { harness: input.harness, event: 'milestone_proposal', payload: { stepId: input.id, proposal: 'reopen', reason: input.note! } });
-        return { deprecated, status: status === 'shown' ? 'proposed' : 'already_proposed', milestone: input.id, message: 'This is a proposal. You cannot reopen a milestone yourself: the user sees your reason and decides. Carry on with other work until they do.' };
+        try {
+          await reopenLifecycleStep(workspacePath, input.id, { reason: input.note!, by: 'agent', harness: input.harness });
+        } catch (error) {
+          if (error instanceof LifecycleStepError) throw new Error(error.message);
+          throw error;
+        }
+        await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'reopened', note: input.note } });
+        return { deprecated, status: 'reopened', milestone: input.id, message: 'Reopened. Tell the user what is wrong and what you will do about it.', ...(await refreshPlanningContext(root)) };
       }
 
-      needNote('what shows the milestone is finished');
+      needNote('what came out of the milestone');
       if (step.status !== 'in_progress' && step.status !== 'verified') {
-        throw new Error(`"${step.title}" is ${step.status}, so it cannot be proposed as done. Start it first.`);
+        throw new Error(`"${step.title}" is ${step.status}, so it cannot be finished. Start it first.`);
       }
-      const { status } = await appendScreenEvent(root, { harness: input.harness, event: 'milestone_proposal', payload: { stepId: input.id, proposal: 'complete', reason: input.note! } });
-      return { deprecated, status: status === 'shown' ? 'proposed' : 'already_proposed', milestone: input.id, message: 'This is a proposal. You cannot complete a milestone yourself: it has to pass its own check and the user decides.' };
+      // Runs the milestone's check when it has one; done only when the check passes.
+      await advanceLifecycleStep(workspacePath, input.id, 'complete', { by: 'agent', harness: input.harness }, { resolution: input.note! });
+      await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'done', note: input.note } });
+      return { deprecated, status: 'done', milestone: input.id, message: 'Done. Tell the user what you finished and what is next; they can reopen it.', ...(await refreshPlanningContext(root)) };
     },
   ),
 

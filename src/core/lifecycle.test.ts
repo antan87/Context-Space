@@ -132,7 +132,7 @@ describe('core/lifecycle', () => {
         repos: [],
       } as any);
 
-      const updated = await advanceLifecycleStep(ws, 'step-1', 'start');
+      const updated = await advanceLifecycleStep(ws, 'step-1', 'start', { by: 'user' });
       expect(updated.steps[0]!.status).toBe('in_progress');
       expect(updated.currentStepId).toBe('step-1');
     });
@@ -160,7 +160,7 @@ describe('core/lifecycle', () => {
         repos: [],
       } as any);
 
-      const updated = await advanceLifecycleStep(ws, 'step-1', 'complete');
+      const updated = await advanceLifecycleStep(ws, 'step-1', 'complete', { by: 'user' });
       expect(updated.steps[0]!.status).toBe('completed');
       // A block without a reason only meant "waits for step 1"; now it is simply ready.
       expect(updated.steps[1]!.status).toBe('pending');
@@ -202,7 +202,7 @@ describe('core/lifecycle', () => {
         repos: ['repoA'],
       } as any);
 
-      const updated = await advanceLifecycleStep(ws, 'step-verify', 'verify');
+      const updated = await advanceLifecycleStep(ws, 'step-verify', 'verify', { by: 'user' });
       expect(updated.steps[0]!.status).toBe('verified');
       expect(updated.steps[0]!.lastVerificationSha).toBe('abc999');
     });
@@ -219,14 +219,14 @@ describe('core/lifecycle', () => {
     });
 
     it.each(['start', 'verify', 'complete'] as const)('rejects %s when dependencies are unfinished', async (action) => {
-      await expect(advanceLifecycleStep(ws, 'verify_and_ship', action)).rejects.toThrow(/dependencies/);
+      await expect(advanceLifecycleStep(ws, 'verify_and_ship', action, { by: 'user' })).rejects.toThrow(/dependencies/);
       const { verifyWorkspace } = await import('./verify.js');
       expect(verifyWorkspace).not.toHaveBeenCalled();
       expect((await readPlan(ws)).items.find((item) => item.id === 'verify_and_ship')?.status).toBe('todo');
     });
 
     it('rejects unknown actions', async () => {
-      await expect(advanceLifecycleStep(ws, 'reproduce_and_fix', 'skip' as any)).rejects.toThrow(/Unknown/);
+      await expect(advanceLifecycleStep(ws, 'reproduce_and_fix', 'skip' as any, { by: 'user' })).rejects.toThrow(/Unknown/);
     });
 
     it('does not accept dirty verification without progress permission, or retain stale verified status', async () => {
@@ -234,22 +234,22 @@ describe('core/lifecycle', () => {
       const state = await workspaceState.loadWorkspaceState(ws);
       state.lifecycle!.steps[0].status = 'verified';
       vi.mocked(verifyWorkspace).mockResolvedValue({ canProgress: false, overallStatus: 'pass_dirty', repos: [] } as any);
-      const result = await advanceLifecycleStep(ws, 'reproduce_and_fix', 'verify');
+      const result = await advanceLifecycleStep(ws, 'reproduce_and_fix', 'verify', { by: 'user' });
       expect(result.steps[0].status).toBe('in_progress');
     });
 
     it('runs the gate before completion, persists a failure, and allows recovery', async () => {
       const { verifyWorkspace } = await import('./verify.js');
-      await advanceLifecycleStep(ws, 'reproduce_and_fix', 'complete');
+      await advanceLifecycleStep(ws, 'reproduce_and_fix', 'complete', { by: 'user' });
       // Nothing starts by itself: the next milestone is started on purpose.
-      await advanceLifecycleStep(ws, 'verify_and_ship', 'start');
+      await advanceLifecycleStep(ws, 'verify_and_ship', 'start', { by: 'user' });
       vi.mocked(verifyWorkspace).mockResolvedValueOnce({ canProgress: false, overallStatus: 'fail', repos: [] } as any);
-      await expect(advanceLifecycleStep(ws, 'verify_and_ship', 'complete')).rejects.toThrow(/Verification/);
+      await expect(advanceLifecycleStep(ws, 'verify_and_ship', 'complete', { by: 'user' })).rejects.toThrow(/Verification/);
       const failed = await loadWorkspaceLifecycle(ws, { includeFleet: false });
       expect(failed.steps[1].status).toBe('in_progress');
       expect(failed.steps[1].lastVerificationStatus).toBe('fail');
       vi.mocked(verifyWorkspace).mockResolvedValueOnce({ canProgress: true, overallStatus: 'pass', repos: [] } as any);
-      const result = await advanceLifecycleStep(ws, 'verify_and_ship', 'complete');
+      const result = await advanceLifecycleStep(ws, 'verify_and_ship', 'complete', { by: 'user' });
       expect(result.steps.every((step) => step.status === 'completed')).toBe(true);
       expect(result.currentStepId).toBeUndefined();
     });
@@ -268,7 +268,7 @@ describe('core/lifecycle', () => {
     it('gives milestone gates 30 minutes by default, far more than an ad-hoc verify', async () => {
       const { verifyWorkspace } = await import('./verify.js');
       vi.mocked(verifyWorkspace).mockResolvedValue({ canProgress: true, overallStatus: 'pass', repos: [] } as any);
-      await advanceLifecycleStep(ws, 'gate', 'complete');
+      await advanceLifecycleStep(ws, 'gate', 'complete', { by: 'user' });
       expect(verifyWorkspace).toHaveBeenCalledWith(ws, { command: 'npm test && npm run test:e2e', timeoutMs: DEFAULT_GATE_TIMEOUT_SECONDS * 1000 });
       expect(DEFAULT_GATE_TIMEOUT_SECONDS).toBe(1800);
     });
@@ -278,7 +278,7 @@ describe('core/lifecycle', () => {
       const state = await workspaceState.loadWorkspaceState(ws);
       state.lifecycle!.steps[0].verificationTimeoutSeconds = 600;
       vi.mocked(verifyWorkspace).mockResolvedValue({ canProgress: false, overallStatus: 'timeout', repos: [] } as any);
-      await expect(advanceLifecycleStep(ws, 'gate', 'complete')).rejects.toThrow(/stopped after 10 minutes; raise this milestone's verification time limit/);
+      await expect(advanceLifecycleStep(ws, 'gate', 'complete', { by: 'user' })).rejects.toThrow(/stopped after 10 minutes; raise this milestone's verification time limit/);
       expect(verifyWorkspace).toHaveBeenCalledWith(ws, { command: 'npm test && npm run test:e2e', timeoutMs: 600_000 });
     });
 

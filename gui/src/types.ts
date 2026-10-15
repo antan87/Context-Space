@@ -898,7 +898,7 @@ export type ScreenEvent = { id: string; timestamp: string; harness: string } & (
   | { event: 'show'; payload: { view: 'document' | 'file' | 'diff'; path?: string; repo?: string; line?: number; endLine?: number; note?: string } }
   | { event: 'annotate'; payload: { path: string; repo?: string; line: number; text: string; tag: AnnotationTag } }
   | { event: 'next'; payload: { title: string; reason: string; path?: string; repo?: string; line?: number } }
-  | { event: 'milestone'; payload: { stepId: string; state: 'in_progress' | 'blocked'; note?: string } }
+  | { event: 'milestone'; payload: { stepId: string; state: 'in_progress' | 'blocked' | 'done' | 'reopened'; note?: string } }
   | { event: 'milestone_proposal'; payload: { stepId: string; proposal: 'reopen' | 'complete'; reason: string } }
 );
 

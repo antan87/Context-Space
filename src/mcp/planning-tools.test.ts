@@ -69,7 +69,7 @@ it('returns the plan as ctxspace plan prints it, and the old planning tools say 
 
 it('rejects stale plan, assignment, document, and note writes without losing newer work', async () => {
   const plan = await call('update_milestone_plan', { revision: 0, steps: [{ id: 'reports', title: 'Report viewer' }] });
-  await advanceLifecycleStep(root, 'reports', 'start');
+  await advanceLifecycleStep(root, 'reports', 'start', { by: 'user' });
   expect((await findTool('update_milestone_plan')!.handler({ revision: plan.lifecycle.revision, steps: [] }, ctx)).isError).toBe(true);
   let context = await call('add_work_document', { revision: 0, title: 'Requirements', role: 'reference', url: 'https://example.com/requirements' });
   expect((await findTool('add_work_document')!.handler({ revision: 0, title: 'Stale', role: 'reference', content: 'old' }, ctx)).isError).toBe(true);

@@ -5,8 +5,12 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
 import { setActiveStorageProvider } from '../core/adapters/registry.js';
-import { readPlan, PlanError, type PlanActor } from '../core/plan.js';
+import { mutatePlan, readPlan, PlanError, type PlanActor } from '../core/plan.js';
 import { saveWorkspaceState } from '../core/workspace-state.js';
+
+const PASSED = { overallStatus: 'pass', canProgress: true, repos: [{ headSha: 'abc1234def5678' }] };
+const check = vi.hoisted(() => ({ result: undefined as unknown }));
+vi.mock('../core/verify.js', () => ({ verifyWorkspace: async () => check.result }));
 import {
   codeList,
   confirmWithin,
@@ -34,8 +38,13 @@ function context(over: Partial<PlanCommandContext> = {}): PlanCommandContext {
   };
 }
 const output = () => printed.join('\n');
+/** A proposal as an AI saved it under the earlier rule, before it could close a milestone itself. */
+const seedProposal = (id: string, note: string) => mutatePlan(root, (plan) => {
+  plan.items.find((item) => item.id === id)!.proposal = { action: 'done', by: 'claude', note, at: '2026-10-01T00:00:00.000Z' };
+});
 
 beforeEach(async () => {
+  check.result = PASSED;
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'plan-cli-'));
   setActiveStorageProvider(new LocalStorageAdapter());
   await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ id: 'csv', branchName: 'feat/csv', description: 'Add CSV export to reports', repos: [], assistants: [] }));
@@ -98,18 +107,35 @@ describe('changing the plan from an AI tool', () => {
     expect((await readPlan(root)).items[0]!.history.map((entry) => entry.by)).toEqual(['claude', 'claude', 'claude']);
   });
 
-  it('turns finishing a milestone into a proposal and says the user decides', async () => {
+  it('finishes a milestone itself, and the history names it', async () => {
     await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await planChange(context(), { type: 'start', id: 'M1' });
     await planChange(context(), { type: 'done', id: 'M1', resolution: 'Tests pass' });
-    expect(printed[1]).toContain("Proposed that M1 CSV export endpoint is done. A milestone is the user's decision: they see it under Needs you and accept it or send it back.");
-    // The AI is told its part is over, so it does not hunt for a way around the proposal.
-    expect(printed[1]).toContain('Your part is done: tell the user it waits for them. Do not look for another way to close it.');
-    expect((await readPlan(root)).items[0]!.status).toBe('todo');
+    expect(printed[2]).toBe('Done: M1 CSV export endpoint.\nPlan: Needs you 0 · In progress 0 · To do 0 · Done 1. Run "ctxspace plan" to see it.');
+    const [item] = (await readPlan(root)).items;
+    expect(item).toMatchObject({ status: 'done', resolution: 'Tests pass' });
+    expect(item!.history.at(-1)).toMatchObject({ by: 'claude', action: 'done' });
   });
 
-  it('refuses to accept its own proposal', async () => {
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+  it('runs a milestone\'s check before finishing it, and leaves it open when the check fails', async () => {
+    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint', gate: { required: true, command: 'npm test' } });
+    await planChange(context(), { type: 'start', id: 'M1' });
+    check.result = { overallStatus: 'fail', canProgress: false, repos: [{ headSha: 'abc1234def5678' }] };
+    await expect(planChange(context(), { type: 'done', id: 'M1', resolution: 'Tests pass' })).rejects.toThrow(/did not permit progress/);
+    expect((await readPlan(root)).items[0]!.status).toBe('in_progress');
+
+    check.result = PASSED;
     await planChange(context(), { type: 'done', id: 'M1', resolution: 'Tests pass' });
+    expect(printed.at(-1)).toContain('Done: M1 CSV export endpoint. Its check passed.');
+    const [item] = (await readPlan(root)).items;
+    expect(item).toMatchObject({ status: 'done' });
+    expect(item!.resolution).toMatch(/^Tests pass\. Passed its check on /);
+    expect(item!.history.at(-1)).toMatchObject({ by: 'claude', action: 'done' });
+  });
+
+  it('refuses to accept a proposal: that is the user\'s', async () => {
+    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await seedProposal('M1', 'Tests pass');
     await expect(planChange(context(), { type: 'accept', id: 'M1' })).rejects.toThrow(/Only the user can accept/);
   });
 
@@ -133,33 +159,36 @@ describe('changing the plan from an interactive terminal', () => {
     return { asked, context: context({ actor: { by: 'user' }, interactive: true, confirmAsUser: async (question) => { asked.push(question); return answer; } }) };
   };
 
-  it('asks before making a decision that is the user\'s, and does nothing when declined', async () => {
+  it('asks before deciding a proposal as the user, and does nothing when declined', async () => {
     await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await seedProposal('M1', 'Shipped');
     const declined = user(false);
-    await planChange(declined.context, { type: 'done', id: 'M1', resolution: 'Shipped' });
+    await planChange(declined.context, { type: 'accept', id: 'M1' });
     expect(declined.asked).toEqual(["M1 CSV export endpoint: this is the user's decision. Do it as the user?"]);
     expect(printed.at(-1)).toBe('Nothing changed.');
     expect((await readPlan(root)).items[0]!.status).toBe('todo');
     const accepted = user(true);
-    await planChange(accepted.context, { type: 'done', id: 'M1', resolution: 'Shipped' });
+    await planChange(accepted.context, { type: 'accept', id: 'M1' });
     expect((await readPlan(root)).items[0]).toMatchObject({ status: 'done', resolution: 'Shipped' });
   });
 
-  it('does not ask for everyday changes', async () => {
+  it('does not ask for everyday changes, finishing a milestone included', async () => {
     const { asked, context: ctx } = user(false);
     await planChange(ctx, { type: 'add', kind: 'task', title: 'Write docs' });
     await planChange(ctx, { type: 'start', id: 'T1' });
+    await planChange(ctx, { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await planChange(ctx, { type: 'done', id: 'M1', resolution: 'Shipped' });
     expect(asked).toEqual([]);
-    expect((await readPlan(root)).items[0]!.status).toBe('in_progress');
+    expect((await readPlan(root)).items.map((item) => item.status)).toEqual(['in_progress', 'done']);
   });
 
   it('lets the user accept or send back a proposal', async () => {
     await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
-    await planChange(context(), { type: 'done', id: 'M1', resolution: 'Tests pass' });
+    await seedProposal('M1', 'Tests pass');
     const { context: ctx } = user(true);
     await planChange(ctx, { type: 'reject', id: 'M1', reason: 'Also cap at 50,000 rows' });
     expect(printed.at(-1)).toContain('Sent back to claude: M1 CSV export endpoint. Also cap at 50,000 rows');
-    await planChange(context(), { type: 'done', id: 'M1', resolution: 'Capped too' });
+    await seedProposal('M1', 'Capped too');
     await planChange(ctx, { type: 'accept', id: 'M1' });
     expect((await readPlan(root)).items[0]).toMatchObject({ status: 'done', resolution: 'Capped too' });
   });

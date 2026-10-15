@@ -419,7 +419,8 @@ export async function advanceLifecycleStep(
   workspacePath: string,
   stepId: string,
   action: 'start' | 'verify' | 'complete',
-  actor: PlanActor = { by: 'user' },
+  /** Who acts. No default: a close recorded as the user when the AI made it is the wrong history. */
+  actor: PlanActor,
   /** For complete: what came out of it, kept with the check's result. */
   options: { resolution?: string } = {},
 ): Promise<WorkspaceLifecycle> {
@@ -515,6 +516,7 @@ function reasonText(emptyMessage: string) {
 const reopenSchema = z.object({
   reason: reasonText('Say why the milestone is being reopened.'),
   by: z.enum(['user', 'agent']),
+  harness: z.string().trim().max(100).optional(),
 });
 const blockSchema = z.object({ reason: reasonText('Say what the milestone is blocked on.') });
 
@@ -523,15 +525,15 @@ const blockSchema = z.object({ reason: reasonText('Say what the milestone is blo
  * so this is a first-class, checkable fact on the step (when, why, by whom, how
  * many times) and not a silent status flip. Only a completed or verified
  * milestone can be reopened. The earlier completion and its verification proof
- * no longer describe the work, so both are cleared. From the AI side this is a
- * proposal: the user decides.
+ * no longer describe the work, so both are cleared. The AI may reopen too; the
+ * history names who did.
  */
 export async function reopenLifecycleStep(
   workspacePath: string,
   stepId: string,
-  input: { reason: string; by: 'user' | 'agent' },
+  input: { reason: string; by: 'user' | 'agent'; harness?: string },
 ): Promise<WorkspaceLifecycle> {
-  const { reason, by } = reopenSchema.parse(input);
+  const { reason, by, harness } = reopenSchema.parse(input);
   const { plan, lifecycle } = await loadView(workspacePath, { write: true });
   const step = lifecycle.steps.find((candidate) => candidate.id === stepId);
   const item = plan.items.find((candidate) => candidate.id === stepId);
@@ -539,10 +541,9 @@ export async function reopenLifecycleStep(
   if (step.status !== 'completed' && step.status !== 'verified') {
     throw new LifecycleStepError(`Step "${stepId}" is ${step.status.replace('_', ' ')}, so there is nothing to reopen. Only a finished milestone can be reopened.`, 'not_reopenable');
   }
-  let outcome: 'applied' | 'proposed';
   try {
-    ({ outcome } = await changePlan(workspacePath, { type: 'reopen', id: stepId, reason },
-      { actor: by === 'user' ? { by: 'user' } : { by: 'agent' }, ifItemUpdatedAt: item.updatedAt }));
+    await changePlan(workspacePath, { type: 'reopen', id: stepId, reason },
+      { actor: by === 'user' ? { by: 'user' } : { by: 'agent', ...(harness ? { harness } : {}) }, ifItemUpdatedAt: item.updatedAt });
   } catch (error) {
     // Another session may have changed or reopened it while this call was waiting.
     if (error instanceof PlanError && error.code === 'conflict') {
@@ -550,7 +551,7 @@ export async function reopenLifecycleStep(
     }
     throw error;
   }
-  if (outcome === 'applied') await recordEvidence(workspacePath, stepId, null);
+  await recordEvidence(workspacePath, stepId, null);
   return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
 }
 

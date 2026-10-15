@@ -39,7 +39,7 @@ export function cleanScreenEvent(raw: unknown): ScreenEvent | null {
       return { ...base, event: 'next', payload: { title: p.title, reason: p.reason, ...optionalText('path', p.path), ...optionalText('repo', p.repo), ...optionalLine('line', p.line) } };
     }
     case 'milestone': {
-      if (!isText(p.stepId) || (p.state !== 'in_progress' && p.state !== 'blocked')) return null;
+      if (!isText(p.stepId) || (p.state !== 'in_progress' && p.state !== 'blocked' && p.state !== 'done' && p.state !== 'reopened')) return null;
       return { ...base, event: 'milestone', payload: { stepId: p.stepId, state: p.state, ...optionalText('note', p.note) } };
     }
     case 'milestone_proposal': {

@@ -9,6 +9,7 @@ import { getWorkContext } from '../core/work-guidance.js';
 import { loadWorkspaceLifecycle, advanceLifecycleStep, renderLifecyclePlan } from '../core/lifecycle.js';
 import { resolveWorkspaceInteractive } from '../utils/resolve-workspace.js';
 import { BRAND_NAME } from '../core/constants.js';
+import { resolvePlanActor } from './plan.js';
 
 export interface FlowCommandOptions {
   step?: string;
@@ -34,7 +35,9 @@ export async function flowCommand(
 
   if (options.step && options.action) {
     console.log(chalk.cyan(`\nAdvancing step "${options.step}" (${options.action})...`));
-    const updated = await advanceLifecycleStep(workspacePath, options.step, options.action);
+    // Recorded as the AI, by its tool's name, as `ctxspace plan` records it; never as the user by default.
+    const actor = resolvePlanActor({}, process.env, Boolean(process.stdin.isTTY && process.stdout.isTTY));
+    const updated = await advanceLifecycleStep(workspacePath, options.step, options.action, actor);
     console.log(chalk.green(`✔ Step transitioned successfully.\n`));
     if (options.json) {
       console.log(JSON.stringify(updated, null, 2));

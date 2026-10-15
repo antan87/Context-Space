@@ -4,11 +4,11 @@
  * without setup: the AI runs these commands in its shell, and the person sees the same plan in the
  * Plan tab.
  *
- * Who is acting: always the AI, so a close that is the user's becomes a proposal they accept in the
- * Plan tab. Some AI tools run commands in a terminal, so a terminal alone does not mean a person is
- * typing. A person acts as the user with `--as user` (and `accept`/`reject`) in their own terminal,
- * after confirming; a prompt that nobody answers gives up instead of waiting. This guides
- * behaviour; it is not a security boundary.
+ * Who is acting: always the AI, recorded with its name, and it may make every change, milestones
+ * included. Some AI tools run commands in a terminal, so a terminal alone does not mean a person is
+ * typing. A person acts as the user with `--as user` (and `accept`/`reject` for a proposal saved under
+ * the earlier rule) in their own terminal, after confirming; a prompt that nobody answers gives up
+ * instead of waiting. This guides behaviour and keeps the history true; it is not a security boundary.
  */
 
 import { Command, Option } from 'commander';
@@ -18,10 +18,10 @@ import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
 import { preparePlan } from '../core/plan-import.js';
+import { advanceLifecycleStep } from '../core/lifecycle.js';
 import { PLAN_KINDS, WHO_ACTS, itemLabel, type PlanKind } from '../core/plan-words.js';
 import {
   PlanError,
-  agentMayClose,
   changePlan,
   findItem,
   planSections,
@@ -175,26 +175,30 @@ export async function planCheck(context: PlanCommandContext): Promise<void> {
   context.print(lines.join('\n').trimEnd());
 }
 
-const CLOSING = new Set<PlanChange['type']>(['done', 'answer', 'drop', 'later', 'reopen']);
-
 /**
- * Applies one change and prints what happened, naming the item by its label. A person at an
- * interactive terminal is asked before making a decision that belongs to the user.
+ * Applies one change and prints what happened, naming the item by its label. Finishing a milestone
+ * with a check runs the check first, as the Plan tab does. A person at an interactive terminal is
+ * asked before deciding a proposal as the user.
  */
 export async function planChange(context: PlanCommandContext, change: PlanChange): Promise<void> {
-  await preparePlan(context.workspacePath);
-  if (context.interactive && context.actor.by === 'user' && change.type !== 'add') {
-    const plan = await readPlan(context.workspacePath);
-    const item = findItem(plan, change.id);
-    const usersCall = change.type === 'accept' || change.type === 'reject'
-      || (item !== undefined && CLOSING.has(change.type) && !agentMayClose(item, { by: 'agent' }));
-    if (item && usersCall) {
-      const ok = await context.confirmAsUser(`${itemLabel(item)}: this is the user's decision. Do it as the user?`);
-      if (!ok) {
-        context.print('Nothing changed.');
-        return;
-      }
+  const plan = await preparePlan(context.workspacePath);
+  const item = change.type === 'add' ? undefined : findItem(plan, change.id);
+  if (context.interactive && context.actor.by === 'user' && item && (change.type === 'accept' || change.type === 'reject')) {
+    const ok = await context.confirmAsUser(`${itemLabel(item)}: this is the user's decision. Do it as the user?`);
+    if (!ok) {
+      context.print('Nothing changed.');
+      return;
     }
+  }
+  if (change.type === 'done' && item?.kind === 'milestone' && (item.gate?.required || item.gate?.command)) {
+    await advanceLifecycleStep(context.workspacePath, item.id, 'complete', context.actor, { resolution: change.resolution });
+    const after = await readPlan(context.workspacePath);
+    const done = after.items.find((candidate) => candidate.id === item.id)!;
+    const message = `Done: ${itemLabel(done)}. Its check passed.`;
+    context.print(context.json
+      ? JSON.stringify({ ok: true, outcome: 'applied', message, item: itemToJson(after, done), revision: after.revision, counts: planSections(after).counts }, null, 2)
+      : `${message}\n${countsLine(after)}`);
+    return;
   }
   try {
     const result = await changePlan(context.workspacePath, change, { actor: context.actor });

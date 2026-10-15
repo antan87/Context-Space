@@ -267,48 +267,63 @@ describe('who may close what', () => {
     expect(result.item.status).toBe('done');
   });
 
-  it('lets an AI tool close an item owned by that tool, but not one owned by another', async () => {
-    await change({ type: 'add', kind: 'task', title: 'Claude task', owner: 'claude' });
+  it('lets an AI tool close an item owned by the user or by another tool', async () => {
+    await change({ type: 'add', kind: 'task', title: 'User task' });
     await change({ type: 'add', kind: 'task', title: 'Codex task', owner: 'codex' });
-    expect((await change({ type: 'done', id: 'T1', resolution: 'Done' }, claude)).outcome).toBe('applied');
-    expect((await change({ type: 'done', id: 'T2', resolution: 'Done' }, claude)).outcome).toBe('proposed');
+    expect((await change({ type: 'done', id: 'T1', resolution: 'Done' }, claude)).item.status).toBe('done');
+    expect((await change({ type: 'drop', id: 'T2', reason: 'Not needed' }, claude)).item.status).toBe('dropped');
   });
 
-  it('turns the AI finishing a milestone into a proposal the user accepts', async () => {
+  it('lets the AI finish a milestone itself, and names it in the history', async () => {
     await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
     await change({ type: 'start', id: 'M1' }, claude);
-    const proposed = await change({ type: 'done', id: 'M1', resolution: 'Tests pass on a1b2c3d' }, claude);
-    expect(proposed.outcome).toBe('proposed');
-    expect(proposed.item).toMatchObject({ status: 'in_progress', proposal: { action: 'done', by: 'claude', note: 'Tests pass on a1b2c3d' } });
-    expect(proposed.message).toContain('M1 CSV export endpoint');
-    expect(planSections(await readPlan(root)).needsYou.map((item) => item.id)).toEqual(['M1']);
+    const done = await change({ type: 'done', id: 'M1', resolution: 'Tests pass on a1b2c3d' }, claude);
+    expect(done.outcome).toBe('applied');
+    expect(done.message).toBe('Done: M1 CSV export endpoint.');
+    expect(done.item).toMatchObject({ status: 'done', resolution: 'Tests pass on a1b2c3d' });
+    expect(done.item).not.toHaveProperty('proposal');
+    expect(done.item.history.map((entry) => `${entry.by}:${entry.action}`)).toEqual(['user:added', 'claude:started', 'claude:done']);
+    expect(planSections(await readPlan(root)).needsYou).toEqual([]);
+  });
+
+  it('lets the AI record the answer the user gave to their question', async () => {
+    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' }, codex);
+    const answered = await change({ type: 'answer', id: 'Q1', answer: 'UTC' }, codex);
+    expect(answered.item).toMatchObject({ status: 'done', resolution: 'UTC' });
+    expect(answered.item.history.at(-1)).toMatchObject({ by: 'codex', action: 'answered' });
+  });
+
+  it('lets the AI put off, drop and reopen a milestone', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'Database query' });
+    await change({ type: 'add', kind: 'milestone', title: 'Old idea' });
+    await change({ type: 'add', kind: 'milestone', title: 'Someday' });
+    await change({ type: 'done', id: 'M1', resolution: 'Merged' });
+    const reopened = await change({ type: 'reopen', id: 'M1', reason: 'Rows are missing' }, claude);
+    expect(reopened.item).toMatchObject({ status: 'in_progress', reopenReason: 'Rows are missing', reopenedBy: 'agent', reopenCount: 1 });
+    expect((await change({ type: 'drop', id: 'M2', reason: 'Covered by M1' }, claude)).item.status).toBe('dropped');
+    expect((await change({ type: 'later', id: 'M3', revisitWhen: 'After the release' }, claude)).item.status).toBe('later');
+  });
+
+  it('lets the user accept or send back a proposal saved under the earlier rule, and only the user', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' });
+    await mutatePlan(root, (plan) => {
+      plan.items[0]!.proposal = { action: 'done', by: 'claude', note: 'Tests pass on a1b2c3d', at: '2026-10-01T00:00:00.000Z' };
+      plan.items[1]!.proposal = { action: 'answer', by: 'codex', note: 'UTC', at: '2026-10-01T00:00:00.000Z' };
+    });
+    expect(planSections(await readPlan(root)).needsYou.map((item) => item.id)).toEqual(['M1', 'Q1']);
 
     await expect(change({ type: 'accept', id: 'M1' }, claude)).rejects.toThrow(/Only the user/);
     const accepted = await change({ type: 'accept', id: 'M1' });
     expect(accepted.item).toMatchObject({ status: 'done', resolution: 'Tests pass on a1b2c3d' });
     expect(accepted.item).not.toHaveProperty('proposal');
-    expect(accepted.item.history.map((entry) => `${entry.by}:${entry.action}`)).toEqual(['user:added', 'claude:started', 'claude:proposed', 'user:accepted', 'user:done']);
-  });
+    expect(accepted.item.history.map((entry) => `${entry.by}:${entry.action}`)).toEqual(['user:added', 'user:accepted', 'user:done']);
 
-  it('turns the AI answering the user\'s question into a proposal, and the user can send it back', async () => {
-    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' }, codex);
-    const proposed = await change({ type: 'answer', id: 'Q1', answer: 'UTC' }, codex);
-    expect(proposed.outcome).toBe('proposed');
     await expect(change({ type: 'reject', id: 'Q1', reason: '' })).rejects.toMatchObject({ code: 'invalid' });
     const rejected = await change({ type: 'reject', id: 'Q1', reason: 'Use the account time zone' });
     expect(rejected.item.status).toBe('todo');
     expect(rejected.item).not.toHaveProperty('proposal');
     expect(rejected.message).toBe('Sent back to codex: Q1 Which time zone? Use the account time zone');
-  });
-
-  it('turns the AI reopening a milestone into a proposal', async () => {
-    await change({ type: 'add', kind: 'milestone', title: 'Database query' });
-    await change({ type: 'done', id: 'M1', resolution: 'Merged' });
-    const result = await change({ type: 'reopen', id: 'M1', reason: 'Rows are missing' }, claude);
-    expect(result.outcome).toBe('proposed');
-    expect(result.item.status).toBe('done');
-    const accepted = await change({ type: 'accept', id: 'M1' });
-    expect(accepted.item).toMatchObject({ status: 'in_progress', reopenReason: 'Rows are missing', reopenedBy: 'user', reopenCount: 1 });
   });
 
   it('will not finish a milestone with a check unless the check passed', async () => {

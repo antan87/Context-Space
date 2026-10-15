@@ -55,13 +55,16 @@ export const SCREEN_NOTE_LIMIT = 300;
 export type ScreenReaderView = 'document' | 'file' | 'diff';
 export type AnnotationTag = 'question' | 'risk' | 'todo';
 export type MilestoneProposalKind = 'reopen' | 'complete';
+/** What the AI did to a milestone: started, blocked, finished or reopened it. */
+export type MilestoneEventState = 'in_progress' | 'blocked' | 'done' | 'reopened';
+const MILESTONE_EVENT_STATES: readonly string[] = ['in_progress', 'blocked', 'done', 'reopened'];
 
 interface Base { id: string; timestamp: string; harness: string }
 export type ScreenEvent = Base & (
   | { event: 'show'; payload: { view: ScreenReaderView; path?: string; repo?: string; line?: number; endLine?: number; note?: string } }
   | { event: 'annotate'; payload: { path: string; repo?: string; line: number; text: string; tag: AnnotationTag } }
   | { event: 'next'; payload: { title: string; reason: string; path?: string; repo?: string; line?: number } }
-  | { event: 'milestone'; payload: { stepId: string; state: 'in_progress' | 'blocked'; note?: string } }
+  | { event: 'milestone'; payload: { stepId: string; state: MilestoneEventState; note?: string } }
   | { event: 'milestone_proposal'; payload: { stepId: string; proposal: MilestoneProposalKind; reason: string } }
 );
 export type ScreenEventName = ScreenEvent['event'];
@@ -117,7 +120,7 @@ function cleanPayload(event: ScreenEventName, raw: unknown): ScreenEvent['payloa
       return { title, reason, ...optional('path', target), ...(target ? optional('repo', repoName(p.repo)) : {}), ...(target ? optional('line', lineNumber(p.line)) : {}) };
     }
     case 'milestone': {
-      const state = p.state === 'in_progress' || p.state === 'blocked' ? p.state : null;
+      const state = typeof p.state === 'string' && MILESTONE_EVENT_STATES.includes(p.state) ? p.state as MilestoneEventState : null;
       if (typeof p.stepId !== 'string' || !STEP_ID.test(p.stepId) || !state) return null;
       return { stepId: p.stepId, state, ...optional('note', text(p.note, SCREEN_TEXT_LIMIT)) };
     }

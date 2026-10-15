@@ -36,7 +36,12 @@ function examplePlan(): PlanDocument {
   apply({ type: 'done', id: 'T2', resolution: 'Capped at 50,000 rows' }, claude);
   apply({ type: 'add', kind: 'task', title: 'Write the CSV encoder', before: ['M2'], owner: 'user' }, claude);
   apply({ type: 'start', id: 'T3' }, claude);
-  apply({ type: 'done', id: 'T3', resolution: 'Encoder handles quotes and commas' }, claude);
+  // A proposal saved under the earlier rule, before the AI could close the user's work itself.
+  minute += 1;
+  const at = new Date(Date.parse('2026-10-10T11:00:00.000Z') + minute * 60_000).toISOString();
+  const t3 = plan.items.find((item) => item.id === 'T3')!;
+  t3.proposal = { action: 'done', by: 'claude', note: 'Encoder handles quotes and commas', at };
+  t3.history.push({ at, by: 'claude', action: 'proposed', note: 'done: Encoder handles quotes and commas' });
   return plan;
 }
 
@@ -151,11 +156,13 @@ describe('small helpers', () => {
     expect(help).toContain('To do, In progress, Blocked, Done, Dropped, Later');
   });
 
-  it('gives the AI a work routine: read, keep the plan true, record what the user says, report with names', () => {
+  it('gives the AI a work routine: read, keep the plan true, record what the user says, finish what is done, report with names', () => {
     expect(PLAN_WORKFLOW).toHaveLength(6);
     expect(PLAN_WORKFLOW[0].text).toMatch(/^Start by running `ctxspace plan`/);
     expect(PLAN_WORKFLOW[2].list).toHaveLength(3);
-    expect(PLAN_WORKFLOW.map((step) => step.text).join(' ')).toContain('your part is done');
+    const routine = PLAN_WORKFLOW.map((step) => step.text).join(' ');
+    expect(routine).toContain('Never answer the user\'s question with your own guess');
+    expect(routine).toContain('When you judge an item done, a milestone too, finish it');
     expect(PLAN_WORKFLOW.at(-1)!.text).toContain('never "M2" alone');
   });
 
