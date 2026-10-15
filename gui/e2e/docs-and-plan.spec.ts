@@ -152,7 +152,7 @@ test.describe('the plan', () => {
     const plan = page.getByRole('region', { name: 'The plan', exact: true });
     await expect(plan).toContainText('1 of 3 milestones done');
     await expect(plan.getByRole('listitem')).toHaveText([
-      /Measure the slow page.*Done · Passed its check/, /Cache the lookups.*In progress · Claude/, /Ship behind a flag.*To do · starts after cache Cache the lookups/,
+      /Measure the slow page.*Done · Passed its check/, /Cache the lookups.*In progress · Claude/, /Ship behind a flag.*To do · starts after Cache the lookups/,
     ]);
 
     // Editing opens the form in place, and Done closes it again.

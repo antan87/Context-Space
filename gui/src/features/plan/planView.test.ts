@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeText, forYou, itemLook, startableItems, workingOn, milestoneProgress, planNames, splitPlanCodes, stateLine, whenText, whoName, NEEDS_YOU_LOOK, STATUS_LOOK } from './planView.js';
+import { changeText, forYou, itemLook, nameOf, shortCommits, startableItems, suggestedAnswers, tasksUnderMilestones, visibleChanges, workingOn, milestoneProgress, planNames, splitPlanCodes, stateLine, whenText, whoName, NEEDS_YOU_LOOK, STATUS_LOOK } from './planView.js';
 import type { PlanItemView, PlanWords } from './planTypes.js';
 
 const words: PlanWords = {
@@ -29,11 +29,44 @@ describe('whoName', () => {
   });
 });
 
+describe('names, commits and nesting', () => {
+  it('reads names without codes, and short commits', () => {
+    expect(nameOf({ id: 'M2', label: 'M2 Chat docked' })).toBe('Chat docked');
+    expect(nameOf({ id: 'chat-docked', label: 'Chat docked' })).toBe('Chat docked');
+    expect(shortCommits('Passed its check on c9043b3bb666e1f2a3b4c5d6e7f8091a2b3c4d5e')).toBe('Passed its check on c9043b3');
+    expect(shortCommits('Short ae8aa9e stays')).toBe('Short ae8aa9e stays');
+    expect(stateLine(item({ status: 'done', resolution: 'Tests pass. Passed its check on c9043b3bb666e1f2a3b4c5d6e7f8091a2b3c4d5e' }), words)).toBe('Done · Tests pass. Passed its check on c9043b3');
+  });
+
+  it('reads the answers an AI suggested with its question', () => {
+    expect(suggestedAnswers('Why it matters\n\nSuggested answers: main · release')).toEqual(['main', 'release']);
+    expect(suggestedAnswers('No suggestions')).toEqual([]);
+    expect(suggestedAnswers(undefined)).toEqual([]);
+  });
+
+  it('shows each task under the first milestone that waits for it', () => {
+    const queue = item({ id: 'T1', title: 'Queue', kind: 'task' });
+    const docs = item({ id: 'T2', title: 'Docs', kind: 'task', status: 'done' });
+    const loose = item({ id: 'T3', title: 'Loose', kind: 'task' });
+    const m1 = item({ id: 'M1', title: 'Endpoint', waitsFor: [{ id: 'T1', label: 'T1 Queue' }, { id: 'Q1', label: 'Q1 Zone?' }, { id: 'T2', label: 'T2 Docs' }] });
+    const m2 = item({ id: 'M2', title: 'Button', waitsFor: [{ id: 'T1', label: 'T1 Queue' }, { id: 'M1', label: 'M1 Endpoint' }] });
+    const { byMilestone, nested } = tasksUnderMilestones({ milestones: [m1, m2], otherOpen: [queue, loose], closed: [docs], needsYou: [] });
+    expect(byMilestone.get('M1')!.map((task) => task.id)).toEqual(['T1', 'T2']);
+    expect(byMilestone.has('M2')).toBe(false);
+    expect([...nested]).toEqual(['T1', 'T2']);
+  });
+
+  it('leaves out the lines ContextSpace wrote when it moved old notes in', () => {
+    expect(visibleChanges([{ by: 'contextspace', action: 'imported' }, { by: 'claude', action: 'done' }, { by: 'user', action: 'imported' }]))
+      .toEqual([{ by: 'claude', action: 'done' }, { by: 'user', action: 'imported' }]);
+  });
+});
+
 describe('stateLine', () => {
   it('says where an item is and what it carries, in the plan\'s words', () => {
     expect(stateLine(item({}), words)).toBe('To do · ready to start');
     expect(stateLine(item({ waitsFor: [{ id: 'Q1', label: 'Q1 Which zone?', status: 'todo' }, { id: 'T1', label: 'T1 Queue', status: 'done' }] }), words))
-      .toBe('To do · starts after Q1 Which zone?');
+      .toBe('To do · starts after Which zone?');
     expect(stateLine(item({ status: 'in_progress', history: [{ at: '', by: 'user', action: 'added' }, { at: '', by: 'claude', action: 'started' }] }), words)).toBe('In progress · Claude');
     expect(stateLine(item({ status: 'blocked', blockedReason: 'Design is not ready' }), words)).toBe('Blocked · Design is not ready');
     expect(stateLine(item({ status: 'done', resolution: 'Passed its check' }), words)).toBe('Done · Passed its check');

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronRight, CircleHelp, ListPlus, Play, RefreshCw } from 'lucide-react';
+import { ChevronRight, Clock, ListPlus, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { Input } from '../../components/ui/input.js';
@@ -7,66 +7,123 @@ import { Skeleton } from '../../components/ui/skeleton.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { usePlan, useChangePlan, useRunMilestoneCheck } from '../../lib/api/queries.js';
+import { cn } from '../../lib/utils.js';
 import { AddPlanItemDialog } from './AddPlanItem.js';
-import { HowItWorksDialog, StatusKey } from './HowItWorks.js';
 import { PlanItemDetail } from './PlanItemDetail.js';
-import { TONE_CLASS, changeText, howItWorksSeen, itemLook, milestoneProgress, proposalLine, stateLine, whenText, whoName } from './planView.js';
+import {
+  TONE_CLASS, changeText, itemLook, milestoneProgress, nameOf, proposalLine, shortCommits, stateLine, suggestedAnswers, tasksUnderMilestones,
+  visibleChanges, whenText, whoName,
+} from './planView.js';
 import type { PlanChangeInput, PlanItemView, PlanView } from './planTypes.js';
 
 function Section({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
   return <section className="space-y-1.5">
     <h4 className="flex items-center gap-1.5 px-1 text-xs font-semibold text-foreground/80">
       <span>{title}</span>
-      {hint && <><span className="text-muted-foreground font-normal">·</span> <span className="font-normal text-muted-foreground tracking-normal">{hint}</span></>}
+      {hint && <><span className="font-normal text-muted-foreground">·</span> <span className="font-normal tracking-normal text-muted-foreground">{hint}</span></>}
     </h4>
     {children}
   </section>;
 }
 
-/** One item as a row: the whole row opens it. Names first; the code is small. A ready item can start a session. */
-function ItemRow({ item, view, onOpen, onStart }: { item: PlanItemView; view: PlanView; onOpen: () => void; onStart?: (item: PlanItemView) => void }) {
+/** Who owns an item and when it last changed: "Claude · 2 h ago". */
+function rowMeta(item: PlanItemView): string {
+  const when = whenText(item.updatedAt);
+  return [whoName(item.owner ?? 'user'), when].filter(Boolean).join(' · ');
+}
+
+/**
+ * One item as a row: the whole row opens it. The status word starts the line under the name, so no legend
+ * is needed; the code is in the tooltip. Tasks a milestone waits for are shown under it.
+ */
+function ItemRow({ item, view, selected, onOpen, onStart, nested }: {
+  item: PlanItemView; view: PlanView; selected: boolean; onOpen: (item: PlanItemView) => void; onStart?: (item: PlanItemView) => void;
+  /** The tasks shown under this milestone. */
+  nested?: PlanItemView[];
+}) {
   const { icon: Icon, tone } = itemLook(item);
   const finished = item.status === 'done' || item.status === 'dropped';
   const ready = Boolean(onStart) && view.ready.includes(item.label);
-  return <li className="flex items-start gap-1">
-    <button type="button" onClick={onOpen} className="group flex min-w-0 flex-1 items-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-ring">
-      <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${TONE_CLASS[tone]}`} />
-      <span className="min-w-0 flex-1">
-        <span className={`text-xs sm:text-[13px] leading-snug font-medium ${finished ? 'text-muted-foreground line-through opacity-70' : 'text-foreground'}`}><InlinePlanMarkdown content={item.title} /></span>
-        <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{item.id}</span>
-        <span className="block truncate text-[11px] text-muted-foreground mt-0.5" title={stateLine(item, view.words)}><InlinePlanMarkdown content={stateLine(item, view.words)} /></span>
-      </span>
-      <ChevronRight aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity" />
-    </button>
-    {ready && <Button size="xs" variant="outline" className="mt-1 h-7 shrink-0 border-border/40 bg-muted/20 px-2.5 text-xs font-medium text-muted-foreground hover:border-border/70 hover:bg-muted/50 hover:text-foreground transition-colors" aria-label={`Start a session on ${item.label}`} onClick={() => onStart!(item)}><Play className="size-3" />Start</Button>}
+  const line = stateLine(item, view.words);
+  return <li>
+    <div className="flex items-start gap-1">
+      <button type="button" onClick={() => onOpen(item)} aria-current={selected || undefined} title={item.label}
+        className={cn('group flex min-w-0 flex-1 items-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-ring', selected && 'bg-accent/60')}>
+        <Icon aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${TONE_CLASS[tone]}`} />
+        <span className="min-w-0 flex-1">
+          <span className={`text-xs font-medium leading-snug sm:text-[13px] ${finished ? 'text-muted-foreground line-through opacity-70' : 'text-foreground'}`}><InlinePlanMarkdown content={item.title} /></span>
+          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground" title={line}><InlinePlanMarkdown content={line} /></span>
+        </span>
+        <span className="hidden shrink-0 pt-0.5 text-[11px] text-muted-foreground sm:block">{rowMeta(item)}</span>
+        <ChevronRight aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
+      {ready && <Button size="xs" variant="outline" className="mt-1 h-7 shrink-0 px-2.5 text-xs" aria-label={`Start a session on ${item.label}`} onClick={() => onStart!(item)}><Play className="size-3" />Start</Button>}
+    </div>
+    {nested && nested.length > 0 && <ul aria-label={`Tasks for ${item.title}`} className="ml-[1.1rem] border-l border-border/60 pl-1.5">
+      {nested.map((task) => <ItemRow key={task.id} item={task} view={view} selected={false} onOpen={onOpen} onStart={onStart} />)}
+    </ul>}
   </li>;
 }
 
-/** A question for the user, answered in place. */
-function QuestionRow({ item, busy, readOnly, onAnswer, onOpen }: {
-  item: PlanItemView; busy: boolean; readOnly: boolean; onAnswer: (answer: string) => Promise<boolean>; onOpen: () => void;
+type QuestionAction = 'later' | 'drop';
+const QUESTION_ASK: Record<QuestionAction, string> = { later: 'When should it be looked at again?', drop: 'Why is it not needed any more?' };
+
+/**
+ * A question for the user, answered in place: who asked, when, why and what it holds up, the answers the AI
+ * suggested, and a box that takes several lines. A stale question can be put off or dropped from here.
+ */
+function QuestionRow({ item, busy, readOnly, onChange, onOpen }: {
+  item: PlanItemView; busy: boolean; readOnly: boolean; onChange: (change: PlanChangeInput) => Promise<boolean>; onOpen: () => void;
 }) {
   const [answer, setAnswer] = useState('');
-  const asker = item.history?.find((entry) => entry.action === 'added')?.by;
-  return <li className="space-y-1.5 p-3 transition-colors hover:bg-amber-500/[0.03]">
-    <div className="flex items-center justify-between gap-2">
-      <p className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
-        <span className="size-1.5 rounded-full bg-amber-500 shrink-0" />
-        <span className="truncate">Question{asker ? ` from ${whoName(asker)}` : ''}{item.holdsUp.length ? ` · holds up ${item.holdsUp.join(', ')}` : ''}</span>
+  const [asking, setAsking] = useState<QuestionAction | null>(null);
+  const [reason, setReason] = useState('');
+  const added = item.history?.find((entry) => entry.action === 'added');
+  const asked = added ? `${whoName(added.by)} asked${whenText(added.at) ? ` ${whenText(added.at)}` : ''}` : 'Question';
+  const holdsUp = item.holdsUp.map((label) => label.replace(/^\S+\s/, ''));
+  const options = suggestedAnswers(item.detail);
+  const why = item.detail?.split('\n').filter((line) => !line.startsWith('Suggested answers: ')).join('\n').trim();
+  const submitAnswer = () => { const text = answer.trim(); if (text) void onChange({ type: 'answer', id: item.id, answer: text }).then((ok) => { if (ok) setAnswer(''); }); };
+
+  return <li className="space-y-1.5 p-3">
+    <div className="flex items-start justify-between gap-2">
+      <p className="min-w-0 text-[11px] font-medium text-[var(--state-needs)]">
+        {asked}{holdsUp.length ? <span className="font-normal text-muted-foreground"> · holds up {holdsUp.join(', ')}</span> : null}
       </p>
-      <span className="font-mono text-[10px] text-muted-foreground shrink-0">{item.id}</span>
+      {!readOnly && <div className="-my-1 flex shrink-0 items-center">
+        <IconButton label="Put off…" icon={<Clock />} disabled={busy} onClick={() => { setAsking('later'); setReason(''); }} />
+        <IconButton label="Drop…" icon={<Trash2 />} disabled={busy} onClick={() => { setAsking('drop'); setReason(''); }} />
+      </div>}
     </div>
-    <button type="button" className="group block w-full text-left text-xs sm:text-[13px] font-medium text-foreground hover:text-amber-600 dark:hover:text-amber-400 transition-colors focus-visible:outline-2 focus-visible:outline-ring" onClick={onOpen}>
+    <button type="button" title={item.label} className="block w-full text-left text-xs font-medium text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring sm:text-[13px]" onClick={onOpen}>
       <span className="leading-snug"><InlinePlanMarkdown content={item.title} /></span>
     </button>
-    {!readOnly && <form className="flex items-center gap-1.5 pt-0.5" onSubmit={(event) => { event.preventDefault(); void onAnswer(answer.trim()).then((ok) => ok && setAnswer('')); }}>
-      <Input aria-label={`Your answer to ${item.title}`} className="h-7 flex-1 text-xs bg-background/60 border-border/40 focus:border-amber-500/50 rounded-md px-2.5 placeholder:text-muted-foreground/50 transition-colors" placeholder="Type your answer here…" value={answer} onChange={(event) => setAnswer(event.target.value)} />
-      <Button size="xs" variant="outline" type="submit" className="h-7 shrink-0 px-2.5 text-xs font-medium border-border/40 bg-muted/20 hover:bg-amber-500/10 hover:border-amber-500/30 hover:text-amber-600 dark:hover:text-amber-400 transition-colors" disabled={busy || !answer.trim()}>Answer</Button>
-    </form>}
+    {why && <p className="whitespace-pre-wrap text-xs text-muted-foreground">{why}</p>}
+    {!readOnly && (asking ? <form className="flex flex-wrap items-center gap-1.5" onSubmit={(event) => {
+      event.preventDefault();
+      const text = reason.trim();
+      if (!text) return;
+      void onChange(asking === 'later' ? { type: 'later', id: item.id, revisitWhen: text } : { type: 'drop', id: item.id, reason: text }).then((ok) => { if (ok) setAsking(null); });
+    }}>
+      <Input aria-label={QUESTION_ASK[asking]} autoFocus placeholder={QUESTION_ASK[asking]} className="h-7 min-w-48 flex-1 text-xs" value={reason} onChange={(event) => setReason(event.target.value)} />
+      <Button size="xs" type="submit" disabled={busy || !reason.trim()}>{asking === 'later' ? 'Put off' : 'Drop'}</Button>
+      <Button size="xs" type="button" variant="ghost" disabled={busy} onClick={() => setAsking(null)}>Cancel</Button>
+    </form> : <>
+      {options.length > 0 && <div role="group" aria-label="Suggested answers" className="flex flex-wrap gap-1.5">
+        {options.map((option) => <Button key={option} size="xs" variant="outline" title="Puts this answer in the box" onClick={() => setAnswer(option)}>{option}</Button>)}
+      </div>}
+      <form className="flex items-end gap-1.5 pt-0.5" onSubmit={(event) => { event.preventDefault(); submitAnswer(); }}>
+        <Textarea aria-label={`Your answer to ${item.title}`} rows={2} placeholder="Your answer" value={answer}
+          className="min-h-14 flex-1 resize-y text-xs"
+          onChange={(event) => setAnswer(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submitAnswer(); } }} />
+        <Button size="xs" variant="outline" type="submit" className="h-7 shrink-0 px-2.5 text-xs" disabled={busy || !answer.trim()}>Answer</Button>
+      </form>
+    </>)}
   </li>;
 }
 
-/** An AI's close of the user's item or a milestone: the user accepts it or sends it back. */
+/** A close an AI proposed under the earlier rule: the user accepts it or sends it back. */
 function ProposalRow({ item, busy, readOnly, onAccept, onReject, onOpen }: {
   item: PlanItemView; busy: boolean; readOnly: boolean; onAccept: () => void; onReject: (reason: string) => Promise<boolean>; onOpen: () => void;
 }) {
@@ -75,18 +132,12 @@ function ProposalRow({ item, busy, readOnly, onAccept, onReject, onOpen }: {
   const proposal = item.proposal!;
   const withCheck = item.kind === 'milestone' && proposal.action === 'done' && Boolean(item.gate?.required || item.gate?.command);
   const yes = { done: 'Yes, it is done', answer: 'Use this answer', drop: 'Drop it', later: 'Move to later', reopen: 'Reopen it' }[proposal.action];
-  return <li className="space-y-1.5 p-3 transition-colors hover:bg-sky-500/[0.03]">
-    <div className="flex items-center justify-between gap-2">
-      <p className="flex items-center gap-1.5 text-[11px] font-medium text-sky-700 dark:text-sky-400">
-        <span className="size-1.5 rounded-full bg-sky-500 shrink-0" />
-        {proposalLine(item)} · check and decide
-      </p>
-      <span className="font-mono text-[10px] text-muted-foreground shrink-0">{item.id}</span>
-    </div>
-    <button type="button" className="group block w-full text-left text-xs sm:text-[13px] font-medium text-foreground hover:text-primary transition-colors focus-visible:outline-2 focus-visible:outline-ring" onClick={onOpen}>
+  return <li className="space-y-1.5 p-3">
+    <p className="text-[11px] font-medium text-[var(--state-ai)]">{proposalLine(item)} · check and decide{whenText(proposal.at) ? ` · ${whenText(proposal.at)}` : ''}</p>
+    <button type="button" title={item.label} className="block w-full text-left text-xs font-medium text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring sm:text-[13px]" onClick={onOpen}>
       <span className="leading-snug"><InlinePlanMarkdown content={item.title} /></span>
     </button>
-    <p className="text-xs text-muted-foreground leading-relaxed italic border-l-2 border-sky-500/30 pl-2">“<InlinePlanMarkdown content={proposal.note} />”</p>
+    <p className="border-l-2 border-[color-mix(in_oklab,var(--state-ai)_35%,transparent)] pl-2 text-xs italic leading-relaxed text-muted-foreground">“<InlinePlanMarkdown content={shortCommits(proposal.note)} />”</p>
     {!readOnly && (rejecting ? <div className="space-y-2 pt-0.5">
       <label className="block text-xs font-medium text-muted-foreground">What still needs doing?<Textarea className="mt-1 text-xs" autoFocus value={reason} onChange={(event) => setReason(event.target.value)} /></label>
       <div className="flex gap-1.5">
@@ -95,15 +146,16 @@ function ProposalRow({ item, busy, readOnly, onAccept, onReject, onOpen }: {
       </div>
     </div> : <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
       <Button size="xs" className="h-7 px-2.5 text-xs font-medium" disabled={busy} onClick={onAccept}>{busy && withCheck ? 'Running the check…' : yes}</Button>
-      <Button size="xs" variant="outline" className="h-7 px-2.5 text-xs border-border/40 bg-muted/20" disabled={busy} onClick={() => setRejecting(true)}>Not yet</Button>
+      <Button size="xs" variant="outline" className="h-7 px-2.5 text-xs" disabled={busy} onClick={() => setRejecting(true)}>Not yet</Button>
       {withCheck && <span className="text-[11px] text-muted-foreground">Its check runs first.</span>}
     </div>)}
   </li>;
 }
 
 /**
- * The Plan tab: Needs you, Milestones in order, Other open work, Done and dropped, What changed. The
- * same plan, in the same words, that AI tools read and change with `ctxspace plan`.
+ * The Plan tab: Needs you, Milestones in order with their tasks, Other open work, Done and dropped, What
+ * changed. The same plan, in the same words, that AI tools read and change with `ctxspace plan`. An item
+ * opens beside the list when there is room, and in its place when there is not.
  */
 export function PlanChecklist({ workspaceId, readOnly = false, onChanged, onStartSession }: {
   workspaceId: string; readOnly?: boolean; onChanged?: () => void;
@@ -115,7 +167,6 @@ export function PlanChecklist({ workspaceId, readOnly = false, onChanged, onStar
   const runCheck = useRunMilestoneCheck(workspaceId);
   const [openId, setOpenId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [howOpen, setHowOpen] = useState(() => !howItWorksSeen());
   const [showDone, setShowDone] = useState(false);
   const [allChanges, setAllChanges] = useState(false);
   const [message, setMessage] = useState('');
@@ -144,80 +195,85 @@ export function PlanChecklist({ workspaceId, readOnly = false, onChanged, onStar
 
   const everything = [...view.needsYou, ...view.milestones, ...view.otherOpen, ...view.closed];
   const opened = openId ? everything.find((item) => item.id === openId) : undefined;
-  if (opened) {
-    return <PlanItemDetail item={opened} view={view} readOnly={readOnly} busy={change.isPending} checking={runCheck.isPending} error={error}
-      onBack={() => { setOpenId(null); change.reset(); runCheck.reset(); }} onChange={apply} onRunCheck={() => runCheck.mutate(opened.id)} />;
-  }
+  const open = (item: PlanItemView) => { setOpenId(item.id); change.reset(); runCheck.reset(); };
+  const close = () => { setOpenId(null); change.reset(); runCheck.reset(); };
 
   const progress = milestoneProgress(view);
   const counts = view.counts;
   const needsCount = view.needsYou?.length ?? counts.needsYou;
   const needsYouText = needsCount === 0 ? 'all clear' : needsCount === 1 ? '1 thing waits for you' : `${needsCount} things wait for you`;
+  const { byMilestone, nested } = tasksUnderMilestones(view);
   const closedMilestones = new Set(view.milestones.filter((item) => item.status === 'done' || item.status === 'dropped').map((item) => item.id));
-  const closedOther = view.closed.filter((item) => !closedMilestones.has(item.id));
-  const changes = allChanges ? view.changes : view.changes.slice(0, 6);
+  const otherOpen = view.otherOpen.filter((item) => !nested.has(item.id));
+  const closedOther = view.closed.filter((item) => !closedMilestones.has(item.id) && !nested.has(item.id));
+  const changes = visibleChanges(view.changes);
+  const shownChanges = allChanges ? changes : changes.slice(0, 6);
+  const start = readOnly ? undefined : onStartSession;
 
-  return <section aria-label="The plan" className="space-y-4 rounded-xl border border-border/40 bg-card/60 backdrop-blur-xs px-4 py-3 shadow-2xs">
-    <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border/30 pb-2.5 px-1">
-      <h3 className="text-xs font-semibold text-foreground/85">Plan</h3>
-      <p className="text-xs text-muted-foreground">{view.words.needsYou.label} {counts.needsYou} · {view.words.statuses.in_progress.label} {counts.inProgress} · {view.words.statuses.todo.label} {counts.todo} · {view.words.statuses.done.label} {counts.done}</p>
-      <span className="flex-1" />
-      <Button size="xs" variant="ghost" className="text-muted-foreground hover:text-foreground text-xs" onClick={() => setHowOpen(true)}><CircleHelp size={13} />How it works</Button>
-      {!readOnly && <IconButton label="Add to the plan" icon={<ListPlus size={14} />} className="text-muted-foreground hover:text-foreground" onClick={() => setAdding(true)} />}
-    </header>
-    {progress.total > 0 && <div className="px-1">
-      <div className="h-1.5 overflow-hidden rounded-full bg-muted/60" role="progressbar" aria-label="Milestones done" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done}>
-        <div className="h-full rounded-full bg-[var(--state-done)] transition-all duration-300" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
-      </div>
-      <p className="mt-1 text-[11px] font-medium text-muted-foreground">{progress.done} of {progress.total} milestones done</p>
-    </div>}
-    {message && <p role="status" className="px-2 text-sm text-muted-foreground">{message}</p>}
-    {error && !adding && <p role="alert" className="px-2 text-sm text-destructive">{error}</p>}
+  return <div className="@container">
+    <div className={opened ? 'grid items-start gap-4 @min-[45rem]:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]' : ''}>
+      <section aria-label="The plan" className={cn('space-y-4 rounded-xl border border-border/40 bg-card/60 px-4 py-3 shadow-2xs backdrop-blur-xs', opened && 'hidden @min-[45rem]:block')}>
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border/30 px-1 pb-2.5">
+          <h3 className="text-xs font-semibold text-foreground/85">Plan</h3>
+          <p className="text-xs text-muted-foreground">{view.words.needsYou.label} {counts.needsYou} · {view.words.statuses.in_progress.label} {counts.inProgress} · {view.words.statuses.todo.label} {counts.todo} · {view.words.statuses.done.label} {counts.done}</p>
+          <span className="flex-1" />
+          {!readOnly && <IconButton label="Add to the plan" icon={<ListPlus size={14} />} className="text-muted-foreground hover:text-foreground" onClick={() => setAdding(true)} />}
+        </header>
+        {progress.total > 0 && <div className="px-1">
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted/60" role="progressbar" aria-label="Milestones done" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done}>
+            <div className="h-full rounded-full bg-[var(--state-done)] transition-all duration-300" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
+          </div>
+          <p className="mt-1 text-[11px] font-medium text-muted-foreground">{progress.done} of {progress.total} milestones done</p>
+        </div>}
+        {message && !opened && <p role="status" className="px-2 text-sm text-muted-foreground">{message}</p>}
+        {error && !adding && !opened && <p role="alert" className="px-2 text-sm text-destructive">{error}</p>}
 
-    <Section title={view.words.needsYou.label} hint={needsYouText}>
-      {view.needsYou.length === 0 ? <p className="px-2 text-sm text-muted-foreground">Nothing needs you right now.</p> : (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.02] dark:bg-amber-500/[0.03] overflow-hidden shadow-2xs">
-          <ul className="divide-y divide-amber-500/10">
-            {view.needsYou.map((item) => item.proposal
-              ? <ProposalRow key={item.id} item={item} busy={change.isPending} readOnly={readOnly} onOpen={() => setOpenId(item.id)}
-                onAccept={() => void apply({ type: 'accept', id: item.id })} onReject={(reason) => apply({ type: 'reject', id: item.id, reason })} />
-              : <QuestionRow key={item.id} item={item} busy={change.isPending} readOnly={readOnly} onOpen={() => setOpenId(item.id)}
-                onAnswer={(answer) => apply({ type: 'answer', id: item.id, answer })} />)}
-          </ul>
-        </div>
-      )}
-    </Section>
+        <Section title={view.words.needsYou.label} hint={needsYouText}>
+          {view.needsYou.length === 0 ? <p className="px-2 text-sm text-muted-foreground">Nothing needs you right now.</p> : (
+            <div className="overflow-hidden rounded-xl border border-[color-mix(in_oklab,var(--state-needs)_25%,transparent)] bg-[color-mix(in_oklab,var(--state-needs)_3%,transparent)] shadow-2xs">
+              <ul className="divide-y divide-border/50">
+                {view.needsYou.map((item) => item.proposal
+                  ? <ProposalRow key={item.id} item={item} busy={change.isPending} readOnly={readOnly} onOpen={() => open(item)}
+                    onAccept={() => void apply({ type: 'accept', id: item.id })} onReject={(reason) => apply({ type: 'reject', id: item.id, reason })} />
+                  : <QuestionRow key={item.id} item={item} busy={change.isPending} readOnly={readOnly} onOpen={() => open(item)} onChange={apply} />)}
+              </ul>
+            </div>
+          )}
+        </Section>
 
-    <Section title="Milestones" hint="in order">
-      {view.milestones.length === 0 ? <div className="flex items-center gap-2 px-2">
-        <p className="text-sm text-muted-foreground">No milestones yet. Most work does not need them; add some when it has steps worth checking off.</p>
-        {!readOnly && <Button size="xs" variant="outline" onClick={() => setAdding(true)}>Add a milestone</Button>}
-      </div> : <ol>{view.milestones.map((item) => <ItemRow key={item.id} item={item} view={view} onOpen={() => setOpenId(item.id)} onStart={readOnly ? undefined : onStartSession} />)}</ol>}
-    </Section>
+        <Section title="Milestones" hint="in order">
+          {view.milestones.length === 0 ? <div className="flex items-center gap-2 px-2">
+            <p className="text-sm text-muted-foreground">No milestones yet. Most work does not need them; add some when it has steps worth checking off.</p>
+            {!readOnly && <Button size="xs" variant="outline" onClick={() => setAdding(true)}>Add a milestone</Button>}
+          </div> : <ol>{view.milestones.map((item) => <ItemRow key={item.id} item={item} view={view} selected={item.id === openId} onOpen={open} onStart={start}
+            nested={item.status === 'done' || item.status === 'dropped' ? undefined : byMilestone.get(item.id)} />)}</ol>}
+        </Section>
 
-    {view.otherOpen.length > 0 && <Section title="Other open work">
-      <ul>{view.otherOpen.map((item) => <ItemRow key={item.id} item={item} view={view} onOpen={() => setOpenId(item.id)} onStart={readOnly ? undefined : onStartSession} />)}</ul>
-    </Section>}
+        {otherOpen.length > 0 && <Section title="Other open work">
+          <ul>{otherOpen.map((item) => <ItemRow key={item.id} item={item} view={view} selected={item.id === openId} onOpen={open} onStart={start} />)}</ul>
+        </Section>}
 
-    {closedOther.length > 0 && <Section title="Done and dropped" hint={<button type="button" className="text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setShowDone(!showDone)}>
-      {counts.done} done · {counts.dropped} dropped · {showDone ? 'hide' : 'show'}
-    </button>}>
-      {showDone && <ul>{closedOther.map((item) => <ItemRow key={item.id} item={item} view={view} onOpen={() => setOpenId(item.id)} />)}</ul>}
-    </Section>}
+        {closedOther.length > 0 && <Section title="Done and dropped" hint={<button type="button" className="text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setShowDone(!showDone)}>
+          {counts.done} done · {counts.dropped} dropped · {showDone ? 'hide' : 'show'}
+        </button>}>
+          {showDone && <ul>{closedOther.map((item) => <ItemRow key={item.id} item={item} view={view} selected={item.id === openId} onOpen={open} />)}</ul>}
+        </Section>}
 
-    {view.changes.length > 0 && <Section title="What changed">
-      <ul className="space-y-1 px-2">{changes.map((entry, index) => <li key={`${entry.at}-${entry.itemId}-${index}`} className="flex gap-2 text-sm">
-        <span className="shrink-0 font-medium text-foreground">{whoName(entry.by)}</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={changeText(entry, view.words)}>{changeText(entry, view.words)}</span>
-        <span className="shrink-0 text-xs text-muted-foreground">{whenText(entry.at)}</span>
-      </li>)}</ul>
-      {view.changes.length > 6 && <button type="button" className="px-2 text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setAllChanges(!allChanges)}>
-        {allChanges ? 'Show fewer' : 'Show more'}
-      </button>}
-    </Section>}
+        {changes.length > 0 && <Section title="What changed">
+          <ul className="space-y-1 px-2">{shownChanges.map((entry, index) => <li key={`${entry.at}-${entry.itemId}-${index}`} className="flex gap-2 text-sm">
+            <span className="shrink-0 font-medium text-foreground">{whoName(entry.by)}</span>
+            <span className="min-w-0 flex-1 truncate text-muted-foreground" title={shortCommits(changeText(entry, view.words))}>{shortCommits(changeText(entry, view.words).replace(entry.label, nameOf({ id: entry.itemId, label: entry.label })))}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{whenText(entry.at)}</span>
+          </li>)}</ul>
+          {changes.length > 6 && <button type="button" className="px-2 text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setAllChanges(!allChanges)}>
+            {allChanges ? 'Show fewer' : 'Show more'}
+          </button>}
+        </Section>}
+        {!readOnly && <AddPlanItemDialog view={view} open={adding} busy={change.isPending} error={adding ? error : undefined} onClose={() => { setAdding(false); change.reset(); }} onAdd={apply} />}
+      </section>
 
-    <div className="px-2"><StatusKey words={view.words} /></div>
-    <HowItWorksDialog words={view.words} open={howOpen} onClose={() => setHowOpen(false)} />
-    {!readOnly && <AddPlanItemDialog view={view} open={adding} busy={change.isPending} error={adding ? error : undefined} onClose={() => { setAdding(false); change.reset(); }} onAdd={apply} />}
-  </section>;
+      {opened && <PlanItemDetail item={opened} view={view} readOnly={readOnly} busy={change.isPending} checking={runCheck.isPending} error={error} message={message}
+        onClose={close} onOpen={(id) => setOpenId(id)} onChange={apply} onRunCheck={() => runCheck.mutate(opened.id)} />}
+    </div>
+  </div>;
 }

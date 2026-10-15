@@ -110,6 +110,11 @@ export function statusLabel(status: PlanStatus): string {
   return STATUS_WORDS[status].label;
 }
 
+/** Full commit hashes cut to the seven characters people use: "Passed its check on c9043b3". */
+export function shortCommits(text: string): string {
+  return text.replace(/\b([0-9a-f]{7})[0-9a-f]{33}\b/gi, '$1');
+}
+
 /** Ends a sentence that may end in a name: "Added Q1 Which time zone?" needs no extra full stop. */
 export function sentence(text: string): string {
   return /[.!?…]$/.test(text) ? text : `${text}.`;

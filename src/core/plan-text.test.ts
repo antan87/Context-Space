@@ -83,6 +83,12 @@ describe('renderPlanText', () => {
     }
   });
 
+  it('shows a full commit hash in seven characters', () => {
+    const plan = examplePlan();
+    plan.items.find((item) => item.id === 'M1')!.resolution = 'Passed its check on a91f2e0c4d5b6a7980112233445566778899aabb';
+    expect(renderPlanText(plan, { now: NOW })).toContain('M1 Database query for report rows · done · Passed its check on a91f2e0\n');
+  });
+
   it('lists done and dropped items with --all', () => {
     const text = renderPlanText(examplePlan(), { now: NOW, all: true });
     expect(text).toContain('✓   T1 Background job queue for large exports · done · Exports over 10,000 rows run in the background');

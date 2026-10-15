@@ -14,6 +14,7 @@ import {
   WHO_ACTS,
   isOpenStatus,
   itemLabel,
+  shortCommits,
   type PlanStatus,
 } from './plan-words.js';
 import {
@@ -95,7 +96,7 @@ export function itemState(plan: PlanDocument, item: PlanItem): string {
     return `${actorWords(item.proposal.by)} ${PROPOSAL_WORDS[item.proposal.action] ?? item.proposal.action}: ${item.proposal.note} · the user decides`;
   }
   switch (item.status) {
-    case 'done': return item.kind === 'question' ? `answered: ${item.resolution}` : `done · ${item.resolution}`;
+    case 'done': return item.kind === 'question' ? `answered: ${item.resolution}` : `done · ${shortCommits(item.resolution ?? '')}`;
     case 'dropped': return `dropped: ${item.resolution}`;
     case 'later': return `later · look again: ${item.revisitWhen}`;
     case 'blocked': return `blocked: ${item.blockedReason}`;

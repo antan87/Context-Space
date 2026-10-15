@@ -16,7 +16,7 @@ const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).
 
 function csvExportPlan(): PlanView {
   const items = [
-    planItem({ id: 'M1', title: 'Database query for report rows', status: 'done', resolution: 'Passed its check on a91f2e0', gate: { required: true, command: 'npm test' },
+    planItem({ id: 'M1', title: 'Database query for report rows', status: 'done', resolution: 'Passed its check on a91f2e0c4d5b6a7980112233445566778899aabb', gate: { required: true, command: 'npm test' },
       history: [{ at: minutesAgo(3000), by: 'user', action: 'added' }, { at: minutesAgo(2900), by: 'claude', action: 'done', note: 'Passed its check on a91f2e0' }] }),
     planItem({ id: 'M2', title: 'CSV export endpoint', status: 'in_progress', gate: { required: true, command: 'npm test' },
       detail: 'A report can be downloaded as a CSV file. Large reports run in the background. At most 50,000 rows per export.',
@@ -30,6 +30,7 @@ function csvExportPlan(): PlanView {
       proposal: { action: 'done', by: 'claude', note: 'Exports over 10,000 rows now run in the background. Tests pass on commit a1b2c3d.', at: minutesAgo(2) },
       history: [{ at: minutesAgo(120), by: 'codex', action: 'added' }, { at: minutesAgo(60), by: 'claude', action: 'started' }] }),
     planItem({ id: 'Q1', kind: 'question', title: 'Which time zone should export timestamps use?', owner: 'user', holdsUp: ['M2 CSV export endpoint'],
+      detail: 'Timestamps in the file must match what the report shows.\n\nSuggested answers: UTC · The account time zone',
       history: [{ at: minutesAgo(5), by: 'codex', action: 'added' }] }),
     planItem({ id: 'Q2', kind: 'question', title: 'Maximum rows per export?', status: 'done', owner: 'user', resolution: '50,000 rows per export' }),
     planItem({ id: 'Q3', kind: 'question', title: 'Should archived reports be included?', owner: 'agent' }),
@@ -73,23 +74,51 @@ test('shows what needs the user, the milestones in order, the rest, and what cha
   const plan = planRegion(page);
   await expect(plan.getByText('Needs you 2 · In progress 2 · To do 3 · Done 3')).toBeVisible();
   await expect(plan.getByText('2 things wait for you')).toBeVisible();
-  await expect(plan.getByText('Question from Codex · holds up M2 CSV export endpoint')).toBeVisible();
+  // A question says who asked, when, why and what it holds up, with the answers the AI suggested.
+  await expect(plan.getByText('Codex asked 5 min ago · holds up CSV export endpoint')).toBeVisible();
+  await expect(plan.getByText('Timestamps in the file must match what the report shows.')).toBeVisible();
+  await expect(plan.getByRole('group', { name: 'Suggested answers' }).getByRole('button')).toHaveText(['UTC', 'The account time zone']);
   await expect(plan.getByText('Claude says it is done · check and decide')).toBeVisible();
   await expect(plan.getByRole('progressbar', { name: 'Milestones done' })).toHaveAttribute('aria-valuenow', '1');
   await expect(plan.getByText('1 of 3 milestones done')).toBeVisible();
-  // Names first; the code is small. Every row says where the item is.
+  // Names, not codes: the code is in the tooltip. Every row starts with its status word, so there is no legend.
+  // A task a milestone waits for is shown under it, and commits are short.
   const milestones = plan.getByRole('list').nth(1);
   await expect(milestones.getByRole('button')).toHaveText([
-    /^Database query for report rowsM1Done · Passed its check on a91f2e0/,
-    /^CSV export endpointM2In progress · Claude/,
-    /^Export button in the UIM3To do · starts after M2 CSV export endpoint/,
-    /^User docs for exportM4Dropped · Docs are generated automatically now/,
+    /^Database query for report rowsDone · Passed its check on a91f2e0You/,
+    /^CSV export endpointIn progress · ClaudeYou/,
+    /^Background job queue for large exportsClaude says it is done/,
+    /^Export button in the UITo do · starts after CSV export endpointYou/,
+    /^User docs for exportDropped · Docs are generated automatically nowYou/,
   ]);
+  await expect(milestones.getByRole('button', { name: /^CSV export endpoint/ })).toHaveAttribute('title', 'M2 CSV export endpoint');
+  await expect(plan.getByRole('list', { name: 'Tasks for CSV export endpoint' })).toContainText('Background job queue for large exports');
   await expect(plan.getByText('The AI answers')).toBeVisible();
   await expect(plan.getByText('Later · look again after user feedback on CSV')).toBeVisible();
-  await expect(plan.getByText('started M2 CSV export endpoint')).toBeVisible();
-  await expect(plan.getByLabel('What the icons mean')).toContainText('To doIn progressBlockedDoneDroppedLaterNeeds you');
+  await expect(plan.getByText('started CSV export endpoint')).toBeVisible();
+  await expect(plan.getByText('a91f2e0c4d5b')).toHaveCount(0);
+  // The plan is taught where it is used: no legend row, no explainer dialog.
+  await expect(plan.getByLabel('What the icons mean')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'How the plan works' })).toHaveCount(0);
   if (SHOTS) await plan.screenshot({ path: `${SHOTS}/plan-tab.png` });
+});
+
+test('fills the answer from a suggestion, and puts off or drops a stale question from its row', async ({ page }) => {
+  const changes = await routePlan(page, csvExportPlan());
+  await page.goto('/#/workspaces/demo/plan');
+  const plan = planRegion(page);
+  await plan.getByRole('group', { name: 'Suggested answers' }).getByRole('button', { name: 'UTC' }).click();
+  await expect(page.getByLabel('Your answer to Which time zone should export timestamps use?')).toHaveValue('UTC');
+  await plan.getByRole('button', { name: 'Put off…' }).click();
+  await plan.getByLabel('When should it be looked at again?').fill('After the first release');
+  await plan.getByRole('button', { name: 'Put off', exact: true }).click();
+  await plan.getByRole('button', { name: 'Drop…' }).click();
+  await plan.getByLabel('Why is it not needed any more?').fill('Timestamps are dropped from the export');
+  await plan.getByRole('button', { name: 'Drop', exact: true }).click();
+  await expect.poll(() => changes).toEqual([
+    { change: { type: 'later', id: 'Q1', revisitWhen: 'After the first release' }, ifRevision: 3 },
+    { change: { type: 'drop', id: 'Q1', reason: 'Timestamps are dropped from the export' }, ifRevision: 3 },
+  ]);
 });
 
 test('answers the user\'s question in place, as the user', async ({ page }) => {
@@ -120,6 +149,7 @@ test('accepts the AI\'s done, or sends it back with what still needs doing', asy
 });
 
 test('opens a milestone: what it must deliver, what it waits for and holds up, its check, where the work is, its history', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const changes = await routePlan(page, csvExportPlan());
   await page.goto('/#/workspaces/demo/plan');
   await planRegion(page).getByRole('button', { name: /^CSV export endpoint/ }).click();
@@ -129,18 +159,36 @@ test('opens a milestone: what it must deliver, what it waits for and holds up, i
   await expect(detail.getByText('Waiting for your answer')).toBeVisible();
   await expect(detail.getByText('Claude says it is done · Exports over 10,000 rows', { exact: false })).toBeVisible();
   await expect(detail.getByText('Answered · 50,000 rows per export')).toBeVisible();
-  await expect(detail.getByText('M3 Export button in the UI')).toBeVisible();
+  await expect(detail.getByText('Export button in the UI', { exact: true })).toBeVisible();
   await expect(detail.getByText('Last run passed · commit 7c9e1f2', { exact: false })).toBeVisible();
   await expect(detail.getByText(PLAN_RULES[2]!)).toBeVisible();
   await expect(detail.getByText('feat/csv-export')).toBeVisible();
   await expect(detail.getByText('2 h ago · Codex')).toBeVisible();
   if (SHOTS) await detail.screenshot({ path: `${SHOTS}/plan-milestone.png` });
 
+  // Opened beside the list, which stays in view; its main action sits next to its name.
+  await expect(planRegion(page)).toBeVisible();
+  await expect(planRegion(page).getByRole('button', { name: /^CSV export endpoint/ })).toHaveAttribute('aria-current', 'true');
+  await expect(detail.getByRole('button', { name: 'Done…' })).toBeVisible();
   await detail.getByRole('button', { name: 'Mark blocked…' }).click();
   await detail.getByLabel('What is it stuck on?').fill('Waiting for the design');
   await detail.getByRole('button', { name: 'Save' }).click();
   await expect.poll(() => changes).toEqual([{ change: { type: 'block', id: 'M2', reason: 'Waiting for the design' }, ifRevision: 3 }]);
-  await detail.getByRole('button', { name: 'Back to the plan' }).click();
+  // What it waits for opens from here.
+  await detail.getByRole('button', { name: /^Which time zone should export timestamps use\?/ }).click();
+  await expect(page.getByRole('region', { name: 'Question Q1 Which time zone should export timestamps use?' })).toBeVisible();
+  await page.getByRole('region', { name: 'Question Q1 Which time zone should export timestamps use?' }).getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('region', { name: /^Question Q1/ })).toHaveCount(0);
+});
+
+test('opens an item in place of the list when there is no room beside it', async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  await routePlan(page, csvExportPlan());
+  await page.goto('/#/workspaces/demo/plan');
+  await planRegion(page).getByRole('button', { name: /^CSV export endpoint/ }).click();
+  await expect(page.getByRole('region', { name: 'Milestone M2 CSV export endpoint' })).toBeVisible();
+  await expect(planRegion(page)).toBeHidden();
+  await page.getByRole('button', { name: 'Back to the plan' }).click();
   await expect(planRegion(page)).toBeVisible();
 });
 
@@ -156,24 +204,6 @@ test('adds an item that holds up a milestone', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Add', exact: true }).click();
   await expect.poll(() => changes).toEqual([{ change: { type: 'add', kind: 'task', title: 'Rate limit for exports', before: ['M2'] }, ifRevision: 3 }]);
   await expect(dialog).toBeHidden();
-});
-
-test('explains how the plan works once by itself, then only from its link', async ({ page }) => {
-  await routePlan(page, csvExportPlan());
-  await page.addInitScript(() => { if (!sessionStorage.getItem('reloaded')) window.localStorage.removeItem('contextspace.plan.how-it-works-seen'); });
-  await page.goto('/#/workspaces/demo/plan');
-  const dialog = page.getByRole('dialog', { name: 'How the plan works' });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('listitem')).toHaveCount(PLAN_RULES.length);
-  await expect(dialog.getByText('The AI closes items itself, milestones too, when it judges the work done', { exact: false })).toBeVisible();
-  if (SHOTS) await dialog.screenshot({ path: `${SHOTS}/plan-how-it-works.png` });
-  await dialog.getByRole('button', { name: 'Got it' }).click();
-  await page.evaluate(() => sessionStorage.setItem('reloaded', '1'));
-  await page.reload();
-  await expect(planRegion(page)).toBeVisible();
-  await expect(dialog).toBeHidden();
-  await planRegion(page).getByRole('button', { name: 'How it works' }).click();
-  await expect(dialog).toBeVisible();
 });
 
 test('says when the plan cannot be read, and reads it again on Retry', async ({ page }) => {

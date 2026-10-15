@@ -171,7 +171,7 @@ export function planFromLifecycle(lifecycle: WorkspaceLifecycle, now = new Date(
       if (step.verificationTimeoutSeconds) item.gate.timeoutSeconds = step.verificationTimeoutSeconds;
     }
     if (status === 'done') {
-      item.resolution = step.lastVerificationSha ? `Passed its check on ${step.lastVerificationSha}` : 'Completed before the plan moved to its own file';
+      item.resolution = step.lastVerificationSha ? `Passed its check on ${step.lastVerificationSha.slice(0, 7)}` : 'Completed before the plan moved to its own file';
       if (step.completedAt) item.closedAt = step.completedAt;
     }
     if (status === 'blocked') {
@@ -474,7 +474,7 @@ export async function advanceLifecycleStep(
     if (action === 'start') {
       await changePlan(workspacePath, { type: 'start', id: stepId }, { actor, ifItemUpdatedAt: item.updatedAt });
     } else if (action === 'complete' && !gateFailed) {
-      const checked = requiresVerification ? `Passed its check on ${checkedSha ?? 'the latest code'}` : '';
+      const checked = requiresVerification ? `Passed its check on ${checkedSha?.slice(0, 7) ?? 'the latest code'}` : '';
       const resolution = [options.resolution?.trim(), checked].filter(Boolean).join('. ') || 'Marked done';
       await changePlan(workspacePath, { type: 'done', id: stepId, resolution, checkPassed: true }, { actor, ifItemUpdatedAt: item.updatedAt });
     }
