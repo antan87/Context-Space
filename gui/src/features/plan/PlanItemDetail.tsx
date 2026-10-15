@@ -164,15 +164,13 @@ export function PlanItemDetail({ item, view, readOnly, busy, checking, error, me
 
   return <section aria-label={`${kind} ${item.label}`} className="space-y-4 rounded-xl border border-border bg-card px-4 py-3 @min-[45rem]:sticky @min-[45rem]:top-2 @min-[45rem]:max-h-[calc(100vh-10rem)] @min-[45rem]:overflow-y-auto">
     <Button size="xs" variant="ghost" className="-ml-2 text-muted-foreground @min-[45rem]:hidden" onClick={onClose}><ArrowLeft />Back to the plan</Button>
-    <header className="flex items-start gap-2">
-      <div className="min-w-0 flex-1 space-y-1">
-        <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-          <span>{position >= 0 ? `Milestone ${position + 1} of ${milestones.length}` : kind}</span>
-          <span className={`inline-flex items-center gap-1 font-medium ${TONE_CLASS[tone]}`}><Icon aria-hidden="true" className="size-3.5" />{needsYou ? words.needsYou.label : words.statuses[item.status].label}</span>
-        </p>
-        <h3 className="text-base font-semibold text-foreground">{item.title}</h3>
-        <p className="text-sm text-muted-foreground">{stateLine(item, words)}</p>
-      </div>
+    {/* Where it is and what can be done with it on one line, right above its name, which keeps the whole width. */}
+    <header className="space-y-1">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+      <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+        <span>{position >= 0 ? `Milestone ${position + 1} of ${milestones.length}` : kind}</span>
+        <span className={`inline-flex items-center gap-1 font-medium ${TONE_CLASS[tone]}`}><Icon aria-hidden="true" className="size-3.5" />{needsYou ? words.needsYou.label : words.statuses[item.status].label}</span>
+      </p>
       <div className="flex shrink-0 items-center gap-0.5">
         {main === 'start' && <Button size="xs" disabled={busy || unsettled} title={unsettled ? 'It waits for items that are not done yet' : undefined} onClick={() => void submit({ type: 'start', id: item.id })}><Play />Start</Button>}
         {main && main !== 'start' && <Button size="xs" variant="outline" disabled={busy} onClick={() => setAsking(main)}>{ICON[main]}{ASK[main].button}</Button>}
@@ -182,6 +180,9 @@ export function PlanItemDetail({ item, view, readOnly, busy, checking, error, me
           onClick={async () => { if (await safeCopyToClipboard(item.id)) { setCopied(true); setTimeout(() => setCopied(false), 1500); } }} />
         <IconButton label="Close" icon={<X />} className="hidden @min-[45rem]:inline-flex" onClick={onClose} />
       </div>
+      </div>
+      <h3 className="text-base font-semibold text-foreground">{item.title}</h3>
+      <p className="text-sm text-muted-foreground">{stateLine(item, words)}</p>
     </header>
 
     {asking && <div className="space-y-2 rounded-lg border border-border p-3">

@@ -72,7 +72,7 @@ function PlanQuestion({ item, onAnswer }: { item: PlanItemView; onAnswer: (id: s
       <p className="text-[11px] text-muted-foreground">{questionContext(item)}</p>
       <p className="mt-0.5 whitespace-pre-wrap break-words">{item.title}</p>
       <form className="mt-1.5 flex items-end gap-1.5" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-        <Textarea aria-label={`Your answer to ${item.title}`} rows={1} value={answer} placeholder="Your answer" className="min-h-8 flex-1 resize-y py-1.5 text-xs"
+        <Textarea aria-label={`Your answer to ${item.title}`} rows={1} value={answer} placeholder="Your answer" className="max-h-32 flex-1 text-xs" style={{ minHeight: '2rem' }}
           onChange={(event) => setAnswer(event.target.value)}
           onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); } }} />
         <Button type="submit" size="xs" disabled={sending || !answer.trim()}>{sending ? 'Saving…' : 'Answer'}</Button>

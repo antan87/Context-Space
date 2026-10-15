@@ -41,33 +41,38 @@ export function WhereAreWeBar({ facts, guidance, action, expanded, panelId, noti
   const state = planQuestions > 0 && stripState(facts).tone !== 'needs' ? { tone: 'needs' as const, label: 'Needs you' } : stripState(facts);
   const line = factsLine(facts);
   const tooltip = [goal.full ?? goal.text, ...line].filter(Boolean).join(' · ');
+  // "Continue" on the milestone already named as Now says nothing more, so it is one word there.
+  const nextLabel = action && current && action.label === `Continue "${current.title}"` ? 'Continue' : action?.label;
+  // What is worked on keeps its room first; the state, Next and the facts follow as the toolbar allows.
   return (
-    <div className="flex min-w-0 items-center gap-1.5">
+    <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
       <button
         ref={toggleRef} type="button" aria-expanded={expanded} aria-controls={panelId} onClick={onToggle} title={tooltip || undefined}
         className="flex h-6 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring"
       >
         {/* The counts are in the facts line, so the ring is left out of the accessible name. */}
         <ContextRing aria-hidden="true" size={RING_SIZE} milestones={ringMilestones(facts)} currentIndex={currentMilestoneIndex(facts)} />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+        <span className="min-w-[4rem] flex-1 truncate text-xs font-medium text-foreground">
           {current ? <><span className="font-normal text-muted-foreground">Now · </span>{current.title}</>
             : goal.text || <span className="font-normal text-muted-foreground">No goal set yet</span>}
         </span>
-        <span className="state-chip shrink-0 text-[11px]" data-tone={state.tone}>{state.label}</span>
-        <span className="hidden min-w-0 shrink truncate text-[11px] text-muted-foreground @xl:inline">
+        <span className="hidden shrink-0 @[16rem]:inline"><span className="state-chip text-[11px]" data-tone={state.tone}>{state.label}</span></span>
+        <span className="hidden min-w-0 shrink truncate text-[11px] text-muted-foreground @[46rem]:inline">
           {line.map((fact) => <span key={fact}><span aria-hidden="true"> &middot; </span>{fact}</span>)}
         </span>
         <ChevronDown aria-hidden="true" className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
       </button>
       {action && (
-        <Button
-          size="xs" variant="ghost" className="max-w-[16rem] min-w-0 shrink text-foreground" title={action.reason}
-          aria-label={`Next: ${action.label}. ${action.reason}`}
-          onClick={() => onNext(action)}
-        >
-          <span className="truncate">{action.label}</span>
-          <ArrowRight aria-hidden="true" className="text-primary" />
-        </Button>
+        <span className="hidden min-w-0 max-w-[14rem] shrink @[24rem]:inline-flex">
+          <Button
+            size="xs" variant="ghost" className="min-w-0 max-w-full text-foreground" title={action.reason}
+            aria-label={`Next: ${action.label}. ${action.reason}`}
+            onClick={() => onNext(action)}
+          >
+            <span className="truncate">{nextLabel}</span>
+            <ArrowRight aria-hidden="true" className="text-primary" />
+          </Button>
+        </span>
       )}
       {/* Always present, so a screen reader hears the notice; it is shown above the chat while there is one. */}
       <span role="status" className="sr-only">{notice}</span>

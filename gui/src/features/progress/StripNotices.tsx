@@ -6,7 +6,7 @@ import { IconButton } from '../../components/ui/icon-button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import type { PlanChangeEntry, PlanItemView } from '../plan/planTypes.js';
-import { whenText, whoName } from '../plan/planView.js';
+import { suggestedAnswers, whenText, whoName } from '../plan/planView.js';
 import { ReopenForm } from './ProgressPanel.js';
 import { questionContext } from './stripPlan.js';
 
@@ -28,17 +28,22 @@ export interface PlanQuestionBarProps {
 export function PlanQuestionBar({ item, more, busy, error, onAnswer, onShowAll }: PlanQuestionBarProps) {
   const [answer, setAnswer] = useState('');
   const submit = () => { const text = answer.trim(); if (text && !busy) void onAnswer(text).then((ok) => { if (ok) setAnswer(''); }); };
+  const options = suggestedAnswers(item.detail);
+  const why = item.detail?.split('\n').filter((line) => !line.startsWith('Suggested answers: ')).join('\n').trim();
   return (
     <div role="group" aria-label="A question in the plan waits for your answer" className="flex items-start gap-2.5 border-t border-[color-mix(in_oklab,var(--state-needs)_45%,transparent)] bg-[color-mix(in_oklab,var(--state-needs)_7%,var(--card))] px-3 py-2">
       <CircleHelp aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[var(--state-needs)]" />
       <div className="min-w-0 flex-1 space-y-1.5">
         <p className="text-[11px] text-muted-foreground">{questionContext(item)}</p>
         <p className="line-clamp-3 break-words text-[13px] leading-snug text-foreground"><InlinePlanMarkdown content={item.title} /></p>
-        {item.detail && <p className="line-clamp-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{item.detail}</p>}
+        {why && <p className="line-clamp-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{why}</p>}
+        {options.length > 0 && <div role="group" aria-label="Suggested answers" className="flex flex-wrap gap-1.5">
+          {options.map((option) => <Button key={option} size="xs" variant="outline" title="Puts this answer in the box" onClick={() => setAnswer(option)}>{option}</Button>)}
+        </div>}
         <form className="flex items-end gap-1.5" onSubmit={(event) => { event.preventDefault(); submit(); }}>
           <Textarea
             aria-label={`Your answer to ${item.title}`} rows={1} value={answer} placeholder="Your answer"
-            className="min-h-8 flex-1 resize-y py-1.5 text-xs"
+            className="max-h-32 flex-1 text-xs" style={{ minHeight: '2rem' }}
             onChange={(event) => setAnswer(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); } }}
           />
