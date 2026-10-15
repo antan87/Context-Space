@@ -9,7 +9,6 @@ import {
   ExternalLink,
   MessageSquare,
   Terminal,
-  Plus,
   Search,
   ArrowUpDown,
   Check,
@@ -169,7 +168,6 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
 
   const [openingDesktopId, setOpeningDesktopId] = useState<string | null>(null);
   const [resumingTerminalId, setResumingTerminalId] = useState<string | null>(null);
-  const [launchingNewAssistant, setLaunchingNewAssistant] = useState<string | null>(null);
   const [launchedInfo, setLaunchedInfo] = useState<{ assistant: string; cmd: string; timestamp: Date } | null>(null);
 
   // Sorting & Filtering state
@@ -205,28 +203,6 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
     }
   };
 
-  const startNewSession = async (assistant: string) => {
-    if (launchingNewAssistant) return;
-    setLaunchingNewAssistant(assistant);
-    try {
-      await launchTerminalMutation.mutateAsync({
-        workspaceId: ws.branchName,
-        assistant,
-      });
-      const cmd = assistant === 'antigravity' ? 'agy' : assistant === 'cursor' ? 'cursor-agent' : assistant;
-      setLaunchedInfo({
-        assistant,
-        cmd,
-        timestamp: new Date(),
-      });
-      showToast?.(`Opening ${assistant} in CLI chat…`, 'info');
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to launch terminal';
-      showToast?.(message, 'error');
-    } finally {
-      setLaunchingNewAssistant(null);
-    }
-  };
 
   const resumeTerminalSession = async (sessionId: string, assistant: string, sessionCwd?: string) => {
     if (resumingTerminalId) return;
@@ -783,20 +759,6 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
 
                       {/* Uniform, Sleek Header Action Buttons */}
                       <div className="flex items-center gap-1.5 shrink-0 pl-6 sm:pl-0" onClick={(e) => e.stopPropagation()}>
-                        <Button
-                          size="xs"
-                          variant="default"
-                          disabled={launchingNewAssistant === harness.id}
-                          onClick={() => void startNewSession(harness.id)}
-                          title={`Launch new ${harness.cliCommand} session in terminal`}
-                        >
-                          {launchingNewAssistant === harness.id ? (
-                            <Spinner className="size-3" />
-                          ) : (
-                            <Plus size={12} />
-                          )}
-                          <span>New Session</span>
-                        </Button>
 
                         {harness.hasApp && (
                           <Button
@@ -820,15 +782,6 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                             <span>
                               {searchQuery.trim() ? 'No sessions match your search query.' : `No previous sessions recorded for ${harness.name}.`}
                             </span>
-                            {!searchQuery.trim() && (
-                              <button
-                                type="button"
-                                onClick={() => void startNewSession(harness.id)}
-                                className="text-primary font-semibold hover:underline cursor-pointer inline-flex items-center gap-1 text-xs"
-                              >
-                                <Plus size={11} /> Start session
-                              </button>
-                            )}
                           </div>
                         ) : (
                       harnessSessions.map((sess) => (

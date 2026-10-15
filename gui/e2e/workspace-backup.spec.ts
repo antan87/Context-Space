@@ -39,13 +39,19 @@ async function openWorkspace(page: Page, backup: unknown) {
   await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
 }
 
-const notice = (page: Page) => page.getByRole('status', { name: 'Backup' });
+const mark = (page: Page) => page.getByRole('button', { name: 'Not backed up: show how to fix it' });
+const notice = (page: Page) => page.getByRole('region', { name: 'Not backed up' });
+/** The warning is a small mark in the header; its detail opens on demand instead of a banner. */
+async function openNotice(page: Page) {
+  await mark(page).click();
+  await expect(notice(page)).toBeVisible();
+}
 
 test.describe('Workspace backup notice', () => {
   test('says the notes exist only on this computer, and shows the two commands to fix it', async ({ page }) => {
     await openWorkspace(page, atRisk);
 
-    await expect(notice(page)).toContainText('Not backed up.');
+    await openNotice(page);
     await expect(notice(page)).toContainText(summary);
     await expect(notice(page).getByRole('button', { name: 'Copy command: ctxspace remote add <git-url>' })).toBeVisible();
     await expect(notice(page).getByRole('button', { name: 'Copy command: ctxspace remote push' })).toBeVisible();
@@ -58,7 +64,7 @@ test.describe('Workspace backup notice', () => {
     // Requests the page makes by itself while loading are not counted, only those made by the click.
     page.on('request', (request) => { if (request.method() !== 'GET' && request.url().includes('/api/')) writes.push(`${request.method()} ${request.url()}`); });
     await openWorkspace(page, atRisk);
-    await expect(notice(page)).toBeVisible();
+    await openNotice(page);
     writes.length = 0;
 
     await notice(page).getByRole('button', { name: 'Copy command: ctxspace remote push' }).click();
@@ -70,21 +76,21 @@ test.describe('Workspace backup notice', () => {
 
   test('can be dismissed, and stays dismissed after a reload', async ({ page }) => {
     await openWorkspace(page, atRisk);
-    await expect(notice(page)).toBeVisible();
+    await openNotice(page);
 
     await notice(page).getByRole('button', { name: 'Dismiss' }).click();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
 
     await page.reload();
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
   });
 
   test('shows nothing once a remote is set', async ({ page }) => {
     await openWorkspace(page, backedUp);
 
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
   });
 
   test('shows nothing, and breaks nothing, when the status cannot be read', async ({ page }) => {
@@ -94,7 +100,7 @@ test.describe('Workspace backup notice', () => {
     await page.reload();
 
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
   });
 });
 
@@ -104,13 +110,13 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
     test('the notice meets the automated accessibility rules', async ({ page }) => {
       await openWorkspace(page, atRisk);
-      await expect(notice(page)).toBeVisible();
+      await openNotice(page);
       // Measure settled colours, not a fade caught half-way.
       await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-        .include('[aria-label="Backup"]')
+        .include('[aria-label="Not backed up"]')
         .analyze();
 
       const serious = results.violations

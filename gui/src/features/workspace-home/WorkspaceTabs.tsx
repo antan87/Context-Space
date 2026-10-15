@@ -1,4 +1,4 @@
-import { ChevronDown, ListChecks, Plus } from 'lucide-react';
+import { ListChecks } from 'lucide-react';
 import { HarnessIcon, harnessName } from '../../components/icons/HarnessIcon.js';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import { usePlan } from '../../lib/api/queries.js';
@@ -10,8 +10,8 @@ import { useWorkspaceSessions } from './useSessions.js';
 const SHOWN_TABS = 4;
 
 /**
- * The plan's tab and the sessions beside it, for the top of the plan: Plan is open, each running session is one click
- * away, and New session starts the last-used tool in one click (its arrow picks another).
+ * The plan's tab and the sessions beside it, for the top of the plan: Plan is open, and each running session is one
+ * click away. Sessions start in one place, the chat; a ready plan item starts one from its row.
  */
 export function WorkspaceTabs({ workspace }: { workspace: string }) {
   const sessions = useWorkspaceSessions(workspace);
@@ -37,21 +37,5 @@ export function WorkspaceTabs({ workspace }: { workspace: string }) {
         </MenuItem>)}
       </MenuPopup>
     </Menu>}
-    {sessions.lastTool && <div className="ml-1 inline-flex h-6 shrink-0 items-center rounded-md border border-border text-xs">
-      <button type="button" onClick={() => sessions.start(sessions.lastTool!)} title={`Start ${harnessName(sessions.lastTool)}`}
-        className="inline-flex h-full cursor-pointer items-center gap-1 rounded-l-md px-1.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground">
-        <Plus aria-hidden="true" className="size-3.5" /><HarnessIcon harness={sessions.lastTool} className="size-3" /><span>New session</span>
-      </button>
-      <Menu>
-        <MenuTrigger aria-label="Start another tool" className="inline-flex h-full cursor-pointer items-center rounded-r-md border-l border-border px-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground">
-          <ChevronDown className="size-3" aria-hidden="true" />
-        </MenuTrigger>
-        <MenuPopup align="end" className="w-56 p-1">
-          {sessions.tools.map((tool) => <MenuItem key={tool} onClick={() => sessions.start(tool)} className="flex items-center gap-2 text-xs">
-            <HarnessIcon harness={tool} className="size-3.5" />Start {harnessName(tool)}
-          </MenuItem>)}
-        </MenuPopup>
-      </Menu>
-    </div>}
   </div>;
 }

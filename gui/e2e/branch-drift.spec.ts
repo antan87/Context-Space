@@ -33,13 +33,19 @@ async function openWorkspace(page: Page, initial: unknown[]) {
   return state;
 }
 
-const notice = (page: Page) => page.getByRole('status', { name: 'Branch' });
+const mark = (page: Page) => page.getByRole('button', { name: 'Branch changed: show the detail' });
+const notice = (page: Page) => page.getByRole('region', { name: 'Branch changed' });
+/** The warning is a small mark in the header; its detail opens on demand instead of a banner. */
+async function openNotice(page: Page) {
+  await mark(page).click();
+  await expect(notice(page)).toBeVisible();
+}
 
 test.describe('Branch changed notice', () => {
   test('says which folder is on which branch, and how to switch back', async ({ page }) => {
     await openWorkspace(page, [switched('feature_b')]);
 
-    await expect(notice(page)).toContainText('Branch changed.');
+    await openNotice(page);
     await expect(notice(page)).toContainText('api is on branch feature_b, but this workspace edits on feature_a.');
     await expect(notice(page)).toContainText('The files you see there belong to feature_b.');
     await expect(notice(page).getByRole('button', { name: 'Copy command: git -C "/ws/demo/api" switch feature_a' })).toBeVisible();
@@ -48,6 +54,7 @@ test.describe('Branch changed notice', () => {
   test('says so plainly for a detached HEAD', async ({ page }) => {
     await openWorkspace(page, [switched(null)]);
 
+    await openNotice(page);
     await expect(notice(page)).toContainText('api is on a detached HEAD, but this workspace edits on feature_a.');
     await expect(notice(page)).toContainText('not on any branch');
   });
@@ -56,14 +63,14 @@ test.describe('Branch changed notice', () => {
     await openWorkspace(page, [repo()]);
 
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
   });
 
   test('does not flag a read-only reference, which is not edited here', async ({ page }) => {
     await openWorkspace(page, [repo({ editable: false, access: 'reference', branch: 'develop', onExpectedBranch: false })]);
 
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
   });
 
   test('copies the command and sends nothing: the app never switches branches itself', async ({ page, context }) => {
@@ -71,7 +78,7 @@ test.describe('Branch changed notice', () => {
     const writes: string[] = [];
     page.on('request', (request) => { if (request.method() !== 'GET' && request.url().includes('/api/')) writes.push(`${request.method()} ${request.url()}`); });
     await openWorkspace(page, [switched()]);
-    await expect(notice(page)).toBeVisible();
+    await openNotice(page);
     writes.length = 0;
 
     await notice(page).getByRole('button', { name: /^Copy command:/ }).click();
@@ -83,27 +90,29 @@ test.describe('Branch changed notice', () => {
 
   test('can be dismissed and stays dismissed after a reload, but a different branch is flagged again', async ({ page }) => {
     const state = await openWorkspace(page, [switched('feature_b')]);
+    await openNotice(page);
     await notice(page).getByRole('button', { name: 'Dismiss' }).click();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
 
     await page.reload();
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
 
     state.repositories = [switched('feature_c')];
     await page.reload();
+    await openNotice(page);
     await expect(notice(page)).toContainText('api is on branch feature_c');
   });
 
   test('clears by itself soon after the folder is switched back', async ({ page }) => {
     await page.clock.install();
     const state = await openWorkspace(page, [switched()]);
-    await expect(notice(page)).toBeVisible();
+    await expect(mark(page)).toBeVisible();
 
     state.repositories = [repo()];
     await page.clock.fastForward(31_000);
 
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
   });
 
   test('shows nothing, and breaks nothing, when the repositories cannot be read', async ({ page }) => {
@@ -113,7 +122,7 @@ test.describe('Branch changed notice', () => {
     await page.reload();
 
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-    await expect(notice(page)).toHaveCount(0);
+    await expect(mark(page)).toHaveCount(0);
   });
 });
 
@@ -146,13 +155,13 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
     test('the notice meets the automated accessibility rules', async ({ page }) => {
       await openWorkspace(page, [switched()]);
-      await expect(notice(page)).toBeVisible();
+      await openNotice(page);
       // Measure settled colours, not a fade caught half-way.
       await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
-        .include('[aria-label="Branch"]')
+        .include('[aria-label="Branch changed"]')
         .analyze();
 
       const serious = results.violations

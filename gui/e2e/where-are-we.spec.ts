@@ -361,7 +361,8 @@ test.describe('the plan in the chat', () => {
   });
 
   test('says what the AI closed while you were in the chat, and reopens it from there', async ({ page }) => {
-    await page.addInitScript(() => window.localStorage.removeItem('contextspace.strip.seen-closes.feature-x'));
+    // Forget what was seen on the first load only: the reload below must keep it.
+    await page.addInitScript(() => { if (!sessionStorage.getItem('reloaded')) window.localStorage.removeItem('contextspace.strip.seen-closes.feature-x'); });
     const changes = await routePlan(page, planView([planItem({ id: 'a', title: 'Cache invoice lookups', status: 'done' })], {
       changes: [{ at: minutesAgo(4), by: 'claude', action: 'done', itemId: 'a', label: 'a Cache invoice lookups', note: 'Lookups hit the cache' }],
     }));
@@ -375,8 +376,13 @@ test.describe('the plan in the chat', () => {
     // Seen once, it stays out of the way.
     await closed.getByRole('button', { name: 'Got it' }).click();
     await expect(closed).toHaveCount(0);
+    await page.evaluate(() => sessionStorage.setItem('reloaded', '1'));
+    const planRead = page.waitForResponse('**/api/workspace/feature-x/plan/items');
     await page.reload();
-    await expect(page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-pane')).toBeVisible();
+    await planRead;
+    await expect(page.getByRole('region', { name: 'Where are we', exact: true })).toContainText('Now · Add cache tests');
+    // Two frames after the plan arrived, anything it shows is on screen.
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await expect(page.getByRole('group', { name: 'What the AI closed' })).toHaveCount(0);
   });
 });
