@@ -24,6 +24,7 @@ import {
   changePlan,
   emptyPlan,
   mutatePlan,
+  planFocus,
   readPlanIfExists,
   readPlan,
   unsettledWaits,
@@ -193,7 +194,8 @@ function evidenceFromStep(step: LifecycleStep | undefined): PlanEvidence | undef
     ...(step.lastVerificationStatus ? { lastVerificationStatus: step.lastVerificationStatus } : {}),
     // A verified or completed step got there by passing its check.
     canProgress: step.status === 'verified' || step.status === 'completed',
-    at: step.completedAt ?? new Date(0).toISOString(),
+    // An unknown time stays unknown: an invented one shows as a wrong date.
+    ...(step.completedAt ? { at: step.completedAt } : {}),
   };
 }
 
@@ -341,9 +343,10 @@ export function lifecycleView(
     updatedAt: plan.updatedAt,
     revision: plan.revision,
   };
-  // Nothing starts by itself, so the current step is simply the one being worked on, if any.
-  const current = steps.find((step) => step.status === 'in_progress' || step.status === 'verified');
-  if (current) lifecycle.currentStepId = current.id;
+  // Nothing starts by itself. What is current and next follows the plan's one rule, as every surface does.
+  const focus = planFocus(plan);
+  if (focus.current) lifecycle.currentStepId = focus.current.id;
+  if (focus.next) lifecycle.nextStepId = focus.next.id;
   return lifecycle;
 }
 

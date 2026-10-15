@@ -14,6 +14,7 @@ import {
   findItem,
   heldUpBy,
   mutatePlan,
+  planFocus,
   planSections,
   planStoreExists,
   readPlan,
@@ -417,6 +418,33 @@ describe('the sections everyone sees', () => {
     expect(sections.ready.map((item) => item.id)).toEqual([]);
     expect(sections.counts).toMatchObject({ needsYou: 1, todo: 4, done: 2, later: 1 });
     expect(sections.changes[0]).toMatchObject({ itemId: 'D1', label: 'D1 Excel export', action: 'later' });
+  });
+});
+
+describe('what is current and next', () => {
+  it('is the first milestone in progress, and the first that can start', async () => {
+    await seedExample();
+    await change({ type: 'add', kind: 'milestone', title: 'Docs' });
+    await change({ type: 'start', id: 'M1' });
+    // M2 waits for T1 and Q1, and M3 for M2, so Next is M4, which can start.
+    expect(planFocus(await readPlan(root))).toMatchObject({ current: { id: 'M1' }, next: { id: 'M4' }, nextWaitsFor: [] });
+  });
+
+  it('names what Next waits for when nothing can start, instead of naming work that cannot', async () => {
+    await seedExample();
+    await change({ type: 'done', id: 'M1', resolution: 'Merged' });
+    const focus = planFocus(await readPlan(root));
+    expect(focus.current).toBeUndefined();
+    expect(focus.next?.id).toBe('M2');
+    expect(focus.nextWaitsFor.map((item) => item.id)).toEqual(['T1', 'Q1']);
+  });
+
+  it('keeps a milestone current until it is done, and has no Next when all is done', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'Only' });
+    await change({ type: 'start', id: 'M1' });
+    expect(planFocus(await readPlan(root))).toEqual({ current: expect.objectContaining({ id: 'M1' }), nextWaitsFor: [] });
+    await change({ type: 'done', id: 'M1', resolution: 'Shipped' });
+    expect(planFocus(await readPlan(root))).toEqual({ nextWaitsFor: [] });
   });
 });
 

@@ -42,9 +42,10 @@ function CheckPart({ item, evidence, words, running, readOnly, onRun }: {
 }) {
   const command = item.gate?.command || (item.gate?.required ? 'the workspace tests' : '');
   if (!command) return null;
+  const when = evidence ? whenText(evidence.at) : '';
   const result = !evidence ? 'Not run yet.'
     : `Last run ${evidence.canProgress ? 'passed' : evidence.lastVerificationStatus === 'timeout' ? 'stopped: it took too long' : 'failed'}`
-      + `${evidence.lastVerificationSha ? ` · commit ${evidence.lastVerificationSha.slice(0, 7)}` : ''} · ${whenText(evidence.at)}.`;
+      + `${evidence.lastVerificationSha ? ` · commit ${evidence.lastVerificationSha.slice(0, 7)}` : ''}${when ? ` · ${when}` : ''}.`;
   return <Part title="Check before it counts as done">
     <p className="text-sm"><code className="rounded bg-muted px-1 text-xs">{command}</code></p>
     <p className={`text-sm ${evidence ? (evidence.canProgress ? TONE_CLASS.done : TONE_CLASS.reopened) : 'text-muted-foreground'}`}>{result}</p>

@@ -109,7 +109,7 @@ import { CHAT_LAYOUT, chatLayout, hasRoomBeside, useChatLayout } from '../featur
 import { useElementWidth } from '../lib/useElementWidth.js';
 import { CodeSection } from '../features/changes/CodeSection.js';
 import { KnowledgeBase } from '../features/knowledge/KnowledgeBase.js';
-import { ImplementationPlan } from '../features/plan/ImplementationPlan.js';
+import { WorkspaceChecks } from '../features/plan/WorkspaceChecks.js';
 import { RootDocumentsPanel } from '../features/work-guidance/RootDocumentsPanel.js';
 import { WorkspaceWorkPanel } from '../features/work-guidance/WorkspaceWorkPanel.js';
 import { HomePlan } from '../features/workspace-home/HomePlan.js';
@@ -153,7 +153,8 @@ interface WorkspacesPageProps {
   /** What Code needs to commit, finish and sync, plus the change listing the overview counts files from. */
   changesProps: Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast'> & { gitChanges: { repoName: string; files?: unknown[] }[] };
   knowledgeProps: Omit<ComponentProps<typeof KnowledgeBase>, 'ws'>;
-  planProps: ComponentProps<typeof ImplementationPlan>;
+  /** The generated plan summary, which the overview reads, and how to reload it after a plan change. */
+  planProps: { planContent: string; planLoading: boolean; planError: string | null; handleRetryPlan: (wsId: string) => Promise<void> };
 }
 
 export function WorkspacesPage(props: WorkspacesPageProps) {
@@ -178,7 +179,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     planProps,
   } = props;
 
-  const [planVersion, setPlanVersion] = useState(0);
   const selected = workspaces.find((w) => w.branchName === selectedId) ?? null;
   // An archived workspace shows only its record; deep links elsewhere land on its overview. With no section in the
   // address, it opens on that record rather than on the plan, where an active workspace opens.
@@ -647,7 +647,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           repoCount={selected.repos.length}
           changedFiles={st ? totalChangedFiles : null}
           stage={workGuidance?.assignment.stage}
-          milestones={lifecycleData?.lifecycle?.steps ?? []}
           verification={cockpit.gateStatus}
           actions={<>
               {primaryEditor && !archived && (
@@ -1416,11 +1415,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                 <div className="min-w-0 space-y-6">
                 <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived}
                   plan={<HomePlan key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onChanged={() => {
-                    // The Visual Flow and the plan summary follow the plan.
-                    setPlanVersion((version) => version + 1);
+                    // The plan summary follows the plan.
                     void planProps.handleRetryPlan(selected.branchName);
                   }} />} />
-                <ImplementationPlan key={`${selected.branchName}-${planVersion}`} workspaceId={selected.branchName} {...planProps} readOnly={archived} />
+                <WorkspaceChecks key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} />
                 </div>
                 {sessionsOnPlan && <div className="min-w-0 xl:sticky xl:top-0 xl:self-start"><WorkspaceSessions workspace={selected.branchName} /></div>}
               </div>}

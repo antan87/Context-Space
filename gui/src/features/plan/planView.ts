@@ -111,10 +111,11 @@ export function itemLook(item: PlanItemView): { icon: LucideIcon; tone: Tone } {
   return waitsForUser ? NEEDS_YOU_LOOK : STATUS_LOOK[item.status];
 }
 
-/** "2 min ago", "3 h ago", "Oct 7". */
-export function whenText(at: string, now: Date = new Date()): string {
-  const then = Date.parse(at);
-  if (!Number.isFinite(then)) return '';
+/** "2 min ago", "3 h ago", "Oct 7". Empty when the time is unknown, never an invented date. */
+export function whenText(at: string | undefined, now: Date = new Date()): string {
+  const then = at ? Date.parse(at) : NaN;
+  // The epoch stands in for a time that was never recorded; showing it would say "Jan 1".
+  if (!Number.isFinite(then) || then <= 0) return '';
   const minutes = Math.round((now.getTime() - then) / 60_000);
   if (minutes < 1) return 'now';
   if (minutes < 60) return `${minutes} min ago`;

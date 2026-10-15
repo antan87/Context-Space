@@ -99,6 +99,21 @@ describe('renderPlanText', () => {
     ]);
   });
 
+  it('says what is being worked on and what is next, and what Next waits for', () => {
+    const text = renderPlanText(examplePlan(), { goal, now: NOW });
+    expect(text).toContain('NEXT        M2 CSV export endpoint · waits for Q1 Which time zone should export timestamps use?, T3 Write the CSV encoder');
+    expect(text).not.toContain('NOW ');
+    expect(text.indexOf('NEXT ')).toBeLessThan(text.indexOf('NEEDS YOU'));
+    const json = planToJson(examplePlan());
+    expect(json.focus).toEqual({ next: {
+      id: 'M2', label: 'M2 CSV export endpoint', title: 'CSV export endpoint',
+      waitsFor: [
+        { id: 'Q1', label: 'Q1 Which time zone should export timestamps use?', title: 'Which time zone should export timestamps use?' },
+        { id: 'T3', label: 'T3 Write the CSV encoder', title: 'Write the CSV encoder' },
+      ],
+    } });
+  });
+
   it('tells how to start when the plan is empty', () => {
     expect(renderPlanText(emptyPlan())).toContain('The plan has no items yet. Add one: ctxspace plan add milestone');
   });

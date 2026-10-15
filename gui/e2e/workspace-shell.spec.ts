@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planItem, planView } from './planData';
 
 test.use({
   workspacesData: [{
@@ -20,6 +21,11 @@ async function mockWorkspace(page: Page) {
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: { overallStatus: 'pass', canProgress: true, durationMs: 1200, repos: [] } } }));
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ json: { guidance, lifecycle, sharedDocuments: [], assignment: '' } }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
+  await page.route('**/api/workspace/demo/plan/items', (route) => route.fulfill({ json: planView([
+    planItem({ id: 'baseline', title: 'Measure baseline', status: 'done' }),
+    planItem({ id: 'cache', title: 'Cache invoice lookups', status: 'in_progress' }),
+    planItem({ id: 'report', title: 'Report the speed-up', waitsFor: [{ id: 'cache', label: 'cache Cache invoice lookups', status: 'in_progress' }] }),
+  ]) }));
 }
 
 const workspaceNav = (page: Page) => page.getByRole('navigation', { name: 'Workspace' });
@@ -32,7 +38,9 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(page.getByText('Make invoice totals load under a second').first()).toBeVisible();
   const status = page.getByRole('group', { name: 'Task status' });
   await expect(status).toContainText('Stage Implement');
-  await expect(status).toContainText('Cache invoice lookups');
+  // Now and Next come from the plan's one rule: Next names what it waits for instead of claiming it can start.
+  await expect(status).toContainText('Now Cache invoice lookups');
+  await expect(status).toContainText('Next Report the speed-up · waits for Cache invoice lookups');
   await expect(status).toContainText('3 files');
   await expect(status).toContainText('Verified (1.2s)');
   // The workspace is named once; the old cockpit strip and stage switcher are gone.

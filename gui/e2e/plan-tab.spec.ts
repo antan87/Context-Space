@@ -165,7 +165,7 @@ test('explains how the plan works once by itself, then only from its link', asyn
   const dialog = page.getByRole('dialog', { name: 'How the plan works' });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('listitem')).toHaveCount(PLAN_RULES.length);
-  await expect(dialog.getByText('For your items, and for milestones, it asks: you see it under Needs you.', { exact: false })).toBeVisible();
+  await expect(dialog.getByText('The AI closes items itself, milestones too, when it judges the work done', { exact: false })).toBeVisible();
   if (SHOTS) await dialog.screenshot({ path: `${SHOTS}/plan-how-it-works.png` });
   await dialog.getByRole('button', { name: 'Got it' }).click();
   await page.evaluate(() => sessionStorage.setItem('reloaded', '1'));

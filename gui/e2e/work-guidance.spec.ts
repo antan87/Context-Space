@@ -113,7 +113,8 @@ test('keeps the assignment draft when another session changed the saved revision
 test.describe('unsaved brief drafts', () => {
   test('survive switching sections, leaving the workspace and reloading, and clear once saved', async ({ page }) => {
     await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
-    const state = await setupWork(page);
+    // No milestones yet, so the goal card still shows what the brief delivers.
+    const state = await setupWork(page, true);
     await page.getByLabel('Expected output').fill('Merged PRs and a release');
     await page.getByLabel('Stop when').fill('Stop after the release');
     await expect(draftState(page)).toHaveText('Unsaved changes — kept on this device');
@@ -220,7 +221,8 @@ test.describe('unsaved brief drafts', () => {
   });
 
   test('use the saved version when that is the choice', async ({ page }) => {
-    const state = await setupWork(page);
+    // No milestones yet, so the goal card still shows what the brief delivers.
+    const state = await setupWork(page, true);
     await page.getByLabel('Expected output').fill('My output');
     await page.goto('/#/projects');
     state.otherSessionSavesBrief({ assignment: { ...state.guidance().assignment, expectedOutput: 'Their output' }, size: 'small' });

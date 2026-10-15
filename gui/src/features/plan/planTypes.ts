@@ -46,7 +46,18 @@ export interface PlanWords {
   changes: Record<string, string>;
 }
 
-export interface PlanEvidence { lastVerificationSha?: string; lastVerificationStatus?: string; canProgress: boolean; at: string }
+/** A milestone's last check. `at` is missing when the time was not kept. */
+export interface PlanEvidence { lastVerificationSha?: string; lastVerificationStatus?: string; canProgress: boolean; at?: string }
+
+/** An item named for a person: its code, its label ("M2 CSV export endpoint") and its name. */
+export interface PlanItemRef { id: string; label: string; title: string }
+
+/** What is being worked on and what is next, by the one rule every surface uses (core `planFocus`). */
+export interface PlanFocus {
+  current?: PlanItemRef;
+  /** What `next` still waits for is empty when it can start now. */
+  next?: PlanItemRef & { waitsFor: PlanItemRef[]; blockedReason?: string };
+}
 
 export interface PlanView {
   revision: number;
@@ -56,6 +67,7 @@ export interface PlanView {
   otherOpen: PlanItemView[];
   closed: PlanItemView[];
   ready: string[];
+  focus: PlanFocus;
   changes: PlanChangeEntry[];
   evidence: Record<string, PlanEvidence>;
   finish: { blocks: PlanItemView[]; warns: PlanItemView[]; handled: { done: number; dropped: number; later: number } };

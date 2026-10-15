@@ -656,7 +656,10 @@ export interface WorkspaceLifecycle {
   revision?: number;
   workspaceId: string;
   flowType: 'quick' | 'feature' | 'epic';
+  /** The milestone being worked on, by the plan's one rule. */
   currentStepId?: string;
+  /** The milestone to start next, by the same rule; it may still wait for something. */
+  nextStepId?: string;
   steps: LifecycleStep[];
   fleet?: BranchFleetMember[];
   updatedAt: string;
@@ -877,6 +880,8 @@ export interface ProgressFacts {
   milestones: MilestoneFact[];
   counts: { total: number; done: number; inProgress: number; reopened: number; blocked: number; upcoming: number };
   currentMilestoneId?: string;
+  /** The milestone to start next, by the plan's one rule; it may still wait for something. */
+  nextMilestoneId?: string;
   openQuestions: OpenQuestion[];
   changes: { repos: RepoChangeFact[]; files: number; additions: number; deletions: number };
   verification: {

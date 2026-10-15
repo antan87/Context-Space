@@ -837,6 +837,31 @@ export function planSections(plan: PlanDocument, options: { changes?: number } =
   };
 }
 
+/** What is being worked on and what comes next. */
+export interface PlanFocus {
+  /** The milestone being worked on. */
+  current?: PlanItem;
+  /** The milestone to start next. */
+  next?: PlanItem;
+  /** What `next` waits for before it can start; empty when it can start now. */
+  nextWaitsFor: PlanItem[];
+}
+
+/**
+ * One rule, for every surface that says what is being worked on and what is next (the header, the
+ * strip, the Plan tab, `ctxspace plan` and AGENTS.md), so they never disagree. The current milestone is
+ * the first in progress, in plan order; it stays current until it is done, even after its check passed.
+ * Next is the first milestone that can start; when none can, the first still to do, with what it waits for.
+ */
+export function planFocus(plan: PlanDocument): PlanFocus {
+  const milestones = plan.items.filter((item) => item.kind === 'milestone');
+  const current = milestones.find((item) => item.status === 'in_progress');
+  const upcoming = milestones.filter((item) => item !== current && (item.status === 'todo' || item.status === 'blocked'));
+  const ready = upcoming.find((item) => item.status === 'todo' && !unsettledWaits(plan, item).length);
+  const next = ready ?? upcoming[0];
+  return { ...(current ? { current } : {}), ...(next ? { next } : {}), nextWaitsFor: next && !ready ? unsettledWaits(plan, next) : [] };
+}
+
 /** The items that wait for this one: what it holds up. */
 export function heldUpBy(plan: PlanDocument, id: string): PlanItem[] {
   const item = findItem(plan, id);

@@ -61,6 +61,9 @@ describe('small helpers', () => {
     expect(whenText('2026-10-10T11:58:00.000Z', now)).toBe('2 min ago');
     expect(whenText('2026-10-10T09:00:00.000Z', now)).toBe('3 h ago');
     expect(whenText('2026-10-09T11:00:00.000Z', now)).toBe('yesterday');
+    // A check carried over without its time was stored as the epoch: no "Jan 1".
+    expect(whenText('1970-01-01T00:00:00.000Z', now)).toBe('');
+    expect(whenText(undefined, now)).toBe('');
   });
 
   it('counts milestone progress without the dropped ones', () => {

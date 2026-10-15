@@ -4,9 +4,11 @@ import { AlertCircle, ArrowRight, Check, CheckCircle2, Circle, Copy, Loader2 } f
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
-import type { LifecycleStep, WorkGuidance } from '../../types.js';
+import type { WorkGuidance } from '../../types.js';
 import type { VerificationGateTelemetry } from '../cockpit/cockpitStore.js';
-import { nextMilestone, verificationText } from './workspaceStatus.js';
+import { usePlan } from '../../lib/api/queries.js';
+import { milestoneProgress } from '../plan/planView.js';
+import { nextLine, verificationText } from './workspaceStatus.js';
 
 interface WorkspaceHeaderProps {
   workspaceId: string;
@@ -18,7 +20,6 @@ interface WorkspaceHeaderProps {
   repoCount: number;
   changedFiles: number | null;
   stage?: WorkGuidance['assignment']['stage'];
-  milestones: LifecycleStep[];
   verification: VerificationGateTelemetry;
   actions?: ReactNode;
   /** Just who this is and its actions. The chat shows where the work stands in the strip above it. */
@@ -51,11 +52,15 @@ function Fact({ label, children, to }: { label: string; children: ReactNode; to?
  * (stage, next milestone, changes, verification). Each status fact links to
  * the destination where the user acts on it.
  */
-export function WorkspaceHeader({ workspaceId, title, branchName, brief, mode, repoCount, changedFiles, stage, milestones, verification, actions, compact = false }: WorkspaceHeaderProps) {
+export function WorkspaceHeader({ workspaceId, title, branchName, brief, mode, repoCount, changedFiles, stage, verification, actions, compact = false }: WorkspaceHeaderProps) {
   const [copied, setCopied] = useState(false);
   const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
-  const next = nextMilestone(milestones);
-  const done = milestones.length > 0 && !next;
+  // Next comes from the plan, by the rule the plan, the strip and the AI use.
+  const plan = usePlan(compact ? null : workspaceId).data;
+  const now = plan?.focus.current;
+  const next = nextLine(plan?.focus);
+  const progress = plan ? milestoneProgress(plan) : { done: 0, total: 0 };
+  const done = progress.total > 0 && progress.done === progress.total;
 
   return (
     <header className={cn('border-b border-border/40 bg-card/60 backdrop-blur-xs px-4 sm:px-6', compact ? 'py-1.5' : 'pt-3 pb-2.5')}>
@@ -81,9 +86,15 @@ export function WorkspaceHeader({ workspaceId, title, branchName, brief, mode, r
 
       {!compact && <div aria-label="Task status" role="group" className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
         {stage && <Fact label="Stage" to={`${base}/plan`}>{STAGE_LABELS[stage]}</Fact>}
+        {now && <Fact label="Now" to={`${base}/plan`}>
+          <span className="inline-block min-w-0 max-w-[28ch] truncate align-bottom sm:max-w-[40ch]" title={now.title}><InlinePlanMarkdown content={now.title} /></span>
+        </Fact>}
         {next ? (
           <Fact label="Next" to={`${base}/plan`}>
-            <span className="inline-flex min-w-0 max-w-[28ch] items-center gap-1 sm:max-w-[40ch]" title={next.title}><ArrowRight aria-hidden="true" size={12} className="shrink-0 text-muted-foreground" /><span className="truncate"><InlinePlanMarkdown content={next.title} /></span></span>
+            <span className="inline-flex min-w-0 max-w-[28ch] items-center gap-1 sm:max-w-[48ch]" title={next.waits ? `${next.title} · ${next.waits}` : next.title}>
+              <ArrowRight aria-hidden="true" size={12} className="shrink-0 text-muted-foreground" />
+              <span className="truncate"><InlinePlanMarkdown content={next.title} />{next.waits && <span className="font-normal text-muted-foreground"> · {next.waits}</span>}</span>
+            </span>
           </Fact>
         ) : done ? <Fact label="Milestones">All done</Fact> : null}
         <Fact label="Changes" to={`${base}/changes`}>
