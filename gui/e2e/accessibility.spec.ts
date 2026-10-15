@@ -108,13 +108,13 @@ async function checkChatStrip(page: Page, label: string) {
   const strip = page.getByRole('region', { name: 'Where are we', exact: true });
   await expect(strip).toContainText('Needs you');
   await expect(strip.getByRole('button', { name: /^Next: / })).toBeVisible();
-  await expect(strip.getByRole('group', { name: 'The AI is waiting for your answer' })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'The AI is waiting for your answer' })).toBeVisible();
   const openSession = page.locator('aside.context-sidebar [data-sidebar-session="demo"]');
   await expect(openSession.locator('.live-dot')).toHaveAttribute('data-state', 'waiting');
   await expect(openSession.getByText('Which cache backend should we use?')).toBeVisible();
   await expectNoSeriousViolations(page, `${label} strip`);
   await strip.getByRole('button', { expanded: false }).click();
-  const detail = strip.getByRole('region', { name: 'Progress details' });
+  const detail = page.getByRole('region', { name: 'Progress details' });
   await expect(detail.getByText('The AI suggests reopening this')).toBeVisible();
   await expect(detail.getByText('Waiting for an API key').first()).toBeVisible();
   await expectNoSeriousViolations(page, `${label} strip panel`);

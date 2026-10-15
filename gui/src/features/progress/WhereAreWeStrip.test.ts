@@ -41,10 +41,10 @@ const proposalEvent = (stepId: string, proposal: 'reopen' | 'complete', reason: 
 describe('WhereAreWeBar', () => {
   const plan = [milestone('a', 'done'), milestone('b', 'in_progress')];
 
-  it('shows the goal, the state and the checkable facts in one button that opens the panel', () => {
+  it('shows what is worked on now, the state and the checkable facts in one button that opens the panel, with the goal in its tooltip', () => {
     const html = bar(facts(plan, { currentMilestoneId: 'b', openQuestions: [{ id: 'q', timestamp: 't', harness: 'c', message: 'm' }], changes: { repos: [], files: 3, additions: 1, deletions: 1 } }));
-    expect(html).toContain('Make invoices load fast');
-    expect(html).toContain('implement');
+    expect(html).toContain('Now · </span>Title b');
+    expect(html).toContain('title="Make invoices load fast · 1 of 2 done · 1 question · 3 files changed"');
     expect(html).toContain('data-tone="needs"');
     expect(html).toContain('Needs you');
     expect(html).toContain('1 of 2 done');
@@ -74,11 +74,13 @@ describe('WhereAreWeBar', () => {
     expect(html).toContain('aria-label="Next: Continue &quot;Title b&quot;. It is in progress."');
   });
 
-  it('keeps a live region for notices, hidden from view until there is one', () => {
+  it('keeps a live region for notices, which are shown above the chat', () => {
     expect(bar(facts(plan))).toContain('<span role="status" class="sr-only"></span>');
-    const withNotice = bar(facts(plan), { notice: 'Added to the chat prompt. Press Enter to send it.' });
-    expect(withNotice).toContain('role="status" class="basis-full');
-    expect(withNotice).toContain('Press Enter to send it.');
+    expect(bar(facts(plan), { notice: 'Added to the chat prompt. Press Enter to send it.' })).toContain('<span role="status" class="sr-only">Added to the chat prompt. Press Enter to send it.</span>');
+  });
+
+  it('says it needs you when a question in the plan waits, even when the chat asks nothing', () => {
+    expect(bar(facts(plan, { currentMilestoneId: 'b' }), { planQuestions: 1 })).toContain('data-tone="needs">Needs you');
   });
 
   it('turns the chevron when open', () => {

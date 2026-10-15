@@ -4,8 +4,11 @@ import { Check, CircleHelp, CornerDownLeft, RotateCcw, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { Input } from '../../components/ui/input.js';
+import { Textarea } from '../../components/ui/textarea.js';
 import type { MilestoneFact, MilestoneState, ProgressFacts, RepoChangeListing, WorkGuidance } from '../../types.js';
+import type { PlanItemView } from '../plan/planTypes.js';
 import { checkIsFailing, formatAge, verificationLine, type ActiveProposal, type StripTone } from './progressView.js';
+import { questionContext } from './stripPlan.js';
 
 /** Mirrors the backend's limit on a reopen reason. */
 export const REOPEN_REASON_MAX = 500;
@@ -54,6 +57,30 @@ export function ReopenForm({ id, title, reason, pending, error, onChange, onSubm
   );
 }
 
+/** A question in the plan, answered from the panel. The box takes several lines; Ctrl+Enter sends it. */
+function PlanQuestion({ item, onAnswer }: { item: PlanItemView; onAnswer: (id: string, answer: string) => Promise<boolean> }) {
+  const [answer, setAnswer] = useState('');
+  const [sending, setSending] = useState(false);
+  const submit = () => {
+    const text = answer.trim();
+    if (!text || sending) return;
+    setSending(true);
+    void onAnswer(item.id, text).then((ok) => { setSending(false); if (ok) setAnswer(''); });
+  };
+  return (
+    <li className="rounded-md border border-border p-2">
+      <p className="text-[11px] text-muted-foreground">{questionContext(item)}</p>
+      <p className="mt-0.5 whitespace-pre-wrap break-words">{item.title}</p>
+      <form className="mt-1.5 flex items-end gap-1.5" onSubmit={(event) => { event.preventDefault(); submit(); }}>
+        <Textarea aria-label={`Your answer to ${item.title}`} rows={1} value={answer} placeholder="Your answer" className="min-h-8 flex-1 resize-y py-1.5 text-xs"
+          onChange={(event) => setAnswer(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); } }} />
+        <Button type="submit" size="xs" disabled={sending || !answer.trim()}>{sending ? 'Saving…' : 'Answer'}</Button>
+      </form>
+    </li>
+  );
+}
+
 function milestoneNotes(milestone: MilestoneFact, titles: ReadonlyMap<string, string>, now: number): string[] {
   const notes: string[] = [];
   if (milestone.reopen) {
@@ -80,6 +107,10 @@ export interface ProgressPanelProps {
   /** Which part to bring into view when the panel opens from the Next button. */
   focusSection?: 'open' | 'milestones';
   now?: number;
+  /** The plan's questions for the developer that the chat is not asking already. */
+  planQuestions?: readonly PlanItemView[];
+  /** With milestones, each says what it delivers, so the brief's own expected output and stop condition are left out. */
+  hasMilestones?: boolean;
   acknowledging: boolean;
   /** Resolves to an error message, or null once the milestone is reopened. */
   onReopen: (stepId: string, reason: string) => Promise<string | null>;
@@ -87,6 +118,8 @@ export interface ProgressPanelProps {
   onFill: (text: string) => void;
   onOpenFile: (reference: { path: string; line?: number }) => void;
   onAcknowledge: () => void;
+  /** Resolves true once the answer is in the plan. */
+  onAnswer?: (id: string, answer: string) => Promise<boolean>;
 }
 
 /** The detail behind the strip: the goal, every milestone, what waits on the developer, and what was touched. */
@@ -123,7 +156,8 @@ export function ProgressPanel(props: ProgressPanelProps) {
   const questions = facts.openQuestions;
   const blocked = facts.milestones.filter((milestone) => milestone.state === 'blocked');
   const verification = verificationLine(facts, now);
-  const waiting = questions.length > 0 || blocked.length > 0 || checkIsFailing(facts);
+  const planQuestions = props.planQuestions ?? [];
+  const waiting = questions.length > 0 || planQuestions.length > 0 || blocked.length > 0 || checkIsFailing(facts);
   const assignment = guidance?.assignment;
   const files = (changes ?? []).flatMap((repo) => repo.files.map((file) => ({ repo, file })));
 
@@ -151,6 +185,7 @@ export function ProgressPanel(props: ProgressPanelProps) {
                 )}
               </li>
             ))}
+            {props.onAnswer && planQuestions.map((item) => <PlanQuestion key={item.id} item={item} onAnswer={props.onAnswer!} />)}
             {blocked.map((milestone) => (
               <li key={milestone.id}><span className="state-chip" data-tone="needs">Blocked</span> &ldquo;{milestone.title}&rdquo;: {milestone.blockedReason ?? milestone.unblockCondition ?? 'no reason given'}</li>
             ))}
@@ -166,8 +201,10 @@ export function ProgressPanel(props: ProgressPanelProps) {
             <dl className="space-y-1">
               <div><dt className="inline font-medium">Stage: </dt><dd className="inline capitalize">{assignment.stage}</dd></div>
               <div><dt className="inline font-medium">Objective: </dt><dd className="inline">{assignment.objective || <span className="text-muted-foreground">Not set</span>}</dd></div>
-              <div><dt className="inline font-medium">Expected output: </dt><dd className="inline">{assignment.expectedOutput || <span className="text-muted-foreground">Not set</span>}</dd></div>
-              <div><dt className="inline font-medium">Stop when: </dt><dd className="inline">{assignment.stopCondition || <span className="text-muted-foreground">Not set</span>}</dd></div>
+              {!props.hasMilestones && <>
+                <div><dt className="inline font-medium">Expected output: </dt><dd className="inline">{assignment.expectedOutput || <span className="text-muted-foreground">Not set</span>}</dd></div>
+                <div><dt className="inline font-medium">Stop when: </dt><dd className="inline">{assignment.stopCondition || <span className="text-muted-foreground">Not set</span>}</dd></div>
+              </>}
             </dl>
           ) : <p className="text-muted-foreground">The goal has not loaded.</p>}
         </section>

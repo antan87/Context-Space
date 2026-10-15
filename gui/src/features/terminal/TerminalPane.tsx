@@ -69,7 +69,9 @@ const paneStatusFor = (kind: PaneState['kind']): PaneStatus => {
   }
 };
 
-interface Props { workspace: string; active: boolean; launch?: TerminalLaunch; consumeLaunch: (id: string) => void; onOpenFileReference?: (reference: Pick<FileReference, 'path' | 'line'> & { cwd?: string }) => void; inspectorControls?: ReactNode; onStatusChange?: (status: PaneStatus) => void; onBackgroundOutput?: () => void; fillPromptRef?: { current: ((text: string) => boolean) | null };
+interface Props { workspace: string; active: boolean; launch?: TerminalLaunch; consumeLaunch: (id: string) => void; onOpenFileReference?: (reference: Pick<FileReference, 'path' | 'line'> & { cwd?: string }) => void; inspectorControls?: ReactNode;
+  /** Where the work stands, in the toolbar's free room after the tabs. */
+  summary?: ReactNode; onStatusChange?: (status: PaneStatus) => void; onBackgroundOutput?: () => void; fillPromptRef?: { current: ((text: string) => boolean) | null };
   /** The developer sent a line to an assistant (not a plain shell): their reply to whatever it asked. */
   onReply?: (target: string) => void;
   /** The terminal this pane shows, chosen by its session tab: null for none yet, undefined while the tab still looks.
@@ -87,7 +89,7 @@ interface Props { workspace: string; active: boolean; launch?: TerminalLaunch; c
   primary?: boolean;
   /** True while this pane starts or resumes a terminal, so the tabs do not give it a tab of its own meanwhile. */
   onBusyChange?: (busy: boolean) => void }
-export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenFileReference, inspectorControls, onStatusChange, onBackgroundOutput, fillPromptRef, onReply, boundTerminalId, claimed, onTerminalChange, onShowTerminal, sessionTabs, primary = true, onBusyChange }: Props) {
+export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenFileReference, inspectorControls, summary, onStatusChange, onBackgroundOutput, fillPromptRef, onReply, boundTerminalId, claimed, onTerminalChange, onShowTerminal, sessionTabs, primary = true, onBusyChange }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const renderer = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -592,7 +594,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
       {terminal && (disconnected || exited) && <span className="min-w-0 truncate text-[11px] text-muted-foreground" data-testid="terminal-state-help">
         {disconnected && error ? `${stateHelp} ${error}` : stateHelp}
       </span>}
-      <span className="flex-1" />
+      {summary ? <div className="min-w-[8rem] flex-1">{summary}</div> : <span className="flex-1" />}
       {inspectorControls}
       {terminal && <Menu open={paneMenuOpen} onOpenChange={setPaneMenuOpen}>
         <MenuTrigger aria-label="Pane options" className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" title="Open terminals, usage and terminal tools">
