@@ -7,12 +7,17 @@ import { toWorkspaceRelative } from '../../components/markdownLinks.js';
  * is a document it can open, because a repo-relative `docs/guide.md` has the
  * same shape as a folder under the workspace root.
  *
+ * `cwd` is the folder the terminal session runs in, when known.
  * `repoPaths` are the workspace's repositories. Worktrees live under the
  * workspace root, so `NexusFlow/README.md` is inside it too, but belongs in the
  * code panel with its diff and change state, not in the read-only document viewer.
  */
-export function workspaceDocumentName(reference: { path: string; line?: number }, workspaceRoot?: string, repoPaths: string[] = []): string | null {
-  const name = toWorkspaceRelative(reference.path, workspaceRoot);
+export function workspaceDocumentName(reference: { path: string; line?: number }, workspaceRoot?: string, repoPaths: string[] = [], cwd?: string): string | null {
+  // A relative path is relative to the folder the session runs in. Read as relative to the workspace root, a README
+  // printed inside a repository named the root's README, and `../../notes.md` from a subfolder named nothing.
+  const absolute = /^(?:[a-z]:[\\/]|[\\/])/i.test(reference.path.trim());
+  const target = cwd && !absolute ? `${cwd.replace(/[\\/]+$/, '')}/${reference.path}` : reference.path;
+  const name = toWorkspaceRelative(target, workspaceRoot);
   // The document viewer cannot jump to a line, so a nested `path:12` stays a code reference.
   if (!name || (reference.line !== undefined && name.includes('/'))) return null;
   // Compared case-insensitively for Windows. On POSIX a folder differing from a repo only by case

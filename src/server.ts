@@ -2513,6 +2513,8 @@ app.get('/api/workspace/:id/files/resolve', async (c) => {
     const repos = feature.repos.map((repoPath) => ({
       repoName: path.basename(repoPath),
       repoPath: resolveFeatureRepoPath(feature, workspacePath, repoPath),
+      // Paths an assistant printed against the original checkout still name the same files in the workspace's copy.
+      sourcePath: repoPath,
     }));
     return c.json(await resolveFileReference(reference, {
       repos,

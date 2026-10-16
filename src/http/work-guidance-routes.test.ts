@@ -116,3 +116,23 @@ it('keeps HTML locked down unless it is explicitly opened in a browser', async (
   const afterOpen = await app.request('/api/workspace/test/documents/file?name=page.html');
   expect(afterOpen.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'");
 });
+
+it('lists data files outside the workspace repositories, opens them by name, and still lists when the manifest cannot be read', async () => {
+  await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ id: 'test', branchName: 'test', description: 'Test', repos: ['/somewhere/else/api'], assistants: [], mode: 'worktree' }));
+  await fs.mkdir(path.join(root, 'api'));
+  await fs.writeFile(path.join(root, 'api', 'package.json'), '{"name":"api"}');
+  await fs.writeFile(path.join(root, 'api', 'README.md'), '# api');
+  await fs.writeFile(path.join(root, 'spec.json'), '{"openapi":"3.1.0"}');
+  const names = async () => ((await (await app.request('/api/workspace/test/documents?recursive=1')).json()).documents as { name: string }[]).map((doc) => doc.name);
+
+  // The repository's checkout is `api` inside the workspace: its package.json is not a document, the workspace's spec.json is,
+  // and contextspace.json (ContextSpace's own manifest) is neither.
+  expect(await names()).toEqual(['api/README.md', 'spec.json']);
+  const preview = await (await app.request('/api/workspace/test/documents/preview?name=spec.json')).json();
+  expect(preview).toMatchObject({ name: 'spec.json', kind: 'text', content: '{"openapi":"3.1.0"}' });
+  expect((await app.request('/api/workspace/test/documents/preview?name=api%2Fpackage.json')).status).toBe(200);
+
+  // An unreadable manifest must not take the listing down: every data file is listed instead.
+  await fs.writeFile(path.join(root, 'contextspace.json'), '{ not json');
+  expect(await names()).toEqual(['api/package.json', 'api/README.md', 'spec.json']);
+});

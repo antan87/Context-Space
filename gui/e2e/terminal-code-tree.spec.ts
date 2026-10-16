@@ -291,6 +291,118 @@ test('opens paths printed in the terminal in Code, says when one is not there, a
   await expect.poll(() => page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true);
 });
 
+test('a path printed in a tool-call line, in bold or in a diff header opens that file, not the words around it', async ({ page }) => {
+  const listing = [{ repoName: 'repo', repoPath: 'C:/repo', files: [{ file: 'src/nested/clean.ts', type: 'unchanged' }] }];
+  await page.route('**/api/workspace/feature-x/changes?include=all', route => route.fulfill({ json: { changes: listing } }));
+  await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'export const clean = true;\n' } }));
+  const resolved: (string | null)[] = [];
+  await page.route('**/api/workspace/feature-x/files/resolve?*', route => {
+    const path = new URL(route.request().url()).searchParams.get('path');
+    resolved.push(path);
+    return path === 'src/nested/clean.ts'
+      ? route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file: 'src/nested/clean.ts' } })
+      : route.fulfill({ json: { status: 'not-found', reason: 'missing' } });
+  });
+  await page.routeWebSocket('**/ws/terminal', socket => {
+    socket.onMessage(message => {
+      if (JSON.parse(String(message)).type !== 'attach') return;
+      socket.send(JSON.stringify({ type: 'ready', terminal, truncated: false }));
+      // The lines an assistant CLI prints on Linux: a tool call, a bold path in prose, and a diff header.
+      socket.send(JSON.stringify({ type: 'output', data: '\u23fa Update(src/nested/clean.ts)\r\n- **src/nested/clean.ts:** the ring\r\n+++ b/src/nested/clean.ts\r\n' }));
+      socket.send(JSON.stringify({ type: 'replayed' }));
+    });
+  });
+  await chatBesidePanels(page);
+  await page.goto('/#/workspaces/feature-x/sessions');
+  await page.getByRole('button', { name: 'Open CLI Chat', exact: true }).click();
+  const pane = page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-pane');
+  await expect(pane.getByTestId('terminal-state')).toHaveText('Running');
+  await pane.locator('.xterm-helper-textarea').focus();
+
+  const screen = pane.locator('.xterm-screen');
+  const cellWidth = await screen.evaluate((element) => {
+    const rows = element.querySelector('.xterm-rows');
+    const probe = document.createElement('span');
+    probe.textContent = 'M'.repeat(40);
+    probe.style.cssText = 'visibility:hidden;position:absolute;white-space:pre;font:inherit';
+    rows!.appendChild(probe);
+    const width = probe.getBoundingClientRect().width / 40;
+    probe.remove();
+    return width;
+  });
+  const hover = async (row: number, column: number) => {
+    const box = await screen.boundingBox();
+    const rowHeight = await screen.evaluate((element) => element.querySelector('.xterm-rows')?.firstElementChild?.getBoundingClientRect().height ?? 17);
+    const point = { x: box!.x + cellWidth * (column + 0.5), y: box!.y + rowHeight * (row + 0.5) };
+    await page.mouse.move(point.x, point.y);
+    return point;
+  };
+
+  // On the tool's name there is nothing to open.
+  await hover(0, 4);
+  await page.waitForTimeout(150);
+  await expect(pane.locator('.xterm-cursor-pointer')).toHaveCount(0);
+
+  // On the path of each line there is, and it is the path alone that is asked for.
+  for (const [row, column] of [[0, 16], [1, 12], [2, 14]] as const) {
+    const point = await hover(row, column);
+    await expect(pane.locator('.xterm-cursor-pointer')).toHaveCount(1);
+    await page.mouse.click(point.x, point.y);
+    await expect.poll(() => resolved.length).toBe(row + 1);
+  }
+  expect(resolved).toEqual(['src/nested/clean.ts', 'src/nested/clean.ts', 'src/nested/clean.ts']);
+  await expect(codeSection(page).locator('p[title]').first()).toHaveText('src/nested/clean.ts');
+});
+
+test('a file made moments ago is looked for among the changes before Code moves to Files', async ({ page }) => {
+  const old = { file: 'src/old.ts', type: 'modified', additions: 1, deletions: 0 };
+  const made = { file: 'src/new.ts', type: 'added', additions: 3, deletions: 0 };
+  // The listing on screen was taken before the assistant made the file; the next one has it.
+  let made_it = false;
+  await page.route('**/api/workspace/feature-x/changes', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: made_it ? [old, made] : [old] }] } }));
+  await page.route('**/api/workspace/feature-x/changes?include=all', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: [old, made] }] } }));
+  await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'export const made = true;\n' } }));
+  await page.route('**/api/workspace/feature-x/files/resolve?*', route => {
+    made_it = true;
+    return route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file: 'src/new.ts' } });
+  });
+  await page.routeWebSocket('**/ws/terminal', socket => {
+    socket.onMessage(message => {
+      if (JSON.parse(String(message)).type !== 'attach') return;
+      socket.send(JSON.stringify({ type: 'ready', terminal, truncated: false }));
+      socket.send(JSON.stringify({ type: 'output', data: 'src/new.ts:3\r\n' }));
+      socket.send(JSON.stringify({ type: 'replayed' }));
+    });
+  });
+  await chatBesidePanels(page, 40);
+  await page.goto('/#/workspaces/feature-x/sessions');
+  await page.getByRole('button', { name: 'Open CLI Chat', exact: true }).click();
+  const pane = page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-pane');
+  await expect(pane.getByTestId('terminal-state')).toHaveText('Running');
+  // Code is open and has listed the changes, so that listing is what is on screen when the path is clicked.
+  await page.getByRole('region', { name: 'CLI Chat', exact: true }).getByRole('button', { name: 'Code', exact: true }).click();
+  await expect(codeSection(page).getByRole('tree', { name: 'repo changed files' }).getByRole('treeitem', { name: /old\.ts/ })).toBeVisible();
+  await expect(codeSection(page).getByRole('tree', { name: 'repo changed files' }).getByRole('treeitem', { name: /new\.ts/ })).toHaveCount(0);
+  await pane.locator('.xterm-helper-textarea').focus();
+
+  const screen = pane.locator('.xterm-screen');
+  const cell = await screen.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const firstRow = element.querySelector('.xterm-rows')?.firstElementChild?.getBoundingClientRect();
+    return { x: bounds.x + 35, y: (firstRow?.y ?? bounds.y) + (firstRow?.height ?? 17) * 0.5 };
+  });
+  await page.mouse.move(cell.x, cell.y);
+  await expect(pane.locator('.xterm-cursor-pointer')).toHaveCount(1);
+  await page.mouse.click(cell.x, cell.y);
+
+  const code = codeSection(page);
+  await expect(openFileName(page)).toHaveText('src/new.ts:3');
+  // Still among the changes, where the new file now is, not moved to the list of every file.
+  await expect(code.getByRole('tree', { name: 'repo changed files' }).getByRole('treeitem', { name: /new\.ts/ })).toBeVisible();
+  await expect(code.getByRole('button', { name: /^Changes/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(code.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-pressed', 'false');
+});
+
 test('opens a path even when the terminal beside Code wraps it across rows', async ({ page }) => {
   const longPath = 'src/nested/really-long-folder-name/with-another-quite-long-segment/target.ts';
   const listing = [{ repoName: 'repo', repoPath: 'C:/repo', files: [{ file: 'src/nested/clean.ts', type: 'unchanged' }, { file: longPath, type: 'unchanged' }] }];
@@ -663,4 +775,59 @@ test.describe('documents in folders of the workspace root', () => {
     await expect(openFileName(page)).toHaveText('docs/guide.md');
     await expect(documents).toBeHidden();
   });
+});
+
+test('a file git ignores that the AI names gets a row in the Files tree, only while it is the open file', async ({ page }) => {
+  const old = { file: 'src/old.ts', type: 'modified', additions: 1, deletions: 0 };
+  const other = { file: 'src/other.ts', type: 'unchanged' };
+  // git's listing: no dist/out.js, which the repository ignores, and no other ignored file either.
+  await page.route('**/api/workspace/feature-x/changes', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: [old] }] } }));
+  await page.route('**/api/workspace/feature-x/changes?include=all', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: [{ ...old, type: 'modified' }, other] }] } }));
+  await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'export const out = 1;\n' } }));
+  await page.route('**/api/workspace/feature-x/files/resolve?*', route => route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file: 'dist/out.js' } }));
+  await page.routeWebSocket('**/ws/terminal', socket => {
+    socket.onMessage(message => {
+      if (JSON.parse(String(message)).type !== 'attach') return;
+      socket.send(JSON.stringify({ type: 'ready', terminal, truncated: false }));
+      socket.send(JSON.stringify({ type: 'output', data: 'dist/out.js:3\r\n' }));
+      socket.send(JSON.stringify({ type: 'replayed' }));
+    });
+  });
+  await chatBesidePanels(page, 40);
+  await page.goto('/#/workspaces/feature-x/sessions');
+  await page.getByRole('button', { name: 'Open CLI Chat', exact: true }).click();
+  const pane = page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-pane');
+  await expect(pane.getByTestId('terminal-state')).toHaveText('Running');
+  await pane.locator('.xterm-helper-textarea').focus();
+  const screen = pane.locator('.xterm-screen');
+  const cell = await screen.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const firstRow = element.querySelector('.xterm-rows')?.firstElementChild?.getBoundingClientRect();
+    return { x: bounds.x + 35, y: (firstRow?.y ?? bounds.y) + (firstRow?.height ?? 17) * 0.5 };
+  });
+  await page.mouse.move(cell.x, cell.y);
+  await expect(pane.locator('.xterm-cursor-pointer')).toHaveCount(1);
+  await page.mouse.click(cell.x, cell.y);
+
+  const code = codeSection(page);
+  await expect(openFileName(page)).toHaveText('dist/out.js:3');
+  // The file is in the Files tree, selected, and marked as not in git's listing.
+  await expect(code.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const tree = code.getByRole('tree', { name: 'repo files' });
+  const row = tree.getByRole('treeitem', { name: /out\.js/ });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('I');
+  await expect(row.locator('[title*="ignored by git"]').first()).toBeAttached();
+  await expect(code.getByTestId('code-file-viewer')).toContainText('export const out = 1;');
+  // Only the file that was opened: the files git lists are there as before, the other ignored ones are not.
+  await expect(tree.getByRole('treeitem', { name: 'dist' })).toHaveAttribute('aria-expanded', 'true');
+  await tree.getByRole('treeitem', { name: 'src' }).click();
+  await expect(tree.getByRole('treeitem', { name: /other\.ts/ })).toBeVisible();
+  // dist, out.js, src, old.ts and other.ts: no other ignored file has a row.
+  await expect(tree.getByRole('treeitem')).toHaveCount(5);
+
+  // Opening another file takes the extra row away; it was only there for the file that was open.
+  await tree.getByRole('treeitem', { name: /other\.ts/ }).click();
+  await expect(openFileName(page)).toHaveText('src/other.ts');
+  await expect(tree.getByRole('treeitem', { name: /out\.js/ })).toHaveCount(0);
 });

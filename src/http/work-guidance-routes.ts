@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { readPlanningNotes, savePlanningNotes } from '../core/planning-notes.js';
 import type { Hono, Context, Handler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -6,6 +7,23 @@ import { addWorkDocument, getWorkContext, readWorkDocument, updateWorkDocument, 
 import { loadWorkspaceLifecycle, updateLifecyclePlan } from '../core/lifecycle.js';
 import { listRootDocuments, readRootDocument } from '../core/root-documents.js';
 import { refreshPlanningContext } from '../core/planning-refresh.js';
+import { loadFeatureConfig } from '../core/workspace.js';
+import { resolveFeatureRepoPath } from '../utils/feature.js';
+
+/** The workspace-relative folders that hold a repository's checkout. A repository outside the workspace folder has none. */
+async function repositoryFolders(root: string): Promise<string[]> {
+  try {
+    const feature = await loadFeatureConfig(root);
+    if (!feature) return [];
+    return feature.repos.flatMap((repoPath) => {
+      const relative = path.relative(root, resolveFeatureRepoPath(feature, root, repoPath));
+      return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? [relative.split(path.sep).join('/')] : [];
+    });
+  } catch {
+    // The listing of documents does not depend on the manifest being readable; without it every data file is listed.
+    return [];
+  }
+}
 
 /** Mounted behind the server's existing local-origin boundary. */
 export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: string) => Promise<string | null>) {
@@ -21,10 +39,10 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
     }
   };
   app.get('/api/workspace/:id/planning-notes', handle((root) => readPlanningNotes(root)));
-  app.get('/api/workspace/:id/documents', handle((root, c) => {
+  app.get('/api/workspace/:id/documents', handle(async (root, c) => {
     const folder = c.req.query('folder') ?? '';
     const recursive = c.req.query('recursive') === '1';
-    return listRootDocuments(root, folder, recursive);
+    return listRootDocuments(root, folder, recursive, { repoFolders: await repositoryFolders(root) });
   }));
   app.get('/api/workspace/:id/documents/preview', handle(async (root, c) => {
     const { bytes: _bytes, ...document } = await readRootDocument(root, c.req.query('name') ?? '');

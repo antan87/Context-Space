@@ -6,6 +6,11 @@ export interface ReferenceRepo {
   repoName: string;
   /** Where the repository is checked out for this workspace (worktree or in-place source). */
   repoPath: string;
+  /**
+   * The checkout this one was made from, when it is a different folder. An assistant that read the repository there
+   * prints paths under it, and each names the same file in this workspace's copy.
+   */
+  sourcePath?: string;
 }
 
 export interface ResolvedRepoFile {
@@ -49,7 +54,7 @@ async function canonical(target: string): Promise<string> {
   }
 }
 
-interface CanonicalRepo extends ReferenceRepo { root: string; realRoot: string; source: ReferenceRepo }
+interface CanonicalRepo extends ReferenceRepo { root: string; realRoot: string; sourceRoot?: string; source: ReferenceRepo }
 
 /**
  * Finds the repository file a path printed by a CLI (or written in a document) refers to.
@@ -75,11 +80,19 @@ export async function resolveFileReference(rawPath: string, options: ResolveFile
     source: repo,
     root: path.resolve(repo.repoPath),
     realRoot: await canonical(repo.repoPath),
+    sourceRoot: repo.sourcePath && path.resolve(repo.sourcePath) !== path.resolve(repo.repoPath) ? path.resolve(repo.sourcePath) : undefined,
   })));
 
   const tiers: string[][] = [];
   if (path.isAbsolute(target) || /^[a-z]:\//i.test(target)) {
-    tiers.push([path.resolve(target)]);
+    const absolute = path.resolve(target);
+    tiers.push([absolute]);
+    // A path under the checkout a repository was copied from is the same file in the copy. It is tried second, so a
+    // file that is really in the workspace is never shadowed, and it is only for a file the copy has.
+    const moved = repos.flatMap((repo) => repo.sourceRoot && within(repo.sourceRoot, absolute) && !within(repo.root, absolute)
+      ? [path.join(repo.root, path.relative(repo.sourceRoot, absolute))]
+      : []);
+    if (moved.length) tiers.push(moved);
   } else {
     if (options.cwd) tiers.push([path.resolve(options.cwd, target)]);
     tiers.push(repos.map((repo) => path.resolve(repo.root, target)));

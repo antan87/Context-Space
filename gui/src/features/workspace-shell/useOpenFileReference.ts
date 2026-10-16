@@ -50,7 +50,7 @@ export function useOpenFileReference(workspace: string, workspacePath: string, r
     const request = ++latest.current;
     const base = `/api/workspace/${encodeURIComponent(workspace)}`;
 
-    const name = workspaceDocumentName({ path: parsed.path, line }, workspacePath, [...repoPaths]);
+    const name = workspaceDocumentName({ path: parsed.path, line }, workspacePath, [...repoPaths], click.cwd);
     if (name) {
       let isDocument: boolean;
       try {

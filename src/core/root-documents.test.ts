@@ -36,7 +36,7 @@ it('opens linked files in visible subfolders but never hidden, linked or escapin
   for (const name of ['.git/notes.md', 'assessment/../.git/notes.md', 'assessment//screenshots/01.png', 'linked-dir/secret.md', 'C:/escape.md', 'doc.md:stream']) {
     await expect(readRootDocument(root, name)).rejects.toThrow();
   }
-  await expect(readRootDocument(root, 'assessment/evidence.json')).rejects.toThrow("can't be opened here");
+  await expect(readRootDocument(root, 'assessment/evidence.exe')).rejects.toThrow("can't be opened here");
 });
 
 it('rejects traversal, linked files, unsupported files and nonregular paths', async () => {
@@ -95,4 +95,109 @@ it('discovers visible folders, lists documents within subfolders, and supports r
   await expect(listRootDocuments(root, '../outside')).rejects.toThrow('Choose a folder inside this workspace.');
   await expect(listRootDocuments(root, '.git')).rejects.toThrow('Choose a folder inside this workspace.');
   await expect(listRootDocuments(root, 'nonexistent')).rejects.toThrow('Folder not found.');
+});
+
+it('opens plain-text data files the assistant writes, and still refuses files that are not documents', async () => {
+  await fs.mkdir(path.join(root, 'assessment'));
+  const written: Record<string, string> = {
+    'spec.json': '{"openapi":"3.1.0"}', 'openapi.yaml': 'openapi: 3.1.0', 'ci.yml': 'on: push', 'config.toml': 'name = "x"',
+    'feed.xml': '<feed/>', 'diagram.mmd': 'graph TD; A-->B', 'page.mdx': '# Page', 'assessment/evidence.json': '{"ok":true}',
+  };
+  for (const [name, text] of Object.entries(written)) await fs.writeFile(path.join(root, name), text);
+  for (const [name, text] of Object.entries(written)) {
+    expect(await readRootDocument(root, name)).toMatchObject({ name, content: text, kind: 'text', mime: 'text/plain; charset=utf-8' });
+  }
+  expect((await listRootDocuments(root)).documents.map((doc) => doc.name)).toEqual(['ci.yml', 'config.toml', 'diagram.mmd', 'feed.xml', 'openapi.yaml', 'page.mdx', 'spec.json']);
+
+  await fs.writeFile(path.join(root, 'keys.env'), 'TOKEN=1');
+  await fs.writeFile(path.join(root, 'tool.exe'), 'MZ');
+  for (const name of ['keys.env', 'tool.exe', 'package.lock']) await expect(readRootDocument(root, name)).rejects.toThrow("can't be opened here");
+  await fs.mkdir(path.join(root, '.config'));
+  await fs.writeFile(path.join(root, '.config', 'app.json'), '{}');
+  await expect(readRootDocument(root, '.config/app.json')).rejects.toThrow('Choose a document inside this workspace.');
+});
+
+it('lists data files outside the repositories only, and never ContextSpace\'s own store files', async () => {
+  await fs.mkdir(path.join(root, 'api'));
+  await fs.mkdir(path.join(root, 'services', 'web'), { recursive: true });
+  await fs.mkdir(path.join(root, 'docs'));
+  const files = [
+    'spec.json', 'contextspace.json', 'contextspace-plan.json', 'contextspace-work.json', 'contextspace-plan.md',
+    'api/package.json', 'api/README.md', 'services/web/tsconfig.json', 'services/web/notes.md', 'docs/openapi.yaml', 'apiary.json',
+  ];
+  for (const name of files) await fs.writeFile(path.join(root, name), 'x');
+  const repoFolders = ['api', 'services/web'];
+
+  expect((await listRootDocuments(root, '', true, { repoFolders })).documents.map((doc) => doc.name)).toEqual([
+    'apiary.json', 'api/README.md', 'contextspace-plan.md', 'docs/openapi.yaml', 'services/web/notes.md', 'spec.json',
+  ].sort((a, b) => a.localeCompare(b)));
+  // A folder that only starts with a repository's name is not that repository.
+  expect((await listRootDocuments(root, '', false, { repoFolders })).documents.map((doc) => doc.name)).toContain('apiary.json');
+  // Browsing into a repository lists its documents but not its data files.
+  expect((await listRootDocuments(root, 'api', false, { repoFolders })).documents.map((doc) => doc.name)).toEqual(['api/README.md']);
+  // Without repositories nothing is held back, except ContextSpace's own files at the root.
+  expect((await listRootDocuments(root, 'api')).documents.map((doc) => doc.name)).toEqual(['api/package.json', 'api/README.md']);
+  expect((await listRootDocuments(root)).documents.map((doc) => doc.name)).toEqual(['apiary.json', 'contextspace-plan.md', 'spec.json']);
+  // Left out of the listing, still readable by name: a link to one opens it.
+  expect((await readRootDocument(root, 'api/package.json')).content).toBe('x');
+});
+
+it('bounds data files like other text, skips links, and recovers after a bad file is fixed', async () => {
+  const target = path.join(root, 'big.json');
+  await fs.writeFile(target, ' '.repeat(1024 * 1024 + 1));
+  await expect(readRootDocument(root, 'big.json')).rejects.toThrow('preview limit');
+  expect((await readRootDocument(root, 'big.json', true)).bytes.length).toBe(1024 * 1024 + 1);
+  await fs.writeFile(target, Buffer.from([0xff, 0xfe]));
+  await expect(readRootDocument(root, 'big.json')).rejects.toThrow();
+  await fs.writeFile(target, '{"fixed":true}');
+  expect((await readRootDocument(root, 'big.json')).content).toBe('{"fixed":true}');
+
+  await fs.symlink(target, path.join(root, 'linked.json'));
+  await fs.mkdir(path.join(root, 'folder.yaml'));
+  expect((await listRootDocuments(root)).documents.map((doc) => doc.name)).toEqual(['big.json']);
+  await expect(readRootDocument(root, 'linked.json')).rejects.toThrow();
+  await expect(readRootDocument(root, 'folder.yaml')).rejects.toThrow();
+});
+
+it('opens documents in .claude, .agents and .github, and names the reason for every other hidden path', async () => {
+  const written = ['.claude/skills/plan/SKILL.md', '.agents/skills/plan/SKILL.md', '.github/PULL_REQUEST_TEMPLATE.md', '.github/workflows/ci.yml', '.claude/settings.json'];
+  for (const name of written) { await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true }); await fs.writeFile(path.join(root, name), `# ${name}`); }
+  for (const name of written) expect((await readRootDocument(root, name)).content).toBe(`# ${name}`);
+  expect(await readRootDocument(root, '.claude\\skills\\plan\\SKILL.md')).toMatchObject({ name: '.claude/skills/plan/SKILL.md', kind: 'markdown' });
+
+  for (const hidden of ['.git', '.contextspace', '.vscode', '.ssh', '.Claude', '.claude-old']) {
+    await fs.mkdir(path.join(root, hidden), { recursive: true });
+    await fs.writeFile(path.join(root, hidden, 'notes.md'), 'closed');
+    await expect(readRootDocument(root, `${hidden}/notes.md`)).rejects.toThrow(/Choose a document inside this workspace\. Hidden files and folders can't be opened here, except the folders \.claude, \.agents and \.github\./);
+    await expect(listRootDocuments(root, hidden)).rejects.toThrow(/Choose a folder inside this workspace\. Hidden files/);
+  }
+  // A hidden file, a hidden folder below an open one, and traversal through an open one stay closed.
+  await fs.writeFile(path.join(root, '.claude', '.secret.md'), 'closed');
+  await fs.mkdir(path.join(root, '.claude', '.cache'));
+  await fs.writeFile(path.join(root, '.claude', '.cache', 'a.md'), 'closed');
+  for (const name of ['.claude/.secret.md', '.claude/.cache/a.md', '.private.md', '.claude/../.git/notes.md', '.claude/../escape.md']) {
+    await expect(readRootDocument(root, name)).rejects.toThrow('Choose a document inside this workspace.');
+  }
+});
+
+it('lists what opens: the three hidden folders and their documents, and nothing else that is hidden', async () => {
+  for (const name of ['.claude/skills/plan/SKILL.md', '.agents/skills/plan/SKILL.md', '.github/PULL_REQUEST_TEMPLATE.md', '.github/workflows/ci.yml', '.claude/settings.json', '.git/HEAD.md', '.vscode/notes.md', 'README.md']) {
+    await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
+    await fs.writeFile(path.join(root, name), 'x');
+  }
+  const top = await listRootDocuments(root);
+  expect(top.folders).toEqual(['.agents', '.claude', '.github']);
+  expect(top.documents.map((doc) => doc.name)).toEqual(['README.md']);
+
+  const github = await listRootDocuments(root, '.github');
+  expect(github.documents.map((doc) => doc.name)).toEqual(['.github/PULL_REQUEST_TEMPLATE.md']);
+  expect(github.folders).toEqual(['.github/workflows']);
+
+  // Searching the whole workspace finds them, and a configuration file in a hidden folder is not a document in the list.
+  const all = (await listRootDocuments(root, '', true)).documents.map((doc) => doc.name);
+  expect(all).toEqual(['.agents/skills/plan/SKILL.md', '.claude/skills/plan/SKILL.md', '.github/PULL_REQUEST_TEMPLATE.md', 'README.md']);
+  // Not listed, yet it opens when a link names it.
+  expect((await readRootDocument(root, '.github/workflows/ci.yml')).content).toBe('x');
+  // Every listed document opens, which is the point of one rule.
+  for (const name of all) await expect(readRootDocument(root, name)).resolves.toMatchObject({ name });
 });
