@@ -13,6 +13,7 @@
 import { execa } from 'execa';
 
 import type { LifecycleStep, VerificationStatus, WorkspaceVerificationReport } from '../types.js';
+import { gitStateFingerprint, reuseWhileGitStateIs } from '../utils/git-state.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { listOpenInputRequests, type InputRequest } from './attention.js';
 import { loadWorkspaceLifecycle } from './lifecycle.js';
@@ -179,8 +180,10 @@ function shortReason(error: unknown): string {
   return text.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, REASON_LIMIT) || 'Unknown error';
 }
 
+/** HEAD, reused while the refs are unchanged: the strip asks for it on every read. */
 async function headOf(repoPath: string): Promise<string | null> {
-  return execa('git', ['rev-parse', 'HEAD'], { cwd: repoPath }).then((result) => result.stdout.trim()).catch(() => null);
+  return reuseWhileGitStateIs(repoPath, 'progress:head', await gitStateFingerprint(repoPath), () =>
+    execa('git', ['rev-parse', 'HEAD'], { cwd: repoPath }).then((result) => result.stdout.trim()).catch(() => null));
 }
 
 /**

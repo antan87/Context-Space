@@ -14,6 +14,7 @@ import {
   type RepoStatusFile,
 } from '../utils/multi-git.js';
 import { execa } from 'execa';
+import { gitStateFingerprint, reuseWhileGitStateIs } from '../utils/git-state.js';
 import { loadFeatureConfig } from './workspace.js';
 import { describeEditBoundaries, type RepoAccess } from './edit-policy.js';
 
@@ -92,14 +93,19 @@ export async function getWorkspaceStatusReport(
 
   const reports: RepoStatusReport[] = await Promise.all(
     repos.map(async (repo): Promise<RepoStatusReport> => {
+      // Only the working tree needs git every time. Branch, HEAD, upstream, remote and history change with the refs
+      // and config, so their answers are reused while those files are unchanged: one git process per repository on
+      // a refresh instead of about ten.
+      const fingerprint = await gitStateFingerprint(repo.path, [`refs/heads/${repo.branchName}`, `refs/remotes/origin/${repo.branchName}`]);
+      const reuse = <T>(key: string, compute: () => Promise<T>) => reuseWhileGitStateIs(repo.path, `status:${key}:${repo.branchName}`, fingerprint, compute);
       const [branch, status, remoteUrl, aheadBehind, headSha] = await Promise.all([
-        getRepoBranch(repo.path),
+        reuse('branch', () => getRepoBranch(repo.path)),
         getRepoStatus(repo.path),
-        getRemoteUrl(repo.path),
-        getAheadBehind(repo.path, repo.branchName),
-        execa('git', ['rev-parse', 'HEAD'], { cwd: repo.path })
+        reuse('remote', () => getRemoteUrl(repo.path)),
+        reuse('ahead-behind', () => getAheadBehind(repo.path, repo.branchName)),
+        reuse('head', () => execa('git', ['rev-parse', 'HEAD'], { cwd: repo.path })
           .then((result) => result.stdout.trim())
-          .catch(() => null),
+          .catch(() => null)),
       ]);
 
       const collisions: FileCollision[] = [];
@@ -118,15 +124,14 @@ export async function getWorkspaceStatusReport(
 
         // 2. Identify collaborator commits landing on modified files
         try {
-          const [userName, userEmail, recentCommitsOut] = await Promise.all([
-            execa('git', ['config', 'user.name'], { cwd: repo.path }).then((r) => r.stdout.trim()).catch(() => ''),
-            execa('git', ['config', 'user.email'], { cwd: repo.path }).then((r) => r.stdout.trim()).catch(() => ''),
-            execa('git', ['log', '-n', '10', '--format=%H|%an|%ae|%s|%cI'], { cwd: repo.path })
-              .then((r) => r.stdout.trim())
-              .catch(() => ''),
-          ]);
-
-          if (recentCommitsOut) {
+          const history = await reuse('collaborators', async () => {
+            const [userName, userEmail, recentCommitsOut] = await Promise.all([
+              execa('git', ['config', 'user.name'], { cwd: repo.path }).then((r) => r.stdout.trim()).catch(() => ''),
+              execa('git', ['config', 'user.email'], { cwd: repo.path }).then((r) => r.stdout.trim()).catch(() => ''),
+              execa('git', ['log', '-n', '10', '--format=%H|%an|%ae|%s|%cI'], { cwd: repo.path })
+                .then((r) => r.stdout.trim())
+                .catch(() => ''),
+            ]);
             const commits = recentCommitsOut.split('\n').filter(Boolean).map((line) => {
               const [sha, authorName, authorEmail, subject, date] = line.split('|');
               return {
@@ -145,33 +150,30 @@ export async function getWorkspaceStatusReport(
               if (userEmail && c.authorEmail && c.authorEmail !== userEmail) return true;
               return false;
             });
+            if (collaboratorCommits.length === 0) return { collaboratorCommits, touched: [] as string[] };
+            const { stdout: touchedFilesOut } = await execa(
+              'git',
+              ['diff-tree', '--no-commit-id', '--name-only', '-r', ...collaboratorCommits.map((c) => c.sha)],
+              { cwd: repo.path },
+            ).catch(() => ({ stdout: '' }));
+            return { collaboratorCommits, touched: touchedFilesOut.split('\n').map((f) => f.trim()).filter(Boolean) };
+          });
 
-            if (collaboratorCommits.length > 0) {
-              const shas = collaboratorCommits.map((c) => c.sha);
-              const { stdout: touchedFilesOut } = await execa(
-                'git',
-                ['diff-tree', '--no-commit-id', '--name-only', '-r', ...shas],
-                { cwd: repo.path },
-              ).catch(() => ({ stdout: '' }));
+          const touchedSet = new Set(history.touched);
+          for (const file of trackedDirtyFiles) {
+            if (collisions.some((c) => c.filePath === file.path)) continue;
 
-              const touchedSet = new Set(touchedFilesOut.split('\n').map((f) => f.trim()).filter(Boolean));
-
-              for (const file of trackedDirtyFiles) {
-                if (collisions.some((c) => c.filePath === file.path)) continue;
-
-                if (touchedSet.has(file.path)) {
-                  const commit = collaboratorCommits.find((c) => c.sha);
-                  collisions.push({
-                    filePath: file.path,
-                    code: file.code,
-                    lastCommittedBy: commit?.author,
-                    lastCommitSha: commit?.sha?.slice(0, 7),
-                    lastCommitMessage: commit?.subject,
-                    lastCommitDate: commit?.date,
-                    collisionHint: `File "${file.path}" modified on disk was recently committed by collaborator ${commit?.author} ("${commit?.subject}"). Coordinate with post_workroom_handoff before editing.`,
-                  });
-                }
-              }
+            if (touchedSet.has(file.path)) {
+              const commit = history.collaboratorCommits.find((c) => c.sha);
+              collisions.push({
+                filePath: file.path,
+                code: file.code,
+                lastCommittedBy: commit?.author,
+                lastCommitSha: commit?.sha?.slice(0, 7),
+                lastCommitMessage: commit?.subject,
+                lastCommitDate: commit?.date,
+                collisionHint: `File "${file.path}" modified on disk was recently committed by collaborator ${commit?.author} ("${commit?.subject}"). Coordinate with post_workroom_handoff before editing.`,
+              });
             }
           }
         } catch {
