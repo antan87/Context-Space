@@ -63,7 +63,7 @@ async function startHonoServer(context: vscode.ExtensionContext) {
         if (failureReported) return;
         failureReported = true;
         void vscode.window.showErrorMessage(
-            `ContextSpace could not start its dashboard: ${detail}. Install or repair the CLI with npm install -g @mrpatronz/nexusflow, then reload this window.`
+            `ContextSpace could not start its dashboard: ${detail}. Install or update ContextSpace from https://github.com/antan87/Context-Space/releases (or run ctxspace desktop install), then reload this window.`
         );
     };
     serverProcess.on('error', (error) => {

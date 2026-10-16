@@ -18,7 +18,6 @@ import {
   ENGINE_ID,
   ENGINE_NAME,
   ENGINE_COMMAND,
-  ENGINE_NPM_PACKAGE,
 } from '../core/constants.js';
 
 export interface UpdateStatus {
@@ -222,16 +221,29 @@ export function isNewerVersion(current: string, latest: string): boolean {
 }
 
 /**
+ * How to get a newer ContextSpace. It ships only as a release (npm publishing is deprecated), so this is the
+ * installer where one exists and the release page elsewhere.
+ */
+export function engineUpdateAdvice(platform: NodeJS.Platform = process.platform): { command: string | null; sentence: string } {
+  if (platform === 'win32' || platform === 'linux') {
+    const command = `${ENGINE_COMMAND} desktop install`;
+    return { command, sentence: `Run ${command} to update!` };
+  }
+  return { command: null, sentence: `Download it from ${RELEASE_PAGE_URL}` };
+}
+
+/**
  * Prints a clean, premium terminal notification banner if an update is available.
  */
 export function printUpdateBanner(status: UpdateStatus): void {
   if (!status.updateAvailable) return;
 
   const msg = `Update available: ${chalk.red(status.currentVersion)} → ${chalk.green(status.latestVersion)}`;
-  const runMsg = `Run ${chalk.cyan(`npm install -g ${ENGINE_NPM_PACKAGE}`)} to update!`;
+  const advice = engineUpdateAdvice();
+  const runMsg = advice.command ? advice.sentence.replace(advice.command, chalk.cyan(advice.command)) : advice.sentence;
 
   const cleanMsg = `Update available: ${status.currentVersion} → ${status.latestVersion}`;
-  const cleanRunMsg = `Run npm install -g ${ENGINE_NPM_PACKAGE} to update!`;
+  const cleanRunMsg = advice.sentence;
   const width = Math.max(cleanMsg.length, cleanRunMsg.length) + 2;
 
   const padMsg = ' '.repeat(width - cleanMsg.length);
@@ -274,9 +286,11 @@ export async function getToolsStatus(force = false): Promise<ToolUpdateStatus[]>
       id: ENGINE_ID,
       name: ENGINE_NAME,
       command: ENGINE_COMMAND,
-      npmPackage: ENGINE_NPM_PACKAGE,
-      updateCmd: `npm install -g ${ENGINE_NPM_PACKAGE}`,
+      npmPackage: '',
+      updateCmd: engineUpdateAdvice().command ?? RELEASE_PAGE_URL,
       getCurrent: async () => currentVersion,
+      // The release is the only source of a current version; the npm package stopped at 2.39.
+      getLatest: async () => (await checkForUpdates())?.latestVersion ?? '',
     },
     {
       id: 'antigravity',
@@ -327,7 +341,9 @@ export async function getToolsStatus(force = false): Promise<ToolUpdateStatus[]>
         installed = currentVal !== '';
       } catch {}
 
-      if (installed && t.npmPackage) {
+      if (installed && t.getLatest) {
+        try { latestVal = await t.getLatest(); } catch {}
+      } else if (installed && t.npmPackage) {
         try {
           const response = await fetch(`https://registry.npmjs.org/${t.npmPackage}/latest`, {
             signal: AbortSignal.timeout(2000),

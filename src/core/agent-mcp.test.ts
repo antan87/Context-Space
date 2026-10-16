@@ -14,6 +14,7 @@ import {
   type CommandRunner,
 } from './agent-mcp.js';
 import { BRAND_CONFIG, ENGINE_NPM_PACKAGE } from './constants.js';
+import { lastingRuntimeRoot } from './lasting-runtime.js';
 
 let home: string;
 let calls: Array<{ file: string; args: string[] }>;
@@ -105,13 +106,13 @@ const byId = <T extends { id: string }>(items: T[], id: string) => items.find((i
 
 describe('unboundMcpServer', () => {
   it('names no workspace, so the server finds it from the agent working directory', () => {
-    const server = unboundMcpServer();
+    const server = unboundMcpServer(envWith(), home);
     expect(server.command).toBe('npx');
     expect(server.args).toEqual(['-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive']);
   });
 
   it('asks the registry for the latest version, because npx reuses a bare package from its cache forever', () => {
-    const [, spec] = unboundMcpServer().args;
+    const [, spec] = unboundMcpServer(envWith(), home).args;
     expect(spec).not.toBe(ENGINE_NPM_PACKAGE);
     expect(spec).toBe(`${ENGINE_NPM_PACKAGE}@latest`);
   });
@@ -119,22 +120,64 @@ describe('unboundMcpServer', () => {
 
 describe('agentMcpServer', () => {
   it('is exactly the unbound server everywhere except Windows', () => {
-    expect(agentMcpServer('linux')).toEqual(unboundMcpServer());
-    expect(agentMcpServer('darwin')).toEqual(unboundMcpServer());
+    expect(agentMcpServer('linux', envWith(), home)).toEqual(unboundMcpServer(envWith(), home));
+    expect(agentMcpServer('darwin', envWith(), home)).toEqual(unboundMcpServer(envWith(), home));
   });
 
   it('runs npx through cmd /c on Windows, because npx there is a .cmd shim an agent cannot start directly', () => {
-    const base = unboundMcpServer();
-    expect(agentMcpServer('win32')).toEqual({ command: 'cmd', args: ['/c', 'npx', ...base.args] });
+    const base = unboundMcpServer(envWith(), home);
+    expect(agentMcpServer('win32', envWith(), home)).toEqual({ command: 'cmd', args: ['/c', 'npx', ...base.args] });
   });
 
   it('keeps asking the registry for the latest version on Windows too', () => {
-    expect(agentMcpServer('win32').args).toContain(`${ENGINE_NPM_PACKAGE}@latest`);
-    expect(agentMcpServer('win32').args).not.toContain(ENGINE_NPM_PACKAGE);
+    expect(agentMcpServer('win32', envWith(), home).args).toContain(`${ENGINE_NPM_PACKAGE}@latest`);
+    expect(agentMcpServer('win32', envWith(), home).args).not.toContain(ENGINE_NPM_PACKAGE);
   });
 
   it('leaves unboundMcpServer alone, so the editor configs written on Windows are unchanged', () => {
-    expect(unboundMcpServer().command).toBe('npx');
+    expect(unboundMcpServer(envWith(), home).command).toBe('npx');
+  });
+});
+
+describe('with a lasting copy of the app\'s CLI', () => {
+  const launcher = () => path.join(lastingRuntimeRoot(envWith(), home), 'bin', 'ctxspace');
+  const installLauncher = () => write(path.relative(home, launcher()), '#!/bin/sh\n');
+
+  it('registers the app\'s own launcher instead of the frozen npm package', async () => {
+    await installLauncher();
+    expect(unboundMcpServer(envWith(), home)).toEqual({ command: launcher(), args: ['mcp', 'run', '--role', 'interactive'] });
+    // Windows only needs the cmd /c wrapper around npx; the launcher is a program of its own.
+    expect(agentMcpServer('win32', envWith(), home).command).toBe(launcher());
+    await install('claude', 'codex');
+    await registerAgentMcp(options());
+    expect(calls).toEqual(expect.arrayContaining([
+      { file: 'claude', args: ['mcp', 'add', '--scope', 'user', MCP_REGISTRATION_NAME, '--', launcher(), 'mcp', 'run', '--role', 'interactive'] },
+      { file: 'codex', args: ['mcp', 'add', MCP_REGISTRATION_NAME, '--', launcher(), 'mcp', 'run', '--role', 'interactive'] },
+    ]));
+  });
+
+  it('says so when an agent is already registered through npm, and does not touch it', async () => {
+    await installLauncher();
+    await install('claude', 'codex');
+    const npx = { command: 'npx', args: ['-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive'] };
+    await write('.claude.json', JSON.stringify({ mcpServers: { [MCP_REGISTRATION_NAME]: npx } }));
+    await write('.codex/config.toml', stringifyToml({ mcp_servers: { [MCP_REGISTRATION_NAME]: { command: launcher(), args: ['mcp', 'run'] } } }));
+
+    const results = await registerAgentMcp(options());
+
+    const claude = byId(results, 'claude').outcome;
+    expect(claude).toMatchObject({ result: 'already', serverName: MCP_REGISTRATION_NAME });
+    expect((claude as { stale?: string }).stale).toContain('npm package');
+    expect((claude as { stale?: string }).stale).toContain(path.join(home, '.claude.json'));
+    expect((byId(results, 'codex').outcome as { stale?: string }).stale).toBeUndefined();
+    expect(calls).toEqual([]);
+    expect(JSON.parse(await read('.claude.json')).mcpServers[MCP_REGISTRATION_NAME]).toEqual(npx);
+  });
+
+  it('raises no warning about npm registrations while npm is all this machine has', async () => {
+    await install('claude');
+    await write('.claude.json', JSON.stringify({ mcpServers: { [MCP_REGISTRATION_NAME]: { command: 'npx', args: ['-y', `${ENGINE_NPM_PACKAGE}@latest`] } } }));
+    expect((byId(await registerAgentMcp(options()), 'claude').outcome as { stale?: string }).stale).toBeUndefined();
   });
 });
 
@@ -243,7 +286,7 @@ describe('registerAgentMcp', () => {
     const results = await registerAgentMcp(options());
 
     expect(results.filter((r) => r.outcome.result === 'added').map((r) => r.id).sort()).toEqual(['antigravity', 'claude', 'codex']);
-    const server = unboundMcpServer();
+    const server = unboundMcpServer(envWith(), home);
     expect(calls).toEqual(expect.arrayContaining([
       { file: 'claude', args: ['mcp', 'add', '--scope', 'user', MCP_REGISTRATION_NAME, '--', server.command, ...server.args] },
       { file: 'codex', args: ['mcp', 'add', MCP_REGISTRATION_NAME, '--', server.command, ...server.args] },
@@ -483,7 +526,7 @@ describe('registerAgentMcp', () => {
       const config = await readJson('.config/mcp/mcp.json');
       expect(config.settings).toEqual({ toolPrefix: 'short' });
       expect(config.mcpServers.memory).toEqual({ command: 'npx', args: ['memory'] });
-      expect(config.mcpServers[MCP_REGISTRATION_NAME]).toEqual(unboundMcpServer());
+      expect(config.mcpServers[MCP_REGISTRATION_NAME]).toEqual(unboundMcpServer(envWith(), home));
       expect(calls).toEqual([]);
     });
 
@@ -491,7 +534,7 @@ describe('registerAgentMcp', () => {
       await install('pi');
       await write('.pi/agent/settings.json', adapter);
       await registerAgentMcp(options());
-      expect((await readJson('.config/mcp/mcp.json')).mcpServers[MCP_REGISTRATION_NAME]).toEqual(unboundMcpServer());
+      expect((await readJson('.config/mcp/mcp.json')).mcpServers[MCP_REGISTRATION_NAME]).toEqual(unboundMcpServer(envWith(), home));
     });
 
     it('is idempotent', async () => {

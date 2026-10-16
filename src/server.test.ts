@@ -8,6 +8,7 @@ import { AgentTurnGate, app, archiveRefusedAction, canOfferClaudeDesktopTransfer
 import * as archive from './core/archive.js';
 import * as workspace from './core/workspace.js';
 import * as config from './core/config.js';
+import * as desktop from './commands/desktop.js';
 import * as configPaths from './core/config-paths.js';
 import * as analyzers from './analyzers/index.js';
 import * as generators from './generators/index.js';
@@ -1609,20 +1610,52 @@ describe('Server API Endpoints Unit Tests', () => {
       expect(data.error).toBe('Tool not found');
     });
 
-    it('should install tool successfully if execa exits with 0', async () => {
+    it('should install a tool successfully if execa exits with 0', async () => {
       vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Successfully updated' } as any);
 
       const response = await app.request('/api/updates/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ toolId: 'nexusflow' })
+        body: JSON.stringify({ toolId: 'claude' })
       });
 
       expect(response.status).toBe(200);
       const data = await response.json();
       expect(data.success).toBe(true);
       expect(data.output).toBe('Successfully updated');
-      expect(execa).toHaveBeenCalledWith('npm', ['install', '-g', '@mrpatronz/nexusflow'], expect.any(Object));
+      expect(execa).toHaveBeenCalledWith('npm', ['install', '-g', '@anthropic-ai/claude-code'], expect.any(Object));
+    });
+
+    it('installs ContextSpace from its release, never from the deprecated npm package', async () => {
+      vi.mocked(execa).mockClear();
+      const install = vi.spyOn(desktop, 'installDesktop').mockResolvedValue({
+        platform: 'linux', assetName: 'ContextSpace-2.50.0.AppImage', sha256: 'x', installedPath: '/home/u/.local/share/contextspace/ContextSpace.AppImage',
+      } as any);
+      try {
+        const response = await app.request('/api/updates/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ toolId: 'nexusflow' })
+        });
+        expect(response.status).toBe(200);
+        expect((await response.json()).output).toContain('ContextSpace-2.50.0.AppImage');
+        expect(install).toHaveBeenCalledOnce();
+        expect(execa).not.toHaveBeenCalled();
+      } finally { install.mockRestore(); }
+    });
+
+    it('reports a failed release install instead of falling back to npm', async () => {
+      vi.mocked(execa).mockClear();
+      const install = vi.spyOn(desktop, 'installDesktop').mockRejectedValue(new Error('Desktop installer is unsupported on darwin.'));
+      try {
+        const response = await app.request('/api/updates/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ toolId: 'nexusflow' })
+        });
+        expect(response.status).toBeGreaterThanOrEqual(400);
+        expect(execa).not.toHaveBeenCalled();
+      } finally { install.mockRestore(); }
     });
   });
 

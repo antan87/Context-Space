@@ -94,5 +94,5 @@ it.each(['spawn error', 'early exit'])('reports a recoverable dashboard %s witho
   if (failure === 'spawn error') mocks.spawnHandlers.get('error')(new Error('spawn ctxspace ENOENT'));
   mocks.spawnHandlers.get('close')(1);
   expect(mocks.showErrorMessage).toHaveBeenCalledTimes(1);
-  expect(mocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining('npm install -g @mrpatronz/nexusflow'));
+  expect(mocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining('github.com/antan87/Context-Space/releases'));
 });

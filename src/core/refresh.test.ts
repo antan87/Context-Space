@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs/promises';
-import { refreshWorkspace } from './refresh.js';
+import { refreshWorkspace, upgradeWorkspaceToRunningVersion } from './refresh.js';
+import { getGeneratorVersion } from './analysis-cache.js';
 import * as workspace from './workspace.js';
 import * as analyzers from '../analyzers/index.js';
 import * as generators from '../generators/index.js';
 import * as handoff from '../commands/handoff.js';
 import * as generationLock from './generation-lock.js';
 import * as locks from './locks.js';
+import * as workspaceTools from './workspace-tools.js';
 
 vi.mock('node:fs/promises');
 vi.mock('./workspace.js');
@@ -15,6 +17,7 @@ vi.mock('../generators/index.js');
 vi.mock('../commands/handoff.js');
 vi.mock('./generation-lock.js');
 vi.mock('./locks.js');
+vi.mock('./workspace-tools.js');
 
 const feature = {
   id: 'feat',
@@ -118,5 +121,55 @@ describe('refreshWorkspace', () => {
       '/ws',
     );
     expect(report.refreshedHandoff).toBe(true);
+  });
+});
+
+describe('upgradeWorkspaceToRunningVersion', () => {
+  const lockFrom = (toolVersion: string) => ({ schemaVersion: 1, toolVersion, repos: {}, outputs: {}, generatedAt: '' }) as any;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(workspace.loadFeatureConfig).mockResolvedValue(feature);
+    vi.mocked(workspace.resolveRepoInfos).mockResolvedValue([]);
+    vi.mocked(analyzers.analyzeAllReposCached).mockResolvedValue({ analysis: new Map(), analyzed: [], reused: [] } as any);
+    vi.mocked(generators.generateContextFiles).mockResolvedValue(undefined);
+    vi.mocked(locks.acquireLock).mockResolvedValue(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(fs.access).mockRejectedValue(new Error('ENOENT'));
+  });
+
+  it('refreshes a workspace an older version generated', async () => {
+    vi.mocked(generationLock.readGenerationLock).mockResolvedValue(lockFrom('2.39.0'));
+    expect(await upgradeWorkspaceToRunningVersion('/ws')).toBe(true);
+    expect(generators.generateContextFiles).toHaveBeenCalledOnce();
+  });
+
+  it('leaves a workspace on this version, on a newer one, or with no lock alone', async () => {
+    for (const lock of [lockFrom(getGeneratorVersion()), lockFrom('99.0.0'), null]) {
+      vi.mocked(generationLock.readGenerationLock).mockResolvedValue(lock);
+      expect(await upgradeWorkspaceToRunningVersion('/ws')).toBe(false);
+    }
+    expect(generators.generateContextFiles).not.toHaveBeenCalled();
+  });
+
+  it('leaves an archived workspace alone, however old it is', async () => {
+    vi.mocked(workspace.loadFeatureConfig).mockResolvedValue({ ...feature, archivedAt: '2026-10-01T00:00:00Z' });
+    vi.mocked(generationLock.readGenerationLock).mockResolvedValue(lockFrom('2.39.0'));
+    expect(await upgradeWorkspaceToRunningVersion('/ws')).toBe(false);
+    expect(generators.generateContextFiles).not.toHaveBeenCalled();
+  });
+
+  it('also refreshes a workspace on this version whose tools point at a program that is gone', async () => {
+    vi.mocked(generationLock.readGenerationLock).mockResolvedValue(lockFrom(getGeneratorVersion()));
+    vi.mocked(workspaceTools.workspaceToolsNeedRepair).mockResolvedValue(true);
+    expect(await upgradeWorkspaceToRunningVersion('/ws')).toBe(true);
+    expect(generators.generateContextFiles).toHaveBeenCalledOnce();
+  });
+
+  it('reports a failed refresh instead of throwing, so the workspace still opens', async () => {
+    vi.mocked(generationLock.readGenerationLock).mockResolvedValue(lockFrom('2.39.0'));
+    vi.mocked(generators.generateContextFiles).mockRejectedValue(new Error('Refusing to overwrite a custom launcher'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await upgradeWorkspaceToRunningVersion('/ws')).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('custom launcher'));
+    warn.mockRestore();
   });
 });
