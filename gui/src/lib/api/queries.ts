@@ -9,6 +9,9 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQueries, useQuery, 
 
 import { apiFetch } from './client.js';
 import type { PlanChangeInput, PlanView } from '../../features/plan/planTypes.js';
+import { workingIn } from '../../features/chat/liveSessions.js';
+import { RUNNING_TERMINALS_KEY } from '../../features/chat/useRunningTerminals.js';
+import type { RunningTerminal } from '../../features/terminal/client.js';
 import type {
   AISession,
   DetectedAI,
@@ -743,17 +746,25 @@ export const progressFactsKey = (wsId: string | null) => ['progress-facts', wsId
 const fetchProgressFacts = async (wsId: string, signal?: AbortSignal) =>
   (await apiFetch<{ facts: ProgressFacts }>(`/api/workspace/${encodeURIComponent(wsId)}/progress-facts`, { signal })).facts;
 
+/** How often the strip reads progress facts while an AI in the workspace is working, and while none is. */
+export const PROGRESS_FACTS_WORKING_MS = 8_000;
+export const PROGRESS_FACTS_IDLE_MS = 30_000;
+
 /**
  * Checkable progress facts: milestones (with reopened work), open questions, changed
  * files and the last check. Polled only while the workspace is on screen; the live
  * feed asks for a fresh read the moment something changes.
  */
 export function useProgressFacts(wsId: string | null, active: boolean) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: progressFactsKey(wsId),
     queryFn: ({ signal }) => fetchProgressFacts(wsId!, signal),
     enabled: Boolean(wsId) && active,
-    refetchInterval: 8000,
+    // Each read runs git status on every repository, slow on a big repository and on Windows, so it waits longer while
+    // no AI in the workspace is working. The list of running terminals is already polled, and reading it costs nothing.
+    refetchInterval: () => workingIn(queryClient.getQueryData<RunningTerminal[]>(RUNNING_TERMINALS_KEY), wsId ?? '', Date.now())
+      ? PROGRESS_FACTS_WORKING_MS : PROGRESS_FACTS_IDLE_MS,
     staleTime: 3000,
     // The strip is on screen all the time, so a failure is reported after one quick retry rather than after three slow ones.
     retry: 1,
@@ -763,7 +774,7 @@ export function useProgressFacts(wsId: string | null, active: boolean) {
 
 /**
  * The facts and the goal of every open chat, for the tabs and the chat list. The strip polls the chat on screen every
- * eight seconds; these are the others, read slowly and only while the chat is on screen, because a progress read looks
+ * 8 or 30 seconds; these are the others, read slowly and only while the chat is on screen, because a progress read looks
  * at every repository. Both use the strip's own cache keys, so the chat on screen is never read twice.
  */
 export function useOpenChatFacts(workspaceIds: readonly string[], enabled: boolean) {
