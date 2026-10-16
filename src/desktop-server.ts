@@ -12,8 +12,14 @@
 
 import { startServer } from './server.js';
 import { getDesktopReadyTokens, BRAND_CONFIG, resolveFirstEnv } from './core/constants.js';
+import { startLastingRuntime } from './core/lasting-runtime.js';
+import { currentCliRuntime } from './core/workspace-tools.js';
 
 const port = Number(resolveFirstEnv(BRAND_CONFIG.env.port) ?? process.argv[2] ?? 0) || 0;
+
+// On a Linux AppImage the AI tools need a program that outlives the temporary unpack folder. This runs in the
+// background and only on that platform; workspaces opened before it finishes wait for it (runningCliRuntime).
+void startLastingRuntime({ source: currentCliRuntime() });
 
 startServer(port, { strictPort: false })
   .then(({ port: actualPort }) => {

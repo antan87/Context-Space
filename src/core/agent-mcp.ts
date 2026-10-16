@@ -13,13 +13,15 @@
  * known server names is present.
  */
 
+import { existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execa } from 'execa';
 import { parse as parseToml } from 'smol-toml';
 
-import { BRAND_CONFIG, ENGINE_NPM_PACKAGE } from './constants.js';
+import { BRAND_CONFIG, CLI_NAME, ENGINE_NPM_PACKAGE } from './constants.js';
+import { lastingLauncherPath } from './lasting-runtime.js';
 import { atomicWriteJson } from '../resources/fs-safety.js';
 import { findExecutable, getAugmentedPath } from '../utils/user-paths.js';
 
@@ -33,12 +35,14 @@ export interface McpServerDefinition {
 /**
  * Shared by every registration; matches what `ctxspace mcp setup` writes for editors.
  *
- * The package must carry `@latest`. A bare `npx -y <package>` runs whatever copy is already in
- * npx's cache and never asks the registry again, so a registration made once would keep running
- * the same old version for good: on one machine it started 2.24.1 while 2.31.0 was current, and
- * the agent never saw the newer tools.
+ * Once the app has kept a lasting copy of the CLI (Linux AppImage), that is what is registered: the app's own
+ * version, and it survives a restart. Otherwise it falls back to npx. npm publishing is deprecated, so npx only
+ * ever reaches the last package published (2.39), and the package must carry `@latest` or npx keeps running whatever
+ * copy is already in its cache. Where there is no lasting copy yet, that is the best this machine can do.
  */
-export function unboundMcpServer(): McpServerDefinition {
+export function unboundMcpServer(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): McpServerDefinition {
+  const launcher = lastingLauncherPath(env, home);
+  if (existsSync(launcher)) return { command: launcher, args: ['mcp', 'run', '--role', 'interactive'] };
   return { command: 'npx', args: ['-y', `${ENGINE_NPM_PACKAGE}@latest`, 'mcp', 'run', '--role', 'interactive'] };
 }
 
@@ -51,9 +55,9 @@ export function unboundMcpServer(): McpServerDefinition {
  * Only agent registration uses this. `unboundMcpServer()` stays as it was for the editor configs
  * `ctxspace mcp setup` writes, so what they get on Windows is unchanged.
  */
-export function agentMcpServer(platform: NodeJS.Platform = process.platform): McpServerDefinition {
-  const server = unboundMcpServer();
-  return platform === 'win32' ? { command: 'cmd', args: ['/c', server.command, ...server.args] } : server;
+export function agentMcpServer(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): McpServerDefinition {
+  const server = unboundMcpServer(env, home);
+  return platform === 'win32' && server.command === 'npx' ? { command: 'cmd', args: ['/c', server.command, ...server.args] } : server;
 }
 
 /** The name new registrations use. */
@@ -69,7 +73,8 @@ const KNOWN_SERVER_NAMES: readonly string[] = [
 
 export type AgentMcpState =
   | { state: 'not-installed' }
-  | { state: 'registered'; serverName: string }
+  /** `stale`: it runs the npm package, which stopped at 2.39, while a lasting copy of the app's version exists. */
+  | { state: 'registered'; serverName: string; stale?: string }
   | { state: 'missing' }
   /** Installed, but it cannot use MCP servers until `reason` is resolved. */
   | { state: 'unsupported'; reason: string }
@@ -87,7 +92,7 @@ export interface AgentMcpStatus {
 export type AgentMcpOutcome =
   | { result: 'not-installed' }
   | { result: 'added'; how: string }
-  | { result: 'already'; serverName: string }
+  | { result: 'already'; serverName: string; stale?: string }
   | { result: 'would-add'; how: string }
   | { result: 'skipped'; reason: string }
   | { result: 'failed'; reason: string };
@@ -154,6 +159,8 @@ interface AgentTarget {
   readServers(ctx: Context): Promise<string[]>;
   /** A reason this agent cannot use MCP servers even once registered, or null. */
   unsupported?(ctx: Context): Promise<string | null>;
+  /** What a named server is set to run, when the config says. Used to spot a registration that runs the npm package. */
+  readDefinition?(ctx: Context, name: string): Promise<{ command?: unknown; args?: unknown } | undefined>;
   register(ctx: Context, binaryPath: string, definition: McpServerDefinition): Promise<{ how: string }>;
 }
 
@@ -175,6 +182,11 @@ async function readJsonServers(file: string, keys: readonly string[]): Promise<s
   return [];
 }
 
+async function readJsonDefinition(file: string, name: string): Promise<{ command?: unknown; args?: unknown } | undefined> {
+  const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as { mcpServers?: Record<string, { command?: unknown; args?: unknown }> };
+  return parsed?.mcpServers?.[name];
+}
+
 async function runAdd(ctx: Context, binaryPath: string, args: string[], label: string): Promise<{ how: string }> {
   const outcome = await ctx.run(binaryPath, args, ctx.env);
   if (outcome.exitCode !== 0) {
@@ -193,6 +205,7 @@ const TARGETS: readonly AgentTarget[] = [
       ? path.join(ctx.env.CLAUDE_CONFIG_DIR, '.claude.json')
       : path.join(ctx.home, '.claude.json'),
     readServers(ctx) { return readJsonServers(this.configPath(ctx), ['mcpServers']); },
+    readDefinition(ctx, name) { return readJsonDefinition(this.configPath(ctx), name); },
     register: (ctx, bin, def) => runAdd(
       ctx, bin, ['mcp', 'add', '--scope', 'user', MCP_REGISTRATION_NAME, '--', def.command, ...def.args], 'claude mcp add',
     ),
@@ -213,6 +226,10 @@ const TARGETS: readonly AgentTarget[] = [
       const servers = parseToml(raw).mcp_servers;
       return servers && typeof servers === 'object' && !Array.isArray(servers) ? Object.keys(servers) : [];
     },
+    async readDefinition(ctx, name) {
+      const servers = parseToml(await fs.readFile(this.configPath(ctx), 'utf8')).mcp_servers as Record<string, { command?: unknown; args?: unknown }> | undefined;
+      return servers?.[name];
+    },
     register: (ctx, bin, def) => runAdd(
       ctx, bin, ['mcp', 'add', MCP_REGISTRATION_NAME, '--', def.command, ...def.args], 'codex mcp add',
     ),
@@ -223,6 +240,7 @@ const TARGETS: readonly AgentTarget[] = [
     binary: 'agy',
     configPath: (ctx) => path.join(ctx.home, '.gemini', 'config', 'mcp_config.json'),
     readServers(ctx) { return readJsonServers(this.configPath(ctx), ['mcpServers']); },
+    readDefinition(ctx, name) { return readJsonDefinition(this.configPath(ctx), name); },
     register: (ctx, bin, def) => runAdd(
       ctx, bin, ['mcp', 'add', MCP_REGISTRATION_NAME, '--', def.command, ...def.args], 'agy mcp add',
     ),
@@ -277,6 +295,19 @@ const TARGETS: readonly AgentTarget[] = [
   },
 ];
 
+/** A registration that runs the npm package, when the app's own lasting copy could be registered instead. */
+async function staleRegistration(target: AgentTarget, ctx: Context, name: string): Promise<{ stale?: string }> {
+  if (unboundMcpServer(ctx.env, ctx.home).command === 'npx') return {};
+  try {
+    const definition = await target.readDefinition?.(ctx, name);
+    const line = [definition?.command, ...(Array.isArray(definition?.args) ? definition.args : [])].join(' ');
+    if (/\bnpx\b/.test(line) && line.includes(ENGINE_NPM_PACKAGE)) {
+      return { stale: `"${name}" runs the npm package, which stopped at 2.39. Remove it from ${target.configPath(ctx)}, then run ${CLI_NAME} mcp setup again to use this app's version.` };
+    }
+  } catch { /* an unreadable definition is not a reason to warn */ }
+  return {};
+}
+
 async function inspectTarget(target: AgentTarget, ctx: Context): Promise<AgentMcpStatus> {
   const base = { id: target.id, name: target.name, configPath: target.configPath(ctx) };
   if (!ctx.find(target.binary)) return { ...base, status: { state: 'not-installed' } };
@@ -291,7 +322,7 @@ async function inspectTarget(target: AgentTarget, ctx: Context): Promise<AgentMc
     return { ...base, status: { state: 'unreadable', reason: `${base.configPath}: ${(error as Error).message}` } };
   }
   const present = KNOWN_SERVER_NAMES.find((name) => servers.includes(name));
-  if (present) return { ...base, status: { state: 'registered', serverName: present } };
+  if (present) return { ...base, status: { state: 'registered', serverName: present, ...(await staleRegistration(target, ctx, present)) } };
   // On Windows the registration goes through `cmd /c` (see agentMcpServer). It has been checked against
   // the agents' config files, not yet against a live connection on Windows, so setup says how to confirm it.
   return { ...base, status: { state: 'missing' } };
@@ -309,7 +340,7 @@ export async function inspectAgentMcp(options: AgentMcpOptions = {}): Promise<Ag
  */
 export async function registerAgentMcp(options: AgentMcpOptions = {}): Promise<AgentMcpResult[]> {
   const ctx = contextOf(options);
-  const definition = agentMcpServer(ctx.platform);
+  const definition = agentMcpServer(ctx.platform, ctx.env, ctx.home);
   const results: AgentMcpResult[] = [];
 
   for (const target of TARGETS) {
@@ -318,7 +349,7 @@ export async function registerAgentMcp(options: AgentMcpOptions = {}): Promise<A
 
     switch (status.state) {
       case 'not-installed': done({ result: 'not-installed' }); continue;
-      case 'registered': done({ result: 'already', serverName: status.serverName }); continue;
+      case 'registered': done({ result: 'already', serverName: status.serverName, ...(status.stale ? { stale: status.stale } : {}) }); continue;
       case 'unsupported': done({ result: 'skipped', reason: status.reason }); continue;
       case 'unreadable': done({ result: 'skipped', reason: `left alone, could not read ${status.reason}` }); continue;
       case 'missing': break;

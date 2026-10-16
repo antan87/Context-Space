@@ -40,8 +40,6 @@ import {
   WORKROOM_BOOTSTRAP_COOKIES,
   ENGINE_ID,
   LEGACY_ENGINE_ID,
-  ENGINE_NPM_PACKAGE,
-  LEGACY_ENGINE_NPM_PACKAGE,
   resolveWorkspaceChatLedger,
   readWorkspaceChatMessages,
   BRAND_NAME,
@@ -113,7 +111,7 @@ import { ArchivedWorkspaceError, assertWorkspaceActive } from './core/archive-gu
 import { archiveWorkspace, unarchiveWorkspace } from './core/archive.js';
 import { evaluateProgression } from './core/progression-policy.js';
 import { getWorkspaceStatusReport } from './core/status.js';
-import { refreshWorkspace } from './core/refresh.js';
+import { refreshWorkspace, upgradeWorkspaceToRunningVersion } from './core/refresh.js';
 import { checkGenerationLock } from './core/generation-lock.js';
 import { writeWorkspaceFile } from './core/storage.js';
 import {
@@ -150,6 +148,7 @@ import {
   readPm2List,
 } from './orchestration/index.js';
 import { checkForUpdates, getCurrentVersion, getToolsStatus } from './utils/update-check.js';
+import { installDesktop } from './commands/desktop.js';
 import { getWorkflowTemplates, saveWorkflowTemplate, deleteWorkflowTemplate } from './utils/workflows.js';
 import {
 
@@ -1982,6 +1981,7 @@ app.post('/api/workspace/:id/terminal', async (c) => {
       return c.json({ error: 'Workspace configuration not found.' }, 404);
     }
 
+    await upgradeWorkspaceToRunningVersion(workspacePath);
     await checkGenerationLock(workspacePath, { markDocuments: true });
 
     let launchPath = workspacePath;
@@ -3731,9 +3731,12 @@ app.get('/api/updates/tools', async (c) => {
 app.post('/api/updates/install', async (c) => {
   try {
     const { toolId } = await c.req.json() as { toolId: string };
+    // ContextSpace itself is installed from its release; its npm package stopped at 2.39 and is deprecated.
+    if (toolId === ENGINE_ID || toolId === LEGACY_ENGINE_ID) {
+      const installed = await installDesktop();
+      return c.json({ success: true, output: `Installed ${installed.assetName}${installed.installedPath ? ` at ${installed.installedPath}` : ''}` });
+    }
     const tools = [
-      { id: ENGINE_ID, cmd: 'npm', args: ['install', '-g', ENGINE_NPM_PACKAGE] },
-      { id: LEGACY_ENGINE_ID, cmd: 'npm', args: ['install', '-g', LEGACY_ENGINE_NPM_PACKAGE] },
       { id: 'antigravity', cmd: 'agy', args: ['update'] },
       { id: 'claude', cmd: 'npm', args: ['install', '-g', '@anthropic-ai/claude-code'] },
     ];

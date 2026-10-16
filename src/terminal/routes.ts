@@ -8,6 +8,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { assertWorkspaceActive } from '../core/archive-guard.js';
 import { checkGenerationLock } from '../core/generation-lock.js';
+import { upgradeWorkspaceToRunningVersion } from '../core/refresh.js';
 import { loadWorkspaceManifest } from '../core/workspace.js';
 import { canOpenCodexSessionInWorkspace, canTransferClaudeSessionInWorkspace, findSessions } from '../utils/session-finder.js';
 import { TerminalManager, TerminalNotFoundError, nativePtyAvailable, type TerminalClient } from './manager.js';
@@ -113,6 +114,7 @@ export function registerTerminalRoutes(app: Hono, upgrade: UpgradeWebSocket<any,
       const input = createSchema.parse(await c.req.json());
       // An archived workspace keeps a readable record only; stopping its terminals stays allowed, so leftovers can be cleaned up.
       assertWorkspaceActive(await loadWorkspaceManifest(root), 'start assistant sessions');
+      await upgradeWorkspaceToRunningVersion(root);
       await checkGenerationLock(root, { markDocuments: true });
       let cwd = await containedTerminalCwd(root, input.cwd);
       if (input.sessionId) {

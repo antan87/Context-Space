@@ -119,7 +119,9 @@ function describeAgentResult({ name, outcome }: AgentMcpResult): string {
     case 'not-installed': return chalk.gray(`  - ${name}: not installed`);
     case 'added': return chalk.green(`  ✓ ${name}: registered (${outcome.how})`);
     case 'would-add': return chalk.cyan(`  + ${name}: would register (${outcome.how})`);
-    case 'already': return chalk.gray(`  ✓ ${name}: already available as "${outcome.serverName}"`);
+    case 'already': return outcome.stale
+      ? chalk.yellow(`  ! ${name}: already available as "${outcome.serverName}", but ${outcome.stale}`)
+      : chalk.gray(`  ✓ ${name}: already available as "${outcome.serverName}"`);
     case 'skipped': return chalk.yellow(`  ! ${name}: ${outcome.reason}`);
     case 'failed': return chalk.red(`  ✗ ${name}: failed: ${outcome.reason}`);
   }
