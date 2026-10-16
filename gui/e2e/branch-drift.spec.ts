@@ -109,8 +109,9 @@ test.describe('Branch changed notice', () => {
     const state = await openWorkspace(page, [switched()]);
     await expect(mark(page)).toBeVisible();
 
+    // No AI works here, so the repositories are read every 2 minutes (every 30 s while one does).
     state.repositories = [repo()];
-    await page.clock.fastForward(31_000);
+    await page.clock.fastForward(121_000);
 
     await expect(mark(page)).toHaveCount(0);
   });

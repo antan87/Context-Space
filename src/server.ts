@@ -2965,7 +2965,9 @@ app.get('/api/workspace/:id/lifecycle', async (c) => {
     const config = await loadConfig();
     const workspacePath = resolveWorkspacePath(config.workspacesDir, id);
     const { loadWorkspaceLifecycle, renderLifecyclePlan } = await import('./core/lifecycle.js');
-    const lifecycle = await loadWorkspaceLifecycle(workspacePath);
+    // ?fleet=1 adds the other branches of this work. They cost several git processes per repository, and only the
+    // Plan tab's checks show them, so the page that reads the steps on every switch leaves them out.
+    const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: c.req.query('fleet') === '1' });
     const report = (await loadWorkspaceState(workspacePath)).lastVerification ?? null;
     return c.json({ lifecycle, report, plan: renderLifecyclePlan(lifecycle) });
   } catch (error) {

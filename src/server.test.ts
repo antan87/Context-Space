@@ -3217,6 +3217,9 @@ describe('Server API Endpoints Unit Tests', () => {
       const response = await app.request('/api/workspace/demo/lifecycle');
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ lifecycle, report, plan: '' });
+      expect(lifecycleSpy).toHaveBeenLastCalledWith(expect.any(String), { includeFleet: false });
+      expect((await app.request('/api/workspace/demo/lifecycle?fleet=1')).status).toBe(200);
+      expect(lifecycleSpy).toHaveBeenLastCalledWith(expect.any(String), { includeFleet: true });
     } finally {
       lifecycleSpy.mockRestore();
       stateSpy.mockRestore();

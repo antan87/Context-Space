@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execa } from 'execa';
-import { clearEditorDetectionCache, detectEditors } from './detect-editors.js';
+import { DETECTION_TTL_MS, clearEditorDetectionCache, detectEditors } from './detect-editors.js';
 import { PROBE_TIMEOUT_MS } from './probe.js';
 
 vi.mock('execa');
@@ -106,7 +106,7 @@ describe('detectEditors', () => {
     expect(result.find((e) => e.command === 'code')?.detected).toBe(false);
   });
 
-  it('shares one probe run between concurrent callers and reuses it for 60 s', async () => {
+  it('shares one probe run between concurrent callers and reuses it for 10 minutes', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
@@ -114,7 +114,8 @@ describe('detectEditors', () => {
     const probesPerRun = vi.mocked(execa).mock.calls.length;
     expect(second).toBe(first);
 
-    vi.setSystemTime(Date.now() + 59_000);
+    expect(DETECTION_TTL_MS).toBe(10 * 60_000);
+    vi.setSystemTime(Date.now() + DETECTION_TTL_MS - 1_000);
     await detectEditors();
     expect(execa).toHaveBeenCalledTimes(probesPerRun);
 

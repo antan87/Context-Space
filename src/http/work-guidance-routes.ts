@@ -97,7 +97,8 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
     return { ...(await savePlanningNotes(root, input.revision, input.content)), ...(await refreshPlanningContext(root)) };
   }));
   app.get('/api/workspace/:id/work', handle(async (root) => {
-    await loadWorkspaceLifecycle(root);
+    // Only to move an older lifecycle into the plan. The brief shows no branches, so it skips the fleet's git work.
+    await loadWorkspaceLifecycle(root, { includeFleet: false });
     return getWorkContext(root);
   }));
   app.put('/api/workspace/:id/work', bounded, handle(async (root, c) => {

@@ -47,11 +47,12 @@ async function commandExists(command: string): Promise<boolean> {
  *
  * @returns An array of {@link DetectedEditor} results, one per editor.
  */
-// Editor detection starts one process per candidate, and the GUI asks for it
-// from two endpoints at startup. Share one run and reuse it briefly; the GUI
-// caches the answer for the same 60 s, so a newly installed editor still
-// appears within a minute.
-const DETECTION_TTL_MS = 60_000;
+// Editor detection starts one process per candidate (an editor's --version is
+// often a whole Electron start), and the GUI asks for it from two endpoints at
+// startup and again whenever a workspace opens. Share one run and reuse it for
+// 10 minutes; the GUI caches the answer for as long, so a newly installed
+// editor appears within 10 minutes, or at once after a restart.
+export const DETECTION_TTL_MS = 10 * 60_000;
 let cachedDetection: { at: number; result: Promise<DetectedEditor[]> } | null = null;
 
 /** Forgets the shared detection result (for tests). */
