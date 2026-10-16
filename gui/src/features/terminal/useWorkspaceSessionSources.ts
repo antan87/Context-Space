@@ -2,7 +2,7 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client.js';
 import type { AISession } from '../../types.js';
 
-export function useWorkspaceSessionSources(workspace: string, enabled: boolean) {
+export function useWorkspaceSessionSources(workspace: string, enabled: boolean, { newest }: { /** Only the newest few that can be continued, per tool: older history is not parsed. */ newest?: number } = {}) {
   const catalog = useQuery({
     queryKey: ['terminal-resume-sources'],
     queryFn: ({ signal }) => apiFetch<{ sources: string[] }>('/api/session-sources', { signal }),
@@ -11,8 +11,8 @@ export function useWorkspaceSessionSources(workspace: string, enabled: boolean) 
   });
   const sources = catalog.data?.sources ?? [];
   const histories = useQueries({ queries: sources.map(source => ({
-    queryKey: ['terminal-resume-source', workspace, source],
-    queryFn: ({ signal }: { signal: AbortSignal }) => apiFetch<{ sessions: AISession[] }>(`/api/workspace/${encodeURIComponent(workspace)}/sessions?source=${source}`, { signal }),
+    queryKey: ['terminal-resume-source', workspace, source, newest ?? 'all'],
+    queryFn: ({ signal }: { signal: AbortSignal }) => apiFetch<{ sessions: AISession[] }>(`/api/workspace/${encodeURIComponent(workspace)}/sessions?source=${source}${newest ? `&newest=${newest}` : ''}`, { signal }),
     enabled,
     staleTime: 15_000,
   })) });

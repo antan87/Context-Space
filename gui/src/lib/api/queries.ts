@@ -307,19 +307,22 @@ export function useCreateRepo() {
   });
 }
 
-export function useAiDetect() {
+/** AI detection starts each tool's program to ask its version, so callers enable it where it is shown. */
+export function useAiDetect({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['ai-detect'],
     queryFn: ({ signal }) => apiFetch<DetectedAI[]>('/api/ai-detect', { signal }),
+    enabled,
     staleTime: 60_000,
   });
 }
 
-export function useEditorDetect() {
+export function useEditorDetect({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['editor-detect'],
     queryFn: ({ signal }) => apiFetch<DetectedEditor[]>('/api/editor-detect', { signal }),
-    staleTime: 10 * 60_000, // as long as the backend keeps its detection
+    enabled,
+    staleTime: 60_000,
   });
 }
 
@@ -327,7 +330,7 @@ export function useWorkspaceLaunchTargets() {
   return useQuery({
     queryKey: ['workspace-launch-targets'],
     queryFn: ({ signal }) => apiFetch<WorkspaceLaunchTarget[]>('/api/workspace-launch-targets', { signal }),
-    staleTime: 10 * 60_000, // as long as the backend keeps its detection
+    staleTime: 60_000,
   });
 }
 

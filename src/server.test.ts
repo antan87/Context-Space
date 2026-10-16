@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { execa } from 'execa';
@@ -445,18 +447,30 @@ describe('Server API Endpoints Unit Tests', () => {
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
 
-      vi.mocked(execa).mockImplementation((async (command: any, args?: readonly string[]): Promise<any> => ({
-        exitCode: args?.[0] === '--version' && command === 'code' ? 0 : 1,
-      })) as any);
+      vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
+      // An editor counts as installed when its command is on PATH (node:fs/promises is mocked here, so sync fs).
+      const bin = fsSync.mkdtempSync(path.join(os.tmpdir(), 'editor-bin-'));
+      const savedPath = process.env.PATH;
+      fsSync.writeFileSync(path.join(bin, process.platform === 'win32' ? 'code.cmd' : 'code'), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
+      process.env.PATH = bin;
+      const { clearEditorDetectionCache } = await import('./utils/detect-editors.js');
+      clearEditorDetectionCache();
 
-      const response = await app.request('/api/open-editor', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspacePath: repoDir,
-          command: 'code',
-        })
-      });
+      let response: Response;
+      try {
+        response = await app.request('/api/open-editor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspacePath: repoDir,
+            command: 'code',
+          })
+        });
+      } finally {
+        process.env.PATH = savedPath;
+        clearEditorDetectionCache();
+        fsSync.rmSync(bin, { recursive: true, force: true });
+      }
 
       expect(response.status).toBe(200);
       const data = await response.json();
@@ -925,6 +939,26 @@ describe('Server API Endpoints Unit Tests', () => {
         const piResponse = await app.request('/api/workspace/safe-workspace/sessions?source=pi');
         expect(piResponse.status).toBe(200);
         expect(find).toHaveBeenCalledWith(workspacePath, [path.join(workspacePath, 'repo')], 'pi');
+      } finally {
+        find.mockRestore();
+      }
+    });
+
+    it('returns the newest conversations that can be continued, per tool, when asked with newest', async () => {
+      expect((await app.request('/api/workspace/safe-workspace/sessions?source=claude&newest=9')).status).toBe(400);
+      expect((await app.request('/api/workspace/safe-workspace/sessions?newest=1&desktopHandoffOnly=true')).status).toBe(400);
+
+      vi.spyOn(config, 'loadConfig').mockResolvedValue({ workspacesDir } as any);
+      vi.mocked(workspace.loadFeatureConfig).mockResolvedValue({ id: 'safe-workspace', repos: [], workspacePath } as any);
+      const session = (id: string, extra: object = {}) => ({ id, assistant: 'claude', title: id, updatedAt: '', recordedCwd: workspacePath, ...extra });
+      const find = vi.spyOn(sessionFinder, 'findSessions').mockResolvedValue([
+        session('helper', { threadKind: 'subagent' }), session('newest'), session('older'), session('no-folder', { recordedCwd: undefined }),
+      ] as any);
+      try {
+        const response = await app.request('/api/workspace/safe-workspace/sessions?source=claude&newest=1');
+        expect(response.status).toBe(200);
+        expect(find).toHaveBeenCalledWith(workspacePath, [], 'claude', { newest: 1 });
+        expect((await response.json() as { sessions: Array<{ id: string }> }).sessions.map((s) => s.id)).toEqual(['newest']);
       } finally {
         find.mockRestore();
       }

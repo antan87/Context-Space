@@ -27,7 +27,8 @@ export function WorkspaceChatResume({ workspace }: { workspace: string }) {
     return () => observer.disconnect();
   }, [inView]);
 
-  const { sessions, sourcesChecked, sourcesPending, sourcesFailed, sourceCount } = useWorkspaceSessionSources(workspace, inView);
+  // The card shows the newest conversation of up to two tools, so one per tool is enough to ask for.
+  const { sessions, sourcesChecked, sourcesPending, sourcesFailed, sourceCount } = useWorkspaceSessionSources(workspace, inView, { newest: 1 });
   const recent = sessions.filter(session => session.threadKind !== 'subagent' && session.recordedCwd)
     .sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
   const preview = recent.filter((session, index) => recent.findIndex(item => item.assistant === session.assistant) === index).slice(0, 2);

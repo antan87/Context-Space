@@ -14,7 +14,8 @@ const SHOWN_TABS = 4;
  * click away. Sessions start in one place, the chat; a ready plan item starts one from its row.
  */
 export function WorkspaceTabs({ workspace }: { workspace: string }) {
-  const sessions = useWorkspaceSessions(workspace);
+  // Only the running sessions are shown here, not the saved conversations.
+  const sessions = useWorkspaceSessions(workspace, true, { withSaved: false });
   const plan = usePlan(workspace);
   const shown = sessions.running.slice(0, SHOWN_TABS);
   const more = sessions.running.slice(SHOWN_TABS);

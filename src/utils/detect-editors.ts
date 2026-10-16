@@ -3,7 +3,7 @@
  * Detects which code editors are available on the system.
  */
 
-import { probeCommand } from './probe.js';
+import { findExecutable } from './user-paths.js';
 
 import type { DetectedEditor } from '../types.js';
 
@@ -26,19 +26,12 @@ const EDITOR_CANDIDATES: ReadonlyArray<{ name: string; command: string; platform
 /**
  * Attempts to probe whether the editor or shell command exists on the system.
  */
+// An editor is installed when its command is on PATH. Asking each one for its --version instead started about ten
+// processes per detection, several of them whole Electron apps; a launcher that is present but broken reports its own
+// error when it is used.
 async function commandExists(command: string): Promise<boolean> {
-  if (process.platform === 'win32') {
-    if (command === 'powershell' || command === 'cmd') {
-      return true;
-    }
-  }
-  const outcome = await probeCommand(command, ['--version'], {
-    shell: process.platform === 'win32',
-    windowsHide: true,
-  });
-  // A command that starts but does not answer in time is installed; it just
-  // could not report a version (for example a snap on its first run).
-  return outcome !== 'failed';
+  if (process.platform === 'win32' && (command === 'powershell' || command === 'cmd')) return true;
+  return findExecutable(command) !== null;
 }
 
 /**
@@ -47,12 +40,10 @@ async function commandExists(command: string): Promise<boolean> {
  *
  * @returns An array of {@link DetectedEditor} results, one per editor.
  */
-// Editor detection starts one process per candidate (an editor's --version is
-// often a whole Electron start), and the GUI asks for it from two endpoints at
-// startup and again whenever a workspace opens. Share one run and reuse it for
-// 10 minutes; the GUI caches the answer for as long, so a newly installed
-// editor appears within 10 minutes, or at once after a restart.
-export const DETECTION_TTL_MS = 10 * 60_000;
+// The GUI asks for detection from two endpoints at startup and whenever a
+// workspace opens. Share one run and reuse it briefly; the GUI caches the answer
+// for the same 60 s, so a newly installed editor still appears within a minute.
+export const DETECTION_TTL_MS = 60_000;
 let cachedDetection: { at: number; result: Promise<DetectedEditor[]> } | null = null;
 
 /** Forgets the shared detection result (for tests). */
