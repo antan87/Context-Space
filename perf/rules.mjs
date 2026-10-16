@@ -260,6 +260,49 @@ const RULES = {
       }
     },
   },
+
+  R6: {
+    title: 'Switching workspaces leaves one plan on screen',
+    expected: 'one visible plan after switching back and forth, and no plan polled for a workspace the user left',
+    async run(ctx) {
+      const page = await ctx.context.newPage();
+      const planFile = (id) => path.join(ctx.fixture.home, 'dev', 'workspaces', id, 'contextspace-plan.json');
+      const saved = new Map();
+      try {
+        for (const id of [WS[0], WS[1]]) {
+          saved.set(id, await fs.readFile(planFile(id), 'utf8').catch(() => null));
+          await ctx.backend.json(`/api/workspace/${id}/plan/items`, {
+            method: 'POST', headers: { 'content-type': 'application/json', origin: ctx.backend.base },
+            body: JSON.stringify({ change: { type: 'add', kind: 'milestone', title: `R6 plan of ${id}` } }),
+          });
+        }
+        await openOverview(ctx, page);
+        const plans = page.getByRole('region', { name: 'The plan', exact: true });
+        const seen = [];
+        for (const id of [WS[0], WS[1], WS[0], WS[1]]) {
+          await openWorkspace(ctx, page, id, 'plan');
+          await plans.filter({ hasText: `R6 plan of ${id}` }).first().waitFor({ timeout: 20_000 });
+          seen.push({ workspace: id, visiblePlans: await plans.count() });
+        }
+        await sleep(2_000);
+        await ctx.backend.counters(true);
+        await sleep(31_000); // two of the plan's 15 s polls
+        const c = await ctx.backend.counters();
+        const leftBehind = Object.entries(c.requests)
+          .filter(([request]) => /\/plan\/items/.test(request) && !request.includes(`/${WS[1]}/`))
+          .map(([request, r]) => `${request} ×${r.count}`);
+        const pass = seen.every((s) => s.visiblePlans === 1) && leftBehind.length === 0;
+        return { verdict: pass ? 'pass' : 'fail', observed: { seen, plansPolledForWorkspacesLeft: leftBehind } };
+      } finally {
+        await page.close();
+        // The fixture is shared between runs: put the plans back as they were.
+        for (const [id, content] of saved) {
+          if (content === null) await fs.rm(planFile(id), { force: true });
+          else await fs.writeFile(planFile(id), content);
+        }
+      }
+    },
+  },
 };
 
 // ─── Runner ──────────────────────────────────────────────────────────────────

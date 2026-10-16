@@ -48,6 +48,7 @@ real backend and production GUI in headless Chromium on tier S:
 | R3b | Leaving a workspace aborts its in-flight requests |
 | R4 | The overview is usable while optional calls are delayed 5 s |
 | R5 | New sessions in nested folders and new files appear on the next request |
+| R6 | Switching workspaces leaves one plan on screen, and no plan is polled for a workspace the user left |
 
 `--enforce` fails when a rule listed in `perf/rules-enforced.json` does not
 pass. Add a rule there in the change that makes it pass.

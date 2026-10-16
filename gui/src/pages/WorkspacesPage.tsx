@@ -1405,13 +1405,15 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               {subTab === 'knowledge' && <KnowledgeBase ws={selected} {...knowledgeProps} readOnly={archived} />}
               {subTab === 'skills' && <WorkspaceSkillsTab ws={selected} showToast={showToast} />}
               {visitedSections.has('plan') && <div hidden={subTab !== 'plan'}>
-                <div className="min-w-0 space-y-6">
-                <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived}
-                  plan={<HomePlan key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onChanged={() => {
+                {/* One key for the whole tab: siblings that share a key are never removed, so each switch left the
+                    previous workspace's brief and plan on screen, still polling. */}
+                <div key={selected.branchName} className="min-w-0 space-y-6">
+                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived}
+                  plan={<HomePlan workspaceId={selected.branchName} readOnly={archived} onChanged={() => {
                     // The plan summary follows the plan.
                     void planProps.handleRetryPlan(selected.branchName);
                   }} />} />
-                <WorkspaceChecks key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} />
+                <WorkspaceChecks workspaceId={selected.branchName} readOnly={archived} />
                 </div>
               </div>}
               {subTab === 'services' && <ServiceConsole ws={selected} />}

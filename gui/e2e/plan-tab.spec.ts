@@ -206,6 +206,23 @@ test('adds an item that holds up a milestone', async ({ page }) => {
   await expect(dialog).toBeHidden();
 });
 
+test.describe('with two workspaces', () => {
+  const other = { ...workspace, id: 'other', branchName: 'other', name: 'Billing retries', description: 'Retry failed card payments', workspacePath: '/tmp/other' };
+  test.use({ workspacesData: [[workspace, other], { option: true }] });
+
+  test('switching back and forth shows only the plan of the workspace on screen', async ({ page }) => {
+    await routePlan(page, csvExportPlan());
+    await page.route('**/api/workspace/other/plan/items', (route) => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify(planView([planItem({ id: 'M1', title: 'Retry a failed payment once' })])) }));
+    for (const [id, title] of [['demo', 'CSV export endpoint'], ['other', 'Retry a failed payment once'], ['demo', 'CSV export endpoint'], ['other', 'Retry a failed payment once']]) {
+      await page.goto(`/#/workspaces/${id}/plan`);
+      // The new plan first, then the count: a plan left behind from the last workspace would make it two.
+      await expect(planRegion(page).filter({ hasText: title })).toBeVisible();
+      await expect(planRegion(page)).toHaveCount(1);
+    }
+  });
+});
+
 test('says when the plan cannot be read, and reads it again on Retry', async ({ page }) => {
   let fail = true;
   await page.route('**/api/workspace/demo/plan/items', async (route) => fail
