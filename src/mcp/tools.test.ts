@@ -561,4 +561,27 @@ describe('MCP tools', () => {
     expect(tagContent.skills).toHaveLength(1);
     expect(tagContent.skills[0].id).toBe('global-git');
   });
+
+  it('list_skills names the harness that owns a skill, without exposing its folder', async () => {
+    const tool = findTool('list_skills');
+    vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([
+      {
+        id: 'pdf',
+        name: 'pdf',
+        description: 'PDF help',
+        scope: 'global',
+        content: '',
+        custom: false,
+        source: { harness: 'claude', label: 'Claude Code', root: '/home/someone/.claude/skills' },
+      },
+      { id: 'mine', name: 'mine', description: 'Catalog skill', scope: 'global', content: '', custom: true },
+    ] as any);
+
+    const result = await tool!.handler({ scope: 'global' }, { config: mockConfig, workspacePath: '/dev/workspaces/feat-test' });
+    const { skills } = JSON.parse(result.content[0]!.text);
+
+    expect(skills.find((s: any) => s.id === 'pdf').source).toEqual({ harness: 'claude', label: 'Claude Code' });
+    expect(skills.find((s: any) => s.id === 'mine').source).toBeUndefined();
+    expect(result.content[0]!.text).not.toContain('/home/someone');
+  });
 });

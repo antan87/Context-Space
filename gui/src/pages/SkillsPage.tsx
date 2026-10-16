@@ -56,6 +56,7 @@ import {
   useDomainPacks,
 } from '../lib/api/queries.js';
 import { SkillDiagnosticsPanel } from '../features/skills/SkillDiagnosticsPanel.js';
+import { SkillsExplorer } from '../features/skills/SkillsExplorer.js';
 import {
   canDeleteSkill, deleteWorkspaceFor, groupToggled, matchesSkillSearch, scopeLabel, selectionFor, selectionState, skillTargets, toggled,
   type SelectionDraft,
@@ -319,8 +320,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
     }
   };
 
-  const confirmDeleteSkill = (skill: SkillItem, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const confirmDeleteSkill = (skill: SkillItem, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     // From the skill and the page being viewed, never from what the editor was last open on.
     setDeleteTarget({ type: 'skill', id: skill.id, title: skill.title || skill.name, workspaceId: deleteWorkspaceFor(skill, selectedWorkspace) });
     setDeleteConfirmModalOpen(true);
@@ -569,483 +570,496 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
         </div>
       )}
 
-      {/* Search and Filter Ribbon */}
-      <div className="px-6 py-3 border-b border-border/60 bg-muted/20 flex items-center justify-between gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search skills by keyword, tag, or tool..."
-            className="pl-9 pr-8 h-9 text-xs"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+      {!isWorkspaceView && (
+        <SkillsExplorer
+          skills={skills}
+          showToast={showToast}
+          onEdit={(skill) => handleOpenSkillModal(skill)}
+          onDelete={(skill) => confirmDeleteSkill(skill)}
+        />
+      )}
 
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>
-            Showing <strong className="text-foreground">{filteredSkills.length}</strong> of{' '}
-            <strong className="text-foreground">{skills.length}</strong> skills
-          </span>
-          {isWorkspaceView && (
-            <Badge variant="secondary" className="text-[10px] uppercase font-mono">
-              Workspace Mode ({enabledSkillIds.size} active)
-            </Badge>
-          )}
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <ScrollArea className="flex-1 p-6">
-        {loadingCategories || loadingSkills || (isWorkspaceView && loadingWorkspaceConfig) ? (
-          <div className="flex items-center justify-center p-12 gap-3 text-muted-foreground">
-            <Spinner />
-            <span className="text-sm">Loading skills catalog...</span>
-          </div>
-        ) : isWorkspaceView && workspaceConfigError ? (
-          <Empty className="py-12 border border-dashed rounded-xl">
-            <EmptyHeader>
-              <EmptyTitle>Workspace resources could not be loaded</EmptyTitle>
-              <EmptyDescription>Assignment controls are disabled so an existing selection cannot be overwritten.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : filteredSkills.length === 0 && searchQuery ? (
-          <Empty className="py-12 border border-dashed rounded-xl">
-            <EmptyMedia>
-              <Search className="h-8 w-8 text-muted-foreground" />
-            </EmptyMedia>
-            <EmptyHeader>
-              <EmptyTitle>No matching skills found</EmptyTitle>
-              <EmptyDescription>
-                No skills matched your search query "{searchQuery}".
-              </EmptyDescription>
-            </EmptyHeader>
-            <Button variant="outline" size="sm" onClick={() => setSearchQuery('')}>
-              Clear Search
-            </Button>
-          </Empty>
-        ) : (
-          <div className="space-y-6 max-w-7xl mx-auto pb-12">
-            {categories.map((category) => {
-              const IconComp = ICON_MAP[category.icon || 'boxes'] || Boxes;
-              const catSkills = skillsByCategory[category.id] || [];
-              const isCollapsed = !!collapsedCategories[category.id];
-              const isDragTarget = dragOverCategoryId === category.id;
-              const allCatEnabled =
-                catSkills.length > 0 && catSkills.every((s) => enabledSkillIds.has(s.id));
-
-              return (
-                <div
-                  key={category.id}
-                  onDragOver={(e) => handleDragOver(e, category.id)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, category.id)}
-                  className={cn(
-                    'border rounded-xl transition-all duration-150 overflow-hidden bg-card/60',
-                    isDragTarget ? 'border-primary ring-2 ring-primary/20 bg-primary/5' : 'border-border',
-                  )}
-                >
-                  {/* Category Box Header */}
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={!isCollapsed}
-                    onClick={() => toggleCategoryCollapse(category.id)}
-                    onKeyDown={(e) => {
-                      // A key pressed on a button inside the header is that button's, not the header's.
-                      if (e.target !== e.currentTarget) return;
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        toggleCategoryCollapse(category.id);
-                      }
-                    }}
-                    className="p-4 flex items-center justify-between cursor-pointer hover:bg-muted/40 transition-colors border-b border-border/40 select-none"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="p-2 rounded-lg text-white shadow-sm flex items-center justify-center"
-                        style={{ backgroundColor: category.color || '#3b82f6' }}
-                      >
-                        <IconComp className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="font-semibold text-sm tracking-tight">{category.name}</h2>
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                            {catSkills.length} {catSkills.length === 1 ? 'skill' : 'skills'}
-                          </Badge>
-                          {category.isTemplate && !category.custom && (
-                            <Badge variant="secondary" className="text-[9px] px-1 py-0 uppercase">
-                              Template
-                            </Badge>
-                          )}
-                        </div>
-                        {category.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5">{category.description}</p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Category Box Actions */}
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      {isWorkspaceView && catSkills.length > 0 && (
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => handleToggleCategoryAll(category.id, !allCatEnabled)}
-                          className="h-7 text-xs mr-2 text-muted-foreground hover:text-foreground"
-                          title={allCatEnabled ? 'Deselect all in category' : 'Select all in category'}
-                        >
-                          {allCatEnabled ? (
-                            <CheckSquare className="h-3.5 w-3.5 mr-1 text-primary" />
-                          ) : (
-                            <Square className="h-3.5 w-3.5 mr-1" />
-                          )}
-                          <span>{allCatEnabled ? 'Deselect All' : 'Select All'}</span>
-                        </Button>
-                      )}
-
-                      {!isWorkspaceView && (
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => handleOpenSkillModal(undefined, category.id)}
-                          title="Add skill to this category"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-
-                      {!isWorkspaceView && (
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => handleOpenCategoryModal(category)}
-                          title="Edit category"
-                        >
-                          <Edit2 className="h-3 w-3" />
-                        </Button>
-                      )}
-
-                      {!isWorkspaceView && category.custom && (
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={(e) => confirmDeleteCategory(category, e)}
-                          title="Delete category"
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      )}
-
-                      <div className="p-1 text-muted-foreground">
-                        {isCollapsed ? (
-                          <ChevronRight className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Skills Grid */}
-                  {!isCollapsed && (
-                    <div className="p-4 bg-background/50">
-                      {catSkills.length === 0 ? (
-                        <div className="border border-dashed border-border/80 rounded-lg p-6 text-center text-xs text-muted-foreground">
-                           {searchQuery.trim() ? 'No skills in this category match your search.' : 'No skills in this category.'}
-                           {!isWorkspaceView && !searchQuery.trim() && (
-                             <>{' '}Drag a custom skill here, or click{' '}
-                               <button
-                                 onClick={() => handleOpenSkillModal(undefined, category.id)}
-                                 className="text-primary underline font-medium"
-                               >
-                                 + Add Skill
-                               </button>
-                             </>
-                           )}
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                          {catSkills.map((skill) => {
-                            const isEnabledInWs = enabledSkillIds.has(skill.id);
-                            return (
-                              <Card
-                                key={skill.id}
-                                draggable={!isWorkspaceView && !!skill.custom}
-                                onDragStart={(e) => {
-                                  if (!isWorkspaceView && skill.custom) handleDragStart(e, skill.id);
-                                }}
-                                onClick={() => handleOpenSkillModal(skill)}
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(event) => {
-                                  // A key pressed on a button inside the card is that button's, not the card's.
-                                  if (event.target !== event.currentTarget) return;
-                                  if (event.key === 'Enter' || event.key === ' ') {
-                                    event.preventDefault();
-                                    handleOpenSkillModal(skill);
-                                  }
-                                }}
-                                className={cn(
-                                  'group relative cursor-pointer hover:border-primary/60 transition-all p-3.5 flex flex-col justify-between select-none shadow-sm',
-                                  isWorkspaceView && !isEnabledInWs && 'opacity-60 bg-muted/20',
-                                  draggingSkillId === skill.id && 'opacity-40 border-dashed',
-                                )}
-                              >
-                                <div>
-                                  {/* Card Top: Drag Handle & Workspace Toggle */}
-                                  <div className="flex items-center justify-between gap-2 mb-2">
-                                    <div
-                                      className="flex items-center gap-1.5 text-muted-foreground group-hover:text-foreground cursor-grab active:cursor-grabbing"
-                                      title="Drag to reorder or re-categorize"
-                                      aria-label="Drag handle"
-                                    >
-                                      <GripVertical className="h-3.5 w-3.5" />
-                                      <span className="font-mono text-xs font-bold text-foreground">
-                                        {skill.title || skill.name}
-                                      </span>
-                                    </div>
-
-                                    {/* Workspace Active Checkbox & Badges */}
-                                    {isWorkspaceView ? (
-                                      <div className="flex items-center gap-1">
-                                        <Badge
-                                          variant="outline"
-                                          className={cn(
-                                            'text-[9px] font-mono px-1 py-0.2 uppercase',
-                                            skill.scope === 'workspace'
-                                              ? 'border-amber-500/40 text-warning-foreground bg-amber-500/10'
-                                              : 'border-blue-500/40 text-blue-300 bg-blue-500/10',
-                                          )}
-                                        >
-                                          {skill.scope === 'workspace' ? 'Workspace' : 'Global'}
-                                        </Badge>
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleToggleWorkspaceSkill(skill.id);
-                                          }}
-                                          disabled={!workspaceAssignmentReady || assignSkillsMutation.isPending}
-                                          className={cn(
-                                            'h-5 px-2 rounded-md flex items-center gap-1 text-[10px] font-semibold transition-colors',
-                                            isEnabledInWs
-                                              ? 'bg-primary text-primary-foreground'
-                                              : 'bg-muted text-muted-foreground hover:bg-muted/80',
-                                          )}
-                                        >
-                                          <Check className={cn('h-3 w-3', !isEnabledInWs && 'opacity-0')} />
-                                          <span>{isEnabledInWs ? 'Enabled' : 'Disabled'}</span>
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div className="flex items-center gap-1">
-                                        <Badge
-                                          variant="outline"
-                                          className={cn(
-                                            'text-[9px] font-mono px-1 py-0.2 uppercase',
-                                            skill.scope === 'workspace'
-                                              ? 'border-amber-500/40 text-warning-foreground bg-amber-500/10'
-                                              : 'border-blue-500/40 text-blue-300 bg-blue-500/10',
-                                          )}
-                                        >
-                                          {skill.scope === 'workspace' ? 'Workspace' : 'Global'}
-                                        </Badge>
-                                        <Badge variant="outline" className="text-[10px] font-mono">
-                                          {skill.custom ? 'Custom' : 'Template'}
-                                        </Badge>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* Description */}
-                                  <p className="text-xs text-muted-foreground line-clamp-2 mb-3 leading-relaxed">
-                                    {skill.description || 'No description provided.'}
-                                  </p>
-                                </div>
-
-                                {/* Card Bottom: Tags & Quick Menu */}
-                                <div className="pt-2 border-t border-border/40 flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-1.5 flex-wrap overflow-hidden">
-                                    {skill.tags?.slice(0, 3).map((tag) => (
-                                      <span
-                                        key={tag}
-                                        className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground"
-                                      >
-                                        #{tag}
-                                      </span>
-                                    ))}
-                                    {skill.allowedTools && skill.allowedTools.length > 0 && (
-                                      <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 font-mono">
-                                        <Wrench className="h-2.5 w-2.5" />
-                                        {skill.allowedTools.length}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {/* Card Quick Actions */}
-                                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                                    {!isWorkspaceView && skill.custom && (
-                                      <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        onClick={(e) => handleOpenMoveModal(skill, e)}
-                                        title="Move to another category"
-                                        className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                                      >
-                                        <ArrowRightLeft className="h-3 w-3" />
-                                      </Button>
-                                    )}
-
-                                    {canDeleteSkill(skill, isWorkspaceView) && (
-                                      <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        onClick={(e) => confirmDeleteSkill(skill, e)}
-                                        title="Delete skill"
-                                        className="h-6 w-6 text-destructive hover:text-destructive cursor-pointer"
-                                      >
-                                        <Trash2 className="h-3 w-3" />
-                                      </Button>
-                                    )}
-                                  </div>
-                                </div>
-                              </Card>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Uncategorized Skills Section */}
-            {uncategorizedSkills.length > 0 && (
-              <div className="border border-border/80 rounded-xl overflow-hidden bg-card/60">
-                <div className="p-4 bg-muted/30 border-b border-border/40 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Boxes className="h-4 w-4 text-muted-foreground" />
-                    <h2 className="font-semibold text-sm">Uncategorized Skills</h2>
-                    <Badge variant="outline" className="text-[10px]">
-                      {uncategorizedSkills.length}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                  {uncategorizedSkills.map((skill) => (
-                    <Card
-                      key={skill.id}
-                      onClick={() => handleOpenSkillModal(skill)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(event) => {
-                        // A key pressed on a button inside the card is that button's, not the card's.
-                        if (event.target !== event.currentTarget) return;
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          handleOpenSkillModal(skill);
-                        }
-                      }}
-                      className="p-3.5 cursor-pointer hover:border-primary/60 flex flex-col justify-between"
-                    >
-                      <div>
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <div className="font-mono text-xs font-bold">{skill.title || skill.name}</div>
-                          <div className="flex items-center gap-1">
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                'text-[9px] font-mono px-1 py-0.2 uppercase',
-                                skill.scope === 'workspace'
-                                  ? 'border-amber-500/40 text-warning-foreground bg-amber-500/10'
-                                  : 'border-blue-500/40 text-blue-300 bg-blue-500/10',
-                              )}
-                            >
-                              {skill.scope === 'workspace' ? 'Workspace' : 'Global'}
-                            </Badge>
-                            {isWorkspaceView && (
-                              <Button
-                                size="xs"
-                                variant={enabledSkillIds.has(skill.id) ? 'default' : 'outline'}
-                                disabled={!workspaceAssignmentReady || assignSkillsMutation.isPending}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleToggleWorkspaceSkill(skill.id);
-                                }}
-                              >
-                                {enabledSkillIds.has(skill.id) ? 'Enabled' : 'Disabled'}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground line-clamp-2">{skill.description}</p>
-                      </div>
-                      {/* Card Bottom: Tags & Quick Menu */}
-                      <div className="pt-2 mt-2 border-t border-border/40 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 flex-wrap overflow-hidden">
-                          {skill.tags && skill.tags.length > 0 ? (
-                            skill.tags.slice(0, 3).map((tag) => (
-                              <span key={tag} className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
-                                #{tag}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground italic">No tags</span>
-                          )}
-                          {skill.allowedTools && skill.allowedTools.length > 0 && (
-                            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 font-mono">
-                              <Wrench className="h-2.5 w-2.5" />
-                              {skill.allowedTools.length}
-                            </span>
-                          )}
-                        </div>
-
-                        {skill.custom && (
-                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            {!isWorkspaceView && (
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                onClick={(e) => handleOpenMoveModal(skill, e)}
-                                title="Move to a category"
-                                className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                              >
-                                <ArrowRightLeft className="h-3 w-3" />
-                              </Button>
-                            )}
-                            {canDeleteSkill(skill, isWorkspaceView) && (
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                onClick={(e) => confirmDeleteSkill(skill, e)}
-                                title="Delete skill"
-                                className="h-6 w-6 text-destructive hover:text-destructive cursor-pointer"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              </div>
+      {isWorkspaceView && (
+        <>
+        {/* Search and Filter Ribbon */}
+        <div className="px-6 py-3 border-b border-border/60 bg-muted/20 flex items-center justify-between gap-4">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none z-10" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search skills by keyword, tag, or tool..."
+              className="pl-9 pr-8 h-9 text-xs"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             )}
           </div>
-        )}
-      </ScrollArea>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>
+              Showing <strong className="text-foreground">{filteredSkills.length}</strong> of{' '}
+              <strong className="text-foreground">{skills.length}</strong> skills
+            </span>
+            {isWorkspaceView && (
+              <Badge variant="secondary" className="text-[10px] uppercase font-mono">
+                Workspace Mode ({enabledSkillIds.size} active)
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        {/* Main Content Area */}
+        <ScrollArea className="flex-1 p-6">
+          {loadingCategories || loadingSkills || (isWorkspaceView && loadingWorkspaceConfig) ? (
+            <div className="flex items-center justify-center p-12 gap-3 text-muted-foreground">
+              <Spinner />
+              <span className="text-sm">Loading skills catalog...</span>
+            </div>
+          ) : isWorkspaceView && workspaceConfigError ? (
+            <Empty className="py-12 border border-dashed rounded-xl">
+              <EmptyHeader>
+                <EmptyTitle>Workspace resources could not be loaded</EmptyTitle>
+                <EmptyDescription>Assignment controls are disabled so an existing selection cannot be overwritten.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : filteredSkills.length === 0 && searchQuery ? (
+            <Empty className="py-12 border border-dashed rounded-xl">
+              <EmptyMedia>
+                <Search className="h-8 w-8 text-muted-foreground" />
+              </EmptyMedia>
+              <EmptyHeader>
+                <EmptyTitle>No matching skills found</EmptyTitle>
+                <EmptyDescription>
+                  No skills matched your search query "{searchQuery}".
+                </EmptyDescription>
+              </EmptyHeader>
+              <Button variant="outline" size="sm" onClick={() => setSearchQuery('')}>
+                Clear Search
+              </Button>
+            </Empty>
+          ) : (
+            <div className="space-y-6 max-w-7xl mx-auto pb-12">
+              {categories.map((category) => {
+                const IconComp = ICON_MAP[category.icon || 'boxes'] || Boxes;
+                const catSkills = skillsByCategory[category.id] || [];
+                const isCollapsed = !!collapsedCategories[category.id];
+                const isDragTarget = dragOverCategoryId === category.id;
+                const allCatEnabled =
+                  catSkills.length > 0 && catSkills.every((s) => enabledSkillIds.has(s.id));
+
+                return (
+                  <div
+                    key={category.id}
+                    onDragOver={(e) => handleDragOver(e, category.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, category.id)}
+                    className={cn(
+                      'border rounded-xl transition-all duration-150 overflow-hidden bg-card/60',
+                      isDragTarget ? 'border-primary ring-2 ring-primary/20 bg-primary/5' : 'border-border',
+                    )}
+                  >
+                    {/* Category Box Header */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={!isCollapsed}
+                      onClick={() => toggleCategoryCollapse(category.id)}
+                      onKeyDown={(e) => {
+                        // A key pressed on a button inside the header is that button's, not the header's.
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          toggleCategoryCollapse(category.id);
+                        }
+                      }}
+                      className="p-4 flex items-center justify-between cursor-pointer hover:bg-muted/40 transition-colors border-b border-border/40 select-none"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="p-2 rounded-lg text-white shadow-sm flex items-center justify-center"
+                          style={{ backgroundColor: category.color || '#3b82f6' }}
+                        >
+                          <IconComp className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h2 className="font-semibold text-sm tracking-tight">{category.name}</h2>
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                              {catSkills.length} {catSkills.length === 1 ? 'skill' : 'skills'}
+                            </Badge>
+                            {category.isTemplate && !category.custom && (
+                              <Badge variant="secondary" className="text-[9px] px-1 py-0 uppercase">
+                                Template
+                              </Badge>
+                            )}
+                          </div>
+                          {category.description && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{category.description}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Category Box Actions */}
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        {isWorkspaceView && catSkills.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => handleToggleCategoryAll(category.id, !allCatEnabled)}
+                            className="h-7 text-xs mr-2 text-muted-foreground hover:text-foreground"
+                            title={allCatEnabled ? 'Deselect all in category' : 'Select all in category'}
+                          >
+                            {allCatEnabled ? (
+                              <CheckSquare className="h-3.5 w-3.5 mr-1 text-primary" />
+                            ) : (
+                              <Square className="h-3.5 w-3.5 mr-1" />
+                            )}
+                            <span>{allCatEnabled ? 'Deselect All' : 'Select All'}</span>
+                          </Button>
+                        )}
+
+                        {!isWorkspaceView && (
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => handleOpenSkillModal(undefined, category.id)}
+                            title="Add skill to this category"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+
+                        {!isWorkspaceView && (
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => handleOpenCategoryModal(category)}
+                            title="Edit category"
+                          >
+                            <Edit2 className="h-3 w-3" />
+                          </Button>
+                        )}
+
+                        {!isWorkspaceView && category.custom && (
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={(e) => confirmDeleteCategory(category, e)}
+                            title="Delete category"
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
+
+                        <div className="p-1 text-muted-foreground">
+                          {isCollapsed ? (
+                            <ChevronRight className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Skills Grid */}
+                    {!isCollapsed && (
+                      <div className="p-4 bg-background/50">
+                        {catSkills.length === 0 ? (
+                          <div className="border border-dashed border-border/80 rounded-lg p-6 text-center text-xs text-muted-foreground">
+                             {searchQuery.trim() ? 'No skills in this category match your search.' : 'No skills in this category.'}
+                             {!isWorkspaceView && !searchQuery.trim() && (
+                               <>{' '}Drag a custom skill here, or click{' '}
+                                 <button
+                                   onClick={() => handleOpenSkillModal(undefined, category.id)}
+                                   className="text-primary underline font-medium"
+                                 >
+                                   + Add Skill
+                                 </button>
+                               </>
+                             )}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                            {catSkills.map((skill) => {
+                              const isEnabledInWs = enabledSkillIds.has(skill.id);
+                              return (
+                                <Card
+                                  key={skill.id}
+                                  draggable={!isWorkspaceView && !!skill.custom}
+                                  onDragStart={(e) => {
+                                    if (!isWorkspaceView && skill.custom) handleDragStart(e, skill.id);
+                                  }}
+                                  onClick={() => handleOpenSkillModal(skill)}
+                                  role="button"
+                                  tabIndex={0}
+                                  onKeyDown={(event) => {
+                                    // A key pressed on a button inside the card is that button's, not the card's.
+                                    if (event.target !== event.currentTarget) return;
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                      event.preventDefault();
+                                      handleOpenSkillModal(skill);
+                                    }
+                                  }}
+                                  className={cn(
+                                    'group relative cursor-pointer hover:border-primary/60 transition-all p-3.5 flex flex-col justify-between select-none shadow-sm',
+                                    isWorkspaceView && !isEnabledInWs && 'opacity-60 bg-muted/20',
+                                    draggingSkillId === skill.id && 'opacity-40 border-dashed',
+                                  )}
+                                >
+                                  <div>
+                                    {/* Card Top: Drag Handle & Workspace Toggle */}
+                                    <div className="flex items-center justify-between gap-2 mb-2">
+                                      <div
+                                        className="flex items-center gap-1.5 text-muted-foreground group-hover:text-foreground cursor-grab active:cursor-grabbing"
+                                        title="Drag to reorder or re-categorize"
+                                        aria-label="Drag handle"
+                                      >
+                                        <GripVertical className="h-3.5 w-3.5" />
+                                        <span className="font-mono text-xs font-bold text-foreground">
+                                          {skill.title || skill.name}
+                                        </span>
+                                      </div>
+
+                                      {/* Workspace Active Checkbox & Badges */}
+                                      {isWorkspaceView ? (
+                                        <div className="flex items-center gap-1">
+                                          <Badge
+                                            variant="outline"
+                                            className={cn(
+                                              'text-[9px] font-mono px-1 py-0.2 uppercase',
+                                              skill.scope === 'workspace'
+                                                ? 'border-amber-500/40 text-warning-foreground bg-amber-500/10'
+                                                : 'border-blue-500/40 text-blue-300 bg-blue-500/10',
+                                            )}
+                                          >
+                                            {skill.scope === 'workspace' ? 'Workspace' : 'Global'}
+                                          </Badge>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleToggleWorkspaceSkill(skill.id);
+                                            }}
+                                            disabled={!workspaceAssignmentReady || assignSkillsMutation.isPending}
+                                            className={cn(
+                                              'h-5 px-2 rounded-md flex items-center gap-1 text-[10px] font-semibold transition-colors',
+                                              isEnabledInWs
+                                                ? 'bg-primary text-primary-foreground'
+                                                : 'bg-muted text-muted-foreground hover:bg-muted/80',
+                                            )}
+                                          >
+                                            <Check className={cn('h-3 w-3', !isEnabledInWs && 'opacity-0')} />
+                                            <span>{isEnabledInWs ? 'Enabled' : 'Disabled'}</span>
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center gap-1">
+                                          <Badge
+                                            variant="outline"
+                                            className={cn(
+                                              'text-[9px] font-mono px-1 py-0.2 uppercase',
+                                              skill.scope === 'workspace'
+                                                ? 'border-amber-500/40 text-warning-foreground bg-amber-500/10'
+                                                : 'border-blue-500/40 text-blue-300 bg-blue-500/10',
+                                            )}
+                                          >
+                                            {skill.scope === 'workspace' ? 'Workspace' : 'Global'}
+                                          </Badge>
+                                          <Badge variant="outline" className="text-[10px] font-mono">
+                                            {skill.custom ? 'Custom' : 'Template'}
+                                          </Badge>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Description */}
+                                    <p className="text-xs text-muted-foreground line-clamp-2 mb-3 leading-relaxed">
+                                      {skill.description || 'No description provided.'}
+                                    </p>
+                                  </div>
+
+                                  {/* Card Bottom: Tags & Quick Menu */}
+                                  <div className="pt-2 border-t border-border/40 flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-1.5 flex-wrap overflow-hidden">
+                                      {skill.tags?.slice(0, 3).map((tag) => (
+                                        <span
+                                          key={tag}
+                                          className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground"
+                                        >
+                                          #{tag}
+                                        </span>
+                                      ))}
+                                      {skill.allowedTools && skill.allowedTools.length > 0 && (
+                                        <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 font-mono">
+                                          <Wrench className="h-2.5 w-2.5" />
+                                          {skill.allowedTools.length}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Card Quick Actions */}
+                                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                      {!isWorkspaceView && skill.custom && (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon-xs"
+                                          onClick={(e) => handleOpenMoveModal(skill, e)}
+                                          title="Move to another category"
+                                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                                        >
+                                          <ArrowRightLeft className="h-3 w-3" />
+                                        </Button>
+                                      )}
+
+                                      {canDeleteSkill(skill, isWorkspaceView) && (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon-xs"
+                                          onClick={(e) => confirmDeleteSkill(skill, e)}
+                                          title="Delete skill"
+                                          className="h-6 w-6 text-destructive hover:text-destructive cursor-pointer"
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Uncategorized Skills Section */}
+              {uncategorizedSkills.length > 0 && (
+                <div className="border border-border/80 rounded-xl overflow-hidden bg-card/60">
+                  <div className="p-4 bg-muted/30 border-b border-border/40 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Boxes className="h-4 w-4 text-muted-foreground" />
+                      <h2 className="font-semibold text-sm">Uncategorized Skills</h2>
+                      <Badge variant="outline" className="text-[10px]">
+                        {uncategorizedSkills.length}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                    {uncategorizedSkills.map((skill) => (
+                      <Card
+                        key={skill.id}
+                        onClick={() => handleOpenSkillModal(skill)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          // A key pressed on a button inside the card is that button's, not the card's.
+                          if (event.target !== event.currentTarget) return;
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            handleOpenSkillModal(skill);
+                          }
+                        }}
+                        className="p-3.5 cursor-pointer hover:border-primary/60 flex flex-col justify-between"
+                      >
+                        <div>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <div className="font-mono text-xs font-bold">{skill.title || skill.name}</div>
+                            <div className="flex items-center gap-1">
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  'text-[9px] font-mono px-1 py-0.2 uppercase',
+                                  skill.scope === 'workspace'
+                                    ? 'border-amber-500/40 text-warning-foreground bg-amber-500/10'
+                                    : 'border-blue-500/40 text-blue-300 bg-blue-500/10',
+                                )}
+                              >
+                                {skill.scope === 'workspace' ? 'Workspace' : 'Global'}
+                              </Badge>
+                              {isWorkspaceView && (
+                                <Button
+                                  size="xs"
+                                  variant={enabledSkillIds.has(skill.id) ? 'default' : 'outline'}
+                                  disabled={!workspaceAssignmentReady || assignSkillsMutation.isPending}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleToggleWorkspaceSkill(skill.id);
+                                  }}
+                                >
+                                  {enabledSkillIds.has(skill.id) ? 'Enabled' : 'Disabled'}
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground line-clamp-2">{skill.description}</p>
+                        </div>
+                        {/* Card Bottom: Tags & Quick Menu */}
+                        <div className="pt-2 mt-2 border-t border-border/40 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 flex-wrap overflow-hidden">
+                            {skill.tags && skill.tags.length > 0 ? (
+                              skill.tags.slice(0, 3).map((tag) => (
+                                <span key={tag} className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
+                                  #{tag}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground italic">No tags</span>
+                            )}
+                            {skill.allowedTools && skill.allowedTools.length > 0 && (
+                              <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 font-mono">
+                                <Wrench className="h-2.5 w-2.5" />
+                                {skill.allowedTools.length}
+                              </span>
+                            )}
+                          </div>
+
+                          {skill.custom && (
+                            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              {!isWorkspaceView && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  onClick={(e) => handleOpenMoveModal(skill, e)}
+                                  title="Move to a category"
+                                  className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                                >
+                                  <ArrowRightLeft className="h-3 w-3" />
+                                </Button>
+                              )}
+                              {canDeleteSkill(skill, isWorkspaceView) && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  onClick={(e) => confirmDeleteSkill(skill, e)}
+                                  title="Delete skill"
+                                  className="h-6 w-6 text-destructive hover:text-destructive cursor-pointer"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </ScrollArea>
+        </>
+      )}
 
       {/* ─── Category Create/Edit Modal ────────────────────────────────────── */}
       <Dialog open={categoryModalOpen} onOpenChange={setCategoryModalOpen}>
