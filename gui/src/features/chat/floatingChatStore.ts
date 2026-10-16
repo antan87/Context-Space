@@ -212,8 +212,11 @@ export const floatingChatStore = {
     }));
   },
 
-  /** Closes a tab. When it was the one on screen, the next tab takes its place and is asked for. */
-  removeTab: (branchName: string) => {
+  /**
+   * Closes a tab. When it was the one on screen, the next tab takes its place and is asked for, unless `follow` is
+   * false: closing a tab from somewhere else (archiving, a refreshed list) must not move the person to another chat.
+   */
+  removeTab: (branchName: string, { follow = true }: { follow?: boolean } = {}) => {
     updateState((prev) => {
       if (!prev.openTabs.includes(branchName)) return prev;
       const openTabs = prev.openTabs.filter((t) => t !== branchName);
@@ -225,7 +228,7 @@ export const floatingChatStore = {
         activeTab,
         splitTab: branchName === prev.splitTab || activeTab === prev.splitTab ? null : prev.splitTab,
       };
-      return activeTab !== prev.activeTab && activeTab !== null ? focused(next) : next;
+      return follow && activeTab !== prev.activeTab && activeTab !== null ? focused(next) : next;
     });
   },
 

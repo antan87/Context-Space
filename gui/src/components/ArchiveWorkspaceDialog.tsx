@@ -153,7 +153,8 @@ export function ArchiveWorkspaceDialog({ workspaceName, open, onClose, onArchive
           <DialogDescription>
             Archiving <strong className="font-semibold text-foreground">{workspaceName}</strong> removes its worktrees once
             their work is merged, and deletes the merged branches it created. Milestones, verification results, planning notes,
-            knowledge and documents stay readable, and your own checkouts are not changed. You can restore it later.
+            knowledge and documents stay readable, and your own checkouts are not changed. Its open session is closed and any
+            assistant running in it stops. You can restore it later.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3 text-sm">

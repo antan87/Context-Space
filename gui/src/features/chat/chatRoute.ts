@@ -104,6 +104,10 @@ export function browserPath(hash: string = typeof window === 'undefined' ? '' : 
 
 /** Where a part of a workspace is. The chat has its own address; every other part is named after it. */
 export function workspacePath(branchName: string, section = 'chat'): string {
+  // `overview` is an archived workspace's record, and the old address of an active workspace's home. It is written
+  // with no part, so each workspace opens on its own home: the record when archived, else the plan. Carried across
+  // from an archived workspace as it was, it opened an active one on an Overview that has no place on its rail.
+  if (section === 'overview') return `/workspaces/${encodeURIComponent(branchName)}`;
   return section === 'chat' ? chatPath(branchName) : `/workspaces/${encodeURIComponent(branchName)}/${encodeURIComponent(section)}`;
 }
 

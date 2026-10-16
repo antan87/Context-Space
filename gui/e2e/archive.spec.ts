@@ -112,7 +112,7 @@ test('archive previews what happens, parks unmerged work on request, and restore
   await page.goto('/#/overview');
   const sidebar = page.getByRole('complementary').first();
   await expect(sidebar.getByText('No active workspaces')).toBeVisible();
-  await sidebar.getByRole('button', { name: 'Show archived (1)' }).click();
+  await sidebar.getByRole('button', { name: 'Archived (1)' }).click();
   await expect(sidebar.getByRole('link', { name: /Invoice speed-up/ })).toBeVisible();
 
   // A deep link to a working section lands on the record; the plan cannot be edited.
