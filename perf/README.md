@@ -41,7 +41,7 @@ real backend and production GUI in headless Chromium on tier S:
 
 | Rule | Passes when |
 |---|---|
-| R1 | A hidden window makes no API requests and starts no git processes |
+| R1 | A hidden window makes no API requests and starts no git processes, apart from the check that alerts you when an AI waits |
 | R2a | A repeated sessions request re-reads no transcript in full |
 | R2b | An idle, visible Code panel starts at most one git process per 10 s |
 | R3a | A slow response for a workspace the user left is never shown |

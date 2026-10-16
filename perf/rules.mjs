@@ -39,16 +39,13 @@ async function openWorkspace(ctx, page, id, tab = '') {
   return since;
 }
 
-/** Opens the CLI chat for `id` and its Code inspector; waits until files are listed. */
+/** Opens `id` with its Code section beside the chat; waits until files are listed. */
 async function openCodePanel(ctx, page, id) {
   await openOverview(ctx, page);
-  await openWorkspace(ctx, page, id, 'sessions');
-  await page.getByRole('button', { name: 'Open CLI Chat', exact: true }).click({ timeout: 10_000 });
-  const chat = page.getByRole('region', { name: 'CLI Chat', exact: true });
-  await chat.waitFor({ timeout: 10_000 });
-  // Ctrl+Shift+E toggles the Code inspector without a running terminal pane.
-  await page.keyboard.press('Control+Shift+E');
-  await chat.getByRole('region', { name: 'Workspace code' }).waitFor({ timeout: 20_000 });
+  const listed = page.waitForResponse((r) => r.url().includes(`/api/workspace/${id}/changes`) && r.ok(), { timeout: 20_000 });
+  await openWorkspace(ctx, page, id, 'changes');
+  await listed;
+  await page.getByRole('region', { name: 'Code', exact: true }).waitFor({ timeout: 20_000 });
   await sleep(3_000); // first load settles
 }
 
@@ -74,7 +71,7 @@ async function hide(page) {
 const RULES = {
   R1: {
     title: 'Nothing polls in the background',
-    expected: '0 API requests and 0 git processes while the window is hidden',
+    expected: '0 API requests and 0 git processes while the window is hidden, apart from the check that alerts you when an AI waits for you',
     async run(ctx) {
       const cases = [];
       for (const [label, open] of [
@@ -89,7 +86,10 @@ const RULES = {
         await ctx.backend.counters(true);
         await sleep(ctx.idleMs);
         const c = await ctx.backend.counters();
-        cases.push({ case: label, visibility: state, requests: sumRequests(c), git: c.spawns.git ?? 0, byRoute: c.requests });
+        // An open chat keeps asking whether its AI waits for the user even while the window is hidden: being away
+        // is when that alert matters (useInputRequests). It runs no git; anything else in the background fails.
+        const alerts = requestsMatching(c, /^GET \/api\/attention$/);
+        cases.push({ case: label, visibility: state, requests: sumRequests(c) - alerts, alertChecks: alerts, git: c.spawns.git ?? 0, byRoute: c.requests });
         await page.close();
       }
       if (cases.some((c) => c.visibility !== 'hidden')) return { verdict: 'inconclusive', reason: 'The browser did not report the page as hidden.', cases };
