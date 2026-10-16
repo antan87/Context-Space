@@ -576,6 +576,7 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
           showToast={showToast}
           onEdit={(skill) => handleOpenSkillModal(skill)}
           onDelete={(skill) => confirmDeleteSkill(skill)}
+          onMove={(skill, event) => handleOpenMoveModal(skill, event)}
         />
       )}
 

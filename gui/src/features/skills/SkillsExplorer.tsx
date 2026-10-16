@@ -21,6 +21,8 @@ interface SkillsExplorerProps {
   showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
   onEdit: (skill: SkillItem) => void;
   onDelete: (skill: SkillItem) => void;
+  /** Opens the "move to a category" dialog for one of the catalog's own skills. */
+  onMove: (skill: SkillItem, event: React.MouseEvent) => void;
 }
 
 const LIST_MIN_WIDTH = 240;
@@ -58,7 +60,7 @@ const skillKey = (skill: SkillItem) => `${skill.source?.harness ?? 'catalog'}:${
  * quarantine), with a detail pane. Your catalog skills are edited and deleted; a tool's skills are
  * read-only here and can only be moved to quarantine and back.
  */
-export function SkillsExplorer({ skills, showToast, onEdit, onDelete }: SkillsExplorerProps) {
+export function SkillsExplorer({ skills, showToast, onEdit, onDelete, onMove }: SkillsExplorerProps) {
   const [query, setQuery] = useState('');
   const [selection, setSelection] = useState<Selection>(null);
   const [listWidth, setListWidth] = useState(() => readStoredWidth());
@@ -116,6 +118,7 @@ export function SkillsExplorer({ skills, showToast, onEdit, onDelete }: SkillsEx
   };
 
   const total = skills.length;
+  const shown = catalog.length + tools.reduce((sum, tool) => sum + tool.skills.length, 0) + shownEntries.length;
 
   return (
     <div className="flex flex-1 min-h-0 border-t border-border/60">
@@ -141,7 +144,9 @@ export function SkillsExplorer({ skills, showToast, onEdit, onDelete }: SkillsEx
               </button>
             )}
           </div>
-          <p className="mt-2 text-[11px] text-muted-foreground">{total} skills loaded</p>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Showing <strong className="text-foreground">{shown}</strong> of <strong className="text-foreground">{total}</strong> skills
+          </p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-4">
@@ -234,6 +239,7 @@ export function SkillsExplorer({ skills, showToast, onEdit, onDelete }: SkillsEx
             busy={quarantineSkill.isPending}
             onOpenFolder={() => runReveal(selectedSkill)}
             openingFolder={revealSkill.isPending}
+            onMove={(event) => onMove(selectedSkill, event)}
           />
         )}
         {selectedEntry && (
@@ -312,6 +318,7 @@ function SkillDetail({
   busy,
   onOpenFolder,
   openingFolder,
+  onMove,
 }: {
   skill: SkillItem;
   onEdit: () => void;
@@ -320,6 +327,7 @@ function SkillDetail({
   busy: boolean;
   onOpenFolder: () => void;
   openingFolder: boolean;
+  onMove: (event: React.MouseEvent) => void;
 }) {
   const fromTool = Boolean(skill.source);
   return (
@@ -339,8 +347,11 @@ function SkillDetail({
             </Button>
           ) : (
             <>
-              <Button variant="outline" onClick={onEdit}>Edit</Button>
-              <Button variant="outline" onClick={onDelete}>Delete</Button>
+              <Button variant="outline" onClick={onMove} title="Move to another category" aria-label="Move to another category">
+                Move to category
+              </Button>
+              <Button variant="outline" onClick={onEdit} title="Edit skill" aria-label="Edit skill">Edit</Button>
+              <Button variant="outline" onClick={onDelete} title="Delete skill" aria-label="Delete skill">Delete</Button>
             </>
           )}
         </div>
