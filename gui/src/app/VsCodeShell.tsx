@@ -60,7 +60,7 @@ export function VsCodeShell({
                 setActiveWsId(null);
                 setSelectedLogService(null);
               }}
-              className="text-primary hover:text-primary/90 hover:underline transition-colors cursor-pointer bg-transparent border-none p-0 outline-none"
+              className="text-primary hover:text-primary/90 hover:underline transition-colors cursor-pointer rounded bg-transparent border-none p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               [Change WS]
             </button>
