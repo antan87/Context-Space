@@ -464,8 +464,8 @@ export function WorkspaceSkillsTab({ ws, showToast }: WorkspaceSkillsTabProps) {
     <div className="flex flex-col gap-4">
       <SkillDiagnosticsPanel diagnostics={diagnostics} />
       {/* Top Banner / Actions Bar */}
-      <Card className="p-3.5 sm:p-4 rounded-xl border border-border/40 bg-card/60 backdrop-blur-xs shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+      <Card className="p-3.5 sm:p-4 rounded-xl border border-border/40 bg-card/60 backdrop-blur-xs shadow-2xs flex flex-col gap-3">
+        <div className="flex items-start gap-3 min-w-0 w-full">
           <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0 mt-0.5 sm:mt-0">
             <Boxes className="h-4.5 w-4.5" />
           </div>
@@ -487,7 +487,7 @@ export function WorkspaceSkillsTab({ ws, showToast }: WorkspaceSkillsTabProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             size="xs"
             variant="outline"

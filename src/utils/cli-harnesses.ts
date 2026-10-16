@@ -1,5 +1,6 @@
 /** CLI capabilities shared by terminal launch and saved-session discovery.
  * A new history-capable harness must register a complete reader in session-readers.
+ * Every harness must also declare where it keeps global skills in harness-skill-sources.
  * The GUI receives history sources from the API, so it needs no source list.
  */
 export const CLI_HARNESSES = {

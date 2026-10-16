@@ -656,3 +656,145 @@ describe('Skill discovery diagnostics', () => {
     expect(diagnostics).toContainEqual(expect.objectContaining({ id: 'twin', scope: 'workspace', level: 'warning', message: expect.stringContaining('overrides a global skill') }));
   });
 });
+
+describe('Skills owned by a harness', () => {
+  let tempHome: string;
+  let harnessHome: string;
+  const saved = {
+    nexusflow: process.env.NEXUSFLOW_HOME,
+    contextspace: process.env.CONTEXTSPACE_HOME,
+    home: process.env.HOME,
+    userProfile: process.env.USERPROFILE,
+  };
+  const restore = (key: string, value: string | undefined) => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  };
+  type Diagnostics = NonNullable<Parameters<typeof getAllSkills>[1]>;
+
+  beforeEach(async () => {
+    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-harness-skills-catalog-'));
+    // realpath: the catalog reports symlink-resolved roots, and tmpdir is a symlink on macOS.
+    harnessHome = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-harness-skills-home-')));
+    process.env.NEXUSFLOW_HOME = tempHome;
+    delete process.env.CONTEXTSPACE_HOME;
+  });
+
+  afterEach(async () => {
+    restore('NEXUSFLOW_HOME', saved.nexusflow);
+    restore('CONTEXTSPACE_HOME', saved.contextspace);
+    restore('HOME', saved.home);
+    restore('USERPROFILE', saved.userProfile);
+    await fse.remove(tempHome);
+    await fse.remove(harnessHome);
+  });
+
+  async function writeSkill(relativeDir: string, frontmatter: string[] = []): Promise<string> {
+    const dir = path.join(harnessHome, relativeDir);
+    const name = path.basename(dir);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'SKILL.md'),
+      ['---', `name: ${name}`, 'description: From the harness', ...frontmatter, '---', '', '# Body', ''].join('\n'),
+    );
+    return dir;
+  }
+  const list = (diagnostics?: Diagnostics) => getAllSkills(undefined, diagnostics, { harnessHomeDir: harnessHome });
+
+  it('lists them as read-only global skills that name their harness', async () => {
+    await writeSkill('.claude/skills/synced/bucket-1/pdf');
+    await writeSkill('.codex/skills/.system/imagegen');
+    const diagnostics: Diagnostics = [];
+
+    const skills = await list(diagnostics);
+
+    expect(skills.find((s) => s.id === 'pdf')).toMatchObject({
+      scope: 'global',
+      custom: false,
+      source: { harness: 'claude', label: 'Claude Code', root: path.join(harnessHome, '.claude', 'skills') },
+    });
+    expect(skills.find((s) => s.id === 'imagegen')?.source).toMatchObject({ harness: 'codex', label: 'Codex' });
+    // The user cannot add a category to a harness's file, so nothing is flagged.
+    expect(skills.find((s) => s.id === 'pdf')?.categoryAssumed).toBeUndefined();
+    // The Raw view shows the file as written, so it keeps the frontmatter that `content` leaves out.
+    const pdf = skills.find((s) => s.id === 'pdf')!;
+    expect(pdf.rawFile).toMatch(/^---\nname: pdf\ndescription: From the harness\n---/);
+    expect(pdf.content).not.toContain('description: From the harness');
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('lets a skill in the ContextSpace catalog win an id clash', async () => {
+    await writeSkill('.claude/skills/shared');
+    await saveSkill({ name: 'shared', description: 'From the catalog', content: '# Mine' });
+
+    const shared = (await list()).filter((s) => s.id === 'shared');
+
+    expect(shared).toHaveLength(1);
+    expect(shared[0]).toMatchObject({ description: 'From the catalog', custom: true });
+    expect(shared[0].source).toBeUndefined();
+  });
+
+  it('shows the first harness when two ship the same id, and says the other was hidden', async () => {
+    await writeSkill('.claude/skills/skill-creator');
+    await writeSkill('.codex/skills/.system/skill-creator');
+    const diagnostics: Diagnostics = [];
+
+    const matches = (await list(diagnostics)).filter((s) => s.id === 'skill-creator');
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0].source?.harness).toBe('claude');
+    expect(diagnostics).toEqual([
+      expect.objectContaining({ id: 'skill-creator', level: 'warning', source: 'codex', message: expect.stringContaining('Showing the Claude Code copy') }),
+    ]);
+  });
+
+  it('lists a skill once, without a warning, when one harness ships it in two folders', async () => {
+    await writeSkill('.gemini/antigravity/builtin/skills/twice');
+    await writeSkill('.gemini/antigravity-cli/builtin/skills/twice');
+    const diagnostics: Diagnostics = [];
+
+    const matches = (await list(diagnostics)).filter((s) => s.id === 'twice');
+
+    expect(matches).toHaveLength(1);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('warns about a skill that cannot load, once, and still lists the others', async () => {
+    const mismatched = ['.gemini/antigravity/builtin/skills/bad', '.gemini/antigravity-cli/builtin/skills/bad'];
+    for (const dir of mismatched) {
+      await fs.mkdir(path.join(harnessHome, dir), { recursive: true });
+      await fs.writeFile(path.join(harnessHome, dir, 'SKILL.md'), '---\nname: other\ndescription: Wrong name\n---\n# Body\n');
+    }
+    await writeSkill('.claude/skills/fine');
+    const diagnostics: Diagnostics = [];
+
+    const skills = await list(diagnostics);
+
+    expect(skills.map((s) => s.id)).toContain('fine');
+    expect(skills.some((s) => s.id === 'bad' || s.id === 'other')).toBe(false);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({ id: 'bad', level: 'warning', source: 'antigravity', message: expect.stringContaining('must match directory identity') }),
+    ]);
+  });
+
+  it('skips them in an isolated home, and finds them in the real home', async () => {
+    await writeSkill('.claude/skills/pdf');
+    process.env.HOME = harnessHome;
+    process.env.USERPROFILE = harnessHome;
+
+    expect((await getAllSkills()).some((s) => s.source)).toBe(false);
+
+    delete process.env.NEXUSFLOW_HOME;
+    delete process.env.CONTEXTSPACE_HOME;
+    expect((await getAllSkills()).find((s) => s.id === 'pdf')?.source?.harness).toBe('claude');
+  });
+
+  it('cannot delete a harness skill through the catalog', async () => {
+    const dir = await writeSkill('.claude/skills/keep-me');
+    expect((await list()).some((s) => s.id === 'keep-me')).toBe(true);
+
+    await expect(deleteSkill('keep-me')).rejects.toThrow(/Skill not found/);
+
+    expect(await fse.pathExists(path.join(dir, 'SKILL.md'))).toBe(true);
+  });
+});

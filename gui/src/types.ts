@@ -429,11 +429,15 @@ export interface SkillItem {
   allowedTools?: string[];
   parameters?: SkillParameter[];
   content: string;
+  /** The SKILL.md file exactly as written, frontmatter included. */
+  rawFile?: string;
   custom: boolean;
   sourcePath?: string;
   references?: SkillSupportingFile[];
   scripts?: SkillSupportingFile[];
   scope?: 'workspace' | 'global';
+  /** Set when a harness (Claude Code, Codex, ...) owns the skill; it is read-only here. */
+  source?: { harness: string; label: string; root: string };
   organization?: string;
   domain?: string;
 }

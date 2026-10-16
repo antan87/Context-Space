@@ -961,6 +961,16 @@ export interface SkillSupportingFile {
   content?: string;
 }
 
+/** Where a skill lives when a harness (Claude Code, Codex, ...) owns it instead of the ContextSpace catalog. */
+export interface SkillSource {
+  /** Harness id from `CLI_HARNESSES`, e.g. 'claude'. */
+  harness: string;
+  /** Display name of that harness, e.g. 'Claude Code'. */
+  label: string;
+  /** Absolute, symlink-resolved skills folder the skill was found under. */
+  root: string;
+}
+
 /** An agent skill item. */
 export interface SkillItem {
   /** Unique skill identifier (slug, e.g. 'pr-review-toolkit'). */
@@ -987,6 +997,8 @@ export interface SkillItem {
   parameters?: SkillParameter[];
   /** Main markdown content (playbook instructions). */
   content: string;
+  /** The SKILL.md file exactly as written, frontmatter included. Shown in the Raw view. */
+  rawFile?: string;
   /** Whether this is a user-created or customized skill. */
   custom: boolean;
   /** Absolute source directory path if loaded from disk. */
@@ -999,6 +1011,8 @@ export interface SkillItem {
   assets?: SkillSupportingFile[];
   /** Scope of the skill: 'workspace' for project-specific or 'global' for machine-wide catalog. */
   scope?: 'workspace' | 'global';
+  /** Present when a harness owns this skill. It is listed read-only: edit or delete it in the harness. */
+  source?: SkillSource;
   /** Additional frontmatter metadata (custom properties, deeply nested configurations, etc.). */
   metadata?: Record<string, unknown>;
   /** Optional license expression or identifier. */

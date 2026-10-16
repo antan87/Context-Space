@@ -8,6 +8,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import fse from 'fs-extra';
 
+import { quarantineHarnessSkill, restoreHarnessSkill, listQuarantinedHarnessSkills } from '../utils/harness-skill-quarantine.js';
 import { getAllSkills, saveSkill, deleteSkill, type SkillDiagnostic, type SkillItem } from '../utils/skills-catalog.js';
 import { resolveWorkspaceInteractive, resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { refreshWorkspace } from '../core/refresh.js';
@@ -79,7 +80,8 @@ export async function skillListCommand(workspaceArg?: string, options: SkillList
     console.log(chalk.bold.blue('🌐 Global Company Skills (shared across workspaces):'));
     for (const s of globalSkills) {
       const tagsStr = s.tags?.length ? chalk.dim(` [${s.tags.join(', ')}]`) : '';
-      console.log(`  ${chalk.blue('●')} ${chalk.bold(s.id)} — ${s.title}${tagsStr}`);
+      const sourceStr = s.source ? chalk.dim(` (${s.source.label})`) : '';
+      console.log(`  ${chalk.blue('●')} ${chalk.bold(s.id)} — ${s.title}${sourceStr}${tagsStr}`);
       if (s.description) console.log(chalk.dim(`    ${s.description}`));
     }
     console.log('');
@@ -111,8 +113,10 @@ export async function skillLintCommand(workspaceArg?: string, options: SkillLint
     workspacePath = await resolveWorkspaceQuiet().catch(() => null);
   }
 
-  const diagnostics: SkillDiagnostic[] = [];
-  const skills = await getAllSkills(workspacePath || undefined, diagnostics);
+  const allDiagnostics: SkillDiagnostic[] = [];
+  const skills = await getAllSkills(workspacePath || undefined, allDiagnostics);
+  // Problems in a harness's own skill files are shown on the Skills page, but they are not the user's to fix or gate on.
+  const diagnostics = allDiagnostics.filter((d) => !d.source);
   const isError = (d: SkillDiagnostic) => (d.level ?? 'error') === 'error';
   const errors = diagnostics.filter(isError);
   const warnings = diagnostics.filter((d) => !isError(d));
@@ -352,4 +356,44 @@ export async function skillShowCommand(
   } else {
     console.log();
   }
+}
+
+/** `ctxspace skill quarantine <id>`: moves a harness-owned skill out of its harness folder, where it can be restored. */
+export async function skillQuarantineCommand(id: string): Promise<void> {
+  try {
+    const entry = await quarantineHarnessSkill(id);
+    console.log(chalk.green(`\n✔ Moved "${entry.id}" out of ${entry.label}.`));
+    console.log(chalk.dim(`  Was: ${entry.originalPath}`));
+    console.log(chalk.dim(`  Kept in: ${path.join(entry.entryDir, 'skill')}`));
+    console.log(chalk.dim(`  Restore with: ctxspace skill restore ${entry.id}\n`));
+  } catch (error) {
+    console.error(chalk.red(`\nError: ${error instanceof Error ? error.message : String(error)}\n`));
+    process.exitCode = 1;
+  }
+}
+
+/** `ctxspace skill restore <id>`: puts a quarantined harness skill back where it was. */
+export async function skillRestoreCommand(id: string): Promise<void> {
+  try {
+    const entry = await restoreHarnessSkill(id);
+    console.log(chalk.green(`\n✔ Restored "${entry.id}" to ${entry.originalPath}\n`));
+  } catch (error) {
+    console.error(chalk.red(`\nError: ${error instanceof Error ? error.message : String(error)}\n`));
+    process.exitCode = 1;
+  }
+}
+
+/** `ctxspace skill quarantined`: lists harness skills that are in quarantine. */
+export async function skillQuarantinedCommand(): Promise<void> {
+  const entries = await listQuarantinedHarnessSkills();
+  if (entries.length === 0) {
+    console.log(chalk.dim('\n  No harness skills are in quarantine.\n'));
+    return;
+  }
+  console.log(chalk.bold.cyan('\nQuarantined harness skills:\n'));
+  for (const entry of entries) {
+    console.log(`  ${chalk.bold(entry.id)} ${chalk.dim(`(${entry.label}, moved ${entry.quarantinedAt})`)}`);
+    console.log(chalk.dim(`    Was: ${entry.originalPath}`));
+  }
+  console.log('');
 }

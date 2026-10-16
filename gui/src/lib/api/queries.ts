@@ -501,6 +501,54 @@ export function useSaveSkill() {
   });
 }
 
+export interface QuarantineEntryItem {
+  id: string;
+  harness: string;
+  label: string;
+  root: string;
+  originalPath: string;
+  quarantinedAt: string;
+}
+
+export function useQuarantinedHarnessSkills() {
+  return useQuery({
+    queryKey: ['harness-skills', 'quarantine'],
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      apiFetch<{ entries: QuarantineEntryItem[] }>('/api/harness-skills/quarantine', { signal }),
+  });
+}
+
+function useHarnessSkillAction(action: 'quarantine' | 'restore') {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ success: boolean }>(`/api/harness-skills/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      queryClient.invalidateQueries({ queryKey: ['harness-skills'] });
+      queryClient.invalidateQueries({ queryKey: ['workspace-skills'] });
+    },
+  });
+}
+
+export function useQuarantineHarnessSkill() {
+  return useHarnessSkillAction('quarantine');
+}
+
+export function useRestoreHarnessSkill() {
+  return useHarnessSkillAction('restore');
+}
+
+export function useRevealSkillFolder() {
+  return useMutation({
+    mutationFn: (skill: Pick<SkillItem, 'id' | 'source'>) =>
+      apiFetch<{ success: boolean; folder: string }>('/api/skills/reveal', {
+        method: 'POST',
+        body: JSON.stringify({ id: skill.id, root: skill.source?.root }),
+      }),
+  });
+}
+
 export function useDeleteSkill() {
   const queryClient = useQueryClient();
   return useMutation({

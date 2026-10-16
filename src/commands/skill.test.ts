@@ -99,6 +99,18 @@ describe('skill CLI commands', () => {
       expect(process.exitCode).toBe(1);
     });
 
+    it('leaves out problems in a harness\'s own skill files, even with --strict', async () => {
+      withDiagnostics([{ id: 'owned', scope: 'global', level: 'warning', source: 'claude', message: 'Claude Code: Invalid SKILL.md' }]);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await skillLintCommand(mockWsPath, { strict: true });
+
+      const output = log.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(output).toContain('nothing to fix');
+      expect(output).not.toContain('Invalid SKILL.md');
+      expect(process.exitCode).toBeUndefined();
+    });
+
     it('prints machine-readable output with the counts', async () => {
       withDiagnostics([failing, review]);
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -159,6 +171,20 @@ describe('skill CLI commands', () => {
       expect(calls).toContain('Global Company Skills');
       expect(calls).toContain('local-test-skill');
       expect(calls).toContain('global-standard-skill');
+      consoleSpy.mockRestore();
+    });
+
+    it('names the harness that owns a global skill', async () => {
+      vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([
+        ...sampleSkills,
+        { id: 'pdf', name: 'pdf', title: 'Pdf', description: 'PDF help', content: '', category: 'general', scope: 'global', custom: false, source: { harness: 'claude', label: 'Claude Code', root: '/home/u/.claude/skills' } },
+      ]);
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      await skillListCommand(mockWsPath, {});
+
+      const calls = consoleSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(calls).toMatch(/pdf.*Pdf.*\(Claude Code\)/);
+      expect(calls).not.toMatch(/global-standard-skill.*\(Claude Code\)/);
       consoleSpy.mockRestore();
     });
 
