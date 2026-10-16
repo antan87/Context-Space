@@ -206,7 +206,7 @@ export function AgentsPage({ showToast }: AgentsPageProps) {
               id="agent-scope"
               value={selectedWorkspace}
               onChange={(event) => setSelectedWorkspace(event.target.value)}
-              className="cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              className="cursor-pointer bg-transparent text-xs font-semibold text-foreground"
             >
               <option value="global">Personal catalog</option>
               {workspaces.map((workspace) => (

@@ -294,3 +294,46 @@ describe('AppSidebar - Open Sessions and Close Controls', () => {
   });
 });
 
+describe('AppSidebar - Active and Archived lists', () => {
+  const archivedAlpha: Feature = { ...mockWorkspaces[0]!, archivedAt: '2026-10-10T10:00:00Z' };
+  const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pressed = (html: string, label: string) => new RegExp(`aria-pressed="true"[^>]*>${escapeRegExp(label)}<`).test(html);
+
+  it('opens on the archived list when an archived workspace is on screen', () => {
+    const html = renderSidebar({ workspaces: [archivedAlpha, mockWorkspaces[1]!], activeWsId: 'feat/alpha' }, '/workspaces/feat%2Falpha/overview');
+
+    expect(html).toContain('aria-label="Which workspaces to list"');
+    expect(pressed(html, 'Archived (1)')).toBe(true);
+    expect(pressed(html, 'Active (1)')).toBe(false);
+  });
+
+  it('opens on the active list from an active workspace, and still offers the way to the archived one', () => {
+    const html = renderSidebar({ workspaces: [archivedAlpha, mockWorkspaces[1]!], activeWsId: 'feat/beta' }, '/workspaces/feat%2Fbeta/plan');
+
+    expect(pressed(html, 'Active (1)')).toBe(true);
+    expect(html).toContain('Archived (1)');
+    expect(pressed(html, 'Archived (1)')).toBe(false);
+  });
+
+  it('shows the active list from any page that is not a workspace', () => {
+    const html = renderSidebar({ workspaces: [archivedAlpha, mockWorkspaces[1]!], activeWsId: null }, '/overview');
+
+    expect(pressed(html, 'Active (1)')).toBe(true);
+  });
+
+  it('offers no switch while nothing is archived', () => {
+    const html = renderSidebar();
+
+    expect(html).not.toContain('Which workspaces to list');
+    expect(html).not.toContain('Show archived');
+  });
+
+  it('lists a workspace from the other list when it is searched for', () => {
+    // On the archived list, an active workspace that matches the search is still listed, so it can be reached.
+    const html = renderSidebar({ workspaces: [archivedAlpha, mockWorkspaces[1]!], activeWsId: 'feat/alpha', initialSearch: 'Beta' }, '/workspaces/feat%2Falpha/overview');
+
+    expect(html).toContain('Feature Beta');
+    expect(html).not.toContain('No workspaces match');
+  });
+});
+

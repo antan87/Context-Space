@@ -117,6 +117,15 @@ describe('switching and closing tabs', () => {
     expect(store.getState()).toMatchObject({ openTabs: ['beta'], activeTab: 'beta', focusRequest: before });
   });
 
+  it('closes the tab on screen without asking to see the next one when it is told not to follow', async () => {
+    const { floatingChatStore: store } = await load();
+    store.open('alpha'); store.open('beta'); store.open('gamma');
+    const before = store.getState().focusRequest;
+    store.removeTab('gamma', { follow: false });
+    // The next tab is chosen as ever, but the person is not taken to it.
+    expect(store.getState()).toMatchObject({ openTabs: ['alpha', 'beta'], activeTab: 'beta', focusRequest: before });
+  });
+
   it('closing the tab on screen brings up the adjacent tab and asks to see it', async () => {
     const { floatingChatStore: store } = await load();
     store.open('alpha'); store.open('beta'); store.open('gamma');

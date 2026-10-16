@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, FolderGit2, Search, X } from 'lucide-react';
 import type { Feature } from '../types.js';
+import { jumpTargets } from './workspaceList.js';
 
 /** Native dialog supplies focus containment, Escape, and focus restoration. */
 export function QuickSwitch({ workspaces }: { workspaces: Feature[] }) {
@@ -13,7 +14,7 @@ export function QuickSwitch({ workspaces }: { workspaces: Feature[] }) {
   const actions = [
     { title: 'New workspace', detail: 'Start a task with your repos', route: '/new' },
     { title: 'Overview', detail: 'Your workspace home', route: '/overview' },
-    ...workspaces.map((w) => ({ title: w.name || w.branchName, detail: `${w.repos.length} repositories · ${w.name ? w.branchName : w.description || 'Open workspace'}`, route: `/workspaces/${encodeURIComponent(w.branchName)}` })),
+    ...jumpTargets(workspaces),
     { title: 'Projects', detail: 'Manage repositories', route: '/projects' },
     { title: 'Workrooms', detail: 'Collaborate with your team', route: '/workrooms' },
     { title: 'Skills & agents', detail: 'Assistant instructions', route: '/skills' },
@@ -49,7 +50,7 @@ export function QuickSwitch({ workspaces }: { workspaces: Feature[] }) {
     <button type="button" onClick={open} className="mx-2.5 my-2 flex h-9 items-center gap-2 rounded-lg border border-input bg-background/60 px-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground" aria-label="Search and jump to a workspace" aria-keyshortcuts="Control+k Meta+k"><Search size={14} /><span>Jump to…</span><kbd className="ml-auto rounded border border-border px-1 text-[10px]">⌘ / Ctrl K</kbd></button>
     <dialog ref={dialog} aria-labelledby="quick-switch-title" className="context-switch m-auto w-[min(560px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-border bg-popover p-0 text-popover-foreground shadow-2xl" onClick={(e) => { if (e.target === dialog.current) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) dialog.current.close(); } }}>
       <h2 id="quick-switch-title" className="sr-only">Jump to a workspace or page</h2>
-      <div className="flex items-center gap-3 border-b border-border px-5"><Search size={18} className="text-primary" /><input ref={input} value={query} onChange={(e) => { setQuery(e.target.value); setActive(0); }} onKeyDown={(e) => {
+      <div className="flex items-center gap-3 border-b border-border px-5 has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-inset has-[input:focus-visible]:ring-ring"><Search size={18} className="text-primary" /><input ref={input} value={query} onChange={(e) => { setQuery(e.target.value); setActive(0); }} onKeyDown={(e) => {
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActive(actions.length ? (current + (e.key === 'ArrowDown' ? 1 : -1) + actions.length) % actions.length : 0); }
         if (e.key === 'Enter' && actions[current]) { e.preventDefault(); choose(actions[current].route); }
       }} role="combobox" aria-expanded="true" aria-controls="quick-results" aria-autocomplete="list" aria-activedescendant={actions[current] ? `quick-result-${current}` : undefined} aria-label="Search pages and workspaces" placeholder="Where do you want to go?" className="h-16 min-w-0 flex-1 bg-transparent text-sm outline-none" /><button onClick={() => dialog.current?.close()} aria-label="Close search" className="rounded p-1 text-muted-foreground hover:bg-accent"><X size={17} /></button></div>

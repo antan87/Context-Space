@@ -112,4 +112,76 @@ describe('terminal file references', () => {
       { path: 'src/Nav.tsx', line: 50 },
     ]);
   });
+
+  describe('what a CLI prints around a path', () => {
+    const paths = (row: string) => findFileReferences(row).map(({ path, line }) => ({ path, line }));
+    const underlined = (row: string) => findFileReferences(row).map(({ start, end }) => row.slice(start, end));
+
+    it('reads the file of a tool-call line, not the tool name before it', () => {
+      expect(paths('⏺ Update(gui/src/app/AppSidebar.tsx)')).toEqual([{ path: 'gui/src/app/AppSidebar.tsx', line: undefined }]);
+      expect(paths('● Read(/home/anton-patron/Dev/workspaces/bugs-findings/NexusFlow/gui/src/index.css)'))
+        .toEqual([{ path: '/home/anton-patron/Dev/workspaces/bugs-findings/NexusFlow/gui/src/index.css', line: undefined }]);
+      expect(paths('● Write(contextspace-plan.md)')).toEqual([{ path: 'contextspace-plan.md', line: undefined }]);
+      expect(paths('  Edit(src/server.ts:88)')).toEqual([{ path: 'src/server.ts', line: 88 }]);
+    });
+
+    it('underlines only the path of a tool call', () => {
+      expect(underlined('⏺ Update(gui/src/app/AppSidebar.tsx)')).toEqual(['gui/src/app/AppSidebar.tsx']);
+      expect(underlined('  Read(src/a.ts) then Write(src/b.ts)')).toEqual(['src/a.ts', 'src/b.ts']);
+    });
+
+    it('leaves calls with no path in them, and a command, as they were', () => {
+      // Only the quoted path argument is a path; `Grep(pattern:` is not made into one.
+      expect(paths('● Grep(pattern: "useState", path: "gui/src")')).toEqual([{ path: 'gui/src', line: undefined }]);
+      expect(paths('● Bash(cat src/server.ts | head -5)')).toEqual([{ path: 'src/server.ts', line: undefined }]);
+      expect(paths('● Bash(npm test)')).toEqual([]);
+      expect(paths('see render(count) and parse(12)')).toEqual([]);
+      // A location after the name is not a tool call.
+      expect(paths('src/app.ts(12,3)')).toEqual([{ path: 'src/app.ts', line: 12 }]);
+    });
+
+    it('reads a path in bold or italics, also with a colon or comma after it', () => {
+      expect(paths('- **gui/src/index.css** was changed')).toEqual([{ path: 'gui/src/index.css', line: undefined }]);
+      expect(paths('**gui/src/index.css:** the ring')).toEqual([{ path: 'gui/src/index.css', line: undefined }]);
+      expect(paths('see **src/app.ts**, then *src/next.ts*.')).toEqual([
+        { path: 'src/app.ts', line: undefined },
+        { path: 'src/next.ts', line: undefined },
+      ]);
+      expect(paths('**src/app.ts:12**')).toEqual([{ path: 'src/app.ts', line: 12 }]);
+      expect(underlined('- **gui/src/index.css** was changed')).toEqual(['gui/src/index.css']);
+    });
+
+    it('does not take a glob for bold', () => {
+      expect(paths('rg "x" src/**/*.ts')).toEqual([{ path: 'src/**/*.ts', line: undefined }]);
+      expect(paths('**/*.ts')).toEqual([{ path: '**/*.ts', line: undefined }]);
+    });
+
+    it('drops the a/ and b/ side git puts in front of a path in a diff header', () => {
+      expect(paths('--- a/gui/src/App.tsx')).toEqual([{ path: 'gui/src/App.tsx', line: undefined }]);
+      expect(paths('+++ b/gui/src/App.tsx')).toEqual([{ path: 'gui/src/App.tsx', line: undefined }]);
+      expect(paths('diff --git a/src/one.ts b/src/two.ts')).toEqual([
+        { path: 'src/one.ts', line: undefined },
+        { path: 'src/two.ts', line: undefined },
+      ]);
+      expect(underlined('+++ b/gui/src/App.tsx')).toEqual(['gui/src/App.tsx']);
+    });
+
+    it('does not take owner/repo#123, the name of a pull request or issue, for a file', () => {
+      expect(paths('mrpatronz/nexusflow#123')).toEqual([]);
+      expect(paths('PR mrpatronz/nexusflow#123, merged')).toEqual([]);
+      expect(paths('(see my-org/my.repo#4567)')).toEqual([]);
+      expect(paths('vercel/next.js#123')).toEqual([]);
+      // A file with a numbered anchor, or a longer path, still is one.
+      expect(paths('docs/guide.md#12')).toEqual([{ path: 'docs/guide.md', line: undefined }]);
+      expect(paths('src/app.ts#12')).toEqual([{ path: 'src/app.ts', line: undefined }]);
+      expect(paths('a/b/c#12')).toEqual([{ path: 'a/b/c', line: undefined }]);
+    });
+
+    it('keeps a/ and b/ when the row is not a diff header, since a real folder can be named that', () => {
+      expect(paths('open a/notes.md and b/todo.md')).toEqual([
+        { path: 'a/notes.md', line: undefined },
+        { path: 'b/todo.md', line: undefined },
+      ]);
+    });
+  });
 });

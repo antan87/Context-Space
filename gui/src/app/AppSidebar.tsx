@@ -55,6 +55,8 @@ import { PrepareRepoDialog } from '../features/worktrees/PrepareRepoDialog.js';
 import { useWorkspaceRepositories } from '../lib/api/queries.js';
 import { useWorktreeNavigationState } from '../features/worktrees/worktreeStore.js';
 import { useSidebarWidth } from '../features/worktrees/sidebarWidth.js';
+import { isArchivedWorkspace, workspacesForList } from './workspaceList.js';
+import { isTypingTarget } from './typingTarget.js';
 
 export type WorkspaceSortOption =
   | 'created-desc'
@@ -153,9 +155,17 @@ function SidebarContents({
   const [search, setSearch] = useState(initialSearch);
   const [sortBy, setSortBy] = useState<WorkspaceSortOption>('created-desc');
   const [visibleWorkspaceCount, setVisibleWorkspaceCount] = useState(30);
-  // Archived workspaces are records, listed separately so they stay out of the way.
-  const [showArchived, setShowArchived] = useState(false);
+  // Archived workspaces are records, listed separately so they stay out of the way. The list follows the workspace on
+  // screen: opening an archived record shows the archived list, and going to an active workspace, or to any page that
+  // is not a workspace, shows the active one, so the way back never depends on a toggle the person set earlier and forgot.
+  const onScreenArchived = isArchivedWorkspace(activeWorkspace);
+  const [showArchived, setShowArchived] = useState(onScreenArchived);
+  useEffect(() => {
+    setShowArchived(onScreenArchived);
+    setVisibleWorkspaceCount(30);
+  }, [activeBranch, onScreenArchived]);
   const archivedCount = useMemo(() => workspaces.filter((w) => w.archivedAt).length, [workspaces]);
+  const activeCount = workspaces.length - archivedCount;
   const [sessionsExpanded, setSessionsExpanded] = useState(true);
   const [workspacesExpanded, setWorkspacesExpanded] = useState(true);
   const prevSearchRef = useRef(search);
@@ -205,10 +215,8 @@ function SidebarContents({
   // Keyboard shortcut for toggling rail (Z or [)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-        return;
-      }
+      // A letter typed into a field, or used to pick an option in a select, is not the shortcut.
+      if (isTypingTarget(e.target)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'z' || e.key === 'Z' || e.key === '[') {
         toggleCollapsed();
@@ -219,14 +227,7 @@ function SidebarContents({
   }, [toggleCollapsed]);
 
   const filteredWorkspaces = useMemo(() => {
-    let list = workspaces.filter((w) => Boolean(w.archivedAt) === showArchived);
-    const q = search.trim().toLowerCase();
-    if (q) {
-      list = list.filter((w) => {
-        const repos = w.repos?.join(' ') ?? '';
-        return `${w.name ?? ''} ${w.branchName} ${w.description ?? ''} ${repos}`.toLowerCase().includes(q);
-      });
-    }
+    const list = workspacesForList(workspaces, showArchived, search);
 
     return [...list].sort((a, b) => {
       switch (sortBy) {
@@ -715,7 +716,7 @@ function SidebarContents({
                     className={cn('shrink-0 text-muted-foreground transition-transform duration-200', !isWorkspacesListOpen && '-rotate-90')}
                   />
                   <span className="text-[11px] font-medium text-muted-foreground group-hover:text-foreground transition-colors">
-                    {showArchived ? 'Archived workspaces' : 'Workspaces'}
+                    {showArchived && !search.trim() ? 'Archived workspaces' : 'Workspaces'}
                   </span>
                 </div>
                 <span className="text-[10px] font-mono text-muted-foreground bg-muted/60 px-1.5 py-0.2 rounded-full shrink-0">
@@ -725,6 +726,26 @@ function SidebarContents({
 
               {isWorkspacesListOpen && (
                 <>
+                  {/* Which list. At the top, where both ways are always in view, so no list can hide the way to the other.
+                      A search ignores it and looks through both. */}
+                  {(archivedCount > 0 || showArchived) && (
+                    <div role="group" aria-label="Which workspaces to list" className="mb-1.5 grid grid-cols-2 gap-0.5 rounded-md bg-muted/50 p-0.5 text-[11px]">
+                      {([false, true] as const).map((archived) => (
+                        <button
+                          key={String(archived)}
+                          type="button"
+                          aria-pressed={showArchived === archived}
+                          onClick={() => { setShowArchived(archived); setVisibleWorkspaceCount(30); }}
+                          className={cn(
+                            'cursor-pointer rounded px-2 py-1 font-medium transition-colors',
+                            showArchived === archived ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
+                          )}
+                        >
+                          {archived ? `Archived (${archivedCount})` : `Active (${activeCount})`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {/* Workspaces Rows */}
                   <div className="flex flex-col gap-1">
                     {workspacesLoading && workspaces.length === 0 ? (
@@ -825,16 +846,6 @@ function SidebarContents({
                     <button type="button" className="mt-2 w-full rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                       onClick={() => setVisibleWorkspaceCount((count) => count + 30)}>
                       Show more workspaces ({otherWorkspaces.length - visibleWorkspaceCount} remaining)
-                    </button>
-                  )}
-                  {(archivedCount > 0 || showArchived) && (
-                    <button
-                      type="button"
-                      aria-pressed={showArchived}
-                      className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                      onClick={() => { setShowArchived((shown) => !shown); setVisibleWorkspaceCount(30); }}
-                    >
-                      {showArchived ? 'Back to active workspaces' : `Show archived (${archivedCount})`}
                     </button>
                   )}
                 </>

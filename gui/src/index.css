@@ -164,11 +164,15 @@
   }
 }
 
-/* Consistent focus ring for keyboard users */
-:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-  border-radius: 2px;
+/* Consistent focus ring for keyboard users. This is the fallback for elements that draw no focus indicator of their
+   own. It sits in the base layer with no specificity, so a component's `outline-none` / `focus-visible:ring-*`
+   replaces it. Outside a layer it beat every utility, and a focused field showed its own ring plus this outline.
+   It must not set border-radius: that reshaped round and pill controls while they had focus. */
+@layer base {
+  :where(:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 }
 
 /* Sleek neutral scrollbars, theme-aware */

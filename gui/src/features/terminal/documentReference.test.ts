@@ -5,6 +5,40 @@ describe('workspaceDocumentName', () => {
   const posix = '/home/me/workspaces/audit';
   const windows = 'C:\\Users\\me\\workspaces\\audit';
 
+  describe('with the folder the session runs in', () => {
+    const repo = `${posix}/api`;
+
+    it('reads a relative path from that folder, so a README printed inside a repository is the repository\'s', () => {
+      expect(workspaceDocumentName({ path: 'README.md' }, posix, [repo], repo)).toBeNull();
+      expect(workspaceDocumentName({ path: 'docs/guide.md' }, posix, [repo], repo)).toBeNull();
+      expect(workspaceDocumentName({ path: './README.md' }, posix, [repo], `${repo}/`)).toBeNull();
+    });
+
+    it('reaches a workspace document from a subfolder, and from the root itself', () => {
+      expect(workspaceDocumentName({ path: '../../notes.md' }, posix, [repo], `${repo}/gui`)).toBe('notes.md');
+      expect(workspaceDocumentName({ path: 'notes.md' }, posix, [repo], posix)).toBe('notes.md');
+      expect(workspaceDocumentName({ path: './docs/report.md' }, posix, [repo], `${posix}/`)).toBe('docs/report.md');
+    });
+
+    it('is not a workspace document when the session runs outside the workspace', () => {
+      expect(workspaceDocumentName({ path: 'notes.md' }, posix, [repo], '/tmp/elsewhere')).toBeNull();
+      expect(workspaceDocumentName({ path: '../../../notes.md' }, posix, [repo], `${repo}/gui`)).toBeNull();
+    });
+
+    it('leaves an absolute path alone, and keeps the old reading when the folder is not known', () => {
+      expect(workspaceDocumentName({ path: `${posix}/docs/report.md` }, posix, [repo], repo)).toBe('docs/report.md');
+      expect(workspaceDocumentName({ path: 'notes.md' }, posix, [repo])).toBe('notes.md');
+      expect(workspaceDocumentName({ path: 'notes.md' }, posix, [repo], undefined)).toBe('notes.md');
+    });
+
+    it('reads Windows folders the same way', () => {
+      const winRepo = `${windows}\\api`;
+      expect(workspaceDocumentName({ path: 'README.md' }, windows, [winRepo], winRepo)).toBeNull();
+      expect(workspaceDocumentName({ path: '..\\notes.md' }, windows, [winRepo], winRepo)).toBe('notes.md');
+      expect(workspaceDocumentName({ path: 'D:\\other\\notes.md' }, windows, [winRepo], winRepo)).toBeNull();
+    });
+  });
+
   it('keeps a bare file name', () => {
     expect(workspaceDocumentName({ path: 'notes.md' }, posix)).toBe('notes.md');
     expect(workspaceDocumentName({ path: './notes.md' }, posix)).toBe('notes.md');
@@ -104,5 +138,15 @@ describe('isUnreadableDocument', () => {
     expect(isUnreadableDocument(new TypeError('Failed to fetch'))).toBe(false);
     expect(isUnreadableDocument(new SyntaxError('Unexpected token < in JSON'))).toBe(false);
     expect(isUnreadableDocument('exceeds the 1 MB preview limit')).toBe(false);
+  });
+});
+
+describe('workspaceDocumentName in the hidden folders Docs opens', () => {
+  it('names a document in .claude, .agents or .github at the workspace root, and leaves one inside a repository to Code', () => {
+    const root = '/home/dev/workspaces/feature-x';
+    expect(workspaceDocumentName({ path: `${root}/.claude/skills/plan/SKILL.md` }, root, [`${root}/repo`])).toBe('.claude/skills/plan/SKILL.md');
+    expect(workspaceDocumentName({ path: '.agents/skills/plan/SKILL.md' }, root, [`${root}/repo`])).toBe('.agents/skills/plan/SKILL.md');
+    expect(workspaceDocumentName({ path: '.github/PULL_REQUEST_TEMPLATE.md' }, root, [`${root}/repo`], root)).toBe('.github/PULL_REQUEST_TEMPLATE.md');
+    expect(workspaceDocumentName({ path: `${root}/repo/.github/workflows/ci.yml` }, root, [`${root}/repo`])).toBeNull();
   });
 });

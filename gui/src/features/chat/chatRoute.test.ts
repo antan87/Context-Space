@@ -193,6 +193,26 @@ describe('workspacePath', () => {
   });
 });
 
+describe('switching from an archived workspace', () => {
+  it('opens the other workspace on its own home, not on an Overview it has no place for', () => {
+    // An archived workspace is read on its overview, its record. An active one's home is its plan.
+    expect(pathForSwitchingTo('beta', '/workspaces/old/overview')).toBe('/workspaces/beta');
+    expect(parseWorkspacePath(pathForSwitchingTo('beta', '/workspaces/old/overview'))).toEqual({ workspace: 'beta', section: 'plan' });
+  });
+
+  it('writes the overview of any workspace without a part, and leaves every other part alone', () => {
+    expect(workspacePath('alpha', 'overview')).toBe('/workspaces/alpha');
+    expect(workspacePath('feature/x y', 'overview')).toBe('/workspaces/feature%2Fx%20y');
+    expect(workspacePath('alpha', 'documents')).toBe('/workspaces/alpha/documents');
+    expect(workspacePath('alpha', 'knowledge')).toBe('/workspaces/alpha/knowledge');
+  });
+
+  it('keeps the parts an archived record shares with active workspaces', () => {
+    expect(pathForSwitchingTo('beta', '/workspaces/old/plan')).toBe('/workspaces/beta/plan');
+    expect(pathForSwitchingTo('beta', '/workspaces/old/documents')).toBe('/workspaces/beta/documents');
+  });
+});
+
 describe('pathForSwitchingTo', () => {
   it('keeps the part being read, for the other workspace', () => {
     expect(pathForSwitchingTo('beta', '/workspaces/alpha/plan')).toBe('/workspaces/beta/plan');

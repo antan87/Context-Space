@@ -18,6 +18,7 @@ import { apiFetch } from '../../lib/api/client.js';
 import { clipboardHtmlToText, readClipboardText, safeCopyToClipboard } from '../../lib/clipboard.js';
 import { terminalRequest, terminalToken, terminalSocketUrl, type TerminalInfo, type TerminalLaunch, type TerminalStatus } from './client.js';
 import { findFileReferences, type FileReference } from './fileReferences.js';
+import { hardWrapSkip } from './wrappedRows.js';
 import { findWebLinks } from './webLinks.js';
 import { toPromptText } from './promptFill.js';
 import { SHIFT_ENTER_SEQUENCE, terminalKeyAction } from './terminalKeys.js';
@@ -281,26 +282,37 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
           return true;
       }
     });
+    // How many leading blanks of a row to skip when it continues the row above: none for a row xterm itself wrapped, some
+    // when the CLI broke a long URL or path with a line break of its own. Null when the row starts a new line.
+    const continuationSkip = (at: number): number | null => {
+      const buffer = term.buffer.active;
+      const line = buffer.getLine(at);
+      if (!line || at === 0) return null;
+      if (line.isWrapped) return 0;
+      const previous = buffer.getLine(at - 1);
+      return previous ? hardWrapSkip(previous.translateToString(true), line.translateToString(true), term.cols) : null;
+    };
     const getWindowedRows = (bufferLineNumber: number) => {
       const buffer = term.buffer.active;
       let first = bufferLineNumber - 1;
-      while (first > 0 && buffer.getLine(first)?.isWrapped && bufferLineNumber - first <= 20) first--;
-      if (buffer.getLine(first)?.isWrapped) return null;
+      while (first > 0 && continuationSkip(first) !== null && bufferLineNumber - first <= 20) first--;
+      if (continuationSkip(first) !== null) return null;
       let last = bufferLineNumber - 1;
-      while (buffer.getLine(last + 1)?.isWrapped && last - first < 20) last++;
-      if (buffer.getLine(last + 1)?.isWrapped) return null;
-      const rows: { line: IBufferLine; text: string }[] = [];
+      while (continuationSkip(last + 1) !== null && last - first < 20) last++;
+      if (continuationSkip(last + 1) !== null) return null;
+      const rows: { line: IBufferLine; text: string; skip: number }[] = [];
       for (let at = first; at <= last; at++) {
         const line = buffer.getLine(at);
         if (!line) return null;
-        rows.push({ line, text: line.translateToString(at === last) });
+        const skip = at === first ? 0 : continuationSkip(at) ?? 0;
+        rows.push({ line, text: line.translateToString(at === last).slice(skip), skip });
       }
       const positionAt = (offset: number, ending: boolean) => {
         let before = 0;
         for (let row = 0; row < rows.length; row++) {
           const length = rows[row].text.length;
           if (offset < before + length || (ending && offset === before + length) || row === rows.length - 1) {
-            const local = Math.max(0, offset - before);
+            const local = Math.max(0, offset - before) + rows[row].skip;
             let column = 0;
             while (column < term.cols && rows[row].line.translateToString(false, 0, column).length < local) column++;
             return { x: column + (ending ? 0 : 1), y: first + row + 1 };

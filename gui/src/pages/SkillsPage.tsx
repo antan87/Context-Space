@@ -56,6 +56,10 @@ import {
   useDomainPacks,
 } from '../lib/api/queries.js';
 import { SkillDiagnosticsPanel } from '../features/skills/SkillDiagnosticsPanel.js';
+import {
+  canDeleteSkill, deleteWorkspaceFor, groupToggled, matchesSkillSearch, scopeLabel, selectionFor, selectionState, skillTargets, toggled,
+  type SelectionDraft,
+} from '../features/skills/skillSelection.js';
 import type { SkillCategory, SkillItem } from '../types.js';
 
 // Available icons
@@ -137,7 +141,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
   } = useWorkspaceSkills(
     selectedWorkspace !== 'global' ? selectedWorkspace : '',
   );
-  const [draftEnabledSkills, setDraftEnabledSkills] = useState<string[] | null>(null);
+  // Enable/disable choices not yet saved, kept per workspace with the revision they started from.
+  const [drafts, setDrafts] = useState<Record<string, SelectionDraft>>({});
 
   // Distinct domain and keyword tags available for skills assignment
   const availableSkillTags = Array.from(
@@ -156,17 +161,19 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
   const assignSkillsMutation = useAssignWorkspaceSkills();
 
   const isWorkspaceView = selectedWorkspace !== 'global';
-  const enabledSkillIds = new Set(draftEnabledSkills ?? workspaceSkillsConfig?.enabledSkills ?? []);
+  // The choice on screen is this workspace's unsaved one, else what is saved. A refetch never replaces an unsaved
+  // choice, and another workspace's choice never shows here.
+  const draft = isWorkspaceView ? drafts[selectedWorkspace] : undefined;
+  const draftEnabledSkills = isWorkspaceView ? selectionFor(draft, workspaceSkillsConfig) : null;
+  const selectionStatus = isWorkspaceView ? selectionState(draft, workspaceSkillsConfig) : 'saved';
+  const enabledSkillIds = new Set(draftEnabledSkills ?? []);
   const workspaceAssignmentReady =
     !isWorkspaceView || (!loadingWorkspaceConfig && !workspaceConfigError && !!workspaceSkillsConfig);
-
-  useEffect(() => {
-    if (!isWorkspaceView) {
-      setDraftEnabledSkills(null);
-      return;
-    }
-    if (workspaceSkillsConfig) setDraftEnabledSkills([...workspaceSkillsConfig.enabledSkills]);
-  }, [isWorkspaceView, selectedWorkspace, workspaceSkillsConfig]);
+  const discardDraft = () => setDrafts((previous) => {
+    const next = { ...previous };
+    delete next[selectedWorkspace];
+    return next;
+  });
 
   const toggleCategoryCollapse = (catId: string) => {
     setCollapsedCategories((prev) => ({ ...prev, [catId]: !prev[catId] }));
@@ -174,16 +181,7 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
 
   // ─── Filtered Skills by Category ──────────────────────────────────────────
 
-  const filteredSkills = skills.filter((s) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      s.title?.toLowerCase().includes(q) ||
-      s.name.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q) ||
-      s.tags?.some((t) => t.toLowerCase().includes(q))
-    );
-  });
+  const filteredSkills = skills.filter((s) => matchesSkillSearch(s, searchQuery));
 
   const skillsByCategory = categories.reduce<Record<string, SkillItem[]>>((acc, cat) => {
     acc[cat.id] = filteredSkills.filter((s) => s.category === cat.id);
@@ -241,7 +239,7 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
     const defaultScope = skill?.scope ?? (isWorkspaceView ? 'workspace' : 'global');
     setEditingSkillScope(defaultScope);
     setEditingSkillWorkspaceId(
-      isWorkspaceView ? selectedWorkspace : (workspaces[0]?.id || ''),
+      isWorkspaceView ? selectedWorkspace : (skillTargets(workspaces)[0]?.id || ''),
     );
     setEditingSkill(
       skill || {
@@ -262,8 +260,9 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
   };
 
   useEffect(() => {
-    if (!editingSkillWorkspaceId && workspaces.length > 0) {
-      setEditingSkillWorkspaceId(workspaces[0].id);
+    const targets = skillTargets(workspaces);
+    if (!editingSkillWorkspaceId && targets.length > 0) {
+      setEditingSkillWorkspaceId(targets[0].id);
     }
   }, [workspaces, editingSkillWorkspaceId]);
 
@@ -322,10 +321,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
 
   const confirmDeleteSkill = (skill: SkillItem, e: React.MouseEvent) => {
     e.stopPropagation();
-    const wsId = (skill.scope === 'workspace' || editingSkillScope === 'workspace')
-      ? (selectedWorkspace !== 'global' ? selectedWorkspace : (editingSkillWorkspaceId || undefined))
-      : undefined;
-    setDeleteTarget({ type: 'skill', id: skill.id, title: skill.title || skill.name, workspaceId: wsId });
+    // From the skill and the page being viewed, never from what the editor was last open on.
+    setDeleteTarget({ type: 'skill', id: skill.id, title: skill.title || skill.name, workspaceId: deleteWorkspaceFor(skill, selectedWorkspace) });
     setDeleteConfirmModalOpen(true);
   };
 
@@ -353,14 +350,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
   // ─── Workspace Assignment Toggles ─────────────────────────────────────────
 
   const handleToggleWorkspaceSkill = (skillId: string) => {
-    if (!isWorkspaceView || !workspaceAssignmentReady || draftEnabledSkills === null) return;
-    const current = new Set(draftEnabledSkills);
-    if (current.has(skillId)) {
-      current.delete(skillId);
-    } else {
-      current.add(skillId);
-    }
-    setDraftEnabledSkills(Array.from(current));
+    if (!isWorkspaceView || !workspaceAssignmentReady || !workspaceSkillsConfig) return;
+    setDrafts((previous) => ({ ...previous, [selectedWorkspace]: toggled(previous[selectedWorkspace], workspaceSkillsConfig, skillId) }));
   };
 
   const handleCopyBuiltInSkill = () => {
@@ -381,17 +372,9 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
   };
 
   const handleToggleCategoryAll = (catId: string, enable: boolean) => {
-    if (!isWorkspaceView || !workspaceAssignmentReady || draftEnabledSkills === null) return;
-    const catSkills = skillsByCategory[catId] || [];
-    const current = new Set(draftEnabledSkills);
-    for (const s of catSkills) {
-      if (enable) {
-        current.add(s.id);
-      } else {
-        current.delete(s.id);
-      }
-    }
-    setDraftEnabledSkills(Array.from(current));
+    if (!isWorkspaceView || !workspaceAssignmentReady || !workspaceSkillsConfig) return;
+    const ids = (skillsByCategory[catId] || []).map((skill) => skill.id);
+    setDrafts((previous) => ({ ...previous, [selectedWorkspace]: groupToggled(previous[selectedWorkspace], workspaceSkillsConfig, ids, enable) }));
   };
 
   const handleApplyWorkspaceSkills = async () => {
@@ -399,11 +382,13 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
     try {
       await assignSkillsMutation.mutateAsync({
         workspaceId: selectedWorkspace,
-        expectedRevision: workspaceSkillsConfig.revision ?? 0,
+        // The revision the choice started from, so a selection saved meanwhile by someone else is refused, not replaced.
+        expectedRevision: draft?.revision ?? workspaceSkillsConfig.revision ?? 0,
         enabledSkills: draftEnabledSkills,
         enabledAgents: workspaceSkillsConfig.enabledAgents ?? [],
         enabledCategories: categories.map((category) => category.id),
       });
+      discardDraft();
       showToast?.('Skill selection saved. Refresh the workspace to apply it.', 'success');
     } catch (error) {
       showToast?.(error instanceof Error ? error.message : 'Failed to save skill selection', 'error');
@@ -440,17 +425,21 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
     const skill = skills.find((s) => s.id === skillId);
     if (!skill || !skill.custom || isWorkspaceView || skill.category === targetCatId) return;
 
-    await saveSkillMutation.mutateAsync({
-      id: skill.id,
-      name: skill.name,
-      title: skill.title,
-      description: skill.description,
-      tags: skill.tags,
-      allowedTools: skill.allowedTools,
-      content: skill.content,
-      category: targetCatId,
-    });
-    showToast?.('Skill re-categorized', 'success');
+    try {
+      await saveSkillMutation.mutateAsync({
+        id: skill.id,
+        name: skill.name,
+        title: skill.title,
+        description: skill.description,
+        tags: skill.tags,
+        allowedTools: skill.allowedTools,
+        content: skill.content,
+        category: targetCatId,
+      });
+      showToast?.('Skill re-categorized', 'success');
+    } catch (err) {
+      showToast?.(err instanceof Error ? err.message : 'Failed to move the skill', 'error');
+    }
   };
 
   const handleOpenMoveModal = (skill: SkillItem, e: React.MouseEvent) => {
@@ -465,16 +454,22 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
       setSkillToMove(null);
       return;
     }
-    await saveSkillMutation.mutateAsync({
-      id: skillToMove.id,
-      name: skillToMove.name,
-      title: skillToMove.title,
-      description: skillToMove.description,
-      tags: skillToMove.tags,
-      allowedTools: skillToMove.allowedTools,
-      content: skillToMove.content,
-      category: targetCatId,
-    });
+    try {
+      await saveSkillMutation.mutateAsync({
+        id: skillToMove.id,
+        name: skillToMove.name,
+        title: skillToMove.title,
+        description: skillToMove.description,
+        tags: skillToMove.tags,
+        allowedTools: skillToMove.allowedTools,
+        content: skillToMove.content,
+        category: targetCatId,
+      });
+    } catch (err) {
+      // The dialog stays open so the move can be tried again or another category chosen.
+      showToast?.(err instanceof Error ? err.message : 'Failed to move the skill', 'error');
+      return;
+    }
     showToast?.('Skill moved to category', 'success');
     setMoveSkillModalOpen(false);
     setSkillToMove(null);
@@ -510,14 +505,14 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
               id="skill-scope"
               value={selectedWorkspace}
               onChange={(e) => setSelectedWorkspace(e.target.value)}
-              className="bg-transparent text-xs font-semibold focus:outline-none cursor-pointer text-foreground"
+              className="bg-transparent text-xs font-semibold cursor-pointer text-foreground"
             >
               <option value="global" className="bg-popover text-popover-foreground">
                 🌐 Global Skills Catalog
               </option>
               {workspaces.map((ws) => (
                 <option key={ws.id} value={ws.id} className="bg-popover text-popover-foreground">
-                  📁 {ws.id} ({ws.branchName})
+                  📁 {scopeLabel(ws)}
                 </option>
               ))}
 
@@ -536,11 +531,21 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
             </Button>
           )}
 
+          {isWorkspaceView && selectionStatus !== 'saved' && (
+            <>
+              <span role="status" className="text-xs text-muted-foreground">
+                {selectionStatus === 'outdated'
+                  ? 'This selection was changed elsewhere since you started. Discard your changes to start again.'
+                  : 'Unsaved changes'}
+              </span>
+              <Button size="sm" variant="outline" onClick={discardDraft}>Discard</Button>
+            </>
+          )}
           {isWorkspaceView && (
             <Button
               size="sm"
               onClick={handleApplyWorkspaceSkills}
-              disabled={!workspaceAssignmentReady || assignSkillsMutation.isPending || draftEnabledSkills === null}
+              disabled={!workspaceAssignmentReady || assignSkillsMutation.isPending || draftEnabledSkills === null || selectionStatus === 'outdated'}
             >
               {assignSkillsMutation.isPending ? 'Saving…' : 'Save selection'}
             </Button>
@@ -654,6 +659,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
                     aria-expanded={!isCollapsed}
                     onClick={() => toggleCategoryCollapse(category.id)}
                     onKeyDown={(e) => {
+                      // A key pressed on a button inside the header is that button's, not the header's.
+                      if (e.target !== e.currentTarget) return;
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
                         toggleCategoryCollapse(category.id);
@@ -754,8 +761,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
                     <div className="p-4 bg-background/50">
                       {catSkills.length === 0 ? (
                         <div className="border border-dashed border-border/80 rounded-lg p-6 text-center text-xs text-muted-foreground">
-                           No skills in this category.
-                           {!isWorkspaceView && (
+                           {searchQuery.trim() ? 'No skills in this category match your search.' : 'No skills in this category.'}
+                           {!isWorkspaceView && !searchQuery.trim() && (
                              <>{' '}Drag a custom skill here, or click{' '}
                                <button
                                  onClick={() => handleOpenSkillModal(undefined, category.id)}
@@ -781,6 +788,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
                                 role="button"
                                 tabIndex={0}
                                 onKeyDown={(event) => {
+                                  // A key pressed on a button inside the card is that button's, not the card's.
+                                  if (event.target !== event.currentTarget) return;
                                   if (event.key === 'Enter' || event.key === ' ') {
                                     event.preventDefault();
                                     handleOpenSkillModal(skill);
@@ -897,7 +906,7 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
                                       </Button>
                                     )}
 
-                                    {skill.custom && (
+                                    {canDeleteSkill(skill, isWorkspaceView) && (
                                       <Button
                                         variant="ghost"
                                         size="icon-xs"
@@ -941,6 +950,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
                       role="button"
                       tabIndex={0}
                       onKeyDown={(event) => {
+                        // A key pressed on a button inside the card is that button's, not the card's.
+                        if (event.target !== event.currentTarget) return;
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();
                           handleOpenSkillModal(skill);
@@ -1002,15 +1013,28 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
 
                         {skill.custom && (
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              onClick={(e) => confirmDeleteSkill(skill, e)}
-                              title="Delete skill"
-                              className="h-6 w-6 text-destructive hover:text-destructive cursor-pointer"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
+                            {!isWorkspaceView && (
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                onClick={(e) => handleOpenMoveModal(skill, e)}
+                                title="Move to a category"
+                                className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                              >
+                                <ArrowRightLeft className="h-3 w-3" />
+                              </Button>
+                            )}
+                            {canDeleteSkill(skill, isWorkspaceView) && (
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                onClick={(e) => confirmDeleteSkill(skill, e)}
+                                title="Delete skill"
+                                className="h-6 w-6 text-destructive hover:text-destructive cursor-pointer"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1263,16 +1287,16 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
                     <Label htmlFor="target-ws" className="text-[11px] font-medium text-muted-foreground">
                       Target Workspace:
                     </Label>
-                    {workspaces.length > 0 ? (
+                    {skillTargets(workspaces).length > 0 ? (
                       <select
                         id="target-ws"
                         value={editingSkillWorkspaceId}
                         onChange={(e) => setEditingSkillWorkspaceId(e.target.value)}
                         className="mt-1 w-full bg-background border border-border rounded-md px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
                       >
-                        {workspaces.map((ws) => (
+                        {skillTargets(workspaces).map((ws) => (
                           <option key={ws.id} value={ws.id}>
-                            📁 {ws.id} ({ws.branchName})
+                            📁 {scopeLabel(ws)}
                           </option>
                         ))}
                       </select>

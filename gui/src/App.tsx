@@ -6,12 +6,17 @@ import {
 } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AppSidebar } from './app/AppSidebar.js';
+import { defaultWorkspaceTarget } from './app/workspaceList.js';
 import { ToastStack, type Toast } from './app/ToastStack.js';
 import { VsCodeShell } from './app/VsCodeShell.js';
 import { SetupPage } from './features/setup/SetupPage.js';
 import { folderErrors, saveConfig as postConfig, type ConfigPathsReport } from './features/setup/setupApi.js';
 import { TranscriptDialog } from './features/sessions/TranscriptDialog.js';
 import { ChatDock } from './features/chat/ChatDock.js';
+import { floatingChatStore } from './features/chat/floatingChatStore.js';
+import { RUNNING_TERMINALS_KEY } from './features/chat/useRunningTerminals.js';
+import { endWorkspaceSession } from './features/workspace-shell/endWorkspaceSession.js';
+import { useDropArchivedTabs } from './app/useDropArchivedTabs.js';
 import { ChatHome } from './features/chat/ChatHome.js';
 import { ChatAttentionCards } from './features/chat/ChatAttentionCards.js';
 import { DeleteWorkspaceDialog } from './components/DeleteWorkspaceDialog.js';
@@ -73,6 +78,8 @@ import {
   PLAN_FILE,
 } from './brand.js';
 
+/** A stable empty list, so a hook that depends on the workspaces does not run again on every render while they load. */
+const NO_WORKSPACES: Feature[] = [];
 const isVsCode = new URLSearchParams(window.location.search).get('env') === 'vscode';
 const nativeUpdateBridge = typeof window !== 'undefined' ? (window.contextspaceBridge?.updates || window.nexusBridge?.updates) : undefined;
 let toastIdCounter = 0;
@@ -205,6 +212,7 @@ function AppInner() {
     }
   }, [onStatusRoute, hasNextPage, isFetchingStatuses, statusesError, fetchNextPage]);
   const workspaces: Feature[] = workspacesQuery.data ?? [];
+  useDropArchivedTabs(workspacesQuery.data ?? NO_WORKSPACES);
   // Archived workspaces are records: pages that start work only offer active ones.
   const activeWorkspaces = useMemo(() => (workspacesQuery.data ?? []).filter((w) => !w.archivedAt), [workspacesQuery.data]);
   const workspacesLoading = workspacesQuery.isLoading;
@@ -956,8 +964,15 @@ Core Instructions:
   };
 
   const handleArchived = async (wsName: string) => {
+    // A record has no session: its terminals stop and its tab closes, without moving the person to another chat.
+    const ended = await endWorkspaceSession(wsName);
+    void queryClient.invalidateQueries({ queryKey: RUNNING_TERMINALS_KEY });
     await fetchWorkspaces();
-    showToast(`Archived ${wsName}. Its record stays readable under Archived workspaces.`, 'success');
+    if (ended.failed > 0) {
+      showToast(`Archived ${wsName}, but ${ended.failed === 1 ? 'a running session' : `${ended.failed} running sessions`} could not be stopped and may still be running.`, 'error');
+      return;
+    }
+    showToast(`Archived ${wsName}.${ended.stopped > 0 ? ' Its running session was stopped.' : ''} Its record stays readable under Archived workspaces.`, 'success');
   };
 
   const handleUnarchiveWorkspace = async (wsName: string) => {
@@ -979,12 +994,15 @@ Core Instructions:
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        // Its session tab goes with it, or the sidebar keeps a row that leads to a workspace that is not there.
+        floatingChatStore.removeTab(wsName);
+        // The list is read again before leaving, or the address that leads to "a workspace" still finds this one.
+        await fetchWorkspaces();
         if (activeWsId === wsName) {
           // Leave the deleted workspace's URL too — otherwise a reload would
           // re-select the dead id and poll its services endpoint forever.
           navigate('/workspaces');
         }
-        await fetchWorkspaces();
         showToast(`Workspace ${wsName} successfully deleted.`, 'success');
         setWorkspaceToDelete(null);
       } else {
@@ -1148,7 +1166,8 @@ Core Instructions:
     />
   ) : null;
 
-  const defaultWorkspaceBranch = activeWsId || (workspaces.length > 0 ? workspaces[0].branchName : null);
+  const { openTabs: sessionTabs, activeTab: lastChat } = floatingChatStore.getState();
+  const defaultWorkspaceBranch = defaultWorkspaceTarget(activeWorkspaces.map((workspace) => workspace.branchName), activeWsId, lastChat, sessionTabs);
   const isWorkspaceRoute = location.pathname.startsWith('/workspaces');
 
   return (

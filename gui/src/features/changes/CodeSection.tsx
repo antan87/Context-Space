@@ -23,6 +23,7 @@ import { DiffErrorBoundary } from './DiffErrorBoundary.js';
 import { PluggableDiffViewer } from './PluggableDiffViewer.js';
 import { FileTree, buildCompactedTree, filterTreeFiles, flattenTreeFiles, getAllDirectoryPaths } from './FileTree.js';
 import { fileTypeGlyph } from './fileTypeGlyph.js';
+import { OPENED_UNLISTED, withOpenedFile } from './openedFileRow.js';
 import { getEditorLabel, openInVsCodeAtLine } from './adapters/ExternalDiffLauncher.js';
 import { disposeChangesetModelsAfterEditors } from './utils/changesetModelStore.js';
 import { globalChangesetSymbolIndex, useChangesetSymbolStore, type ChangesetSymbol, type RawAstSymbol } from './utils/changesetSymbolIndex.js';
@@ -218,12 +219,16 @@ export function CodeSection(props: CodeSectionProps) {
   }, [active, base, mode, listingToken]);
 
   // ─── Tree model ────────────────────────────────────────────────────────────
-  const totalFiles = useMemo(() => repos.reduce((sum, repo) => sum + (repo.files?.length ?? 0), 0), [repos]);
-  const trees = useMemo(() => repos.map((repo) => {
+  // A file opened by name that git's listing leaves out (a build output, a local config) gets one row of its own, so the
+  // tree has the open file in it. It is judged against the Files listing, once that has arrived.
+  const openedUnlisted = mode === 'files' && listedMode === 'files' && !loading && selection?.pinned ? selection : null;
+  const shownRepos = useMemo(() => withOpenedFile(repos, openedUnlisted), [repos, openedUnlisted]);
+  const totalFiles = useMemo(() => shownRepos.reduce((sum, repo) => sum + (repo.files?.length ?? 0), 0), [shownRepos]);
+  const trees = useMemo(() => shownRepos.map((repo) => {
     const files = searching ? filterTreeFiles(repo.files ?? [], deferredQuery) : (repo.files ?? []);
     const root = buildCompactedTree(files);
     return { repo, files, root, folders: getAllDirectoryPaths(root), ordered: flattenTreeFiles(root) };
-  }), [repos, searching, deferredQuery]);
+  }), [shownRepos, searching, deferredQuery]);
   const matchingFiles = useMemo(() => trees.reduce((sum, tree) => sum + tree.files.length, 0), [trees]);
   const ordered = useMemo(() => trees.flatMap(({ repo, ordered: files }) => files.map((file) => ({ repoName: repo.repoName, repoPath: repo.repoPath, file: file.file }))), [trees]);
   const currentIndex = selection ? ordered.findIndex((entry) => sameFile(entry, selection)) : -1;
@@ -299,12 +304,19 @@ export function CodeSection(props: CodeSectionProps) {
     else setNotice(asked);
   }, [request]);
 
-  // A file opened by name that is not a change can only be shown in the tree under Files.
+  // A file opened by name that is not a change can only be shown in the tree under Files. The listing can be up to
+  // REFRESH_MS old, and a file made moments ago may be a change it does not have yet, so it is listed again once
+  // before the view moves, and Changes stays when the file turns up in it. `revision` is left out of the
+  // dependencies on purpose: the answer is judged when that listing has arrived, not when it was asked for.
+  const relisted = useRef<string | null>(null);
   useEffect(() => {
-    if (!selection?.pinned || mode !== 'changes' || listedMode !== 'changes') return;
+    if (!selection?.pinned || mode !== 'changes' || listedMode !== 'changes' || loading) return;
     const listed = repos.some((repo) => repo.repoName === selection.repoName && repo.files.some((file) => file.file === selection.file));
-    if (!listed) setMode('files');
-  }, [selection, mode, listedMode, repos]);
+    if (listed) { relisted.current = null; return; }
+    const asked = `${selection.repoName}\0${selection.file}\0${selection.jump}`;
+    if (relisted.current !== asked) { relisted.current = asked; setRevision((value) => value + 1); return; }
+    setMode('files');
+  }, [selection, mode, listedMode, repos, loading]);
 
   // ─── The open file ─────────────────────────────────────────────────────────
   const selectedEntry = selection ? repos.find((repo) => repo.repoName === selection.repoName)?.files.find((file) => file.file === selection.file) : undefined;
@@ -510,12 +522,14 @@ export function CodeSection(props: CodeSectionProps) {
                   renderFile={(file) => {
                     const glyph = fileTypeGlyph(file.file);
                     const Glyph = glyph.icon;
-                    const changed = file.type !== 'unchanged';
+                    const unlisted = file.type === OPENED_UNLISTED;
+                    const changed = file.type !== 'unchanged' && !unlisted;
                     return (
-                      <span className="flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-1" title={`${file.file}${changed ? ` · ${file.type}` : ''}`}>
+                      <span className="flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-1" title={`${file.file}${unlisted ? ' · opened here, ignored by git or not listed yet' : changed ? ` · ${file.type}` : ''}`}>
                         <Glyph className={cn('size-3.5 shrink-0', glyph.className)} aria-hidden="true" />
                         <span className={cn('truncate', file.type === 'deleted' && 'line-through opacity-70')}>{file.file.split('/').at(-1)}</span>
-                        <span className="sr-only">{glyph.label}{changed ? `, ${file.type}` : ''}</span>
+                        <span className="sr-only">{glyph.label}{unlisted ? ', opened here, ignored by git or not listed yet' : changed ? `, ${file.type}` : ''}</span>
+                        {unlisted && <span aria-hidden="true" title="Ignored by git" className="ml-auto shrink-0 font-mono text-[10px] font-semibold text-muted-foreground">I</span>}
                         {changed && (
                           <span aria-hidden="true" title={file.type} className={cn('ml-auto shrink-0 font-mono text-[10px] font-semibold',
                             file.type === 'added' || file.type === 'untracked' ? 'text-emerald-500'
