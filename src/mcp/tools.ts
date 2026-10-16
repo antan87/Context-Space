@@ -1285,7 +1285,7 @@ export const tools: NexusFlowTool[] = [
             timestamp: entry.timestamp,
             ...(inPlan ? { planQuestion: inPlan.label } : {}),
             message: inPlan
-              ? `${waitNote} It is in the plan as ${inPlan.label}; when the user answers, record it: ctxspace plan answer ${inPlan.id} "<their answer>".`
+              ? `${waitNote} It is in the plan as ${inPlan.label}; when the user answers, record their words: ctxspace plan answer ${inPlan.id} "<their answer>".`
               : waitNote,
           });
         });

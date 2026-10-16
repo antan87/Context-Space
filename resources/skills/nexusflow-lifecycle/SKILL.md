@@ -68,7 +68,9 @@ edit `contextspace-plan.json` by hand. Always write an item's name with its code
   `block <code> --reason` when stuck.
 - Every close has a reason. You may finish, drop, put off and reopen any item, milestones
   too, when you judge the work says so; tell the user in the chat, and they can reopen it.
-  Record an answer to the user's question only when the user gave it.
+  When the user answers in the chat, however you asked, record it on the plan's question with
+  `answer <code> "<their words>"`, or drop a question their answer makes moot. Never answer
+  the user's question with your own guess.
 - Nothing starts by itself. A milestone is done when everything it waits for is done and its
   check passes on the latest code.
 - Report back with what you changed or finished, what you need from the user, and what is next.

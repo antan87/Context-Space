@@ -62,6 +62,7 @@ import {
 import { createWorkspace, listWorkspaces, loadFeatureConfig, saveFeatureConfig, loadWorkspaceManifest, deleteWorkspace, addRepoToWorkspace, isolateWorkspaceRepo } from './core/workspace.js';
 import { loadWorkspaceState } from './core/workspace-state.js';
 import { acknowledgeInputRequests, latestInputRequest, type InputRequest } from './core/attention.js';
+import { answerChatQuestionsInPlan } from './core/plan-questions.js';
 import {
   ScreenSharingOffError, getScreenSharing, readScreenContext, saveScreenContext, setScreenSharing,
 } from './core/screen-context.js';
@@ -3053,13 +3054,16 @@ app.post('/api/workspace/:id/lifecycle/reopen', async (c) => {
 });
 
 // 13c-2d. Mark every question the AI has asked so far as answered. Replies typed into
-// the chat terminal never reach the ledger, so the app records this explicitly.
+// the chat terminal never reach the ledger, so the app records this explicitly. The same
+// questions in the plan are answered too; a plan that cannot be changed keeps the answer.
 app.post('/api/workspace/:id/input-requests/acknowledge', async (c) => {
   try {
     const id = c.req.param('id');
     const config = await loadConfig();
     const workspacePath = resolveWorkspacePath(config.workspacesDir, id);
-    return c.json(await acknowledgeInputRequests(workspacePath));
+    const { acknowledged, timestamp, requests } = await acknowledgeInputRequests(workspacePath);
+    const planAnswered = await answerChatQuestionsInPlan(workspacePath, requests.map((request) => request.message)).catch(() => []);
+    return c.json({ acknowledged, timestamp, planAnswered });
   } catch (error) {
     return errorResponse(c, error);
   }

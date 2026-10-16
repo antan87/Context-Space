@@ -22,7 +22,7 @@ import {
   type PlanChange,
   type PlanDocument,
 } from './plan.js';
-import { PLAN_RULES, PLAN_SECTIONS, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
+import { ANSWERED_IN_CHAT, PLAN_RULES, PLAN_SECTIONS, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
 
 const user: PlanActor = { by: 'user' };
 const claude: PlanActor = { by: 'agent', harness: 'claude' };
@@ -210,6 +210,16 @@ describe('closing needs a reason', () => {
     await expect(change({ type: 'answer', id: 'T1', answer: 'x' })).rejects.toThrow(/Only a question has an answer/);
   });
 
+  it('lets the AI write the words over an answer given in the chat, and changes no other answer', async () => {
+    await change({ type: 'add', kind: 'question', title: 'Which branch?', owner: 'user' }, claude);
+    await change({ type: 'answer', id: 'Q1', answer: ANSWERED_IN_CHAT });
+    const { item } = await change({ type: 'answer', id: 'Q1', answer: 'release, not main' }, claude);
+    expect(item).toMatchObject({ status: 'done', resolution: 'release, not main' });
+    expect(item.history.map((entry) => [entry.by, entry.action])).toEqual([['claude', 'added'], ['user', 'answered'], ['claude', 'answered']]);
+    // Now it holds the developer's words, so it is settled like any other answer.
+    await expect(change({ type: 'answer', id: 'Q1', answer: 'main' }, claude)).rejects.toThrow(/already done\. Reopen it first/);
+  });
+
   it('cleans control characters and line breaks out of a reason', async () => {
     await change({ type: 'add', kind: 'task', title: 'Work' });
     const { item } = await change({ type: 'block', id: 'T1', reason: 'Need a key\u001b[31m\n\n2. fake' });
@@ -349,6 +359,13 @@ describe('reopening and editing', () => {
     await expect(change({ type: 'reopen', id: 'T1', reason: 'x' })).resolves.toBeDefined();
     await change({ type: 'add', kind: 'task', title: 'Fresh' });
     await expect(change({ type: 'reopen', id: 'T2', reason: 'x' })).rejects.toThrow(/nothing to reopen/);
+  });
+
+  it('puts a reopened question back on the list: it is answered, not worked on', async () => {
+    await change({ type: 'add', kind: 'question', title: 'Which branch?', owner: 'user' });
+    await change({ type: 'answer', id: 'Q1', answer: 'main' });
+    const { item } = await change({ type: 'reopen', id: 'Q1', reason: 'Asked again' }, claude);
+    expect(item).toMatchObject({ status: 'todo', reopenCount: 1 });
   });
 
   it('will not change what a finished item waits for until it is reopened', async () => {

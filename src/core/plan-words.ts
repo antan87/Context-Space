@@ -71,7 +71,7 @@ export const PLAN_WORKFLOW: readonly { text: string; list?: readonly string[] }[
     'a question for the user: `ctxspace plan add question "<question>" --owner user --before <code it holds up>`',
     'stuck: `ctxspace plan block <code> --reason "<what you wait for>"`',
   ] },
-  { text: 'When the user tells you an answer or a decision, record it: `ctxspace plan answer <code> "<the answer>"`. Never answer the user\'s question with your own guess.' },
+  { text: 'When the user answers or decides something in the chat, however you asked, record it on the plan\'s question: `ctxspace plan answer <code> "<the answer>"`. Drop a question their answer makes moot. Never answer the user\'s question with your own guess.' },
   { text: 'When you judge an item done, a milestone too, finish it: `ctxspace plan done <code> --resolution "<what came out of it>"`. A milestone\'s check runs first. Drop or put off what is no longer needed, with the reason.' },
   { text: 'Report back in three short parts: what you changed or finished, what you need from the user, and what is next. Write the name with every code: "M2 CSV export endpoint", never "M2" alone.' },
 ];
@@ -80,9 +80,15 @@ export const PLAN_WORKFLOW: readonly { text: string; list?: readonly string[] }[
 export const WHO_ACTS = [
   'Who acts: every change is made as the AI and recorded with its name.',
   'You may finish, drop, put off and reopen any item, milestones too. The user sees it in the chat and the plan, and can reopen it.',
-  'Record an answer to the user\'s question only when the user gave it.',
+  'Record an answer to the user\'s question only when the user gave it, wherever they gave it.',
   'The user can act as themselves with --as user in their own terminal.',
 ] as const;
+
+/**
+ * What the app records on the plan's copy of a chat question when the developer replies in the chat. The app sees
+ * that they replied, not what they said, so the AI then writes their words over it with `ctxspace plan answer`.
+ */
+export const ANSWERED_IN_CHAT = 'Answered in the chat.';
 
 /** Codes like M2 are for tools; people read names. */
 export const NAMES_FIRST = 'Always write an item\'s name with its code, for example "M2 CSV export endpoint".';

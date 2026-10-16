@@ -360,6 +360,30 @@ test.describe('the plan in the chat', () => {
     await expect.poll(() => changes).toEqual([{ change: { type: 'answer', id: 'Q1', answer: 'No, after an hour' }, ifRevision: 3 }]);
   });
 
+  test('a reply in the chat answers the same question in the plan, so it is not asked again', async ({ page }) => {
+    let acknowledged = 0;
+    let planReads = 0;
+    const plan = (status: 'todo' | 'done') => planView([
+      planItem({ id: 'b', title: 'Add cache tests', status: 'in_progress' }),
+      planItem({ id: 'Q1', kind: 'question', title: 'Which cache backend should we use?', owner: 'user', status, holdsUp: ['b Add cache tests'], history: [{ at: minutesAgo(3), by: 'claude', action: 'added' }] }),
+    ]);
+    // The server answers the plan's copy when it records the reply.
+    await page.route('**/api/workspace/feature-x/input-requests/acknowledge', async (route) => { acknowledged++; await route.fulfill({ json: { acknowledged: 1, planAnswered: ['Q1 Which cache backend should we use?'] } }); });
+    await page.route('**/api/workspace/feature-x/plan/items', (route) => { planReads++; return route.fulfill({ json: plan(acknowledged ? 'done' : 'todo') }); });
+    await openChat(page, { facts: () => factsBody({ question: acknowledged === 0 }), target: 'claude' });
+    const answerBar = page.getByRole('group', { name: 'The AI is waiting for your answer' });
+    await expect(answerBar).toContainText('Holds up Add cache tests');
+    const readsBefore = planReads;
+
+    await page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-pane').click();
+    await page.keyboard.type('Redis');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => acknowledged).toBe(1);
+    await expect.poll(() => planReads).toBeGreaterThan(readsBefore);
+    await expect(answerBar).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'A question in the plan waits for your answer' })).toHaveCount(0);
+  });
+
   test('says what the AI closed while you were in the chat, and reopens it from there', async ({ page }) => {
     // Forget what was seen on the first load only: the reload below must keep it.
     await page.addInitScript(() => { if (!sessionStorage.getItem('reloaded')) window.localStorage.removeItem('contextspace.strip.seen-closes.feature-x'); });

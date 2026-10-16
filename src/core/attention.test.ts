@@ -303,11 +303,13 @@ describe('latestInputRequest and acknowledgements', () => {
 });
 
 describe('acknowledgeInputRequests', () => {
-  it('records an acknowledgement, reports how many questions it answered and clears the alert', async () => {
+  it('records an acknowledgement, reports the questions it answered and clears the alert', async () => {
     const { dir, ledger } = await workspace();
     await fs.writeFile(ledger, line(request({ id: 'a', timestamp: ago(20 * MIN) })) + line(request({ id: 'b', timestamp: ago(10 * MIN) })), 'utf8');
     const result = await acknowledgeInputRequests(dir, NOW);
-    expect(result).toEqual({ acknowledged: 2, timestamp: new Date(NOW).toISOString() });
+    expect(result).toMatchObject({ acknowledged: 2, timestamp: new Date(NOW).toISOString() });
+    // The questions themselves, so the same ones in the plan can be answered too.
+    expect(result.requests.map((answered) => answered.id)).toEqual(['a', 'b']);
     expect(await latestInputRequest(dir, NOW)).toBeNull();
     expect(await listOpenInputRequests(dir, NOW)).toEqual([]);
     const written = (await fs.readFile(ledger, 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
@@ -316,7 +318,7 @@ describe('acknowledgeInputRequests', () => {
 
   it('works on a workspace with no ledger yet and answers nothing', async () => {
     const { dir } = await workspace();
-    expect(await acknowledgeInputRequests(dir, NOW)).toEqual({ acknowledged: 0, timestamp: new Date(NOW).toISOString() });
+    expect(await acknowledgeInputRequests(dir, NOW)).toEqual({ acknowledged: 0, timestamp: new Date(NOW).toISOString(), requests: [] });
   });
 
   it('does not hide a question asked after the acknowledgement', async () => {

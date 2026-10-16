@@ -22,6 +22,7 @@ import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
 import {
+  ANSWERED_IN_CHAT,
   KIND_WORDS,
   PLAN_KINDS,
   PLAN_STATUSES,
@@ -615,7 +616,9 @@ export function applyPlanChange(
       const resolution = isAnswer
         ? cleanNote(change.answer, `Answering needs the answer: say what was decided for ${itemLabel(item)}.`)
         : cleanNote(change.resolution, `Closing needs a reason: say what came out of ${itemLabel(item)}.`);
-      if (item.status === 'done' || item.status === 'dropped') {
+      // A reply in the chat answers the question before the AI writes down what the developer said.
+      const addsChatWords = isAnswer && item.status === 'done' && item.resolution === ANSWERED_IN_CHAT;
+      if ((item.status === 'done' || item.status === 'dropped') && !addsChatWords) {
         throw new PlanError(`${itemLabel(item)} is already ${statusLabel(item.status).toLowerCase()}. Reopen it first to change that.`, 'not_allowed');
       }
       assertWaitsSettled(plan, item, isAnswer ? 'answer' : 'finish');
@@ -670,8 +673,8 @@ export function applyPlanChange(
       if (item.status === 'todo' || item.status === 'blocked') {
         throw new PlanError(`${itemLabel(item)} is ${statusLabel(item.status).toLowerCase()}, so there is nothing to reopen.`, 'not_allowed');
       }
-      // Finished work goes back into progress; parked or dropped work goes back to the list.
-      item.status = item.status === 'done' || item.status === 'in_progress' ? 'in_progress' : 'todo';
+      // Finished work goes back into progress; parked or dropped work, and a question, which is answered rather than worked on, go back to the list.
+      item.status = item.kind !== 'question' && (item.status === 'done' || item.status === 'in_progress') ? 'in_progress' : 'todo';
       delete item.resolution;
       delete item.closedAt;
       delete item.revisitWhen;
