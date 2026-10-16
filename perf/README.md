@@ -79,6 +79,14 @@ backend per sample and times each endpoint the GUI calls at startup, with the
 processes, git runs and history reads of each request. Each request is capped at
 120 s. `--cpu-prof` also writes a V8 CPU profile of one startup sequence.
 
+## Work sweep
+
+`node perf/sweep.mjs [--tier L] [--idle-seconds 60]` takes the real backend and production GUI through a session of
+ordinary use: startup, opening a workspace, a minute idle on the chat, the plan and the code, twenty switches across
+up to five workspaces, and a minute idle after them. Each phase reports requests and git processes by route, history read
+and backend CPU (Linux). The idle minute after the switches should cost what the one before them did; more means
+something the user left keeps working. Page elements before and after the switches show what stays behind.
+
 ## Instrumentation in the product
 
 - **GUI:** `gui/src/lib/perfMarks.ts` records `cs:` User Timing marks and the
