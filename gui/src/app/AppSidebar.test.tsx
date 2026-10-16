@@ -296,7 +296,8 @@ describe('AppSidebar - Open Sessions and Close Controls', () => {
 
 describe('AppSidebar - Active and Archived lists', () => {
   const archivedAlpha: Feature = { ...mockWorkspaces[0]!, archivedAt: '2026-10-10T10:00:00Z' };
-  const pressed = (html: string, label: string) => new RegExp(`aria-pressed="true"[^>]*>${label.replace(/[()]/g, '\\$&')}<`).test(html);
+  const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pressed = (html: string, label: string) => new RegExp(`aria-pressed="true"[^>]*>${escapeRegExp(label)}<`).test(html);
 
   it('opens on the archived list when an archived workspace is on screen', () => {
     const html = renderSidebar({ workspaces: [archivedAlpha, mockWorkspaces[1]!], activeWsId: 'feat/alpha' }, '/workspaces/feat%2Falpha/overview');
