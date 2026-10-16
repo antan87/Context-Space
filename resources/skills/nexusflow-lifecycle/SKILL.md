@@ -59,8 +59,8 @@ the selected milestone. Project sources remain owned by their originating worksp
 
 Change the plan one item at a time with `ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`;
 `ctxspace plan --help` shows the options and examples, and `--json` gives every field. Never
-edit `contextspace-plan.json` by hand. Always write an item's name with its code:
-"M2 CSV export endpoint", never "M2" alone.
+edit `contextspace-plan.json` by hand. Codes are for commands: to the user, call an item by
+its name ("the CSV export endpoint"), not its code ("M2").
 
 - Start with `ctxspace plan`; continue what is in progress for you, or `start` what is ready.
 - Keep it true while you work: add new work with `add task "<name>" --before <code>`, a
@@ -73,7 +73,9 @@ edit `contextspace-plan.json` by hand. Always write an item's name with its code
   the user's question with your own guess.
 - Nothing starts by itself. A milestone is done when everything it waits for is done and its
   check passes on the latest code.
-- Report back with what you changed or finished, what you need from the user, and what is next.
+- Report back in plain words, for someone who has not read the plan: what works now or was
+  decided, what you need from the user, and what you do next. Leave out plan bookkeeping
+  such as "recorded", "proposed" or "blocked on".
 
 Assignments and sources keep their MCP tools: read `get_work_context` first and use
 `guidance.revision` with `update_work_assignment`, `add_work_document` and

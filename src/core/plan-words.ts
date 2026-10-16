@@ -73,13 +73,12 @@ export const PLAN_WORKFLOW: readonly { text: string; list?: readonly string[] }[
   ] },
   { text: 'When the user answers or decides something in the chat, however you asked, record it on the plan\'s question: `ctxspace plan answer <code> "<the answer>"`. Drop a question their answer makes moot. Never answer the user\'s question with your own guess.' },
   { text: 'When you judge an item done, a milestone too, finish it: `ctxspace plan done <code> --resolution "<what came out of it>"`. A milestone\'s check runs first. Drop or put off what is no longer needed, with the reason.' },
-  { text: 'Report back in three short parts: what you changed or finished, what you need from the user, and what is next. Write the name with every code: "M2 CSV export endpoint", never "M2" alone.' },
+  { text: 'Report back in plain words, for someone who has not read the plan: what works now or was decided, what you need from the user, and what you do next. Call things by name, not code ("the CSV export", not "M2"), and leave out plan bookkeeping such as "recorded", "proposed" or "blocked on".' },
 ];
 
 /** Who a change is made as, one sentence a line, for `ctxspace plan --help` and AGENTS.md. */
 export const WHO_ACTS = [
   'Who acts: every change is made as the AI and recorded with its name.',
-  'You may finish, drop, put off and reopen any item, milestones too. The user sees it in the chat and the plan, and can reopen it.',
   'Record an answer to the user\'s question only when the user gave it, wherever they gave it.',
   'The user can act as themselves with --as user in their own terminal.',
 ] as const;
@@ -90,8 +89,8 @@ export const WHO_ACTS = [
  */
 export const ANSWERED_IN_CHAT = 'Answered in the chat.';
 
-/** Codes like M2 are for tools; people read names. */
-export const NAMES_FIRST = 'Always write an item\'s name with its code, for example "M2 CSV export endpoint".';
+/** Codes like M2 are for commands; people read names. */
+export const NAMES_FIRST = 'To the user, call an item by its name ("the CSV export endpoint"), not its code ("M2"). Codes are for commands.';
 
 /** Statuses that still need someone to act. */
 export const OPEN_STATUSES: readonly PlanStatus[] = ['todo', 'in_progress', 'blocked'];

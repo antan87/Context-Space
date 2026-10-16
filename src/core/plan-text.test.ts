@@ -173,7 +173,7 @@ describe('small helpers', () => {
   it('states the six rules and names-first in the help', () => {
     const help = renderPlanRules();
     PLAN_RULES.forEach((rule, index) => expect(help).toContain(`${index + 1}. ${rule}`));
-    expect(help).toContain('M2 CSV export endpoint');
+    expect(help).toContain('call an item by its name ("the CSV export endpoint"), not its code ("M2")');
     expect(help).toContain('To do, In progress, Blocked, Done, Dropped, Later');
   });
 
@@ -184,7 +184,9 @@ describe('small helpers', () => {
     const routine = PLAN_WORKFLOW.map((step) => step.text).join(' ');
     expect(routine).toContain('Never answer the user\'s question with your own guess');
     expect(routine).toContain('When you judge an item done, a milestone too, finish it');
-    expect(PLAN_WORKFLOW.at(-1)!.text).toContain('never "M2" alone');
+    // Reported to a person: names, not codes, and no plan bookkeeping.
+    expect(PLAN_WORKFLOW.at(-1)!.text).toMatch(/^Report back in plain words, for someone who has not read the plan/);
+    expect(PLAN_WORKFLOW.at(-1)!.text).toContain('not "M2"');
   });
 
   it('writes the Plan section of AGENTS.md: command, numbered routine with its changes, rules, who acts', () => {
@@ -194,9 +196,9 @@ describe('small helpers', () => {
     expect(text).toContain('Never edit `contextspace-plan.json` by hand.');
     expect(text).toContain('.\\.contextspace\\bin\\ctxspace.cmd plan');
     expect(text).toContain('3. Keep the plan true while you work, one change at a time:\n   - new work you find:');
-    expect(text).toContain('6. Report back in three short parts');
+    expect(text).toContain('6. Report back in plain words');
     PLAN_RULES.forEach((rule, index) => expect(text).toContain(`${index + 1}. ${rule}`));
-    expect(text.trimEnd().split('\n').at(-1)).toBe(WHO_ACTS.slice(0, 3).join(' '));
+    expect(text.trimEnd().split('\n').at(-1)).toBe(WHO_ACTS.slice(0, 2).join(' '));
     // Told how a person acts as the user, an AI tried it: AGENTS.md leaves it out.
     expect(text).not.toContain('--as user');
   });
