@@ -60,7 +60,6 @@ async function configuredRuntimes(root: string): Promise<CliRuntime[]> {
   };
   const launcher = await read(CLI_LAUNCHER);
   const exec = launcher ? new RegExp(`^exec ${SHELL_ARG} ${SHELL_ARG} "\\$@"$`, 'm').exec(launcher) : null;
-  if (launcher && exec) found.push({ command: unquoteShell(exec[1]), entry: unquoteShell(exec[2]), electron: launcher.includes('ELECTRON_RUN_AS_NODE=1') });
   const servers: unknown[] = [];
   for (const [relative, key] of [['.mcp.json', 'mcpServers'], ['.cursor/mcp.json', 'mcpServers'], ['.vscode/mcp.json', 'servers']]) {
     try { servers.push(JSON.parse((await read(relative)) ?? 'null')?.[key]?.[BRAND_CONFIG.mcp.serverName]); } catch { /* an unreadable config is rewritten below, or reported there */ }
@@ -71,6 +70,8 @@ async function configuredRuntimes(root: string): Promise<CliRuntime[]> {
       found.push({ command: server.command, entry: server.args[0], electron: server.env?.ELECTRON_RUN_AS_NODE === '1' });
     }
   }
+  // Last: the launcher writes paths with forward slashes, so on a tie the configs' own form wins and nothing churns.
+  if (launcher && exec) found.push({ command: unquoteShell(exec[1]), entry: unquoteShell(exec[2]), electron: launcher.includes('ELECTRON_RUN_AS_NODE=1') });
   return found;
 }
 

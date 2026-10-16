@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execa } from 'execa';
-import { parse } from 'smol-toml';
+import { parse, stringify } from 'smol-toml';
 import { BRAND_CONFIG } from './constants.js';
 import { generateWorkspaceTools, workspaceToolsNeedRepair, CLI_LAUNCHER, CLI_ALIAS_LAUNCHER, CLAUDE_PLAN_PERMISSIONS } from './workspace-tools.js';
 let root: string;
@@ -95,6 +95,8 @@ async function installRuntime(name: string, version: string, electron = false) {
   await fs.writeFile(path.join(dir, 'dist/index.js'), '');
   return { dir, runtime: { command: process.execPath, entry: path.join(dir, 'dist/index.js'), electron } };
 }
+/** Launchers write paths with forward slashes, even on Windows. */
+const slashes = (value: string) => value.replaceAll('\\', '/');
 const mcpEntry = async () => JSON.parse(await fs.readFile(path.join(root, '.mcp.json'), 'utf8')).mcpServers[BRAND_CONFIG.mcp.serverName].args[0];
 
 it('does not move a workspace to an older runtime', async () => {
@@ -118,9 +120,9 @@ it('moves a workspace up to a newer runtime, and every config with it', async ()
   try {
     await generateWorkspaceTools(root, ['claude', 'codex', 'copilot'], old.runtime);
     await generateWorkspaceTools(root, ['claude', 'codex', 'copilot'], app.runtime);
-    expect(await fs.readFile(path.join(root, CLI_LAUNCHER), 'utf8')).toContain(app.runtime.entry);
+    expect(await fs.readFile(path.join(root, CLI_LAUNCHER), 'utf8')).toContain(slashes(app.runtime.entry));
     expect(await mcpEntry()).toBe(app.runtime.entry);
-    expect(await fs.readFile(path.join(root, '.vscode/mcp.json'), 'utf8')).toContain(app.runtime.entry);
+    expect(JSON.parse(await fs.readFile(path.join(root, '.vscode/mcp.json'), 'utf8')).servers[BRAND_CONFIG.mcp.serverName].args[0]).toBe(app.runtime.entry);
   } finally { await fs.rm(old.dir, { recursive: true, force: true }); await fs.rm(app.dir, { recursive: true, force: true }); }
 });
 
@@ -130,10 +132,10 @@ it('pulls a config left on an older runtime up to the newest one the workspace h
   try {
     await generateWorkspaceTools(root, ['claude'], app.runtime);
     await fs.mkdir(path.join(root, '.codex'));
-    await fs.writeFile(path.join(root, '.codex/config.toml'), `[mcp_servers.${BRAND_CONFIG.mcp.serverName}]\ncommand = "${process.execPath}"\nargs = ["${old.runtime.entry}", "mcp", "run", "${root}", "--role", "interactive"]\n`);
+    await fs.writeFile(path.join(root, '.codex/config.toml'), stringify({ mcp_servers: { [BRAND_CONFIG.mcp.serverName]: { command: process.execPath, args: [old.runtime.entry, 'mcp', 'run', root, '--role', 'interactive'] } } }));
     await generateWorkspaceTools(root, ['claude', 'codex'], old.runtime);
-    expect(await fs.readFile(path.join(root, '.codex/config.toml'), 'utf8')).toContain(app.runtime.entry);
-    expect(await fs.readFile(path.join(root, '.codex/config.toml'), 'utf8')).not.toContain(old.runtime.entry);
+    const entered = (parse(await fs.readFile(path.join(root, '.codex/config.toml'), 'utf8')).mcp_servers as any)[BRAND_CONFIG.mcp.serverName].args[0];
+    expect(entered).toBe(app.runtime.entry);
   } finally { await fs.rm(old.dir, { recursive: true, force: true }); await fs.rm(app.dir, { recursive: true, force: true }); }
 });
 
@@ -211,7 +213,7 @@ it('moves a workspace off the temporary unpack folder onto a lasting copy of the
     expect(await workspaceToolsNeedRepair(root, lasting)).toBe(true);
     await generateWorkspaceTools(root, ['claude'], lasting);
     expect(await mcpEntry()).toBe(lasting.entry);
-    expect(await fs.readFile(path.join(root, CLI_LAUNCHER), 'utf8')).toContain(lasting.entry);
+    expect(await fs.readFile(path.join(root, CLI_LAUNCHER), 'utf8')).toContain(slashes(lasting.entry));
     expect(await workspaceToolsNeedRepair(root, lasting)).toBe(false);
     // The temporary copy running later (say, from an old launcher) does not move the workspace back.
     await generateWorkspaceTools(root, ['claude'], temporary);
