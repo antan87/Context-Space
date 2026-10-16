@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScreenPathError, resolveScreenRepo, resolveScreenTarget } from './screen-paths.js';
 
 vi.mock('./workspace.js', () => ({ findWorkspaceRoot: vi.fn() }));
-vi.mock('../utils/multi-git.js', () => ({ getWorkspaceRepos: vi.fn() }));
-import { getWorkspaceRepos } from '../utils/multi-git.js';
+vi.mock('../utils/multi-git.js', () => ({ getWorkspaceRepoPaths: vi.fn() }));
+import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { findWorkspaceRoot } from './workspace.js';
 
 let base: string;
@@ -35,9 +35,9 @@ beforeEach(async () => {
   await fs.symlink(outside, path.join(ws, 'link'));
   await fs.symlink(path.join(ws, 'docs'), path.join(ws, 'docs-alias'));
   vi.mocked(findWorkspaceRoot).mockResolvedValue(ws);
-  vi.mocked(getWorkspaceRepos).mockResolvedValue([
-    { name: 'NexusFlow', path: path.join(ws, 'NexusFlow'), branchName: 'b', defaultBranch: 'main' },
-    { name: 'app', path: external, branchName: 'b', defaultBranch: 'main' },
+  vi.mocked(getWorkspaceRepoPaths).mockResolvedValue([
+    { name: 'NexusFlow', path: path.join(ws, 'NexusFlow') },
+    { name: 'app', path: external },
   ]);
 });
 afterEach(async () => {
@@ -116,7 +116,7 @@ describe('resolveScreenTarget', () => {
   });
 
   it('works in a workspace with no repositories', async () => {
-    vi.mocked(getWorkspaceRepos).mockRejectedValue(new Error('manifest missing'));
+    vi.mocked(getWorkspaceRepoPaths).mockRejectedValue(new Error('manifest missing'));
     expect(await resolveScreenTarget(ws, { path: 'plan.md' })).toMatchObject({ path: 'plan.md' });
     expect(await code(resolveScreenTarget(ws, { path: 'src/a.ts' }))).toBe('missing');
   });

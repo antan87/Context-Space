@@ -8,7 +8,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { getWorkspaceRepos } from '../utils/multi-git.js';
+import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { findWorkspaceRoot } from './workspace.js';
 
 /** Longest path accepted, in characters. */
@@ -44,7 +44,7 @@ async function realpathOrNull(target: string): Promise<string | null> {
 
 async function rootsFor(workspacePath: string): Promise<{ workspace: Root; repos: Root[] }> {
   const workspace = (await findWorkspaceRoot(workspacePath)) ?? workspacePath;
-  const repos = await getWorkspaceRepos(workspace).catch(() => []);
+  const repos = await getWorkspaceRepoPaths(workspace).catch(() => []);
   return { workspace: { dir: workspace }, repos: repos.map((repo) => ({ name: repo.name, dir: repo.path })) };
 }
 

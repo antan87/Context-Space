@@ -154,15 +154,7 @@ import { PRIMARY_MANIFEST_FILE, LEGACY_MANIFEST_FILE } from '../core/constants.j
 export async function getWorkspaceRepos(
   workspacePath: string,
 ): Promise<WorkspaceRepo[]> {
-  let manifestPath = path.join(workspacePath, PRIMARY_MANIFEST_FILE);
-  let raw: string;
-  try {
-    raw = await fs.readFile(manifestPath, 'utf-8');
-  } catch {
-    manifestPath = path.join(workspacePath, LEGACY_MANIFEST_FILE);
-    raw = await fs.readFile(manifestPath, 'utf-8');
-  }
-  const feature = normalizeFeature(JSON.parse(raw) as Feature);
+  const feature = await readWorkspaceManifest(workspacePath);
 
   return Promise.all(
     feature.repos.map(async (repoPath) => {
@@ -190,6 +182,27 @@ export async function getWorkspaceRepos(
       };
     })
   );
+}
+
+/**
+ * Each repo's name and absolute path, from the manifest alone. Runs no git: finding the branches costs up to four
+ * git processes per repo, which a caller that polls and only needs paths should not pay.
+ *
+ * @throws If the manifest cannot be read or parsed.
+ */
+export async function getWorkspaceRepoPaths(workspacePath: string): Promise<Array<Pick<WorkspaceRepo, 'name' | 'path'>>> {
+  const feature = await readWorkspaceManifest(workspacePath);
+  return feature.repos.map((repoPath) => ({ name: path.basename(repoPath), path: resolveFeatureRepoPath(feature, workspacePath, repoPath) }));
+}
+
+async function readWorkspaceManifest(workspacePath: string): Promise<Feature> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(workspacePath, PRIMARY_MANIFEST_FILE), 'utf-8');
+  } catch {
+    raw = await fs.readFile(path.join(workspacePath, LEGACY_MANIFEST_FILE), 'utf-8');
+  }
+  return normalizeFeature(JSON.parse(raw) as Feature);
 }
 
 /**

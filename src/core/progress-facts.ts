@@ -13,7 +13,7 @@
 import { execa } from 'execa';
 
 import type { LifecycleStep, VerificationStatus, WorkspaceVerificationReport } from '../types.js';
-import { getWorkspaceRepos } from '../utils/multi-git.js';
+import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { listOpenInputRequests, type InputRequest } from './attention.js';
 import { loadWorkspaceLifecycle } from './lifecycle.js';
 import { listRepositoryChanges } from './repository-changes.js';
@@ -209,7 +209,7 @@ export async function getProgressFacts(workspacePath: string, now: Date = new Da
   const [openQuestions, live, verification] = await Promise.all([
     settle('questions', [] as InputRequest[], () => listOpenInputRequests(workspacePath, now.getTime())),
     settle('changes', undefined, async () => {
-      const repos = await getWorkspaceRepos(workspacePath);
+      const repos = await getWorkspaceRepoPaths(workspacePath);
       return Promise.all(repos.map(async (repo) => {
         try {
           const files = await listRepositoryChanges(repo.path);
