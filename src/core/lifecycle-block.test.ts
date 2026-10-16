@@ -103,7 +103,7 @@ describe('ending a block', () => {
   it('starting the milestone again clears the block and its reason', async () => {
     await seed([{ id: 'ship', title: 'Ship', status: 'in_progress' }]);
     await blockLifecycleStep(workspacePath, 'ship', { reason: 'Waiting' });
-    const lifecycle = await advanceLifecycleStep(workspacePath, 'ship', 'start');
+    const lifecycle = await advanceLifecycleStep(workspacePath, 'ship', 'start', { by: 'user' });
     expect(lifecycle.steps[0]).toMatchObject({ status: 'in_progress' });
     expect(lifecycle.steps[0]).not.toHaveProperty('blockedReason');
     expect(lifecycle.steps[0]).not.toHaveProperty('blockedAt');
@@ -112,8 +112,8 @@ describe('ending a block', () => {
   it('a milestone can be blocked, started again and completed', async () => {
     await seed([{ id: 'ship', title: 'Ship', status: 'in_progress' }]);
     await blockLifecycleStep(workspacePath, 'ship', { reason: 'Waiting' });
-    await advanceLifecycleStep(workspacePath, 'ship', 'start');
-    const [step] = (await advanceLifecycleStep(workspacePath, 'ship', 'complete')).steps;
+    await advanceLifecycleStep(workspacePath, 'ship', 'start', { by: 'user' });
+    const [step] = (await advanceLifecycleStep(workspacePath, 'ship', 'complete', { by: 'user' })).steps;
     expect(step!.status).toBe('completed');
     expect(step).not.toHaveProperty('blockedReason');
   });
@@ -124,7 +124,7 @@ describe('ending a block', () => {
       { id: 'b', title: 'B', status: 'pending', dependsOn: ['a'] },
     ]);
     await blockLifecycleStep(workspacePath, 'b', { reason: 'Owner has not decided' });
-    await advanceLifecycleStep(workspacePath, 'a', 'complete');
+    await advanceLifecycleStep(workspacePath, 'a', 'complete', { by: 'user' });
     const b = (await stepsNow()).find((step) => step.id === 'b')!;
     expect(b.status).toBe('blocked');
     expect(b.blockedReason).toBe('Owner has not decided');
@@ -135,7 +135,7 @@ describe('ending a block', () => {
       { id: 'a', title: 'A', status: 'in_progress' },
       { id: 'b', title: 'B', status: 'blocked', dependsOn: ['a'] },
     ]);
-    await advanceLifecycleStep(workspacePath, 'a', 'complete');
+    await advanceLifecycleStep(workspacePath, 'a', 'complete', { by: 'user' });
     expect((await stepsNow()).find((step) => step.id === 'b')!.status).not.toBe('blocked');
   });
 });

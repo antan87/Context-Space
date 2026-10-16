@@ -826,6 +826,8 @@ export function useAcknowledgeQuestions(wsId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: progressFactsKey(wsId) });
       void queryClient.invalidateQueries({ queryKey: ['input-requests'] });
+      // The same questions in the plan were answered too.
+      void queryClient.invalidateQueries({ queryKey: planKey(wsId) });
     },
   });
 }

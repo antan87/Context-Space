@@ -14,14 +14,17 @@ import {
   WHO_ACTS,
   isOpenStatus,
   itemLabel,
+  shortCommits,
   type PlanStatus,
 } from './plan-words.js';
 import {
   heldUpBy,
+  planFocus,
   planSections,
   unsettledWaits,
   type PlanChangeEntry,
   type PlanDocument,
+  type PlanFocus,
   type PlanItem,
 } from './plan.js';
 
@@ -93,7 +96,7 @@ export function itemState(plan: PlanDocument, item: PlanItem): string {
     return `${actorWords(item.proposal.by)} ${PROPOSAL_WORDS[item.proposal.action] ?? item.proposal.action}: ${item.proposal.note} · the user decides`;
   }
   switch (item.status) {
-    case 'done': return item.kind === 'question' ? `answered: ${item.resolution}` : `done · ${item.resolution}`;
+    case 'done': return item.kind === 'question' ? `answered: ${item.resolution}` : `done · ${shortCommits(item.resolution ?? '')}`;
     case 'dropped': return `dropped: ${item.resolution}`;
     case 'later': return `later · look again: ${item.revisitWhen}`;
     case 'blocked': return `blocked: ${item.blockedReason}`;
@@ -163,6 +166,13 @@ export function renderPlanText(plan: PlanDocument, options: { goal?: PlanGoal; a
     return lines.join('\n');
   }
 
+  const focus = planFocus(plan);
+  if (focus.current || focus.next) {
+    if (focus.current) lines.push(`NOW         ${itemLabel(focus.current)}`);
+    if (focus.next) lines.push(`NEXT        ${itemLabel(focus.next)}${nextWaits(focus)}`);
+    lines.push('');
+  }
+
   if (sections.needsYou.length) {
     lines.push('NEEDS YOU');
     for (const item of sections.needsYou) lines.push(...itemLines(plan, item, item.proposal ? '✓?' : '?'));
@@ -196,6 +206,28 @@ export function renderPlanText(plan: PlanDocument, options: { goal?: PlanGoal; a
 
   lines.push('Change it: ctxspace plan add|start|done|answer|block|later|drop|reopen  (--help)');
   return lines.join('\n');
+}
+
+/** Why the next milestone cannot start yet, as the end of its line; empty when it can. */
+function nextWaits(focus: PlanFocus): string {
+  if (focus.nextWaitsFor.length) return ` · waits for ${focus.nextWaitsFor.map(itemLabel).join(', ')}`;
+  return focus.next?.status === 'blocked' ? ` · blocked: ${focus.next.blockedReason ?? 'no reason given'}` : '';
+}
+
+/** What is being worked on and what is next, as JSON: names with their codes, and what next waits for. */
+export function focusToJson(plan: PlanDocument) {
+  const focus = planFocus(plan);
+  const ref = (item: PlanItem) => ({ id: item.id, label: itemLabel(item), title: item.title });
+  return {
+    ...(focus.current ? { current: ref(focus.current) } : {}),
+    ...(focus.next ? {
+      next: {
+        ...ref(focus.next),
+        waitsFor: focus.nextWaitsFor.map(ref),
+        ...(focus.next.status === 'blocked' && focus.next.blockedReason ? { blockedReason: focus.next.blockedReason } : {}),
+      },
+    } : {}),
+  };
 }
 
 /** An item as JSON: its label and state in words, what it waits for and what it holds up. */
@@ -243,6 +275,7 @@ export function planToJson(plan: PlanDocument, options: { goal?: PlanGoal; all?:
     otherOpen: json(sections.otherOpen),
     closed: options.all ? json(sections.closed) : sections.closed.map(itemLabel),
     ready: sections.ready.map(itemLabel),
+    focus: focusToJson(plan),
     changes: sections.changes,
   };
 }

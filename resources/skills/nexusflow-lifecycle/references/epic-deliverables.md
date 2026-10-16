@@ -18,8 +18,8 @@ dependent PRs after their base changes.
 
 Preserve milestone codes referenced by documents and assignments. Nothing in the plan is
 deleted: drop a canceled outcome with `ctxspace plan drop <code> --reason`, or move it with
-`later`, rather than marking unimplemented behavior as delivered. Dropping or deferring a
-milestone is the user's decision, so from an AI it becomes a proposal.
+`later`, rather than marking unimplemented behavior as delivered, and tell the user why in
+the chat.
 
 Before replanning, inventory existing work with repo, branch/PR/commit, status
 (merged, on branch, or no change needed), and evidence: `ctxspace plan add existing "<name>"`,

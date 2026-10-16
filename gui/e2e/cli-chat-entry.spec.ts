@@ -26,7 +26,7 @@ test('workspace actions open the selected CLI chat without starting a session', 
   });
 
   await page.goto('/#/overview');
-  await page.locator('section[aria-labelledby="workspaces-heading"]')
+  await page.locator('section[aria-labelledby="recent-heading"]')
     .getByRole('button', { name: 'View all CLI sessions for alpha' }).click();
 
   const chat = page.getByRole('region', { name: 'CLI Chat' });

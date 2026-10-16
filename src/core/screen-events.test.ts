@@ -85,7 +85,7 @@ describe('parseScreenEntry', () => {
     ['an annotation without a line', { event: 'annotate', payload: { path: 'a', text: 'x' } }],
     ['a suggestion without a reason', { event: 'next', payload: { title: 'x' } }],
     ['a milestone event with a bad id', { event: 'milestone', payload: { stepId: '../x', state: 'blocked' } }],
-    ['a milestone event with an unknown state', { event: 'milestone', payload: { stepId: 'a', state: 'done' } }],
+    ['a milestone event with an unknown state', { event: 'milestone', payload: { stepId: 'a', state: 'completed' } }],
     ['a proposal with an unknown kind', { event: 'milestone_proposal', payload: { stepId: 'a', proposal: 'delete', reason: 'x' } }],
     ['a proposal without a reason', { event: 'milestone_proposal', payload: { stepId: 'a', proposal: 'reopen' } }],
     ['an unknown event', { event: 'shell', payload: { cmd: 'rm -rf /' } }],

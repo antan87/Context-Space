@@ -213,12 +213,12 @@ export async function listOpenInputRequests(
 export async function acknowledgeInputRequests(
   workspaceDir: string,
   now: number = Date.now(),
-): Promise<{ acknowledged: number; timestamp: string }> {
+): Promise<{ acknowledged: number; timestamp: string; requests: InputRequest[] }> {
   const open = await listOpenInputRequests(workspaceDir, now);
   const ledger = await resolveWorkspaceChatLedger(workspaceDir);
   await fs.mkdir(ledger.chatDir, { recursive: true });
   const timestamp = new Date(now).toISOString();
   const entry = { id: randomUUID(), timestamp, harness: 'developer', author: 'human', kind: 'input_ack', message: 'Marked answered' };
   await fs.appendFile(ledger.chatPath, JSON.stringify(entry) + '\n', 'utf8');
-  return { acknowledged: open.length, timestamp };
+  return { acknowledged: open.length, timestamp, requests: open };
 }

@@ -37,8 +37,7 @@ import { perfMark } from '../lib/perfMarks.js';
 import { BRAND_NAME, LEGACY_BRAND_NAME } from '../brand.js';
 import { ServiceConsole } from '../features/services/ServiceConsole.js';
 import { WorkspaceHeader } from '../features/workspace-shell/WorkspaceHeader.js';
-import { WorkspaceBackupNotice } from '../features/workspace-shell/WorkspaceBackupNotice.js';
-import { BranchDriftNotice } from '../features/workspace-shell/BranchDriftNotice.js';
+import { WorkspaceMarks } from '../features/workspace-shell/WorkspaceMarks.js';
 import { WorkspaceRail } from '../features/workspace-shell/WorkspaceRail.js';
 import { SECTION_LABELS, visibleSection, type WorkspaceSection } from '../features/workspace-shell/destinations.js';
 import { useLocation } from 'react-router-dom';
@@ -96,7 +95,6 @@ import {
   useDeleteDomainPack,
   useWorkspaceLifecycle,
   useWorkspaceRepositories,
-  useWorkGuidance,
 } from '../lib/api/queries.js';
 import { repoName } from '../lib/status.js';
 import { apiFetch } from '../lib/api/client.js';
@@ -109,11 +107,10 @@ import { CHAT_LAYOUT, chatLayout, hasRoomBeside, useChatLayout } from '../featur
 import { useElementWidth } from '../lib/useElementWidth.js';
 import { CodeSection } from '../features/changes/CodeSection.js';
 import { KnowledgeBase } from '../features/knowledge/KnowledgeBase.js';
-import { ImplementationPlan } from '../features/plan/ImplementationPlan.js';
+import { WorkspaceChecks } from '../features/plan/WorkspaceChecks.js';
 import { RootDocumentsPanel } from '../features/work-guidance/RootDocumentsPanel.js';
 import { WorkspaceWorkPanel } from '../features/work-guidance/WorkspaceWorkPanel.js';
 import { HomePlan } from '../features/workspace-home/HomePlan.js';
-import { WorkspaceSessions } from '../features/workspace-home/WorkspaceSessions.js';
 import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
@@ -153,7 +150,8 @@ interface WorkspacesPageProps {
   /** What Code needs to commit, finish and sync, plus the change listing the overview counts files from. */
   changesProps: Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast'> & { gitChanges: { repoName: string; files?: unknown[] }[] };
   knowledgeProps: Omit<ComponentProps<typeof KnowledgeBase>, 'ws'>;
-  planProps: ComponentProps<typeof ImplementationPlan>;
+  /** The generated plan summary, which the overview reads, and how to reload it after a plan change. */
+  planProps: { planContent: string; planLoading: boolean; planError: string | null; handleRetryPlan: (wsId: string) => Promise<void> };
 }
 
 export function WorkspacesPage(props: WorkspacesPageProps) {
@@ -178,7 +176,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     planProps,
   } = props;
 
-  const [planVersion, setPlanVersion] = useState(0);
   const selected = workspaces.find((w) => w.branchName === selectedId) ?? null;
   // An archived workspace shows only its record; deep links elsewhere land on its overview. With no section in the
   // address, it opens on that record rather than on the plan, where an active workspace opens.
@@ -232,7 +229,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
   const cockpit = useCockpitStore();
   const { data: lifecycleData } = useWorkspaceLifecycle(selected?.branchName ?? null);
   const { data: liveRepositories } = useWorkspaceRepositories(selected?.branchName ?? null);
-  const { data: workGuidance } = useWorkGuidance(selected?.branchName ?? null);
   const visitedSections = workspaceMemory(visitedByWorkspace, selected?.branchName ?? '', () => new Set<WorkspaceSection>());
   visitedSections.add(subTab);
 
@@ -642,12 +638,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           workspaceId={selected.branchName}
           title={selected.name || selected.branchName}
           branchName={selected.name ? selected.branchName : undefined}
-          brief={cockpit.workspaceIntent || selected.description}
           mode={selectedMode}
           repoCount={selected.repos.length}
           changedFiles={st ? totalChangedFiles : null}
-          stage={workGuidance?.assignment.stage}
-          milestones={lifecycleData?.lifecycle?.steps ?? []}
+          marks={archived ? undefined : <WorkspaceMarks workspaceId={selected.branchName} />}
           verification={cockpit.gateStatus}
           actions={<>
               {primaryEditor && !archived && (
@@ -779,8 +773,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               </Menu>
           </>}
         />
-        {!archived && <WorkspaceBackupNotice workspaceId={selected.branchName} />}
-        {!archived && <BranchDriftNotice workspaceId={selected.branchName} />}
         {/* Tab Navigation & Content Container */}
         <div ref={setBody} className="flex min-h-0 flex-1 pb-14 md:pb-0">
           {showChat && (
@@ -1412,17 +1404,15 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               )}
               {subTab === 'knowledge' && <KnowledgeBase ws={selected} {...knowledgeProps} readOnly={archived} />}
               {subTab === 'skills' && <WorkspaceSkillsTab ws={selected} showToast={showToast} />}
-              {visitedSections.has('plan') && <div hidden={subTab !== 'plan'} className={sessionsOnPlan ? 'grid gap-6 xl:grid-cols-[minmax(0,1fr)_20.5rem]' : ''}>
+              {visitedSections.has('plan') && <div hidden={subTab !== 'plan'}>
                 <div className="min-w-0 space-y-6">
                 <WorkspaceWorkPanel key={selected.branchName} workspaceId={selected.branchName} readOnly={archived}
                   plan={<HomePlan key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} onChanged={() => {
-                    // The Visual Flow and the plan summary follow the plan.
-                    setPlanVersion((version) => version + 1);
+                    // The plan summary follows the plan.
                     void planProps.handleRetryPlan(selected.branchName);
                   }} />} />
-                <ImplementationPlan key={`${selected.branchName}-${planVersion}`} workspaceId={selected.branchName} {...planProps} readOnly={archived} />
+                <WorkspaceChecks key={selected.branchName} workspaceId={selected.branchName} readOnly={archived} />
                 </div>
-                {sessionsOnPlan && <div className="min-w-0 xl:sticky xl:top-0 xl:self-start"><WorkspaceSessions workspace={selected.branchName} /></div>}
               </div>}
               {subTab === 'services' && <ServiceConsole ws={selected} />}
           </div>

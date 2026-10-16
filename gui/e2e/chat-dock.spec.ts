@@ -77,9 +77,10 @@ test.describe('the chat is the centre of a workspace', () => {
   test('a workspace opens on its plan, with its sessions one click away', async ({ page }) => {
     await page.goto('/#/workspaces/alpha');
     await expect(page.getByRole('region', { name: 'The plan', exact: true })).toBeVisible();
-    // Nothing runs, so the sessions sit beside the plan instead of a chat.
+    // Nothing runs, so the plan is shown instead of a chat; sessions start in the chat, not in a card beside the plan.
     await expect(chatOf(page)).toBeHidden();
-    await expect(page.getByRole('complementary', { name: 'Sessions' })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Sessions' })).toHaveCount(0);
+    await expect(page.getByLabel('Plan and sessions')).toBeVisible();
     await expect(workspaceNav(page).getByRole('link', { name: 'Plan' })).toHaveAttribute('aria-current', 'page');
     // The address is left as it was given: no section is the plan.
     await expect(page).toHaveURL(/#\/workspaces\/alpha$/);

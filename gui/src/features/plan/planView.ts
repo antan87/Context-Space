@@ -39,13 +39,41 @@ export const TONE_CLASS: Record<Tone, string> = {
   reopened: 'text-[var(--state-reopened)]',
 };
 
-const HOW_IT_WORKS_SEEN = 'contextspace.plan.how-it-works-seen';
-/** Whether How it works has been shown here before. Storage can be unavailable; then it shows once per load. */
-export function howItWorksSeen(): boolean {
-  try { return window.localStorage.getItem(HOW_IT_WORKS_SEEN) === '1'; } catch { return false; }
+/** An item's name without its code: people read names; the code is for tools (and the tooltip). */
+export function nameOf(ref: { id: string; label: string }): string {
+  return ref.label.startsWith(`${ref.id} `) ? ref.label.slice(ref.id.length + 1) : ref.label;
 }
-export function rememberHowItWorksSeen(): void {
-  try { window.localStorage.setItem(HOW_IT_WORKS_SEEN, '1'); } catch { /* shown again next time */ }
+
+/** Full commit hashes cut to the seven characters people use: "Passed its check on c9043b3". */
+export function shortCommits(text: string): string {
+  return text.replace(/\b([0-9a-f]{7})[0-9a-f]{33}\b/gi, '$1');
+}
+
+/** The answers an AI suggested with its question, kept in the question's detail as "Suggested answers: A · B". */
+export function suggestedAnswers(detail: string | undefined): string[] {
+  const line = detail?.split('\n').find((candidate) => candidate.startsWith('Suggested answers: '));
+  return line ? line.slice('Suggested answers: '.length).split(' · ').map((answer) => answer.trim()).filter(Boolean) : [];
+}
+
+/**
+ * The tasks each milestone waits for, so they are shown under it. A task several milestones wait for is
+ * shown under the first, in plan order; `nested` says which tasks are shown that way.
+ */
+export function tasksUnderMilestones(view: Pick<PlanView, 'milestones' | 'otherOpen' | 'closed' | 'needsYou'>): { byMilestone: Map<string, PlanItemView[]>; nested: Set<string> } {
+  const tasks = new Map([...view.otherOpen, ...view.closed, ...view.needsYou].filter((item) => item.kind === 'task').map((item) => [item.id, item]));
+  const byMilestone = new Map<string, PlanItemView[]>();
+  const nested = new Set<string>();
+  for (const milestone of view.milestones) {
+    const under = milestone.waitsFor.map((wait) => tasks.get(wait.id)).filter((task): task is PlanItemView => Boolean(task) && !nested.has(task!.id));
+    for (const task of under) nested.add(task.id);
+    if (under.length) byMilestone.set(milestone.id, under);
+  }
+  return { byMilestone, nested };
+}
+
+/** "What changed", without the lines ContextSpace wrote when it moved old notes into the plan. */
+export function visibleChanges<T extends { by: string; action: string }>(changes: readonly T[]): T[] {
+  return changes.filter((entry) => !(entry.action === 'imported' && /^contextspace$/i.test(entry.by)));
 }
 
 const sentenceCase = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -86,20 +114,20 @@ function startedBy(item: PlanItemView): string | undefined {
 
 /** The line under an item's name: where it is, and what it carries. */
 export function stateLine(item: PlanItemView, words: PlanWords): string {
-  if (item.proposal) return `${proposalLine(item)} · ${item.proposal.note}`;
+  if (item.proposal) return `${proposalLine(item)} · ${shortCommits(item.proposal.note)}`;
   const label = words.statuses[item.status].label;
   switch (item.status) {
     case 'todo': {
       if (item.kind === 'question') return answerer(item.owner) === 'you' ? 'Waiting for your answer' : `${sentenceCase(answerer(item.owner))} answers`;
       const open = item.waitsFor.filter((wait) => wait.status !== 'done' && wait.status !== 'dropped');
-      return open.length ? `${label} · starts after ${open.map((wait) => wait.label).join(', ')}` : `${label} · ready to start`;
+      return open.length ? `${label} · starts after ${open.map(nameOf).join(', ')}` : `${label} · ready to start`;
     }
     case 'in_progress': {
       const who = startedBy(item);
       return who ? `${label} · ${who}` : label;
     }
     case 'blocked': return `${label} · ${item.blockedReason ?? 'no reason given'}`;
-    case 'done': return item.kind === 'question' ? `Answered · ${item.resolution ?? ''}` : `${label} · ${item.resolution ?? ''}`;
+    case 'done': return item.kind === 'question' ? `Answered · ${item.resolution ?? ''}` : `${label} · ${shortCommits(item.resolution ?? '')}`;
     case 'dropped': return `${label} · ${item.resolution ?? ''}`;
     case 'later': return `${label} · look again ${item.revisitWhen ?? 'later'}`;
   }
@@ -111,10 +139,11 @@ export function itemLook(item: PlanItemView): { icon: LucideIcon; tone: Tone } {
   return waitsForUser ? NEEDS_YOU_LOOK : STATUS_LOOK[item.status];
 }
 
-/** "2 min ago", "3 h ago", "Oct 7". */
-export function whenText(at: string, now: Date = new Date()): string {
-  const then = Date.parse(at);
-  if (!Number.isFinite(then)) return '';
+/** "2 min ago", "3 h ago", "Oct 7". Empty when the time is unknown, never an invented date. */
+export function whenText(at: string | undefined, now: Date = new Date()): string {
+  const then = at ? Date.parse(at) : NaN;
+  // The epoch stands in for a time that was never recorded; showing it would say "Jan 1".
+  if (!Number.isFinite(then) || then <= 0) return '';
   const minutes = Math.round((now.getTime() - then) / 60_000);
   if (minutes < 1) return 'now';
   if (minutes < 60) return `${minutes} min ago`;

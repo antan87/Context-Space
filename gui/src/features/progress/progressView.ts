@@ -193,9 +193,10 @@ export function nextAction(facts: ProgressFacts, suggestion?: NextEvent): NextAc
   if (underway) {
     return { kind: 'prompt', source: 'facts', label: `Continue "${underway.title}"`, reason: 'It is in progress.', prompt: `Continue with "${underway.title}".` };
   }
-  const ready = facts.milestones.find((milestone) => milestone.state === 'upcoming' && milestone.waitingOn.length === 0);
-  if (ready) {
-    return { kind: 'prompt', source: 'facts', label: `Start "${ready.title}"`, reason: 'Nothing it depends on is left.', prompt: `Start "${ready.title}".` };
+  // The plan's Next, by the one rule every surface uses. It is offered only when it can start.
+  const next = facts.milestones.find((milestone) => milestone.id === facts.nextMilestoneId);
+  if (next && next.state === 'upcoming' && next.waitingOn.length === 0) {
+    return { kind: 'prompt', source: 'facts', label: `Start "${next.title}"`, reason: 'Nothing it depends on is left.', prompt: `Start "${next.title}".` };
   }
   return null;
 }

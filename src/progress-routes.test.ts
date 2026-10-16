@@ -8,6 +8,8 @@ import * as configModule from './core/config.js';
 import { PRIMARY_MANIFEST_FILE } from './core/constants.js';
 import { loadWorkspaceState, saveWorkspaceState } from './core/workspace-state.js';
 import { loadWorkspaceLifecycle } from './core/lifecycle.js';
+import { PLAN_STORE_FILE, changePlan, readPlan } from './core/plan.js';
+import { ANSWERED_IN_CHAT } from './core/plan-words.js';
 import type { LifecycleStep } from './types.js';
 
 let root: string;
@@ -160,6 +162,29 @@ describe('POST /api/workspace/:id/input-requests/acknowledge', () => {
     expect(body.acknowledged).toBe(2);
 
     expect((await call('GET', '/api/attention?workspaces=ws')).body.requests).toEqual([]);
+    expect((await call('GET', '/api/workspace/ws/progress-facts')).body.facts.openQuestions).toEqual([]);
+  });
+
+  it('answers the same questions in the plan too, as the developer, so nothing asks them twice', async () => {
+    const dir = await makeWorkspace('ws', [], [request({ id: 'a', message: 'Which branch?' })]);
+    await changePlan(dir, { type: 'add', kind: 'question', title: 'Which branch?', owner: 'user' }, { actor: { by: 'agent', harness: 'claude' } });
+    await changePlan(dir, { type: 'add', kind: 'question', title: 'Something else?', owner: 'user' }, { actor: { by: 'agent', harness: 'claude' } });
+
+    const { status, body } = await call('POST', '/api/workspace/ws/input-requests/acknowledge');
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ acknowledged: 1, planAnswered: ['Q1 Which branch?'] });
+    const [answered, other] = (await readPlan(dir)).items;
+    expect(answered).toMatchObject({ status: 'done', resolution: ANSWERED_IN_CHAT });
+    expect(answered!.history.at(-1)).toMatchObject({ by: 'user', action: 'answered' });
+    expect(other).toMatchObject({ status: 'todo' });
+  });
+
+  it('still marks the questions answered when the plan cannot be changed', async () => {
+    const dir = await makeWorkspace('ws', [], [request()]);
+    await fs.writeFile(path.join(dir, PLAN_STORE_FILE), '{ broken', 'utf8');
+    const { status, body } = await call('POST', '/api/workspace/ws/input-requests/acknowledge');
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ acknowledged: 1, planAnswered: [] });
     expect((await call('GET', '/api/workspace/ws/progress-facts')).body.facts.openQuestions).toEqual([]);
   });
 

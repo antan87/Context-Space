@@ -14,6 +14,7 @@ import {
   findItem,
   heldUpBy,
   mutatePlan,
+  planFocus,
   planSections,
   planStoreExists,
   readPlan,
@@ -21,7 +22,7 @@ import {
   type PlanChange,
   type PlanDocument,
 } from './plan.js';
-import { PLAN_RULES, PLAN_SECTIONS, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
+import { ANSWERED_IN_CHAT, PLAN_RULES, PLAN_SECTIONS, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
 
 const user: PlanActor = { by: 'user' };
 const claude: PlanActor = { by: 'agent', harness: 'claude' };
@@ -209,6 +210,16 @@ describe('closing needs a reason', () => {
     await expect(change({ type: 'answer', id: 'T1', answer: 'x' })).rejects.toThrow(/Only a question has an answer/);
   });
 
+  it('lets the AI write the words over an answer given in the chat, and changes no other answer', async () => {
+    await change({ type: 'add', kind: 'question', title: 'Which branch?', owner: 'user' }, claude);
+    await change({ type: 'answer', id: 'Q1', answer: ANSWERED_IN_CHAT });
+    const { item } = await change({ type: 'answer', id: 'Q1', answer: 'release, not main' }, claude);
+    expect(item).toMatchObject({ status: 'done', resolution: 'release, not main' });
+    expect(item.history.map((entry) => [entry.by, entry.action])).toEqual([['claude', 'added'], ['user', 'answered'], ['claude', 'answered']]);
+    // Now it holds the developer's words, so it is settled like any other answer.
+    await expect(change({ type: 'answer', id: 'Q1', answer: 'main' }, claude)).rejects.toThrow(/already done\. Reopen it first/);
+  });
+
   it('cleans control characters and line breaks out of a reason', async () => {
     await change({ type: 'add', kind: 'task', title: 'Work' });
     const { item } = await change({ type: 'block', id: 'T1', reason: 'Need a key\u001b[31m\n\n2. fake' });
@@ -267,48 +278,63 @@ describe('who may close what', () => {
     expect(result.item.status).toBe('done');
   });
 
-  it('lets an AI tool close an item owned by that tool, but not one owned by another', async () => {
-    await change({ type: 'add', kind: 'task', title: 'Claude task', owner: 'claude' });
+  it('lets an AI tool close an item owned by the user or by another tool', async () => {
+    await change({ type: 'add', kind: 'task', title: 'User task' });
     await change({ type: 'add', kind: 'task', title: 'Codex task', owner: 'codex' });
-    expect((await change({ type: 'done', id: 'T1', resolution: 'Done' }, claude)).outcome).toBe('applied');
-    expect((await change({ type: 'done', id: 'T2', resolution: 'Done' }, claude)).outcome).toBe('proposed');
+    expect((await change({ type: 'done', id: 'T1', resolution: 'Done' }, claude)).item.status).toBe('done');
+    expect((await change({ type: 'drop', id: 'T2', reason: 'Not needed' }, claude)).item.status).toBe('dropped');
   });
 
-  it('turns the AI finishing a milestone into a proposal the user accepts', async () => {
+  it('lets the AI finish a milestone itself, and names it in the history', async () => {
     await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
     await change({ type: 'start', id: 'M1' }, claude);
-    const proposed = await change({ type: 'done', id: 'M1', resolution: 'Tests pass on a1b2c3d' }, claude);
-    expect(proposed.outcome).toBe('proposed');
-    expect(proposed.item).toMatchObject({ status: 'in_progress', proposal: { action: 'done', by: 'claude', note: 'Tests pass on a1b2c3d' } });
-    expect(proposed.message).toContain('M1 CSV export endpoint');
-    expect(planSections(await readPlan(root)).needsYou.map((item) => item.id)).toEqual(['M1']);
+    const done = await change({ type: 'done', id: 'M1', resolution: 'Tests pass on a1b2c3d' }, claude);
+    expect(done.outcome).toBe('applied');
+    expect(done.message).toBe('Done: M1 CSV export endpoint.');
+    expect(done.item).toMatchObject({ status: 'done', resolution: 'Tests pass on a1b2c3d' });
+    expect(done.item).not.toHaveProperty('proposal');
+    expect(done.item.history.map((entry) => `${entry.by}:${entry.action}`)).toEqual(['user:added', 'claude:started', 'claude:done']);
+    expect(planSections(await readPlan(root)).needsYou).toEqual([]);
+  });
+
+  it('lets the AI record the answer the user gave to their question', async () => {
+    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' }, codex);
+    const answered = await change({ type: 'answer', id: 'Q1', answer: 'UTC' }, codex);
+    expect(answered.item).toMatchObject({ status: 'done', resolution: 'UTC' });
+    expect(answered.item.history.at(-1)).toMatchObject({ by: 'codex', action: 'answered' });
+  });
+
+  it('lets the AI put off, drop and reopen a milestone', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'Database query' });
+    await change({ type: 'add', kind: 'milestone', title: 'Old idea' });
+    await change({ type: 'add', kind: 'milestone', title: 'Someday' });
+    await change({ type: 'done', id: 'M1', resolution: 'Merged' });
+    const reopened = await change({ type: 'reopen', id: 'M1', reason: 'Rows are missing' }, claude);
+    expect(reopened.item).toMatchObject({ status: 'in_progress', reopenReason: 'Rows are missing', reopenedBy: 'agent', reopenCount: 1 });
+    expect((await change({ type: 'drop', id: 'M2', reason: 'Covered by M1' }, claude)).item.status).toBe('dropped');
+    expect((await change({ type: 'later', id: 'M3', revisitWhen: 'After the release' }, claude)).item.status).toBe('later');
+  });
+
+  it('lets the user accept or send back a proposal saved under the earlier rule, and only the user', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' });
+    await mutatePlan(root, (plan) => {
+      plan.items[0]!.proposal = { action: 'done', by: 'claude', note: 'Tests pass on a1b2c3d', at: '2026-10-01T00:00:00.000Z' };
+      plan.items[1]!.proposal = { action: 'answer', by: 'codex', note: 'UTC', at: '2026-10-01T00:00:00.000Z' };
+    });
+    expect(planSections(await readPlan(root)).needsYou.map((item) => item.id)).toEqual(['M1', 'Q1']);
 
     await expect(change({ type: 'accept', id: 'M1' }, claude)).rejects.toThrow(/Only the user/);
     const accepted = await change({ type: 'accept', id: 'M1' });
     expect(accepted.item).toMatchObject({ status: 'done', resolution: 'Tests pass on a1b2c3d' });
     expect(accepted.item).not.toHaveProperty('proposal');
-    expect(accepted.item.history.map((entry) => `${entry.by}:${entry.action}`)).toEqual(['user:added', 'claude:started', 'claude:proposed', 'user:accepted', 'user:done']);
-  });
+    expect(accepted.item.history.map((entry) => `${entry.by}:${entry.action}`)).toEqual(['user:added', 'user:accepted', 'user:done']);
 
-  it('turns the AI answering the user\'s question into a proposal, and the user can send it back', async () => {
-    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' }, codex);
-    const proposed = await change({ type: 'answer', id: 'Q1', answer: 'UTC' }, codex);
-    expect(proposed.outcome).toBe('proposed');
     await expect(change({ type: 'reject', id: 'Q1', reason: '' })).rejects.toMatchObject({ code: 'invalid' });
     const rejected = await change({ type: 'reject', id: 'Q1', reason: 'Use the account time zone' });
     expect(rejected.item.status).toBe('todo');
     expect(rejected.item).not.toHaveProperty('proposal');
     expect(rejected.message).toBe('Sent back to codex: Q1 Which time zone? Use the account time zone');
-  });
-
-  it('turns the AI reopening a milestone into a proposal', async () => {
-    await change({ type: 'add', kind: 'milestone', title: 'Database query' });
-    await change({ type: 'done', id: 'M1', resolution: 'Merged' });
-    const result = await change({ type: 'reopen', id: 'M1', reason: 'Rows are missing' }, claude);
-    expect(result.outcome).toBe('proposed');
-    expect(result.item.status).toBe('done');
-    const accepted = await change({ type: 'accept', id: 'M1' });
-    expect(accepted.item).toMatchObject({ status: 'in_progress', reopenReason: 'Rows are missing', reopenedBy: 'user', reopenCount: 1 });
   });
 
   it('will not finish a milestone with a check unless the check passed', async () => {
@@ -333,6 +359,13 @@ describe('reopening and editing', () => {
     await expect(change({ type: 'reopen', id: 'T1', reason: 'x' })).resolves.toBeDefined();
     await change({ type: 'add', kind: 'task', title: 'Fresh' });
     await expect(change({ type: 'reopen', id: 'T2', reason: 'x' })).rejects.toThrow(/nothing to reopen/);
+  });
+
+  it('puts a reopened question back on the list: it is answered, not worked on', async () => {
+    await change({ type: 'add', kind: 'question', title: 'Which branch?', owner: 'user' });
+    await change({ type: 'answer', id: 'Q1', answer: 'main' });
+    const { item } = await change({ type: 'reopen', id: 'Q1', reason: 'Asked again' }, claude);
+    expect(item).toMatchObject({ status: 'todo', reopenCount: 1 });
   });
 
   it('will not change what a finished item waits for until it is reopened', async () => {
@@ -402,6 +435,33 @@ describe('the sections everyone sees', () => {
     expect(sections.ready.map((item) => item.id)).toEqual([]);
     expect(sections.counts).toMatchObject({ needsYou: 1, todo: 4, done: 2, later: 1 });
     expect(sections.changes[0]).toMatchObject({ itemId: 'D1', label: 'D1 Excel export', action: 'later' });
+  });
+});
+
+describe('what is current and next', () => {
+  it('is the first milestone in progress, and the first that can start', async () => {
+    await seedExample();
+    await change({ type: 'add', kind: 'milestone', title: 'Docs' });
+    await change({ type: 'start', id: 'M1' });
+    // M2 waits for T1 and Q1, and M3 for M2, so Next is M4, which can start.
+    expect(planFocus(await readPlan(root))).toMatchObject({ current: { id: 'M1' }, next: { id: 'M4' }, nextWaitsFor: [] });
+  });
+
+  it('names what Next waits for when nothing can start, instead of naming work that cannot', async () => {
+    await seedExample();
+    await change({ type: 'done', id: 'M1', resolution: 'Merged' });
+    const focus = planFocus(await readPlan(root));
+    expect(focus.current).toBeUndefined();
+    expect(focus.next?.id).toBe('M2');
+    expect(focus.nextWaitsFor.map((item) => item.id)).toEqual(['T1', 'Q1']);
+  });
+
+  it('keeps a milestone current until it is done, and has no Next when all is done', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'Only' });
+    await change({ type: 'start', id: 'M1' });
+    expect(planFocus(await readPlan(root))).toEqual({ current: expect.objectContaining({ id: 'M1' }), nextWaitsFor: [] });
+    await change({ type: 'done', id: 'M1', resolution: 'Shipped' });
+    expect(planFocus(await readPlan(root))).toEqual({ nextWaitsFor: [] });
   });
 });
 

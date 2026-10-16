@@ -69,14 +69,15 @@ describe('reopenLifecycleStep', () => {
     expect(plan!.reopenedBy).toBe('user');
   });
 
-  it('from the AI side only proposes it: nothing changes until the user decides', async () => {
+  it('lets the AI reopen it too, and names the AI tool in the history', async () => {
     await seed([finished('plan')], { revision: 3 });
-    const lifecycle = await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Tests were too narrow', by: 'agent' });
-    expect(lifecycle.steps[0]).toMatchObject({ status: 'completed', lastVerificationSha: 'abc123' });
-    expect(lifecycle.steps[0]).not.toHaveProperty('reopenedAt');
+    const lifecycle = await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Tests were too narrow', by: 'agent', harness: 'claude' });
+    expect(lifecycle.steps[0]).toMatchObject({ status: 'in_progress', reopenReason: 'Tests were too narrow' });
+    expect(lifecycle.steps[0]).not.toHaveProperty('lastVerificationSha');
     const item = (await readPlan(workspacePath)).items[0]!;
-    expect(item.proposal).toMatchObject({ action: 'reopen', by: 'agent', note: 'Tests were too narrow' });
-    expect(item.status).toBe('done');
+    expect(item).not.toHaveProperty('proposal');
+    expect(item).toMatchObject({ status: 'in_progress', reopenedBy: 'agent' });
+    expect(item.history!.at(-1)).toMatchObject({ by: 'claude', action: 'reopened', note: 'Tests were too narrow' });
   });
 
   it('reopens a verified milestone as well', async () => {
@@ -146,7 +147,7 @@ describe('reopenLifecycleStep', () => {
   it('can be reopened again after the rework finishes, and the count adds up', async () => {
     await seed([finished('plan')]);
     await reopenLifecycleStep(workspacePath, 'plan', { reason: 'first rework', by: 'user' });
-    await advanceLifecycleStep(workspacePath, 'plan', 'complete');
+    await advanceLifecycleStep(workspacePath, 'plan', 'complete', { by: 'user' });
     const [plan] = (await reopenLifecycleStep(workspacePath, 'plan', { reason: 'second rework', by: 'user' })).steps;
     expect(plan).toMatchObject({ status: 'in_progress', reopenReason: 'second rework', reopenedBy: 'user', reopenCount: 2 });
   });
@@ -173,7 +174,7 @@ describe('finishing reopened work', () => {
     expect(reopened).toMatchObject({ status: 'in_progress', reopenCount: 1 });
 
     // The step has no gate, so completing it needs no verification run.
-    const lifecycle = await advanceLifecycleStep(workspacePath, 'plan', 'complete');
+    const lifecycle = await advanceLifecycleStep(workspacePath, 'plan', 'complete', { by: 'user' });
     const [done] = lifecycle.steps;
     expect(done!.status).toBe('completed');
     expect(done).not.toHaveProperty('reopenedAt');
@@ -241,7 +242,7 @@ describe('the milestone plan the AI reads', () => {
   it('shows plain "completed" again once the rework is finished', async () => {
     await seed([finished('plan')]);
     await reopenLifecycleStep(workspacePath, 'plan', { reason: 'Rework', by: 'user' });
-    const lifecycle = await advanceLifecycleStep(workspacePath, 'plan', 'complete');
+    const lifecycle = await advanceLifecycleStep(workspacePath, 'plan', 'complete', { by: 'user' });
     const text = renderLifecyclePlan(lifecycle);
     expect(text).toContain('1. **PLAN** — completed');
     expect(text).not.toContain('Reopened');

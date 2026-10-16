@@ -82,6 +82,8 @@ export interface ProgressFacts {
   milestones: MilestoneFact[];
   counts: MilestoneCounts;
   currentMilestoneId?: string;
+  /** The milestone to start next, by the plan's one rule; it may still wait for something. */
+  nextMilestoneId?: string;
   /** Questions the AI asked that nobody has marked answered. These are the AI's own words. */
   openQuestions: InputRequest[];
   changes: ChangeFacts;
@@ -240,6 +242,7 @@ export async function getProgressFacts(workspacePath: string, now: Date = new Da
     milestones,
     counts: countMilestones(milestones),
     ...(currentMilestoneId ? { currentMilestoneId } : {}),
+    ...(lifecycle?.nextStepId ? { nextMilestoneId: lifecycle.nextStepId } : {}),
     openQuestions,
     changes: changeFacts,
     verification: describeVerification(verification, liveStates),

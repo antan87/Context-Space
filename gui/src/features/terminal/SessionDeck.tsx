@@ -25,6 +25,8 @@ interface SessionDeckProps {
   onBackgroundOutput?: () => void;
   onOpenFileReference?: (reference: { path: string; line?: number; cwd?: string }) => void;
   inspectorControls?: ReactNode;
+  /** Where the work stands, in the toolbar after the tabs, shown with the tabs. */
+  summary?: ReactNode;
 }
 
 interface Deck { slots: readonly Slot[]; active: string; split: string | null }
@@ -37,7 +39,7 @@ interface Deck { slots: readonly Slot[]; active: string; split: string | null }
  */
 const CLOSE_PROBLEM_MS = 8000;
 
-export function SessionDeck({ workspace, active, launch, consumeLaunch, fillPromptRef, onReply, onStatusChange, onBackgroundOutput, onOpenFileReference, inspectorControls }: SessionDeckProps) {
+export function SessionDeck({ workspace, active, launch, consumeLaunch, fillPromptRef, onReply, onStatusChange, onBackgroundOutput, onOpenFileReference, inspectorControls, summary }: SessionDeckProps) {
   const queryClient = useQueryClient();
   const [deck, setDeck] = useState<Deck>(() => ({ slots: [firstSlot()], active: 'main', split: null }));
   const [infos, setInfos] = useState<Record<string, TerminalInfo | null>>({});
@@ -266,6 +268,7 @@ export function SessionDeck({ workspace, active, launch, consumeLaunch, fillProm
               fillPromptRef={fillRefOf(slot.key)}
               onOpenFileReference={onOpenFileReference}
               inspectorControls={left ? inspectorControls : undefined}
+              summary={left ? summary : undefined}
               sessionTabs={left ? tabs : <span className="flex min-w-0 items-center gap-1.5 truncate px-1 text-xs font-medium text-foreground">{labels.get(slot.key)}</span>}
             />
           </div>

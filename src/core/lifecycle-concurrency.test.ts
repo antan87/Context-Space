@@ -26,8 +26,8 @@ afterEach(async () => { await rm(workspacePath, { recursive: true, force: true }
 
 it('preserves both concurrent completions and independent sync state', async () => {
   await Promise.all([
-    advanceLifecycleStep(workspacePath, 'a', 'complete'),
-    advanceLifecycleStep(workspacePath, 'b', 'complete'),
+    advanceLifecycleStep(workspacePath, 'a', 'complete', { by: 'user' }),
+    advanceLifecycleStep(workspacePath, 'b', 'complete', { by: 'user' }),
     recordRepoSync(workspacePath, 'repo', { status: 'rebased', message: 'synced' }),
   ]);
   const state = await loadWorkspaceState(workspacePath);
@@ -45,9 +45,9 @@ it('preserves progress made while another step is being verified', async () => {
     started();
     return new Promise((resolve) => { finish = resolve; });
   });
-  const verification = advanceLifecycleStep(workspacePath, 'a', 'verify');
+  const verification = advanceLifecycleStep(workspacePath, 'a', 'verify', { by: 'user' });
   await running;
-  await advanceLifecycleStep(workspacePath, 'b', 'complete');
+  await advanceLifecycleStep(workspacePath, 'b', 'complete', { by: 'user' });
   finish({ overallStatus: 'pass', canProgress: true, repos: [] });
   await verification;
   expect((await loadWorkspaceLifecycle(workspacePath, { includeFleet: false })).steps.map((s) => s.status)).toEqual(['verified', 'completed']);
@@ -61,13 +61,13 @@ it('rejects a stale verification of a step completed by another caller and permi
     started();
     return new Promise((resolve) => { finish = resolve; });
   });
-  const verification = advanceLifecycleStep(workspacePath, 'a', 'verify');
+  const verification = advanceLifecycleStep(workspacePath, 'a', 'verify', { by: 'user' });
   const rejected = expect(verification).rejects.toThrow('changed during this operation');
   await running;
-  await advanceLifecycleStep(workspacePath, 'a', 'complete');
+  await advanceLifecycleStep(workspacePath, 'a', 'complete', { by: 'user' });
   finish({ overallStatus: 'pass', canProgress: true, repos: [] });
   await rejected;
-  await advanceLifecycleStep(workspacePath, 'b', 'complete');
+  await advanceLifecycleStep(workspacePath, 'b', 'complete', { by: 'user' });
   expect((await loadWorkspaceLifecycle(workspacePath, { includeFleet: false })).steps.every((s) => s.status === 'completed')).toBe(true);
 });
 
@@ -81,7 +81,7 @@ it('initializes a lifecycle once for concurrent first readers', async () => {
 
 it('preserves corrupt state instead of silently replacing it', async () => {
   await writeFile(getStatePath(workspacePath), '{broken');
-  await expect(advanceLifecycleStep(workspacePath, 'step_discovery', 'complete')).rejects.toThrow();
+  await expect(advanceLifecycleStep(workspacePath, 'step_discovery', 'complete', { by: 'user' })).rejects.toThrow();
   expect(await readFile(getStatePath(workspacePath), 'utf8')).toBe('{broken');
   // The failed mutation must release its lock and queue.
   await saveWorkspaceState({ workspacePath, repos: {}, updatedAt: '' });

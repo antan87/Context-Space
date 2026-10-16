@@ -3,8 +3,9 @@ import { test, expect } from './fixtures';
 import { planItem, planView } from './planData';
 
 /**
- * A workspace opens on its plan, with the sessions one click away: start a tool on what is ready, see what runs now,
- * continue a saved conversation. Old links to the chat and the sessions still open them.
+ * A workspace opens on its plan, with the sessions one click away: start a tool on a ready item from its row, see what
+ * runs now as tabs, and continue a saved conversation in the chat, which is the one place sessions start.
+ * Old links to the chat and the sessions still open them.
  */
 const workspace = { id: 'feature-x', branchName: 'feature-x', name: 'Reports CSV export', description: 'Add CSV export to reports', repos: [], assistants: [], workspacePath: '/tmp/feature-x', createdAt: '2026-09-20T00:00:00Z' };
 test.use({ workspacesData: [[workspace], { option: true }], viewport: { width: 1440, height: 950 } });
@@ -53,77 +54,43 @@ async function mockServer(page: Page, { running = [] as Terminal[], saved = fals
 
 const FIRST_MESSAGE = 'Work on M2 CSV export endpoint. Read the plan with `ctxspace plan` first. If it is not started yet, start it with `ctxspace plan start M2`.';
 
-test('opens on the plan, with a Start card beside it when no session runs', async ({ page }) => {
+test('opens on the plan, with no second place to start a session: that is the chat', async ({ page }) => {
   await mockServer(page, { saved: true });
   await page.goto('/#/workspaces/feature-x');
   await expect(page.getByRole('region', { name: 'The plan', exact: true })).toBeVisible();
-  const start = page.getByRole('region', { name: 'Start a session' });
-  await expect(start.getByRole('button', { name: 'Start Claude Code' })).toBeVisible();
-  await expect(start.getByRole('button', { name: 'Start Codex' })).toBeVisible();
-  await expect(start.getByRole('button', { name: 'Start Antigravity' })).toBeVisible();
-  await expect(start.getByRole('button', { name: 'Start Pi' })).toBeVisible();
-  await expect(start.getByRole('radio', { name: /CSV export endpoint/ })).toBeChecked();
-  await expect(start.getByRole('radio', { name: 'Something else' })).not.toBeChecked();
-  await expect(page.getByRole('region', { name: 'Continue where you left off' }).getByText('Plan the CSV export')).toBeVisible();
-  await expect(page.getByLabel('Plan and sessions').getByText('Plan', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Start a session' })).toHaveCount(0);
+  const tabs = page.getByLabel('Plan and sessions');
+  await expect(tabs.getByText('Plan', { exact: true })).toBeVisible();
+  await expect(tabs.getByRole('button', { name: /New session/ })).toHaveCount(0);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/home-no-session.png` });
 });
 
-test('starts the chosen tool on the chosen item, with a first message that names it', async ({ page }) => {
-  const server = await mockServer(page);
-  await page.goto('/#/workspaces/feature-x');
-  const start = page.getByRole('region', { name: 'Start a session' });
-  await start.getByRole('button', { name: 'Start Codex' }).click();
-  await expect(page).toHaveURL(/#\/workspaces\/feature-x\/chat$/);
-  await expect.poll(() => server.created).toEqual([expect.objectContaining({ target: 'codex', prompt: FIRST_MESSAGE })]);
-});
-
-test('starts a non-pinned tool immediately from the more tools menu', async ({ page }) => {
-  const server = await mockServer(page);
-  await page.goto('/#/workspaces/feature-x');
-  const start = page.getByRole('region', { name: 'Start a session' });
-  await start.getByRole('button', { name: 'More tools' }).click();
-  await page.getByRole('menuitem', { name: 'GitHub Copilot' }).click();
-  await expect(page).toHaveURL(/#\/workspaces\/feature-x\/chat$/);
-  await expect.poll(() => server.created).toEqual([expect.objectContaining({ target: 'copilot', prompt: FIRST_MESSAGE })]);
-});
-
-test('starts the last-used tool on a ready item from its row, and without a first message for something else', async ({ page }) => {
+test('starts the last-used tool on a ready item from its row, with a first message that names it', async ({ page }) => {
   const server = await mockServer(page);
   await page.goto('/#/workspaces/feature-x');
   await page.getByRole('button', { name: 'Start a session on M2 CSV export endpoint' }).click();
   await expect.poll(() => server.created).toEqual([expect.objectContaining({ target: 'claude', prompt: FIRST_MESSAGE })]);
-
-  await page.goto('/#/workspaces/feature-x/plan');
-  server.terminals = [];
-  const start = page.getByRole('region', { name: 'Start a session' });
-  await start.getByRole('radio', { name: 'Something else' }).click();
-  await start.getByRole('button', { name: 'Start Claude Code' }).click();
-  await expect.poll(() => server.created.length).toBe(2);
-  expect(server.created[1]).not.toHaveProperty('prompt');
 });
 
 test('shows the running sessions beside the plan, named after what they work on, and brings one on screen', async ({ page }) => {
-  const server = await mockServer(page, { running: [terminal('t-claude', 'claude')], saved: true, startedBy: 'claude' });
+  const server = await mockServer(page, { running: [terminal('t-claude', 'claude')], startedBy: 'claude' });
   await page.goto('/#/workspaces/feature-x');
   const tabs = page.getByLabel('Plan and sessions');
-  await expect(tabs.getByRole('button', { name: /Show CSV export endpoint in Claude Code/ })).toBeVisible();
-  const runningNow = page.getByRole('region', { name: 'Running now' });
-  await expect(runningNow).toContainText('Running now · 1');
-  await expect(runningNow).toContainText('CSV export endpoint');
-  await expect(page.getByRole('region', { name: 'Start a session' })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'New session' }).getByRole('button', { name: /Claude Code/ })).toBeVisible();
+  const session = tabs.getByRole('button', { name: /Show CSV export endpoint in Claude Code/ });
+  await expect(session).toBeVisible();
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/home-running.png` });
-  await runningNow.getByRole('button', { name: /Show Claude Code, working on M2 CSV export endpoint/ }).click();
+  await session.click();
   await expect(page).toHaveURL(/#\/workspaces\/feature-x\/chat$/);
   await expect.poll(() => server.attached).toContain('t-claude');
   expect(server.created).toEqual([]);
 });
 
-test('continues a saved conversation from the plan', async ({ page }) => {
+test('continues a saved conversation from the chat, where sessions start', async ({ page }) => {
   const server = await mockServer(page, { saved: true });
-  await page.goto('/#/workspaces/feature-x');
-  await page.getByRole('button', { name: 'Continue Plan the CSV export in Claude Code' }).click();
+  await page.goto('/#/workspaces/feature-x/chat');
+  const chat = page.getByRole('region', { name: 'CLI Chat', exact: true });
+  const saved = chat.getByRole('region', { name: 'Continue a conversation' }).getByTestId('resume-session-row').filter({ hasText: 'Plan the CSV export' });
+  await saved.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect.poll(() => server.created).toEqual([expect.objectContaining({ target: 'claude', sessionId: SAVED })]);
   expect(server.created[0]).not.toHaveProperty('prompt');
 });

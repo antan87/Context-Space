@@ -198,7 +198,7 @@ describe('editable milestone definitions', () => {
   });
 
   it('preserves progress and exports the same milestone definitions', async () => {
-    let lifecycle = await advanceLifecycleStep(root, 'step_discovery', 'complete');
+    let lifecycle = await advanceLifecycleStep(root, 'step_discovery', 'complete', { by: 'user' });
     const steps = lifecycle.steps.map((step) => ({ ...step, title: step.id === 'step_implementation' ? 'Optimize invoice lookup' : step.title }));
     lifecycle = await updateLifecyclePlan(root, { revision: lifecycle.revision, steps: [...steps, { id: 'rollout', title: 'Roll out gradually', dependsOn: ['step_ship'] }] });
     expect(lifecycle.steps[0].status).toBe('completed');
@@ -228,7 +228,7 @@ describe('editable milestone definitions', () => {
   });
 
   it('blocks changing completed gate dependencies', async () => {
-    const lifecycle = await advanceLifecycleStep(root, 'step_discovery', 'complete');
+    const lifecycle = await advanceLifecycleStep(root, 'step_discovery', 'complete', { by: 'user' });
     const steps = lifecycle.steps.map((step) => step.id === 'step_discovery' ? { ...step, requiresVerification: true } : step);
     await expect(updateLifecyclePlan(root, { revision: lifecycle.revision, steps })).rejects.toThrow('Completed milestone');
   });

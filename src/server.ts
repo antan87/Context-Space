@@ -4,6 +4,7 @@ import { decodeImageAttachment, InvalidImageAttachment } from './services/image-
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
 import { registerPlanRoutes } from './http/plan-routes.js';
+import { registerNeedsYouRoute } from './http/needs-you-routes.js';
 import { extractAstSymbols } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
 /**
@@ -61,6 +62,7 @@ import {
 import { createWorkspace, listWorkspaces, loadFeatureConfig, saveFeatureConfig, loadWorkspaceManifest, deleteWorkspace, addRepoToWorkspace, isolateWorkspaceRepo } from './core/workspace.js';
 import { loadWorkspaceState } from './core/workspace-state.js';
 import { acknowledgeInputRequests, latestInputRequest, type InputRequest } from './core/attention.js';
+import { answerChatQuestionsInPlan } from './core/plan-questions.js';
 import {
   ScreenSharingOffError, getScreenSharing, readScreenContext, saveScreenContext, setScreenSharing,
 } from './core/screen-context.js';
@@ -2949,6 +2951,10 @@ registerPlanRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
+registerNeedsYouRoute(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
 
 // 13c-1. Get active workspace lifecycle and sister branch fleet
 app.get('/api/workspace/:id/lifecycle', async (c) => {
@@ -2979,7 +2985,7 @@ app.post('/api/workspace/:id/lifecycle/step', async (c) => {
       return c.json({ error: 'stepId and action (start|verify|complete) are required.' }, 400);
     }
     const { advanceLifecycleStep } = await import('./core/lifecycle.js');
-    const lifecycle = await advanceLifecycleStep(workspacePath, body.stepId, body.action);
+    const lifecycle = await advanceLifecycleStep(workspacePath, body.stepId, body.action, { by: 'user' });
     return c.json({ lifecycle });
   } catch (error) {
     return errorResponse(c, error);
@@ -3048,13 +3054,16 @@ app.post('/api/workspace/:id/lifecycle/reopen', async (c) => {
 });
 
 // 13c-2d. Mark every question the AI has asked so far as answered. Replies typed into
-// the chat terminal never reach the ledger, so the app records this explicitly.
+// the chat terminal never reach the ledger, so the app records this explicitly. The same
+// questions in the plan are answered too; a plan that cannot be changed keeps the answer.
 app.post('/api/workspace/:id/input-requests/acknowledge', async (c) => {
   try {
     const id = c.req.param('id');
     const config = await loadConfig();
     const workspacePath = resolveWorkspacePath(config.workspacesDir, id);
-    return c.json(await acknowledgeInputRequests(workspacePath));
+    const { acknowledged, timestamp, requests } = await acknowledgeInputRequests(workspacePath);
+    const planAnswered = await answerChatQuestionsInPlan(workspacePath, requests.map((request) => request.message)).catch(() => []);
+    return c.json({ acknowledged, timestamp, planAnswered });
   } catch (error) {
     return errorResponse(c, error);
   }

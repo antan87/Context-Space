@@ -6,8 +6,8 @@
  * Every caller (the lifecycle view, the CLI, MCP and the Plan tab) changes the plan through
  * `changePlan`, one item at a time, so the rules hold whoever makes the change:
  * - closing needs a reason, and nothing is deleted;
- * - the AI closes only items it owns; for a milestone or the user's item its change becomes a
- *   proposal that the user accepts or sends back;
+ * - the AI makes every change itself, milestones and the user's items too, and the history names it,
+ *   so the user can see it and reopen; a proposal saved under the earlier rule waits for the user;
  * - `waitsFor` is the only dependency, and it cannot form a cycle;
  * - nothing starts by itself.
  * A write re-reads the store under a lock, applies one change and bumps the revision. A store that
@@ -22,6 +22,7 @@ import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
 import {
+  ANSWERED_IN_CHAT,
   KIND_WORDS,
   PLAN_KINDS,
   PLAN_STATUSES,
@@ -48,7 +49,7 @@ export const ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 /** Who makes a change. On the command line a non-interactive shell is the AI. */
 export type PlanActor = { by: 'user' } | { by: 'agent'; harness?: string };
 
-/** A close the AI may not make itself, kept on the item until the user decides. */
+/** A close an AI proposed under the earlier rule, kept on the item until the user decides. */
 export type ProposalAction = 'done' | 'answer' | 'drop' | 'later' | 'reopen';
 
 export interface PlanHistoryEntry {
@@ -158,8 +159,8 @@ export type PlanChange =
 export interface PlanChangeResult {
   plan: PlanDocument;
   item: PlanItem;
-  /** `proposed` when the change waits for the user. */
-  outcome: 'applied' | 'proposed';
+  /** Every change applies at once. Kept for the callers that print it. */
+  outcome: 'applied';
   /** One sentence for the caller to show, naming the item by its label. */
   message: string;
 }
@@ -421,14 +422,6 @@ function actorName(actor: PlanActor): string {
   return actor.by === 'user' ? 'user' : (actor.harness?.trim().toLowerCase() || 'agent');
 }
 
-/** The AI may close an item it owns. Milestones and the user's items need the user. */
-export function agentMayClose(item: PlanItem, actor: PlanActor): boolean {
-  if (actor.by === 'user') return true;
-  if (item.kind === 'milestone') return false;
-  const owner = item.owner?.trim().toLowerCase();
-  return owner === 'agent' || (Boolean(actor.harness) && owner === actor.harness!.trim().toLowerCase());
-}
-
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
 // eslint-disable-next-line no-control-regex
@@ -519,20 +512,6 @@ function resolveIds(plan: PlanDocument, ids: string[] | undefined): PlanItem[] {
   return [...new Set(ids ?? [])].map((id) => find(plan, id));
 }
 
-const PROPOSED: Record<ProposalAction, (label: string) => string> = {
-  done: (label) => `Proposed that ${label} is done`,
-  answer: (label) => `Proposed an answer for ${label}`,
-  drop: (label) => `Proposed dropping ${label}`,
-  later: (label) => `Proposed moving ${label} to later`,
-  reopen: (label) => `Proposed reopening ${label}`,
-};
-
-function proposedMessage(item: PlanItem, action: ProposalAction): string {
-  const whose = item.kind === 'milestone' ? 'A milestone is the user\'s decision' : 'This item is the user\'s decision';
-  return `${sentence(PROPOSED[action](itemLabel(item)))} ${whose}: they see it under Needs you and accept it or send it back. `
-    + 'Your part is done: tell the user it waits for them. Do not look for another way to close it.';
-}
-
 function clearOpenNotes(item: PlanItem): void {
   delete item.blockedReason;
   delete item.blockedAt;
@@ -548,16 +527,8 @@ export function applyPlanChange(
   change: PlanChange,
   actor: PlanActor,
   now = new Date().toISOString(),
-): { itemId: string; outcome: 'applied' | 'proposed'; message: string } {
+): { itemId: string; outcome: 'applied'; message: string } {
   const applied = (item: PlanItem, message: string) => ({ itemId: item.id, outcome: 'applied' as const, message });
-
-  // A close the AI may not make itself becomes a proposal on the item; the user decides.
-  const closing = (item: PlanItem, action: ProposalAction, note: string, apply: () => string) => {
-    if (agentMayClose(item, actor)) return applied(item, apply());
-    item.proposal = { action, by: actorName(actor), note, at: now };
-    record(item, actor, 'proposed', now, `${action}: ${note}`);
-    return { itemId: item.id, outcome: 'proposed' as const, message: proposedMessage(item, action) };
-  };
 
   const finish = (item: PlanItem, status: 'done' | 'dropped', resolution: string, action: string) => {
     item.status = status;
@@ -645,15 +616,15 @@ export function applyPlanChange(
       const resolution = isAnswer
         ? cleanNote(change.answer, `Answering needs the answer: say what was decided for ${itemLabel(item)}.`)
         : cleanNote(change.resolution, `Closing needs a reason: say what came out of ${itemLabel(item)}.`);
-      if (item.status === 'done' || item.status === 'dropped') {
+      // A reply in the chat answers the question before the AI writes down what the developer said.
+      const addsChatWords = isAnswer && item.status === 'done' && item.resolution === ANSWERED_IN_CHAT;
+      if ((item.status === 'done' || item.status === 'dropped') && !addsChatWords) {
         throw new PlanError(`${itemLabel(item)} is already ${statusLabel(item.status).toLowerCase()}. Reopen it first to change that.`, 'not_allowed');
       }
       assertWaitsSettled(plan, item, isAnswer ? 'answer' : 'finish');
-      return closing(item, isAnswer ? 'answer' : 'done', resolution, () => {
-        assertGate(item, change.type === 'done' ? change.checkPassed : undefined);
-        finish(item, 'done', resolution, isAnswer ? 'answered' : 'done');
-        return isAnswer ? `Answered ${itemLabel(item)}: ${resolution}` : sentence(`Done: ${itemLabel(item)}`);
-      });
+      assertGate(item, change.type === 'done' ? change.checkPassed : undefined);
+      finish(item, 'done', resolution, isAnswer ? 'answered' : 'done');
+      return applied(item, isAnswer ? `Answered ${itemLabel(item)}: ${resolution}` : sentence(`Done: ${itemLabel(item)}`));
     }
 
     case 'drop': {
@@ -662,10 +633,8 @@ export function applyPlanChange(
       if (item.status === 'done' || item.status === 'dropped') {
         throw new PlanError(`${itemLabel(item)} is already ${statusLabel(item.status).toLowerCase()}.`, 'not_allowed');
       }
-      return closing(item, 'drop', reason, () => {
-        finish(item, 'dropped', reason, 'dropped');
-        return `Dropped ${itemLabel(item)}: ${reason}`;
-      });
+      finish(item, 'dropped', reason, 'dropped');
+      return applied(item, `Dropped ${itemLabel(item)}: ${reason}`);
     }
 
     case 'later': {
@@ -674,15 +643,13 @@ export function applyPlanChange(
       if (!isOpenStatus(item.status)) {
         throw new PlanError(`${itemLabel(item)} is ${statusLabel(item.status).toLowerCase()}, so it can't move to later.`, 'not_allowed');
       }
-      return closing(item, 'later', revisitWhen, () => {
-        item.status = 'later';
-        delete item.blockedReason;
-        delete item.blockedAt;
-        delete item.proposal;
-        item.revisitWhen = revisitWhen;
-        record(item, actor, 'later', now, revisitWhen);
-        return `Moved ${itemLabel(item)} to later: ${revisitWhen}`;
-      });
+      item.status = 'later';
+      delete item.blockedReason;
+      delete item.blockedAt;
+      delete item.proposal;
+      item.revisitWhen = revisitWhen;
+      record(item, actor, 'later', now, revisitWhen);
+      return applied(item, `Moved ${itemLabel(item)} to later: ${revisitWhen}`);
     }
 
     case 'block': {
@@ -706,15 +673,8 @@ export function applyPlanChange(
       if (item.status === 'todo' || item.status === 'blocked') {
         throw new PlanError(`${itemLabel(item)} is ${statusLabel(item.status).toLowerCase()}, so there is nothing to reopen.`, 'not_allowed');
       }
-      // Reopening a milestone, or someone else's item, sends finished work back: the user decides.
-      const reopenNeedsUser = actor.by === 'agent' && (item.kind === 'milestone' || !agentMayClose(item, actor));
-      if (reopenNeedsUser) {
-        item.proposal = { action: 'reopen', by: actorName(actor), note: reason, at: now };
-        record(item, actor, 'proposed', now, `reopen: ${reason}`);
-        return { itemId: item.id, outcome: 'proposed', message: proposedMessage(item, 'reopen') };
-      }
-      // Finished work goes back into progress; parked or dropped work goes back to the list.
-      item.status = item.status === 'done' || item.status === 'in_progress' ? 'in_progress' : 'todo';
+      // Finished work goes back into progress; parked or dropped work, and a question, which is answered rather than worked on, go back to the list.
+      item.status = item.kind !== 'question' && (item.status === 'done' || item.status === 'in_progress') ? 'in_progress' : 'todo';
       delete item.resolution;
       delete item.closedAt;
       delete item.revisitWhen;
@@ -878,6 +838,31 @@ export function planSections(plan: PlanDocument, options: { changes?: number } =
       && unsettledWaits(plan, item).length === 0),
     changes,
   };
+}
+
+/** What is being worked on and what comes next. */
+export interface PlanFocus {
+  /** The milestone being worked on. */
+  current?: PlanItem;
+  /** The milestone to start next. */
+  next?: PlanItem;
+  /** What `next` waits for before it can start; empty when it can start now. */
+  nextWaitsFor: PlanItem[];
+}
+
+/**
+ * One rule, for every surface that says what is being worked on and what is next (the header, the
+ * strip, the Plan tab, `ctxspace plan` and AGENTS.md), so they never disagree. The current milestone is
+ * the first in progress, in plan order; it stays current until it is done, even after its check passed.
+ * Next is the first milestone that can start; when none can, the first still to do, with what it waits for.
+ */
+export function planFocus(plan: PlanDocument): PlanFocus {
+  const milestones = plan.items.filter((item) => item.kind === 'milestone');
+  const current = milestones.find((item) => item.status === 'in_progress');
+  const upcoming = milestones.filter((item) => item !== current && (item.status === 'todo' || item.status === 'blocked'));
+  const ready = upcoming.find((item) => item.status === 'todo' && !unsettledWaits(plan, item).length);
+  const next = ready ?? upcoming[0];
+  return { ...(current ? { current } : {}), ...(next ? { next } : {}), nextWaitsFor: next && !ready ? unsettledWaits(plan, next) : [] };
 }
 
 /** The items that wait for this one: what it holds up. */

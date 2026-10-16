@@ -138,6 +138,8 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/workspace/*/changes', json({ changes: [] }));
     // An empty plan for the Plan tab; a spec about the plan routes its own.
     await page.route('**/api/workspace/*/plan/items', json(planView([])));
+    // Nothing needs the user in any workspace; a spec about the Overview routes its own.
+    await page.route('**/api/needs-you?*', json({ workspaces: [] }));
     // The Where Are We strip above the chat: an empty plan and a live feed with nothing in it. A spec that
     // exercises the strip registers its own routes, which win over these.
     await page.route('**/api/workspace/*/progress-facts', async (route) => {

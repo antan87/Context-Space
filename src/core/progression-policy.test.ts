@@ -3,12 +3,11 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { evaluateProgression, validateOverrideReason } from './progression-policy.js';
-import { changePlan } from './plan.js';
+import { changePlan, mutatePlan } from './plan.js';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 
 const user = { actor: { by: 'user' } } as const;
-const agent = { actor: { by: 'agent', harness: 'claude' } } as const;
 
 describe('finishing and the plan', () => {
   let root: string;
@@ -50,10 +49,12 @@ describe('finishing and the plan', () => {
     expect(await evaluateProgression(root)).toMatchObject({ ready: true, blockers: [] });
   });
 
-  it('stops on a close that still waits for the user\'s OK', async () => {
+  it('stops on a proposal saved under the earlier rule that still waits for the user\'s OK', async () => {
     await changePlan(root, { type: 'add', kind: 'milestone', title: 'Endpoint' }, user);
     await changePlan(root, { type: 'add', kind: 'task', title: 'Job queue', owner: 'user', before: ['M1'] }, user);
-    await changePlan(root, { type: 'done', id: 'T1', resolution: 'Queue works' }, agent);
+    await mutatePlan(root, (plan) => {
+      plan.items[1]!.proposal = { action: 'done', by: 'claude', note: 'Queue works', at: '2026-10-01T00:00:00.000Z' };
+    });
     const decision = await evaluateProgression(root);
     expect(decision.plan.blocking).toEqual([expect.objectContaining({ id: 'T1', status: "waiting for the user's OK" })]);
     expect(decision.ready).toBe(false);

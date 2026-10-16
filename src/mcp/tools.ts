@@ -34,6 +34,7 @@ import { finishWorkspace } from '../core/finish.js';
 import { planRepoIsolation } from '../core/isolate.js';
 import { archiveWorkspace, planArchive, unarchiveWorkspace } from '../core/archive.js';
 import { getWorkContext, readWorkDocument } from '../core/work-guidance.js';
+import { addChatQuestionToPlan } from '../core/plan-questions.js';
 import { verifyWorkspace } from '../core/verify.js';
 import { getAllSkills, saveSkill } from '../utils/skills-catalog.js';
 import {
@@ -1274,12 +1275,18 @@ export const tools: NexusFlowTool[] = [
             ...(options ? { options } : {}),
           };
           await fs.appendFile(ledger.chatPath, JSON.stringify(entry) + '\n', 'utf8');
+          // The same question in the plan, so the user answers it once and the plan says what it holds up.
+          // A plan that cannot be changed must not stop the alert.
+          const inPlan = await addChatQuestionToPlan(root, { message, options, harness }).catch(() => undefined);
           return json({
             status: 'requested',
             workspaceId: feature.id,
             harness,
             timestamp: entry.timestamp,
-            message: waitNote,
+            ...(inPlan ? { planQuestion: inPlan.label } : {}),
+            message: inPlan
+              ? `${waitNote} It is in the plan as ${inPlan.label}; when the user answers, record their words: ctxspace plan answer ${inPlan.id} "<their answer>".`
+              : waitNote,
           });
         });
       } catch (error: any) {

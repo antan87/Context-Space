@@ -36,7 +36,12 @@ function examplePlan(): PlanDocument {
   apply({ type: 'done', id: 'T2', resolution: 'Capped at 50,000 rows' }, claude);
   apply({ type: 'add', kind: 'task', title: 'Write the CSV encoder', before: ['M2'], owner: 'user' }, claude);
   apply({ type: 'start', id: 'T3' }, claude);
-  apply({ type: 'done', id: 'T3', resolution: 'Encoder handles quotes and commas' }, claude);
+  // A proposal saved under the earlier rule, before the AI could close the user's work itself.
+  minute += 1;
+  const at = new Date(Date.parse('2026-10-10T11:00:00.000Z') + minute * 60_000).toISOString();
+  const t3 = plan.items.find((item) => item.id === 'T3')!;
+  t3.proposal = { action: 'done', by: 'claude', note: 'Encoder handles quotes and commas', at };
+  t3.history.push({ at, by: 'claude', action: 'proposed', note: 'done: Encoder handles quotes and commas' });
   return plan;
 }
 
@@ -78,6 +83,12 @@ describe('renderPlanText', () => {
     }
   });
 
+  it('shows a full commit hash in seven characters', () => {
+    const plan = examplePlan();
+    plan.items.find((item) => item.id === 'M1')!.resolution = 'Passed its check on a91f2e0c4d5b6a7980112233445566778899aabb';
+    expect(renderPlanText(plan, { now: NOW })).toContain('M1 Database query for report rows · done · Passed its check on a91f2e0\n');
+  });
+
   it('lists done and dropped items with --all', () => {
     const text = renderPlanText(examplePlan(), { now: NOW, all: true });
     expect(text).toContain('✓   T1 Background job queue for large exports · done · Exports over 10,000 rows run in the background');
@@ -92,6 +103,21 @@ describe('renderPlanText', () => {
       '  39 min ago   Claude       proposed a change to T3 Write the CSV encoder: done: Encoder handles quotes and commas',
       '  40 min ago   Claude       started T3 Write the CSV encoder',
     ]);
+  });
+
+  it('says what is being worked on and what is next, and what Next waits for', () => {
+    const text = renderPlanText(examplePlan(), { goal, now: NOW });
+    expect(text).toContain('NEXT        M2 CSV export endpoint · waits for Q1 Which time zone should export timestamps use?, T3 Write the CSV encoder');
+    expect(text).not.toContain('NOW ');
+    expect(text.indexOf('NEXT ')).toBeLessThan(text.indexOf('NEEDS YOU'));
+    const json = planToJson(examplePlan());
+    expect(json.focus).toEqual({ next: {
+      id: 'M2', label: 'M2 CSV export endpoint', title: 'CSV export endpoint',
+      waitsFor: [
+        { id: 'Q1', label: 'Q1 Which time zone should export timestamps use?', title: 'Which time zone should export timestamps use?' },
+        { id: 'T3', label: 'T3 Write the CSV encoder', title: 'Write the CSV encoder' },
+      ],
+    } });
   });
 
   it('tells how to start when the plan is empty', () => {
@@ -147,16 +173,20 @@ describe('small helpers', () => {
   it('states the six rules and names-first in the help', () => {
     const help = renderPlanRules();
     PLAN_RULES.forEach((rule, index) => expect(help).toContain(`${index + 1}. ${rule}`));
-    expect(help).toContain('M2 CSV export endpoint');
+    expect(help).toContain('call an item by its name ("the CSV export endpoint"), not its code ("M2")');
     expect(help).toContain('To do, In progress, Blocked, Done, Dropped, Later');
   });
 
-  it('gives the AI a work routine: read, keep the plan true, record what the user says, report with names', () => {
+  it('gives the AI a work routine: read, keep the plan true, record what the user says, finish what is done, report with names', () => {
     expect(PLAN_WORKFLOW).toHaveLength(6);
     expect(PLAN_WORKFLOW[0].text).toMatch(/^Start by running `ctxspace plan`/);
     expect(PLAN_WORKFLOW[2].list).toHaveLength(3);
-    expect(PLAN_WORKFLOW.map((step) => step.text).join(' ')).toContain('your part is done');
-    expect(PLAN_WORKFLOW.at(-1)!.text).toContain('never "M2" alone');
+    const routine = PLAN_WORKFLOW.map((step) => step.text).join(' ');
+    expect(routine).toContain('Never answer the user\'s question with your own guess');
+    expect(routine).toContain('When you judge an item done, a milestone too, finish it');
+    // Reported to a person: names, not codes, and no plan bookkeeping.
+    expect(PLAN_WORKFLOW.at(-1)!.text).toMatch(/^Report back in plain words, for someone who has not read the plan/);
+    expect(PLAN_WORKFLOW.at(-1)!.text).toContain('not "M2"');
   });
 
   it('writes the Plan section of AGENTS.md: command, numbered routine with its changes, rules, who acts', () => {
@@ -166,9 +196,9 @@ describe('small helpers', () => {
     expect(text).toContain('Never edit `contextspace-plan.json` by hand.');
     expect(text).toContain('.\\.contextspace\\bin\\ctxspace.cmd plan');
     expect(text).toContain('3. Keep the plan true while you work, one change at a time:\n   - new work you find:');
-    expect(text).toContain('6. Report back in three short parts');
+    expect(text).toContain('6. Report back in plain words');
     PLAN_RULES.forEach((rule, index) => expect(text).toContain(`${index + 1}. ${rule}`));
-    expect(text.trimEnd().split('\n').at(-1)).toBe(WHO_ACTS.slice(0, 3).join(' '));
+    expect(text.trimEnd().split('\n').at(-1)).toBe(WHO_ACTS.slice(0, 2).join(' '));
     // Told how a person acts as the user, an AI tried it: AGENTS.md leaves it out.
     expect(text).not.toContain('--as user');
   });

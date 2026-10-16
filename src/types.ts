@@ -828,7 +828,10 @@ export interface WorkspaceLifecycle {
   revision?: number;
   workspaceId: string;
   flowType: 'quick' | 'feature' | 'epic';
+  /** The milestone being worked on, by the plan's one rule (`planFocus`). */
   currentStepId?: string;
+  /** The milestone to start next, by the same rule; it may still wait for something. */
+  nextStepId?: string;
   steps: LifecycleStep[];
   fleet?: BranchFleetMember[];
   updatedAt: string;
@@ -845,7 +848,8 @@ export interface PlanEvidence {
   lastVerificationStatus?: VerificationStatus;
   /** Whether the check permitted progress. */
   canProgress: boolean;
-  at: string;
+  /** When it ran. Missing for a check carried over from a lifecycle that did not keep the time. */
+  at?: string;
 }
 
 /** State file saved to track per-repo sync/validation status (`.nexusflow-state.json`). */

@@ -656,7 +656,10 @@ export interface WorkspaceLifecycle {
   revision?: number;
   workspaceId: string;
   flowType: 'quick' | 'feature' | 'epic';
+  /** The milestone being worked on, by the plan's one rule. */
   currentStepId?: string;
+  /** The milestone to start next, by the same rule; it may still wait for something. */
+  nextStepId?: string;
   steps: LifecycleStep[];
   fleet?: BranchFleetMember[];
   updatedAt: string;
@@ -877,6 +880,8 @@ export interface ProgressFacts {
   milestones: MilestoneFact[];
   counts: { total: number; done: number; inProgress: number; reopened: number; blocked: number; upcoming: number };
   currentMilestoneId?: string;
+  /** The milestone to start next, by the plan's one rule; it may still wait for something. */
+  nextMilestoneId?: string;
   openQuestions: OpenQuestion[];
   changes: { repos: RepoChangeFact[]; files: number; additions: number; deletions: number };
   verification: {
@@ -898,7 +903,7 @@ export type ScreenEvent = { id: string; timestamp: string; harness: string } & (
   | { event: 'show'; payload: { view: 'document' | 'file' | 'diff'; path?: string; repo?: string; line?: number; endLine?: number; note?: string } }
   | { event: 'annotate'; payload: { path: string; repo?: string; line: number; text: string; tag: AnnotationTag } }
   | { event: 'next'; payload: { title: string; reason: string; path?: string; repo?: string; line?: number } }
-  | { event: 'milestone'; payload: { stepId: string; state: 'in_progress' | 'blocked'; note?: string } }
+  | { event: 'milestone'; payload: { stepId: string; state: 'in_progress' | 'blocked' | 'done' | 'reopened'; note?: string } }
   | { event: 'milestone_proposal'; payload: { stepId: string; proposal: 'reopen' | 'complete'; reason: string } }
 );
 

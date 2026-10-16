@@ -50,12 +50,16 @@ function PlanCard({ title, meta, action, children }: { title: string; meta?: Rea
   </section>;
 }
 
-/** The goal as a reader needs it: its opening, the rest on request, what it delivers and when it stops. */
-function GoalSummary({ guidance, scope }: { guidance: WorkGuidance; scope?: string }) {
+/**
+ * The goal as a reader needs it: its opening, the rest on request. What it delivers and when it stops are
+ * shown only until the plan has milestones: then each milestone says what it must deliver, and the
+ * brief's own words would go stale beside them.
+ */
+function GoalSummary({ guidance, scope, hasMilestones }: { guidance: WorkGuidance; scope?: string; hasMilestones: boolean }) {
   const objective = guidance.assignment.objective?.trim() ?? '';
   const opening = headline(objective);
-  const delivers = guidance.assignment.expectedOutput?.trim();
-  const stops = guidance.assignment.stopCondition?.trim();
+  const delivers = hasMilestones ? undefined : guidance.assignment.expectedOutput?.trim();
+  const stops = hasMilestones ? undefined : guidance.assignment.stopCondition?.trim();
   const stage = guidance.assignment.stage;
   const metaText = [stage ? stage[0]!.toUpperCase() + stage.slice(1) : '', WORK_TYPES[guidance.workType], SIZES[guidance.size], scope ? `For ${scope}` : ''].filter(Boolean).join(' · ');
 
@@ -78,7 +82,7 @@ function GoalSummary({ guidance, scope }: { guidance: WorkGuidance; scope?: stri
       {delivers && (
         <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
           <div className="flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
+            <span className="size-1.5 rounded-full bg-state-done shrink-0" />
             <h4 className="text-xs font-medium text-muted-foreground">Delivers</h4>
           </div>
           <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={delivers}><InlinePlanMarkdown content={delivers} /></p>
@@ -87,7 +91,7 @@ function GoalSummary({ guidance, scope }: { guidance: WorkGuidance; scope?: stri
       {stops && (
         <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
           <div className="flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-amber-500 shrink-0" />
+            <span className="size-1.5 rounded-full bg-state-needs shrink-0" />
             <h4 className="text-xs font-medium text-muted-foreground">Stops when</h4>
           </div>
           <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={stops}><InlinePlanMarkdown content={stops} /></p>
@@ -290,7 +294,7 @@ export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { wo
             {!readOnly && assignmentDirty && !conflicts.assignment && <Button variant="ghost" disabled={busy} onClick={() => { setDraft(context.guidance); setMessage('Unsaved goal edits discarded.'); }}>Discard unsaved goal changes</Button>}
             {!readOnly && <DraftStateLabel state={assignmentState} kept={!notKept.assignment} />}
           </div>
-        </div> : <GoalSummary guidance={draft} scope={context.lifecycle?.steps.find((step) => step.id === draft.assignment.milestoneId)?.title} />}
+        </div> : <GoalSummary guidance={draft} scope={context.lifecycle?.steps.find((step) => step.id === draft.assignment.milestoneId)?.title} hasMilestones={Boolean(context.lifecycle?.steps.length)} />}
       </PlanCard>
 
       {plan}

@@ -6,10 +6,12 @@ import { goToWorkspace, parseWorkspacePath } from '../chat/chatRoute.js';
 import { useOpenFileReference } from '../workspace-shell/useOpenFileReference.js';
 import { hasModifier, modifierLabel, usePaneHotkey } from './usePaneHotkey.js';
 import { SessionDeck } from './SessionDeck.js';
-import { WhereAreWeStrip } from '../progress/WhereAreWeStrip.js';
+import { WhereAreWeNotices, WhereAreWeSummary } from '../progress/WhereAreWeStrip.js';
+import { useWhereAreWe } from '../progress/useWhereAreWe.js';
 
 /**
- * A workspace's chat: the progress strip above its terminal sessions.
+ * A workspace's chat: where the work stands in the toolbar of its terminal sessions, and what waits for the
+ * developer above it while something does. So the chat keeps two bars above its content.
  *
  * Code and documents open in the panel beside the chat, from the workspace rail, never in a second
  * panel inside the chat. Paths the CLI prints open there too. The toolbar's Code button and
@@ -56,10 +58,13 @@ export function TerminalWorkspace({ workspacePath, repoPaths, ...props }: Pick<C
     </Button>,
   ];
 
+  const strip = useWhereAreWe({ workspace: props.workspace, active: props.active, fillPrompt: text => fillPromptRef.current?.(text) ?? false, replyRef, openFile: reference => { void openFile(reference); } });
+
   return <div className="flex h-full min-h-0 flex-col">
-    <WhereAreWeStrip workspace={props.workspace} active={props.active} fillPrompt={text => fillPromptRef.current?.(text) ?? false} replyRef={replyRef} openFile={reference => { void openFile(reference); }} />
+    <WhereAreWeNotices strip={strip} />
     <div className="min-h-0 min-w-0 flex-1">
-      <SessionDeck {...props} fillPromptRef={fillPromptRef} onReply={target => replyRef.current?.(target)} inspectorControls={inspectorControls} onOpenFileReference={reference => { void openFile(reference); }} />
+      <SessionDeck {...props} fillPromptRef={fillPromptRef} onReply={target => replyRef.current?.(target)} inspectorControls={inspectorControls}
+        summary={<WhereAreWeSummary strip={strip} />} onOpenFileReference={reference => { void openFile(reference); }} />
     </div>
   </div>;
 }

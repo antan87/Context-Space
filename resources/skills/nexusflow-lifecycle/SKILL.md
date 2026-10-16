@@ -59,19 +59,23 @@ the selected milestone. Project sources remain owned by their originating worksp
 
 Change the plan one item at a time with `ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`;
 `ctxspace plan --help` shows the options and examples, and `--json` gives every field. Never
-edit `contextspace-plan.json` by hand. Always write an item's name with its code:
-"M2 CSV export endpoint", never "M2" alone.
+edit `contextspace-plan.json` by hand. Codes are for commands: to the user, call an item by
+its name ("the CSV export endpoint"), not its code ("M2").
 
 - Start with `ctxspace plan`; continue what is in progress for you, or `start` what is ready.
 - Keep it true while you work: add new work with `add task "<name>" --before <code>`, a
   question for the user with `add question "<question>" --owner user --before <code>`, and
   `block <code> --reason` when stuck.
-- Every close has a reason. You close only your own items; for the user's items and for
-  milestones, `done`, `answer`, `drop` and `later` become proposals the user accepts under
-  Needs you. That is the end of your part, even when the user told you the answer.
+- Every close has a reason. You may finish, drop, put off and reopen any item, milestones
+  too, when you judge the work says so; tell the user in the chat, and they can reopen it.
+  When the user answers in the chat, however you asked, record it on the plan's question with
+  `answer <code> "<their words>"`, or drop a question their answer makes moot. Never answer
+  the user's question with your own guess.
 - Nothing starts by itself. A milestone is done when everything it waits for is done and its
   check passes on the latest code.
-- Report back with what you changed, what waits for the user, and what is next.
+- Report back in plain words, for someone who has not read the plan: what works now or was
+  decided, what you need from the user, and what you do next. Leave out plan bookkeeping
+  such as "recorded", "proposed" or "blocked on".
 
 Assignments and sources keep their MCP tools: read `get_work_context` first and use
 `guidance.revision` with `update_work_assignment`, `add_work_document` and
@@ -106,12 +110,10 @@ and design produce their agreed outputs and stop before implementation unless th
 has explicitly authorized that transition. Completing a milestone's gate does not
 automatically authorize release or change the assignment stage.
 
-Propose a milestone done with `ctxspace plan done <code> --resolution "<evidence>"`; the user
-accepts it, and its check runs then. `ctxspace flow --step <id> --action verify` and
-`--action complete` may each run the milestone's verification command. Wait for one transition to finish before starting
-another, then check `ctxspace flow --json` for the recorded gate status and tested
-revision. A successful transition command can still record a failed verification;
-investigate the gate result before retrying or treating the milestone as complete.
+Finish a milestone with `ctxspace plan done <code> --resolution "<evidence>"` when you judge
+the work done. Its check runs first, and the milestone is done only when the check passes; a
+failed check leaves it in progress and says why. Wait for one check to finish before starting
+another, and investigate a failed check before retrying.
 A gate that records `timeout` hit its time limit (30 minutes unless the milestone sets
 `verificationTimeoutSeconds`); raise the limit rather than weakening the command.
 

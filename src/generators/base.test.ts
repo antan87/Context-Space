@@ -315,7 +315,7 @@ describe('buildContextContent', () => {
       expect(content).toContain('1. Start by running `ctxspace plan`.');
       expect(content).toContain('   - stuck: `ctxspace plan block <code> --reason "<what you wait for>"`');
       PLAN_RULES.forEach((rule, index) => expect(content).toContain(`${index + 1}. ${rule}`));
-      expect(content).toContain(WHO_ACTS.slice(0, 3).join(' '));
+      expect(content).toContain(WHO_ACTS.slice(0, 2).join(' '));
       expect(content).toContain('./.contextspace/bin/ctxspace plan');
       // The plan has no MCP tools: AIs are never sent to the old planning tools.
       for (const tool of ['update_milestone_plan', 'set_milestone', 'get_planning_notes', 'save_planning_notes']) expect(content).not.toContain(tool);

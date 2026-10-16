@@ -255,7 +255,14 @@ describe('nextAction', () => {
     expect(nextAction(facts([milestone('a', 'reopened', { reopen: { at: '2026-10-02T10:00:00.000Z', reason: 'misses a case', by: 'user' } })])))
       .toMatchObject({ label: 'Redo "Title a"', reason: 'Reopened: misses a case', prompt: 'Let\'s redo "Title a": misses a case' });
     expect(nextAction(facts(plan, { currentMilestoneId: 'b' }))).toMatchObject({ label: 'Continue "Title b"', prompt: 'Continue with "Title b".' });
-    expect(nextAction(facts([milestone('a', 'done'), milestone('c', 'upcoming', { waitingOn: ['z'] }), milestone('d', 'upcoming')]))).toMatchObject({ label: 'Start "Title d"' });
+    expect(nextAction(facts([milestone('a', 'done'), milestone('c', 'upcoming', { waitingOn: ['z'] }), milestone('d', 'upcoming')], { nextMilestoneId: 'd' }))).toMatchObject({ label: 'Start "Title d"' });
+  });
+
+  it('offers to start only the plan\'s Next, and only when it can start', () => {
+    const upcoming = [milestone('a', 'done'), milestone('c', 'upcoming', { waitingOn: ['z'] }), milestone('d', 'upcoming')];
+    // The plan's rule chose c, which still waits: nothing to start, even though d could.
+    expect(nextAction(facts(upcoming, { nextMilestoneId: 'c' }))).toBeNull();
+    expect(nextAction(facts(upcoming))).toBeNull();
   });
 
   it('has nothing to offer when everything is done or nothing can start', () => {

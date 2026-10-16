@@ -24,6 +24,7 @@ import {
   changePlan,
   emptyPlan,
   mutatePlan,
+  planFocus,
   readPlanIfExists,
   readPlan,
   unsettledWaits,
@@ -170,7 +171,7 @@ export function planFromLifecycle(lifecycle: WorkspaceLifecycle, now = new Date(
       if (step.verificationTimeoutSeconds) item.gate.timeoutSeconds = step.verificationTimeoutSeconds;
     }
     if (status === 'done') {
-      item.resolution = step.lastVerificationSha ? `Passed its check on ${step.lastVerificationSha}` : 'Completed before the plan moved to its own file';
+      item.resolution = step.lastVerificationSha ? `Passed its check on ${step.lastVerificationSha.slice(0, 7)}` : 'Completed before the plan moved to its own file';
       if (step.completedAt) item.closedAt = step.completedAt;
     }
     if (status === 'blocked') {
@@ -193,7 +194,8 @@ function evidenceFromStep(step: LifecycleStep | undefined): PlanEvidence | undef
     ...(step.lastVerificationStatus ? { lastVerificationStatus: step.lastVerificationStatus } : {}),
     // A verified or completed step got there by passing its check.
     canProgress: step.status === 'verified' || step.status === 'completed',
-    at: step.completedAt ?? new Date(0).toISOString(),
+    // An unknown time stays unknown: an invented one shows as a wrong date.
+    ...(step.completedAt ? { at: step.completedAt } : {}),
   };
 }
 
@@ -341,9 +343,10 @@ export function lifecycleView(
     updatedAt: plan.updatedAt,
     revision: plan.revision,
   };
-  // Nothing starts by itself, so the current step is simply the one being worked on, if any.
-  const current = steps.find((step) => step.status === 'in_progress' || step.status === 'verified');
-  if (current) lifecycle.currentStepId = current.id;
+  // Nothing starts by itself. What is current and next follows the plan's one rule, as every surface does.
+  const focus = planFocus(plan);
+  if (focus.current) lifecycle.currentStepId = focus.current.id;
+  if (focus.next) lifecycle.nextStepId = focus.next.id;
   return lifecycle;
 }
 
@@ -419,7 +422,8 @@ export async function advanceLifecycleStep(
   workspacePath: string,
   stepId: string,
   action: 'start' | 'verify' | 'complete',
-  actor: PlanActor = { by: 'user' },
+  /** Who acts. No default: a close recorded as the user when the AI made it is the wrong history. */
+  actor: PlanActor,
   /** For complete: what came out of it, kept with the check's result. */
   options: { resolution?: string } = {},
 ): Promise<WorkspaceLifecycle> {
@@ -470,7 +474,7 @@ export async function advanceLifecycleStep(
     if (action === 'start') {
       await changePlan(workspacePath, { type: 'start', id: stepId }, { actor, ifItemUpdatedAt: item.updatedAt });
     } else if (action === 'complete' && !gateFailed) {
-      const checked = requiresVerification ? `Passed its check on ${checkedSha ?? 'the latest code'}` : '';
+      const checked = requiresVerification ? `Passed its check on ${checkedSha?.slice(0, 7) ?? 'the latest code'}` : '';
       const resolution = [options.resolution?.trim(), checked].filter(Boolean).join('. ') || 'Marked done';
       await changePlan(workspacePath, { type: 'done', id: stepId, resolution, checkPassed: true }, { actor, ifItemUpdatedAt: item.updatedAt });
     }
@@ -515,6 +519,7 @@ function reasonText(emptyMessage: string) {
 const reopenSchema = z.object({
   reason: reasonText('Say why the milestone is being reopened.'),
   by: z.enum(['user', 'agent']),
+  harness: z.string().trim().max(100).optional(),
 });
 const blockSchema = z.object({ reason: reasonText('Say what the milestone is blocked on.') });
 
@@ -523,15 +528,15 @@ const blockSchema = z.object({ reason: reasonText('Say what the milestone is blo
  * so this is a first-class, checkable fact on the step (when, why, by whom, how
  * many times) and not a silent status flip. Only a completed or verified
  * milestone can be reopened. The earlier completion and its verification proof
- * no longer describe the work, so both are cleared. From the AI side this is a
- * proposal: the user decides.
+ * no longer describe the work, so both are cleared. The AI may reopen too; the
+ * history names who did.
  */
 export async function reopenLifecycleStep(
   workspacePath: string,
   stepId: string,
-  input: { reason: string; by: 'user' | 'agent' },
+  input: { reason: string; by: 'user' | 'agent'; harness?: string },
 ): Promise<WorkspaceLifecycle> {
-  const { reason, by } = reopenSchema.parse(input);
+  const { reason, by, harness } = reopenSchema.parse(input);
   const { plan, lifecycle } = await loadView(workspacePath, { write: true });
   const step = lifecycle.steps.find((candidate) => candidate.id === stepId);
   const item = plan.items.find((candidate) => candidate.id === stepId);
@@ -539,10 +544,9 @@ export async function reopenLifecycleStep(
   if (step.status !== 'completed' && step.status !== 'verified') {
     throw new LifecycleStepError(`Step "${stepId}" is ${step.status.replace('_', ' ')}, so there is nothing to reopen. Only a finished milestone can be reopened.`, 'not_reopenable');
   }
-  let outcome: 'applied' | 'proposed';
   try {
-    ({ outcome } = await changePlan(workspacePath, { type: 'reopen', id: stepId, reason },
-      { actor: by === 'user' ? { by: 'user' } : { by: 'agent' }, ifItemUpdatedAt: item.updatedAt }));
+    await changePlan(workspacePath, { type: 'reopen', id: stepId, reason },
+      { actor: by === 'user' ? { by: 'user' } : { by: 'agent', ...(harness ? { harness } : {}) }, ifItemUpdatedAt: item.updatedAt });
   } catch (error) {
     // Another session may have changed or reopened it while this call was waiting.
     if (error instanceof PlanError && error.code === 'conflict') {
@@ -550,7 +554,7 @@ export async function reopenLifecycleStep(
     }
     throw error;
   }
-  if (outcome === 'applied') await recordEvidence(workspacePath, stepId, null);
+  await recordEvidence(workspacePath, stepId, null);
   return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
 }
 

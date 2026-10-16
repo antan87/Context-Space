@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { Hono } from 'hono';
 import { registerPlanRoutes } from './plan-routes.js';
-import { changePlan, readPlan } from '../core/plan.js';
+import { changePlan, mutatePlan, readPlan, type ProposalAction } from '../core/plan.js';
 import { planFinishCheck } from '../core/plan-app.js';
 import { PLAN_RULES, STATUS_WORDS } from '../core/plan-words.js';
 import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
@@ -16,6 +16,10 @@ vi.mock('../core/verify.js', () => ({
 
 const agent = { actor: { by: 'agent', harness: 'claude' } } as const;
 const user = { actor: { by: 'user' } } as const;
+/** A proposal an AI saved under the earlier rule, before it could close the user's work itself. */
+const propose = (root: string, id: string, action: ProposalAction, note: string) => mutatePlan(root, (plan) => {
+  plan.items.find((item) => item.id === id)!.proposal = { action, by: 'claude', note, at: '2026-10-01T00:00:00.000Z' };
+});
 
 describe('plan routes', () => {
   let root: string;
@@ -54,12 +58,12 @@ describe('plan routes', () => {
     expect(plan.words.statuses.blocked).toEqual(STATUS_WORDS.blocked);
   });
 
-  it('answers the user\'s question as the user, and accepts or sends back the AI\'s proposals', async () => {
+  it('answers the user\'s question as the user, and accepts or sends back proposals saved earlier', async () => {
     await changePlan(root, { type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' }, agent);
     await changePlan(root, { type: 'add', kind: 'task', title: 'Rate limit', owner: 'user' }, agent);
     await changePlan(root, { type: 'add', kind: 'task', title: 'Docs', owner: 'user' }, agent);
-    await changePlan(root, { type: 'done', id: 'T1', resolution: 'Five tries a minute' }, agent);
-    await changePlan(root, { type: 'done', id: 'T2', resolution: 'Written' }, agent);
+    await propose(root, 'T1', 'done', 'Five tries a minute');
+    await propose(root, 'T2', 'done', 'Written');
 
     expect((await post({ change: { type: 'answer', id: 'Q1', answer: 'UTC' } })).status).toBe(200);
     const accepted = await post({ change: { type: 'accept', id: 'T1' } });
@@ -92,8 +96,7 @@ describe('plan routes', () => {
   it('marks a milestone done only through its check, keeping the reason given', async () => {
     await changePlan(root, { type: 'add', kind: 'milestone', title: 'CSV export endpoint', gate: { required: true, command: 'npm test' } }, user);
     await changePlan(root, { type: 'start', id: 'M1' }, agent);
-    await changePlan(root, { type: 'done', id: 'M1', resolution: 'Endpoint works' }, agent);
-    expect((await readPlan(root)).items[0]!.proposal).toMatchObject({ action: 'done' });
+    await propose(root, 'M1', 'done', 'Endpoint works');
 
     const accepted = await post({ change: { type: 'accept', id: 'M1' } });
     expect(accepted.status).toBe(200);

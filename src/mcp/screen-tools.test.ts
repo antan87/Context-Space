@@ -10,6 +10,7 @@ import { SCREEN_EVENTS_FILE } from '../core/screen-events.js';
 import { setScreenSharing, saveScreenContext } from '../core/screen-context.js';
 import { loadWorkspaceState, saveWorkspaceState } from '../core/workspace-state.js';
 import { loadWorkspaceLifecycle } from '../core/lifecycle.js';
+import { readPlan } from '../core/plan.js';
 import type { LifecycleStep, NexusFlowConfig } from '../types.js';
 
 vi.mock('../core/planning-refresh.js', () => ({ refreshPlanningContext: vi.fn(async () => ({ contextRefreshed: true })) }));
@@ -74,7 +75,7 @@ describe('registration', () => {
 
   it('tells the AI the rules in the descriptions', () => {
     expect(findTool('show_in_reader')!.description).toMatch(/only shows/i);
-    expect(findTool('set_milestone')!.description).toMatch(/proposals/i);
+    expect(findTool('set_milestone')!.description).toMatch(/they can reopen it/i);
     expect(findTool('get_screen_context')!.description).toMatch(/do not ask the user to switch it on/i);
   });
 
@@ -252,11 +253,11 @@ describe('set_milestone', () => {
     expect(plan).not.toHaveProperty('blockedReason');
   });
 
-  it('will not start finished work, and says only the user can reopen it', async () => {
+  it('will not start finished work, and says to reopen it with a note', async () => {
     await seed([step('plan', 'completed')]);
     const result = await call('set_milestone', { id: 'plan', state: 'in_progress' });
     expect(result).toMatchObject({ isError: true });
-    expect(result.text).toContain('Only the user can reopen');
+    expect(result.text).toContain('Reopen it with a note');
     expect((await stepsNow())[0]!.status).toBe('completed');
   });
 
@@ -288,40 +289,33 @@ describe('set_milestone', () => {
     expect((await call('set_milestone', { id: 'plan', state: 'blocked', note: 'x' })).isError).toBe(true);
   });
 
-  it('only PROPOSES reopening: the milestone stays finished and the user is shown the reason', async () => {
+  it('reopens finished work as the AI, with the reason, and shows it', async () => {
     await seed([step('plan', 'completed', { completedAt: '2026-10-01T00:00:00.000Z' })]);
-    const { body } = await call('set_milestone', { id: 'plan', state: 'reopened', note: 'Review found a gap in step 2' });
-    expect(body).toMatchObject({ status: 'proposed', message: expect.stringContaining('You cannot reopen') });
-    const [plan] = await stepsNow();
-    expect(plan!.status).toBe('completed');
-    expect(plan).not.toHaveProperty('reopenedAt');
-    expect((await screenLines())[0]).toMatchObject({ event: 'milestone_proposal', payload: { stepId: 'plan', proposal: 'reopen', reason: 'Review found a gap in step 2' } });
+    const { body } = await call('set_milestone', { harness: 'claude', id: 'plan', state: 'reopened', note: 'Review found a gap in step 2' });
+    expect(body).toMatchObject({ status: 'reopened' });
+    expect((await stepsNow())[0]).toMatchObject({ status: 'in_progress', reopenReason: 'Review found a gap in step 2' });
+    expect((await readPlan(dir)).items[0]!.history!.at(-1)).toMatchObject({ by: 'claude', action: 'reopened' });
+    expect((await screenLines())[0]).toMatchObject({ event: 'milestone', payload: { stepId: 'plan', state: 'reopened', note: 'Review found a gap in step 2' } });
   });
 
-  it('only PROPOSES completion: the milestone is not completed and no check is run', async () => {
+  it('finishes a milestone as the AI when it judges the work done, and shows it', async () => {
     await seed([step('plan', 'in_progress')]);
-    const { body } = await call('set_milestone', { id: 'plan', state: 'done', note: 'All tests pass' });
-    expect(body).toMatchObject({ status: 'proposed', message: expect.stringContaining('You cannot complete') });
-    expect((await stepsNow())[0]!.status).toBe('in_progress');
-    expect((await screenLines())[0]).toMatchObject({ event: 'milestone_proposal', payload: { proposal: 'complete' } });
+    const { body } = await call('set_milestone', { harness: 'claude', id: 'plan', state: 'done', note: 'All tests pass' });
+    expect(body).toMatchObject({ status: 'done', message: expect.stringContaining('they can reopen it') });
+    expect((await stepsNow())[0]!.status).toBe('completed');
+    expect((await readPlan(dir)).items[0]).toMatchObject({ status: 'done', resolution: 'All tests pass' });
+    expect((await readPlan(dir)).items[0]!.history!.at(-1)).toMatchObject({ by: 'claude', action: 'done' });
+    expect((await screenLines())[0]).toMatchObject({ event: 'milestone', payload: { stepId: 'plan', state: 'done', note: 'All tests pass' } });
   });
 
-  it('refuses nonsense proposals: reopening unfinished work, completing work that never started or already finished', async () => {
+  it('refuses what makes no sense: reopening unfinished work, finishing work that never started or already finished', async () => {
     await seed([step('a', 'in_progress'), step('b', 'pending'), step('c', 'completed'), step('d', 'verified')]);
     expect((await call('set_milestone', { id: 'a', state: 'reopened', note: 'x' })).text).toMatch(/nothing to reopen/);
-    // Passed its check but not finished: the user sees it in progress, so a reopen proposal would never show.
+    // Passed its check but not finished: the user sees it in progress, so there is nothing to reopen.
     expect((await call('set_milestone', { id: 'd', state: 'reopened', note: 'x' })).text).toMatch(/nothing to reopen/);
-    expect((await call('set_milestone', { id: 'b', state: 'done', note: 'x' })).text).toMatch(/cannot be proposed as done/);
-    expect((await call('set_milestone', { id: 'c', state: 'done', note: 'x' })).text).toMatch(/cannot be proposed as done/);
+    expect((await call('set_milestone', { id: 'b', state: 'done', note: 'x' })).text).toMatch(/cannot be finished/);
+    expect((await call('set_milestone', { id: 'c', state: 'done', note: 'x' })).text).toMatch(/cannot be finished/);
     expect(await screenLines()).toEqual([]);
-  });
-
-  it('does not propose the same thing twice', async () => {
-    await seed([step('plan', 'completed')]);
-    const args = { harness: 'claude', id: 'plan', state: 'reopened', note: 'Gap' };
-    await call('set_milestone', args);
-    expect((await call('set_milestone', args)).body.status).toBe('already_proposed');
-    expect(await screenLines()).toHaveLength(1);
   });
 
   it('points an unknown id back to get_work_context', async () => {

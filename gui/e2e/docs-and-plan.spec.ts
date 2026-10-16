@@ -140,7 +140,9 @@ test.describe('the plan', () => {
     const goal = page.getByRole('region', { name: 'Goal', exact: true });
     await expect(goal).toContainText('Make invoices load in under a second.');
     await expect(goal).toContainText('Implement · Performance · Standard change');
-    await expect(goal).toContainText('Delivers');
+    // With milestones, each says what it delivers: the brief's own Delivers and Stops when would go stale beside them.
+    await expect(goal).not.toContainText('Delivers');
+    await expect(goal).not.toContainText('Stop before the release');
     await expect(goal.getByText('Today they take four')).toBeHidden();
     await goal.getByText('The whole goal').click();
     await expect(goal.getByText(/Today they take four/)).toBeVisible();
@@ -150,7 +152,7 @@ test.describe('the plan', () => {
     const plan = page.getByRole('region', { name: 'The plan', exact: true });
     await expect(plan).toContainText('1 of 3 milestones done');
     await expect(plan.getByRole('listitem')).toHaveText([
-      /Measure the slow page.*Done · Passed its check/, /Cache the lookups.*In progress · Claude/, /Ship behind a flag.*To do · starts after cache Cache the lookups/,
+      /Measure the slow page.*Done · Passed its check/, /Cache the lookups.*In progress · Claude/, /Ship behind a flag.*To do · starts after Cache the lookups/,
     ]);
 
     // Editing opens the form in place, and Done closes it again.

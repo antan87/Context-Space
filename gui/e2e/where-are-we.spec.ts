@@ -1,5 +1,6 @@
 import type { Page, WebSocketRoute } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planItem, planView } from './planData';
 
 /**
  * The Where Are We strip above the CLI chat: what it shows from checkable facts, the Reopen
@@ -82,7 +83,7 @@ test('opens a panel with the goal, every milestone, what waits on the developer 
   await openChat(page, { facts: factsBody({ question: true }) });
   const toggle = strip(page).getByRole('button', { expanded: false });
   await toggle.click();
-  const detail = strip(page).getByRole('region', { name: 'Progress details' });
+  const detail = page.getByRole('region', { name: 'Progress details' });
   await expect(detail.getByText('Cache invoice lookups', { exact: true })).toBeVisible();
   await expect(detail.getByText('Add cache tests', { exact: true })).toBeVisible();
   await expect(detail.getByText('Waiting on "Add cache tests"')).toBeVisible();
@@ -98,7 +99,7 @@ test('closes the panel with Escape from inside it, and gives focus back to the s
   await openChat(page);
   const toggle = strip(page).getByRole('button', { expanded: false });
   await toggle.click();
-  const detail = strip(page).getByRole('region', { name: 'Progress details' });
+  const detail = page.getByRole('region', { name: 'Progress details' });
   await detail.getByRole('button', { name: /^Reopen "/ }).focus();
   await page.keyboard.press('Escape');
   await expect(detail).toHaveCount(0);
@@ -116,7 +117,7 @@ test('reopens a finished milestone with a reason, as the developer\'s own action
   const chat = await openChat(page, { facts: factsBody() });
   await page.route('**/api/workspace/feature-x/progress-facts', (route) => route.fulfill({ json: factsBody({ reopened }) }));
   await strip(page).getByRole('button', { expanded: false }).click();
-  const detail = strip(page).getByRole('region', { name: 'Progress details' });
+  const detail = page.getByRole('region', { name: 'Progress details' });
   await detail.getByRole('button', { name: 'Reopen "Cache invoice lookups"' }).click();
   const submit = detail.getByRole('button', { name: 'Reopen milestone' });
   await expect(submit).toBeDisabled();
@@ -136,7 +137,7 @@ test('says why a reopen was refused and keeps what was typed', async ({ page }) 
   await page.route('**/api/workspace/feature-x/lifecycle/reopen', (route) => route.fulfill({ status: 409, json: { error: 'That milestone is not finished.', code: 'not_completed' } }));
   await openChat(page);
   await strip(page).getByRole('button', { expanded: false }).click();
-  const detail = strip(page).getByRole('region', { name: 'Progress details' });
+  const detail = page.getByRole('region', { name: 'Progress details' });
   await detail.getByRole('button', { name: /^Reopen "/ }).click();
   await detail.getByLabel(/need rework/).fill('Because');
   await detail.getByRole('button', { name: 'Reopen milestone' }).click();
@@ -202,7 +203,7 @@ test('puts the answer to a question into the prompt when its option is chosen', 
   // The question comes first, ahead of anything the AI suggested.
   await expect(strip(page).getByRole('button', { name: /^Next: Answer the question/ })).toBeVisible();
   await strip(page).getByRole('button', { name: /^Next: Answer the question/ }).click();
-  const detail = strip(page).getByRole('region', { name: 'Progress details' });
+  const detail = page.getByRole('region', { name: 'Progress details' });
   await expect(detail).toBeVisible();
   await detail.getByRole('button', { name: 'Redis' }).click();
   await expect.poll(() => chat.typed).toEqual(['Redis']);
@@ -213,12 +214,12 @@ test('records that the questions were answered, from the panel', async ({ page }
   await page.route('**/api/workspace/feature-x/input-requests/acknowledge', async (route) => { acknowledged = true; await route.fulfill({ json: { acknowledged: 1 } }); });
   await openChat(page, { facts: factsBody({ question: true }) });
   await strip(page).getByRole('button', { expanded: false }).click();
-  await strip(page).getByRole('region', { name: 'Progress details' }).getByRole('button', { name: 'I answered in the chat' }).click();
+  await page.getByRole('region', { name: 'Progress details' }).getByRole('button', { name: 'I answered in the chat' }).click();
   await expect.poll(() => acknowledged).toBe(true);
 });
 
 test.describe('when the AI waits for an answer', () => {
-  const answerBar = (page: Page) => strip(page).getByRole('group', { name: 'The AI is waiting for your answer' });
+  const answerBar = (page: Page) => page.getByRole('group', { name: 'The AI is waiting for your answer' });
 
   test('shows the question above the chat, with its suggested answers one click away', async ({ page }) => {
     const chat = await openChat(page, { facts: factsBody({ question: true }), target: 'claude' });
@@ -319,4 +320,93 @@ test('says so when the facts cannot be loaded, and offers another try', async ({
   fail = false;
   await strip(page).getByRole('button', { name: 'Try again' }).click();
   await expect(strip(page)).toContainText('1 of 3 done');
+});
+
+test.describe('the plan in the chat', () => {
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+  /** The plan as the strip reads it, recording each change the chat sends. */
+  async function routePlan(page: Page, plan: ReturnType<typeof planView>) {
+    const changes: unknown[] = [];
+    await page.route('**/api/workspace/feature-x/plan/items', (route) => {
+      if (route.request().method() === 'POST') {
+        changes.push(route.request().postDataJSON());
+        return route.fulfill({ json: { message: 'Saved.', plan } });
+      }
+      return route.fulfill({ json: plan });
+    });
+    return changes;
+  }
+
+  test('keeps where the work stands in the session toolbar, so the chat has two bars above it', async ({ page }) => {
+    await openChat(page);
+    const pane = page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-pane');
+    await expect(pane.getByRole('region', { name: 'Where are we', exact: true })).toContainText('Now · Add cache tests');
+    await expect(pane.getByRole('tablist', { name: 'CLI sessions' })).toBeVisible();
+  });
+
+  test('asks a question from the plan above the chat, with who asked and what it holds up, and records the answer in the plan', async ({ page }) => {
+    const changes = await routePlan(page, planView([
+      planItem({ id: 'b', title: 'Add cache tests', status: 'in_progress' }),
+      planItem({ id: 'Q1', kind: 'question', title: 'Should the cache expire at midnight?', owner: 'user', holdsUp: ['b Add cache tests'], history: [{ at: minutesAgo(3), by: 'codex', action: 'added' }] }),
+    ]));
+    await openChat(page);
+    const question = page.getByRole('group', { name: 'A question in the plan waits for your answer' });
+    await expect(question).toContainText('Codex asked 3 min ago · holds up Add cache tests');
+    await expect(question).toContainText('Should the cache expire at midnight?');
+    await expect(strip(page)).toContainText('Needs you');
+    await question.getByLabel('Your answer to Should the cache expire at midnight?').fill('No, after an hour');
+    await question.getByRole('button', { name: 'Answer' }).click();
+    await expect.poll(() => changes).toEqual([{ change: { type: 'answer', id: 'Q1', answer: 'No, after an hour' }, ifRevision: 3 }]);
+  });
+
+  test('a reply in the chat answers the same question in the plan, so it is not asked again', async ({ page }) => {
+    let acknowledged = 0;
+    let planReads = 0;
+    const plan = (status: 'todo' | 'done') => planView([
+      planItem({ id: 'b', title: 'Add cache tests', status: 'in_progress' }),
+      planItem({ id: 'Q1', kind: 'question', title: 'Which cache backend should we use?', owner: 'user', status, holdsUp: ['b Add cache tests'], history: [{ at: minutesAgo(3), by: 'claude', action: 'added' }] }),
+    ]);
+    // The server answers the plan's copy when it records the reply.
+    await page.route('**/api/workspace/feature-x/input-requests/acknowledge', async (route) => { acknowledged++; await route.fulfill({ json: { acknowledged: 1, planAnswered: ['Q1 Which cache backend should we use?'] } }); });
+    await page.route('**/api/workspace/feature-x/plan/items', (route) => { planReads++; return route.fulfill({ json: plan(acknowledged ? 'done' : 'todo') }); });
+    await openChat(page, { facts: () => factsBody({ question: acknowledged === 0 }), target: 'claude' });
+    const answerBar = page.getByRole('group', { name: 'The AI is waiting for your answer' });
+    await expect(answerBar).toContainText('Holds up Add cache tests');
+    const readsBefore = planReads;
+
+    await page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-pane').click();
+    await page.keyboard.type('Redis');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => acknowledged).toBe(1);
+    await expect.poll(() => planReads).toBeGreaterThan(readsBefore);
+    await expect(answerBar).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'A question in the plan waits for your answer' })).toHaveCount(0);
+  });
+
+  test('says what the AI closed while you were in the chat, and reopens it from there', async ({ page }) => {
+    // Forget what was seen on the first load only: the reload below must keep it.
+    await page.addInitScript(() => { if (!sessionStorage.getItem('reloaded')) window.localStorage.removeItem('contextspace.strip.seen-closes.feature-x'); });
+    const changes = await routePlan(page, planView([planItem({ id: 'a', title: 'Cache invoice lookups', status: 'done' })], {
+      changes: [{ at: minutesAgo(4), by: 'claude', action: 'done', itemId: 'a', label: 'a Cache invoice lookups', note: 'Lookups hit the cache' }],
+    }));
+    await openChat(page);
+    const closed = page.getByRole('group', { name: 'What the AI closed' });
+    await expect(closed).toContainText('Claude finished “Cache invoice lookups”: Lookups hit the cache · 4 min ago');
+    await closed.getByRole('button', { name: 'Reopen "Cache invoice lookups"' }).click();
+    await closed.getByLabel('Why does “Cache invoice lookups” need rework?').fill('Misses the expiry case');
+    await closed.getByRole('button', { name: 'Reopen milestone' }).click();
+    await expect.poll(() => changes).toEqual([{ change: { type: 'reopen', id: 'a', reason: 'Misses the expiry case' }, ifRevision: 3 }]);
+    // Seen once, it stays out of the way.
+    await closed.getByRole('button', { name: 'Got it' }).click();
+    await expect(closed).toHaveCount(0);
+    await page.evaluate(() => sessionStorage.setItem('reloaded', '1'));
+    const planRead = page.waitForResponse('**/api/workspace/feature-x/plan/items');
+    await page.reload();
+    await planRead;
+    await expect(page.getByRole('region', { name: 'Where are we', exact: true })).toContainText('Now · Add cache tests');
+    // Two frames after the plan arrived, anything it shows is on screen.
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(page.getByRole('group', { name: 'What the AI closed' })).toHaveCount(0);
+  });
 });

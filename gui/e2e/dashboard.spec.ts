@@ -22,25 +22,55 @@ test.describe('Redesigned ContextSpace shell', () => {
     },
   });
 
-  test('puts active workspaces and their status first', async ({ page }) => {
+  test('says what needs you across the workspaces, then the changes to review and the recent work', async ({ page }) => {
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const asked: string[] = [];
+    await page.route('**/api/needs-you?*', (route) => {
+      asked.push(new URL(route.request().url()).searchParams.get('workspaces') ?? '');
+      return route.fulfill({ json: { workspaces: [{
+        workspaceId: 'feature-x',
+        chatQuestion: { message: 'Which branch should I target?', timestamp: minutesAgo(2), harness: 'claude' },
+        questions: [{ id: 'Q1', title: 'Should archived reports be exported?', holdsUp: ['CSV export endpoint'], askedBy: 'codex', at: minutesAgo(30) }],
+        proposals: [],
+        failedChecks: [{ id: 'M2', title: 'CSV export endpoint' }],
+        closedByAi: [{ id: 'M1', title: 'Database query for report rows', action: 'done', by: 'claude', at: minutesAgo(90), note: 'Tests pass' }],
+      }] } });
+    });
     await page.goto('/');
 
     await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
-    const totals = page.getByRole('region', { name: 'Overview totals' });
-    await expect(totals.getByRole('group', { name: 'Workspaces' })).toContainText('1');
-    await expect(totals.getByRole('group', { name: 'Review queue' })).toContainText('3');
-    await expect(totals.getByRole('group', { name: 'Tracked repos' })).toContainText('1');
-    await expect(page.getByRole('heading', { name: /Active workspaces/ })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Test feature workspace' })).toBeVisible();
+    await expect.poll(() => asked).toContain('feature-x');
+    const needs = page.getByRole('region', { name: /^Needs you/ });
+    await expect(needs.getByRole('heading')).toHaveText('Needs you 3');
+    await expect(needs.getByRole('link', { name: 'Test feature workspace' })).toHaveAttribute('href', '#/workspaces/feature-x/plan');
+    const chat = needs.getByRole('link', { name: /Which branch should I target\?/ });
+    await expect(chat).toContainText('Claude asked in the chat 2 min ago');
+    await expect(chat).toHaveAttribute('href', '#/workspaces/feature-x');
+    await expect(needs.getByRole('link', { name: /Should archived reports be exported\?/ })).toContainText('Codex asked 30 min ago · holds up CSV export endpoint');
+    await expect(needs.getByRole('link', { name: /CSV export endpoint.*Its check failed/ })).toHaveAttribute('href', '#/workspaces/feature-x/plan');
+    await expect(page.getByRole('region', { name: 'Finished by the AI lately' })).toContainText('Claude finished “Database query for report rows”: Tests pass');
+
+    const review = page.getByRole('region', { name: 'Changes to review' });
+    await expect(review).toContainText('Test feature workspace3 files · Review diffs');
     await expect(page.getByRole('article')).toHaveCount(1);
-    await expect(page.getByRole('article').getByRole('button', { name: /Open workspace/ })).toBeVisible();
-    await expect(page.getByRole('article').getByText('3 modified files')).toBeVisible();
-    await expect(page.getByRole('article').getByRole('button', { name: 'Review diffs' })).toBeVisible();
-    await expect(page.getByRole('textbox', { name: 'Search workspaces' })).toHaveCount(0);
-    await expect(page.getByText('External Coding Harnesses')).not.toBeVisible();
-    await page.screenshot({ path: 'test-results/overview-cards.png', fullPage: true });
-    await page.getByText('Assistant launchers').click();
-    await expect(page.getByText('External Coding Harnesses')).toBeVisible();
+    // Not the sidebar again: no totals, no card per workspace with Open workspace, no second place to start a session.
+    await expect(page.getByRole('region', { name: 'Overview totals' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Open workspace/ })).toHaveCount(0);
+    await expect(page.getByText('Assistant launchers')).toHaveCount(0);
+    await page.screenshot({ path: 'test-results/overview-needs-you.png', fullPage: true });
+    await review.getByRole('link', { name: /Test feature workspace/ }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/feature-x\/changes/);
+  });
+
+  test('says so when nothing needs you, and offers another try when it cannot be read', async ({ page }) => {
+    let fail = true;
+    await page.route('**/api/needs-you?*', (route) => fail ? route.fulfill({ status: 500, json: { error: 'boom' } }) : route.fulfill({ json: { workspaces: [] } }));
+    await page.goto('/');
+    const needs = page.getByRole('region', { name: /^Needs you/ });
+    await expect(needs.getByRole('alert')).toContainText('Could not read what needs you.', { timeout: 15_000 });
+    fail = false;
+    await needs.getByRole('button', { name: 'Try again' }).click();
+    await expect(needs).toContainText('Nothing needs you right now.');
   });
 
   test('navigates to the workspaces master-detail and opens a workspace via deep link', async ({ page }) => {
@@ -73,18 +103,13 @@ test.describe('Overview diffs', () => {
     },
   });
 
-  test('shows the total and opens the workspaces with diffs', async ({ page }) => {
+  test('lists only the workspaces with changes to review, and opens their changes', async ({ page }) => {
     await page.goto('/');
-    const reviewQueue = page.getByRole('region', { name: 'Overview totals' }).getByRole('group', { name: 'Review queue' });
-    await expect(reviewQueue).toContainText('3');
-    await expect(reviewQueue).toContainText('1 workspace with diffs');
+    const review = page.getByRole('region', { name: 'Changes to review' });
+    await expect(review.getByRole('listitem')).toHaveCount(1);
+    await expect(review).not.toContainText('Clean workspace');
     await expect(page.getByRole('article')).toHaveCount(2);
-
-    await reviewQueue.getByRole('button', { name: 'Show workspaces with diffs' }).click();
-    await expect(page.getByRole('heading', { name: /Workspaces with diffs/ })).toBeVisible();
-    await expect(page.getByRole('article')).toHaveCount(1);
-    await expect(page.getByRole('article').getByRole('heading', { name: 'Clean workspace' })).toHaveCount(0);
-    await page.getByRole('article').getByRole('button', { name: 'Review diffs' }).click();
+    await review.getByRole('link', { name: /Test feature workspace/ }).click();
     await expect(page).toHaveURL(/#\/workspaces\/feature-x\/changes/);
   });
 });
@@ -107,7 +132,7 @@ test.describe('Many workspaces', () => {
     }])),
   });
 
-  test('loads status in pages, then reveals cards and sidebar rows on demand', async ({ page }) => {
+  test('loads status in pages, lists the few recent workspaces, and leaves the rest to the sidebar', async ({ page }) => {
     const offsets: number[] = [];
     let releaseSecondPage = () => {};
     const secondPageHeld = new Promise<void>((resolve) => { releaseSecondPage = resolve; });
@@ -121,17 +146,14 @@ test.describe('Many workspaces', () => {
       }
     });
     await page.goto('/');
-    const totals = page.getByRole('region', { name: 'Overview totals' });
-    await expect(page.getByRole('article')).toHaveCount(12);
-    await expect(totals.getByRole('group', { name: 'Review queue' })).toContainText('Checking 24 of 33 workspaces');
+    const review = page.getByRole('region', { name: 'Changes to review' });
+    await expect(page.getByRole('article')).toHaveCount(6);
+    await expect(page.getByText('The other 27 workspaces are in the sidebar.')).toBeVisible();
+    await expect(review).toContainText('Checking 24 of 33 workspaces');
     releaseSecondPage();
-    await expect(totals.getByRole('group', { name: 'Review queue' })).toContainText('7');
+    await expect(review).toContainText('Workspace 327 files · Review diffs');
     expect(offsets).toContain(0);
     expect(offsets).toContain(24);
-    await page.getByRole('button', { name: /Show more workspaces \(21 remaining\)/ }).click();
-    await expect(page.getByRole('article')).toHaveCount(24);
-    await page.getByRole('button', { name: /Show more workspaces \(3 remaining\)/ }).click();
-    await expect(page.getByRole('link', { name: /feature-32/ })).toBeVisible();
   });
 });
 
@@ -140,7 +162,7 @@ test.describe('Narrow-screen navigation', () => {
 
   test('opens, restores keyboard focus, and closes after selecting a workspace', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: /Active workspaces/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Needs you/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     const trigger = page.getByRole('button', { name: 'Open navigation', exact: true });
     await trigger.click();
