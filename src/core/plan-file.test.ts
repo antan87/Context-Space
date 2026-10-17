@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PlanFileError, addToPlan, answerDecision, openDecisions, parsePlanFile, planItems, planKey, setDone } from './plan-file.js';
+import { PlanFileError, addToPlan, answerDecision, openDecisions, parsePlanFile, planItems, planKey, planText, setDone } from './plan-file.js';
 
 const PLAN = `# Reports export
 
@@ -135,5 +135,15 @@ describe('changing PLAN.md one line at a time', () => {
     expect(fresh.text).toBe('# Notes\n\nJust text.\n\n## Decisions\n\n- [ ] Decide: Go on?\n');
     expect(parsePlanFile(fresh.text).decisions.map((decision) => decision.key)).toEqual([fresh.key]);
     expect(() => addToPlan(PLAN, { step: 'x' }, { checkpoint: 'nope' })).toThrow(/no checkpoint/);
+  });
+});
+
+describe('the free text around the structure', () => {
+  it('is what comes before the first section, and every section that is not the plan\'s own lists', () => {
+    const text = `${PLAN}\n## Notes\n\nKeep the CSV small.\n\n\`\`\`\n## not a heading\n\`\`\`\n`;
+    expect(planText(text)).toEqual({
+      intro: 'Customers export their reports as CSV. ![The export button](docs/export.png)',
+      sections: [{ heading: 'Notes', body: 'Keep the CSV small.\n\n```\n## not a heading\n```' }],
+    });
   });
 });

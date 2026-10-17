@@ -358,3 +358,28 @@ function sectionEnd(lines: string[], heading: string): number | null {
   lines.splice(start + 1, 0, '');
   return start + 2;
 }
+
+/** The headings whose lists ContextSpace reads as the plan's structure; everything else is free text. */
+const STRUCTURED = /^(?:checkpoints|milestones|steps|decisions)\b/i;
+
+/**
+ * The file's free text, for showing beside the structure: what comes before the first second-level heading (the
+ * title line left out), and every second-level section that is not Checkpoints, Steps or Decisions.
+ */
+export function planText(text: string): { intro: string; sections: Array<{ heading: string; body: string }> } {
+  const parts: Array<{ heading: string | null; lines: string[] }> = [{ heading: null, lines: [] }];
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    const mark = FENCE.exec(line)?.[1];
+    if (fence) { if (mark === fence) fence = null; parts[parts.length - 1]!.lines.push(line); continue; }
+    if (mark) fence = mark;
+    const heading = !mark ? /^##\s+(.*?)\s*#*\s*$/.exec(line) : null;
+    if (heading) parts.push({ heading: heading[1]!, lines: [] });
+    else if (!(parts.length === 1 && /^#\s/.test(line))) parts[parts.length - 1]!.lines.push(line);
+  }
+  const body = (lines: string[]) => lines.join('\n').trim();
+  return {
+    intro: body(parts[0]!.lines),
+    sections: parts.slice(1).filter((part) => !STRUCTURED.test(part.heading!)).map((part) => ({ heading: part.heading!, body: body(part.lines) })),
+  };
+}

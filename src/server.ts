@@ -4,6 +4,7 @@ import { decodeImageAttachment, InvalidImageAttachment } from './services/image-
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
 import { registerPlanRoutes } from './http/plan-routes.js';
+import { registerPlanFileRoutes } from './http/plan-file-routes.js';
 import { registerNeedsYouRoute } from './http/needs-you-routes.js';
 import { extractAstSymbols } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
@@ -2954,6 +2955,10 @@ registerWorkGuidanceRoutes(app, async (id) => {
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
 registerPlanRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerPlanFileRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
