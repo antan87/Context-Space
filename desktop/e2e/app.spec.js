@@ -32,6 +32,8 @@ test.describe('desktop app', () => {
   let app;
   /** @type {import('playwright').Page} */
   let window;
+  /** Console and page errors the window reported. */
+  const pageErrors = [];
 
   test.beforeAll(async () => {
     const launchEnv = {
@@ -44,6 +46,8 @@ test.describe('desktop app', () => {
       : await electron.launch({ args: ['.'], cwd: desktopDir, env: launchEnv });
     try {
       window = await app.firstWindow();
+      window.on('console', (message) => { if (message.type() === 'error') pageErrors.push(`console: ${message.text()}`); });
+      window.on('pageerror', (error) => pageErrors.push(`page: ${String(error)}`));
       // The window stays blank until main.js parses the backend port from
       // stdout and calls loadURL.
       await window.waitForURL(/localhost:\d+/, { timeout: 60_000 });
@@ -52,6 +56,15 @@ test.describe('desktop app', () => {
       dumpBackendLog('backend boot log (failure)');
       throw e;
     }
+  });
+
+  // A failed check says what the window showed, not only that an element was missing.
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status === testInfo.expectedStatus) return;
+    dumpBackendLog(`backend log after "${testInfo.title}"`);
+    const text = await window?.evaluate(() => `${location.href}\n${document.body?.innerText?.slice(0, 1500) ?? ''}`)
+      .catch((error) => `(no page: ${error})`);
+    console.log(`\n===== window after "${testInfo.title}" =====\n${text}\n----- errors -----\n${pageErrors.slice(0, 20).join('\n') || '(none)'}\n=====\n`);
   });
 
   test.afterAll(async () => {
