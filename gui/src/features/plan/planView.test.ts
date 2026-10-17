@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeText, forYou, itemLook, nameOf, shortCommits, startableItems, suggestedAnswers, tasksUnderMilestones, visibleChanges, workingOn, milestoneProgress, planNames, splitPlanCodes, stateLine, whenText, whoName, NEEDS_YOU_LOOK, STATUS_LOOK } from './planView.js';
+import { changeText, forYou, itemLook, nameOf, shortCommits, startableItems, suggestedAnswers, questionWhy, tasksUnderMilestones, visibleChanges, workingOn, milestoneProgress, planNames, splitPlanCodes, stateLine, whenText, whoName, NEEDS_YOU_LOOK, STATUS_LOOK } from './planView.js';
 import type { PlanItemView, PlanWords } from './planTypes.js';
 
 const words: PlanWords = {
@@ -41,6 +41,8 @@ describe('names, commits and nesting', () => {
   it('reads the answers an AI suggested with its question', () => {
     expect(suggestedAnswers('Why it matters\n\nSuggested answers: main · release')).toEqual(['main', 'release']);
     expect(suggestedAnswers('No suggestions')).toEqual([]);
+    expect(questionWhy('Why it matters\n\nSuggested answers: main · release')).toBe('Why it matters');
+    expect(questionWhy(undefined)).toBe('');
     expect(suggestedAnswers(undefined)).toEqual([]);
   });
 

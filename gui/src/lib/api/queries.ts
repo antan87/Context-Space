@@ -970,9 +970,10 @@ export function usePlan(wsId: string | null) {
   });
 }
 
-/** What a plan change touches besides the plan: the strip, the brief's milestone list, finishing. */
+/** What a plan change touches besides the plan: the strip, the brief's milestone list, the Overview, finishing. */
 function invalidatePlanState(queryClient: QueryClient, wsId: string) {
   void queryClient.invalidateQueries({ queryKey: progressFactsKey(wsId) });
+  void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
   void queryClient.invalidateQueries({ queryKey: ['workspace-work', wsId] });
   void invalidateDeliveryState(queryClient, wsId);
 }

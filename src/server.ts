@@ -132,6 +132,7 @@ import {
   setScheduleEnabled,
   startScheduler,
 } from './core/scheduler.js';
+import { startPlanFreshness } from './core/plan-freshness-pass.js';
 import {
   detectAllServices,
   suggestProcfiles,
@@ -5058,6 +5059,8 @@ export function startServer(
       // The dashboard server doubles as the host for recurring workspace
       // jobs (nexusflow schedule ...); jobs are re-read from disk each tick.
       startScheduler({ log: (message) => console.log(`[scheduler] ${message}`) });
+      // Questions nobody needs answered any more are withdrawn shortly after start and then daily.
+      startPlanFreshness({ log: (message) => console.log(`[plan] ${message}`) });
       resolve({ port: info.port, server });
     }) as import('node:http').Server;
 
