@@ -12,6 +12,7 @@ const CORE_ARTIFACTS = [
   '.gitignore',
   'AGENTS.md',
   'CLAUDE.md',
+  // No longer generated; listed so a refresh's removal of an old one is committed.
   'WORKSPACE.md',
   'contextspace.json',
   'contextspace.lock',

@@ -228,42 +228,12 @@ test.describe('NexusFlow E2E GUI Tests', () => {
 
   test('should create a workspace in worktree mode from the new workspace flow', async ({ page }) => {
     await mockCompletedCreationStream(page);
-    const chatFrames: Array<Record<string, unknown>> = [];
     const legacyRequests: string[] = [];
     let launchBody: Record<string, unknown> | null = null;
     page.on('request', (request) => {
       if (/\/resume$|\/api\/open-editor$/.test(new URL(request.url()).pathname)) {
         legacyRequests.push(request.url());
       }
-    });
-    await page.route('**/api/adapters/status', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([
-          {
-            id: 'claude-cli',
-            name: 'Claude Code (Local CLI)',
-            isConfigured: true,
-            executionProfiles: [
-              { id: 'review', label: 'Review only', description: 'Reads and plans; no source edits.' },
-              { id: 'workspace-write', label: 'Edit workspace', description: 'Auto-accepts in-workspace file edits.' },
-            ],
-            defaultExecutionProfile: 'review',
-            capabilities: {
-              transport: 'cli-print',
-              sessionIdentity: 'client-assigned',
-              workspaceAccess: 'harness-managed',
-              sessionIdFormat: 'uuid',
-            },
-          },
-        ]),
-      });
-    });
-    await page.routeWebSocket('**/ws', (socket) => {
-      socket.onMessage((message) => {
-        chatFrames.push(JSON.parse(String(message)));
-      });
     });
     await page.route('**/api/projects', async (route) => {
       await route.fulfill({

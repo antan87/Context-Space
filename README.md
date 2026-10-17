@@ -774,7 +774,7 @@ npm run test:watch
 
 1. Create a new file in `src/analyzers/` following the existing patterns
 2. Export the analyzer function and register it in [analyzers/index.ts](src/analyzers/index.ts)
-3. The analyzer output is fed into the context generators and the `WORKSPACE.md` file
+3. The analyzer output is fed into the context generators
 
 ### Pull Request Guidelines
 

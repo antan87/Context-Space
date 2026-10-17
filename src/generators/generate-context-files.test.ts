@@ -5,6 +5,8 @@ import * as os from 'node:os';
 import { execa } from 'execa';
 import fse from 'fs-extra';
 import { generateContextFiles } from './index.js';
+import { checkGenerationLock, GENERATED_VIEW_HEADER, hashGeneratedContent } from '../core/generation-lock.js';
+import { commitWorkspaceArtifacts } from '../core/workspace-git.js';
 import type { WorkspaceContext } from '../types.js';
 
 describe('generateContextFiles with Pi harness', () => {
@@ -46,8 +48,8 @@ describe('generateContextFiles with Pi harness', () => {
     const agentsMd = await fs.readFile(path.join(tempWorkspace, 'AGENTS.md'), 'utf-8');
     expect(agentsMd).toContain('Testing workspace creation with Pi assistant');
 
-    const workspaceMd = await fs.readFile(path.join(tempWorkspace, 'WORKSPACE.md'), 'utf-8');
-    expect(workspaceMd).toContain('Testing workspace creation with Pi assistant');
+    // The index for people is no longer written: the Docs panel and AGENTS.md cover it.
+    expect(await fse.pathExists(path.join(tempWorkspace, 'WORKSPACE.md'))).toBe(false);
 
     const knowledgeMd = await fs.readFile(path.join(tempWorkspace, 'contextspace-knowledge.md'), 'utf-8');
     expect(knowledgeMd).toContain('Testing workspace creation with Pi assistant');
@@ -72,14 +74,12 @@ describe('generateContextFiles with Pi harness', () => {
     await generateContextFiles(ctx, ['claude'], tempWorkspace);
 
     const agentsMd = await fs.readFile(path.join(tempWorkspace, 'AGENTS.md'), 'utf-8');
-    const workspaceMd = await fs.readFile(path.join(tempWorkspace, 'WORKSPACE.md'), 'utf-8');
     const knowledgeMd = await fs.readFile(path.join(tempWorkspace, 'contextspace-knowledge.md'), 'utf-8');
 
     // No blank paragraph where the description would have been, and no placeholder in its place.
     expect(agentsMd).toMatch(/# no-description-feature\n\n[^\n]/);
-    expect(workspaceMd).toMatch(/# Workspace: no-description-feature\n\n> Assistant context lives/);
     expect(knowledgeMd).not.toContain('## Feature Goal');
-    for (const content of [agentsMd, workspaceMd, knowledgeMd]) {
+    for (const content of [agentsMd, knowledgeMd]) {
       expect(content).not.toContain('undefined');
     }
   });
@@ -164,5 +164,54 @@ describe('generateContextFiles retires the old planning files', () => {
     await generateContextFiles(ctx, ['claude'], workspace);
     expect(await fs.readFile(path.join(workspace, 'PLAN.md'), 'utf8')).toBe(plan);
     expect(await exists('contextspace-milestones.md')).toBe(false);
+  });
+});
+
+describe('generateContextFiles retires WORKSPACE.md', () => {
+  let workspace: string;
+
+  beforeEach(async () => {
+    workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-index-test-'));
+    await execa('git', ['init'], { cwd: workspace });
+    await execa('git', ['config', 'user.name', 'Test Runner'], { cwd: workspace });
+    await execa('git', ['config', 'user.email', 'test@local'], { cwd: workspace });
+  });
+
+  afterEach(async () => {
+    await fse.remove(workspace);
+  });
+
+  it('removes an older WORKSPACE.md, commits the removal and leaves the generation lock without drift', async () => {
+    const ctx: WorkspaceContext = {
+      feature: { id: 'index', branchName: 'index', description: 'Drop the index', repos: [], assistants: ['claude'], workspacePath: workspace, createdAt: new Date().toISOString() },
+      repos: [],
+    };
+    await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify(ctx.feature));
+    // As the older version left it: written, listed in the lock and committed with the other generated files.
+    await generateContextFiles(ctx, ['claude'], workspace);
+    const index = `${GENERATED_VIEW_HEADER}\n\n# Workspace: index\n`;
+    await fs.writeFile(path.join(workspace, 'WORKSPACE.md'), index);
+    const lockPath = path.join(workspace, 'contextspace.lock');
+    const older = JSON.parse(await fs.readFile(lockPath, 'utf8'));
+    older.outputs['WORKSPACE.md'] = { hash: hashGeneratedContent(index), source: 'AGENTS.md', location: 'workspace' };
+    await fs.writeFile(lockPath, JSON.stringify(older, null, 2) + '\n');
+    await commitWorkspaceArtifacts(workspace, 'chore: older refresh');
+    expect((await execa('git', ['ls-files'], { cwd: workspace })).stdout.split('\n')).toContain('WORKSPACE.md');
+    await expect(checkGenerationLock(workspace)).resolves.toMatchObject({ fresh: true });
+
+    await generateContextFiles(ctx, ['claude'], workspace);
+
+    expect(await fse.pathExists(path.join(workspace, 'WORKSPACE.md'))).toBe(false);
+    const tracked = (await execa('git', ['ls-files'], { cwd: workspace })).stdout.split('\n');
+    expect(tracked).not.toContain('WORKSPACE.md');
+    expect(tracked).toContain('AGENTS.md');
+    expect((await execa('git', ['status', '--porcelain', '--', 'WORKSPACE.md'], { cwd: workspace })).stdout).toBe('');
+    const removed = await execa('git', ['log', '--diff-filter=D', '--name-only', '--format=%s', '--', 'WORKSPACE.md'], { cwd: workspace });
+    expect(removed.stdout).toContain('refresh workspace artifacts');
+    expect(removed.stdout).toContain('WORKSPACE.md');
+
+    const lock = JSON.parse(await fs.readFile(lockPath, 'utf8'));
+    expect(Object.keys(lock.outputs)).not.toContain('WORKSPACE.md');
+    await expect(checkGenerationLock(workspace)).resolves.toMatchObject({ fresh: true, drift: [] });
   });
 });

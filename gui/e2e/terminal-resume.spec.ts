@@ -21,7 +21,6 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/ai-detect', route => route.fulfill({ json: [
     { name: 'codex', displayName: 'Codex', detected: true }, { name: 'antigravity', displayName: 'Antigravity', detected: true },
   ] }));
-  await page.route('**/api/adapters/status', route => route.fulfill({ json: [] }));
   await page.route('**/api/session-sources', route => route.fulfill({ json: { sources: [...harnesses, 'workspace'] } }));
   await page.route('**/api/workspace/feature-x/sessions*', route => route.fulfill({ json: { sessions: [...sessions, child] } }));
   await page.route('**/api/terminals/bootstrap', route => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
