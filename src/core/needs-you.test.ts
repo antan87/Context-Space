@@ -28,6 +28,17 @@ async function askInChat(message: string, at = new Date().toISOString()) {
 }
 
 describe('what needs the user in a workspace', () => {
+  it('says what a question holds up among the open work only, and sends why it is asked with its suggested answers', async () => {
+    await changePlan(root, { type: 'add', kind: 'milestone', title: 'CSV export' }, user);
+    await changePlan(root, { type: 'add', kind: 'milestone', title: 'Export button' }, user);
+    await changePlan(root, { type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user', before: ['M1', 'M2'],
+      detail: 'Timestamps must match the report.\nSuggested answers: UTC · The account time zone' }, claude);
+    await changePlan(root, { type: 'drop', id: 'M2', reason: 'Not needed' }, claude);
+
+    const [question] = (await workspaceNeeds('reports', root)).questions;
+    expect(question).toMatchObject({ holdsUp: ['CSV export'], detail: 'Timestamps must match the report.\nSuggested answers: UTC · The account time zone' });
+  });
+
   it('lists the questions for the user with what they hold up, what the AI closed, failed checks, and now and next', async () => {
     await changePlan(root, { type: 'add', kind: 'milestone', title: 'Chat docked' }, user);
     await changePlan(root, { type: 'add', kind: 'milestone', title: 'Reader with tabs', after: ['M1'] }, user);
