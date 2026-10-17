@@ -202,6 +202,9 @@ Open this folder in your editor → your AI assistant picks up the context and s
 | `ctxspace stop` | Stop all running services |
 | `ctxspace status` | Show live repo SHA/branch/dirty/push state, generated-context freshness, and service status |
 | `ctxspace plan` | Where the plan (`PLAN.md`) stands: checkpoints with their steps and proof, and what waits for you. `done` ticks a step or checkpoint (a checkpoint's check runs first), `check`, `answer`, `add`, `decide`, `log`; `--json` on all. Most changes need no command: edit `PLAN.md` |
+| `ctxspace news` | What changed in the workspace since you last looked, and who made each change: plan changes, documents and images, knowledge and commits. Every reader (you, or an AI tool by name) has their own record of when they last looked; `--peek` looks without marking it, `--since <time>`, `--as <name>` and `--json` change what is read. AI tools run it when they start and after their context is compacted |
+| `ctxspace ask` | An AI tool asks the user a question and flags its chat as waiting for the answer, the same alert as the MCP tool `request_user_input`: `ctxspace ask "Which branch?" --option main --option release`. For AI tools that cannot use MCP; `--harness` names the tool |
+| `ctxspace knowledge search` | Find knowledge entries by words and print each one in full (`--type`, `--scope`, `--repo`, `--limit`, `--json`). The same search as the MCP tool `search_knowledge` |
 | `ctxspace flow` | Visualize active lifecycle steps, milestone gates, and multi-branch sister fleet (`--step`, `--action`, `--assignment`) |
 | `ctxspace verify` | Execute mechanical verification gates and record cryptographic proof in workspace state (`--repo`, `--tag`, `--filter`, `--timeout`, `--allow-dirty`) |
 | `ctxspace progress` | Derive implementation progress from live branch, push, and available PR state |
@@ -252,9 +255,10 @@ ContextSpace is built around a single loop:
    ```bash
    ctxspace knowledge add -t decision --title "worktree isolation" -m "Chose worktrees over submodules for isolation"
    ctxspace knowledge add -t gotcha --title "windows ebusy" --scope "path:src/core/workspace.ts" -m "fs.rm needs maxRetries on Windows (EBUSY)"
+   ctxspace knowledge search "windows"    # prints the matching entries in full
    ctxspace progress
    ```
-   Entries land under searchable dated slug headings in `contextspace-knowledge.md`. Identical retries are idempotent. If the storage write succeeds but Git auto-commit fails, ContextSpace reports "recorded but not committed" instead of inviting a duplicate retry. Git auto-commit applies to local workspace storage; custom adapters retain their own durability contract. The 300-character body cap remains enforced; implementation progress is never authored and is derived live instead.
+   Entries land under dated headings in `contextspace-knowledge.md`, titled as you wrote them (older versions stored the title as a slug; those headings still work). `AGENTS.md` lists up to 25 titles under "Lessons from earlier sessions" — the workspace's own, newest first, then those in the base knowledge of its repos (what `finish` promotes), labelled with the repo — so every session starts knowing what was learned, including in a new workspace on the same repo; recording an entry updates that list right away, without a refresh. Identical retries are idempotent. If the storage write succeeds but Git auto-commit fails, ContextSpace reports "recorded but not committed" instead of inviting a duplicate retry. Git auto-commit applies to local workspace storage; custom adapters retain their own durability contract. The 300-character body cap remains enforced; implementation progress is never authored and is derived live instead.
 3. **`ctxspace finish`** — close it out:
    - Shows a preflight status table (branch, dirty files, unpushed commits) per repo, and the verification evidence for each editable repo.
    - Refuses to finish while verification is missing, failed, timed out or stale for the current content — the same decision in the CLI, the app and MCP. Verify again, or pass `--override-verification "<reason>"`; the reason is recorded and returned. `--yes` never bypasses it.

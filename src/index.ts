@@ -23,6 +23,8 @@ import { statusCommand } from './commands/status.js';
 import { verifyCommand } from './commands/verify.js';
 import { flowCommand } from './commands/flow.js';
 import { registerPlanCommand } from './commands/plan.js';
+import { askCommand, type AskOptions } from './commands/ask.js';
+import { newsCommand, type NewsOptions } from './commands/news.js';
 import { runsInsideAiTool } from './utils/ai-tool.js';
 import { uiCommand } from './commands/ui.js';
 import { tuiCommand } from './commands/tui.js';
@@ -45,7 +47,7 @@ import { progressCommand } from './commands/progress.js';
 import { remoteAddCommand, remotePullCommand, remotePushCommand } from './commands/remote.js';
 import { doctorCommand } from './commands/doctor.js';
 import { dataGuideCommand, diagnosticPreviewCommand, diagnosticExportCommand } from './commands/diagnostics.js';
-import { knowledgeAddCommand, knowledgeShowCommand, knowledgePromoteCommand } from './commands/knowledge.js';
+import { knowledgeAddCommand, knowledgeSearchCommand, knowledgeShowCommand, knowledgePromoteCommand, type KnowledgeSearchOptions } from './commands/knowledge.js';
 import { strategyListCommand, strategyCreateCommand, strategyEditCommand, strategyDeleteCommand, strategyShowCommand } from './commands/strategy.js';
 import { projectListCommand, projectAddCommand, projectShowCommand, projectRemoveCommand } from './commands/project.js';
 import { finishCommand } from './commands/finish.js';
@@ -233,6 +235,33 @@ program
 
 // The plan, one item at a time: what AI tools run in their shell and people read in the Plan tab.
 registerPlanCommand(program, (error) => runAction(async () => { throw error; })());
+
+// Asking the user, for an AI tool without MCP: the same alert the MCP tool request_user_input raises.
+program
+  .command('ask')
+  .description('Ask the user a question and flag this chat as waiting for their answer (AI tools run this)')
+  .argument('<question>', 'The question, in plain words (at most 500 characters)')
+  .option('-o, --option <answer>', 'A short answer the user can pick; repeat for more (at most 6)', (value: string, previous: string[] = []) => [...previous, value])
+  .option('--harness <name>', 'The AI tool asking (defaults to CTXSPACE_HARNESS, then claude inside Claude Code, then agent)')
+  .option('-w, --workspace <path>', 'Workspace path or name (defaults to the workspace you are in)')
+  .addHelpText('after', '\nExamples:\n  ctxspace ask "Which branch should I target?" --option main --option release\n\nThen write the full question in the chat and end your turn; the user replies there.\n')
+  .action(runAction(async (question: string, options: AskOptions) => {
+    await askCommand(question, options);
+  }));
+
+// What changed since this reader last looked: AI tools run it when they start and after their context is compacted.
+program
+  .command('news')
+  .description('Show what changed in the workspace since you last looked, and who made each change (AI tools run this when they start)')
+  .option('--as <name>', 'Read as this name, such as "claude" (defaults to the AI tool running this, else you)')
+  .option('--peek', 'Look without recording that you have, so the same changes show next time')
+  .option('--since <time>', 'Reach back to this date and time (ISO, such as 2026-10-17T09:00:00Z) instead of your last look')
+  .option('--json', 'Output in JSON format')
+  .option('-w, --workspace <path>', 'Workspace path or name (defaults to the workspace you are in)')
+  .addHelpText('after', '\nExamples:\n  ctxspace news            what changed since you last looked (then marks it seen)\n  ctxspace news --peek     the same, without marking it seen\n')
+  .action(runAction(async (options: NewsOptions) => {
+    await newsCommand(options);
+  }));
 
 program
   .command('progress')
@@ -610,7 +639,7 @@ knowledgeCmd
   .argument('[workspace]', 'Path to workspace (auto-detects from CWD)')
   .requiredOption('-t, --type <type>', 'Entry type: decision | gotcha | assumption | question')
   .requiredOption('-m, --message <msg>', 'The learning to record, as a rule plus its reason (max 300 chars)')
-  .requiredOption('--title <title>', 'Short title used to create the searchable heading slug (max 60 chars)')
+  .requiredOption('--title <title>', 'Short title, kept as written in the entry\'s heading (one line, max 60 chars)')
   .option('--scope <scope>', 'Applicability: repo:<name>, path:<repo/path>, or seam:<name>')
   .option('--evidence <evidence>', 'Short evidence pointer such as a commit SHA or repro document')
   .option('-r, --repo <repo>', "Write to this repo's persistent base knowledge instead")
@@ -624,7 +653,7 @@ program
   .argument('[workspace]', 'Path to workspace (auto-detects from CWD)')
   .requiredOption('-t, --type <type>', 'Entry type: decision | gotcha | assumption | question')
   .requiredOption('-m, --message <msg>', 'The learning to record, as a rule plus its reason (max 300 chars)')
-  .requiredOption('--title <title>', 'Short title used to create the searchable heading slug (max 60 chars)')
+  .requiredOption('--title <title>', 'Short title, kept as written in the entry\'s heading (one line, max 60 chars)')
   .option('--scope <scope>', 'Applicability: repo:<name>, path:<repo/path>, or seam:<name>')
   .option('--evidence <evidence>', 'Short evidence pointer such as a commit SHA or repro document')
   .action(runAction(async (workspace: string | undefined, options: { type: string; message: string; title: string; scope?: string; evidence?: string }) => {
@@ -650,6 +679,20 @@ remoteCmd
   .command('pull')
   .argument('[workspace]', 'Path to workspace (auto-detects from CWD)')
   .action(runAction(async (workspace?: string) => remotePullCommand(workspace)));
+
+knowledgeCmd
+  .command('search')
+  .description('Find knowledge entries by words and print each one in full')
+  .argument('<words...>', 'Words to look for; an entry matching any of them is found, and more matches rank higher')
+  .option('-t, --type <type>', 'Only entries of this type: decision | gotcha | assumption | question')
+  .option('--scope <scope>', 'Only entries for an exact scope: repo:<name>, path:<repo/path>, or seam:<name>')
+  .option('-r, --repo <repo>', "Search this repo's base knowledge only (default: every repo in the workspace)")
+  .option('-n, --limit <count>', 'Most entries to print, from 1 to 20 (default 5)')
+  .option('-w, --workspace <path>', 'Workspace path or name (defaults to the workspace you are in)')
+  .option('--json', 'Print JSON instead of text')
+  .action(runAction(async (words: string[], options: KnowledgeSearchOptions) => {
+    await knowledgeSearchCommand(words, options);
+  }));
 
 knowledgeCmd
   .command('show')

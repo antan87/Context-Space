@@ -13,6 +13,7 @@ import { renderFreshnessBanner } from '../core/generation-lock.js';
 import { PRIMARY_KNOWLEDGE_FILE, PRIMARY_PLAN_FILE, CLI_NAME } from '../core/constants.js';
 import { resolveActiveDomainRules } from '../core/domain-packs.js';
 import { renderPlanFileInstructions } from '../core/plan-file-text.js';
+import { renderLessonsSection } from './lessons.js';
 
 /** How a repo relates to its siblings in this workspace. */
 export interface RepoRelations {
@@ -115,6 +116,8 @@ function orderReposByDependency<T extends { name: string }>(
  *  - where each repo is, and how the repos relate to each other
  *  - how to verify each repo
  *  - the one structural rule that is not inferable (worktree isolation)
+ *  - the titles of the recorded knowledge entries, so a session starts knowing what
+ *    was learned (`generators/lessons`; `core/agents-lessons` keeps them current)
  *
  * Everything else is a pointer. Per-repo language, framework, build tool, port
  * and purpose used to be listed here; two independent agents evaluating a
@@ -275,14 +278,15 @@ ${summary}${reposSection}
 
 ${renderPlanFileInstructions()}
 
-## Where to look
+${renderLessonsSection(ctx.lessons ?? [])}## Where to look
 
 If \`ctxspace\` is not on PATH, use \`./.contextspace/bin/ctxspace\` (bash) or \`.\\.contextspace\\bin\\ctxspace.cmd\` (PowerShell) with the same arguments. Trust workspace MCP configs in your assistant.
 
-- \`${PRIMARY_KNOWLEDGE_FILE}\` — decisions and gotchas, one per \`###\` heading. Use MCP \`search_knowledge\`; if the MCP server is not connected, inspect headings, not the whole file. Add via \`${CLI_NAME} knowledge add -t decision|gotcha --title "..." -m "..."\`; without CLI, append a \`### <YYYY-MM-DD> — <Title>\` heading directly. Record a rule and reason that cannot be recovered from the code or git history. Avoid restating structure the code already shows.
+- When you start, and again after your context is compacted, run \`${CLI_NAME} news\`: it lists what changed since you last looked (plan, documents, knowledge, commits) and who made it.
+- \`${PRIMARY_KNOWLEDGE_FILE}\` — decisions and gotchas, one per \`###\` heading. Search it, not the whole file, with \`${CLI_NAME} knowledge search <words>\` (MCP \`search_knowledge\` also works). Add a rule and its reason, if they cannot be recovered from the code or git history, with \`${CLI_NAME} knowledge add -t decision|gotcha --title "..." -m "..."\`.
 - \`contextspace-work.json\` — assignment and sources. Read live guidance with \`ctxspace flow --assignment\` or MCP \`get_work_context\`.
 - \`.agents/skills/\` — enabled playbooks; Claude copies: \`.claude/skills/\`.
-- Need the user's answer or approval? Call MCP \`request_user_input\` (one short question) so this chat is flagged, then ask in the chat and end your turn. No MCP: just ask.
+- Need the user's answer or approval? Run \`${CLI_NAME} ask "<question>" --option "<answer>" ...\` (or MCP \`request_user_input\`) so this chat is flagged, then ask in the chat and end your turn.
 - Show your work: MCP \`show_in_reader\`, \`annotate_document\` and \`suggest_next\` put it beside the user's chat. They only show things. No MCP: say it in the chat.
 ${ownInstructions}${customCommands}${teamwork}${enterpriseSection}`;
 }

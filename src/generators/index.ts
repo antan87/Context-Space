@@ -23,6 +23,7 @@ import {
 } from '../core/generation-lock.js';
 import { commitWorkspaceArtifacts } from '../core/workspace-git.js';
 import { getActiveStorageProvider } from '../core/adapters/registry.js';
+import { readKnowledgeLessons, type KnowledgeLesson } from '../core/knowledge.js';
 
 import {
   PRIMARY_KNOWLEDGE_FILE,
@@ -172,6 +173,15 @@ export function buildBaseKnowledgeContent(repoName: string): string {
 `;
 }
 
+/** The lessons AGENTS.md lists. A knowledge file that cannot be read leaves the list out; it must not stop generation. */
+async function readLessonsQuietly(workspacePath: string): Promise<KnowledgeLesson[]> {
+  try {
+    return await readKnowledgeLessons(workspacePath);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Generates AI context files for each of the selected assistants.
  *
@@ -192,7 +202,8 @@ export async function generateContextFiles(
   workspacePath: string,
 ): Promise<void> {
   const generation = await captureGenerationSnapshot(ctx.repos);
-  const renderCtx: WorkspaceContext = { ...ctx, generation };
+  const lessons = ctx.lessons ?? await readLessonsQuietly(workspacePath);
+  const renderCtx: WorkspaceContext = { ...ctx, generation, lessons };
   const generatedOutputs: Array<{
     path: string;
     source: string;
