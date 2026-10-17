@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { openMenuFor } from './menus';
 
 /**
  * The chat docked as the centre of the workspace. The promise is that it behaves like a place,
@@ -367,9 +368,8 @@ test.describe('a menu opened over the chat stays above it', () => {
   test('the menu for docking a second workspace is not hidden behind the dock', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
     await expect(chatOf(page)).toBeVisible();
-    await page.getByRole('button', { name: 'Dock a second workspace' }).click();
     const item = page.getByRole('menuitem', { name: /beta/ });
-    await expect(item).toBeVisible();
+    await openMenuFor(page.getByRole('button', { name: 'Dock a second workspace' }), item);
     // Visible and clickable: nothing sits on top of it.
     await item.click({ trial: true });
   });

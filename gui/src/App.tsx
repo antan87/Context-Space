@@ -151,8 +151,11 @@ function AppInner() {
   // Repos & tool detection come from the shared react-query cache (same data
   // the Projects/Start-work pages read) — one fetch, one source of truth.
   const reposQuery = useRepos();
-  const aiDetectQuery = useAiDetect();
-  const editorsQuery = useEditorDetect();
+  // Detection starts about 17 programs (each tool's and editor's --version). Only the strategies page (the inspect
+  // assistant) and Settings (the editors) use it here, so the overview and workspaces start without it.
+  const detectionShown = /^\/(workflows|strategies|settings)/.test(location.pathname);
+  const aiDetectQuery = useAiDetect({ enabled: detectionShown });
+  const editorsQuery = useEditorDetect({ enabled: detectionShown });
   const templatesQuery = useWorkflowTemplates();
   const repos: RepoInfo[] = reposQuery.data ?? [];
   const aiAssistants: DetectedAI[] = aiDetectQuery.data ?? [];

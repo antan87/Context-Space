@@ -14,9 +14,9 @@ import { readPlan } from '../core/plan.js';
 import type { LifecycleStep, NexusFlowConfig } from '../types.js';
 
 vi.mock('../core/planning-refresh.js', () => ({ refreshPlanningContext: vi.fn(async () => ({ contextRefreshed: true })) }));
-vi.mock('../utils/multi-git.js', () => ({ getWorkspaceRepos: vi.fn(async () => []) }));
+vi.mock('../utils/multi-git.js', () => ({ getWorkspaceRepoPaths: vi.fn(async () => []) }));
 import { refreshPlanningContext } from '../core/planning-refresh.js';
-import { getWorkspaceRepos } from '../utils/multi-git.js';
+import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 
 const config: NexusFlowConfig = { version: '1.0', devDir: '/dev', workspacesDir: '/dev/workspaces', defaultAssistant: null, scanDepth: 2 };
 
@@ -41,12 +41,12 @@ beforeEach(async () => {
   vi.spyOn(workspace, 'loadFeatureConfig').mockResolvedValue({
     id: 'ws-one', branchName: 'ws-one', description: 'x', mode: 'worktree', repos: [], assistants: [], workspacePath: dir, createdAt: new Date().toISOString(),
   });
-  vi.mocked(getWorkspaceRepos).mockResolvedValue([{ name: 'NexusFlow', path: path.join(dir, 'NexusFlow'), branchName: 'b', defaultBranch: 'main' }]);
+  vi.mocked(getWorkspaceRepoPaths).mockResolvedValue([{ name: 'NexusFlow', path: path.join(dir, 'NexusFlow') }]);
   vi.mocked(refreshPlanningContext).mockClear();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
-  vi.mocked(getWorkspaceRepos).mockResolvedValue([]);
+  vi.mocked(getWorkspaceRepoPaths).mockResolvedValue([]);
   await fs.rm(root, { recursive: true, force: true }).catch(() => {});
 });
 

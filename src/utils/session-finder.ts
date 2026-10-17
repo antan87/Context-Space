@@ -635,8 +635,24 @@ export async function canTransferClaudeSessionInWorkspace(
  * @param source - Optional history source to scan independently for progressive loading.
  * @returns A promise that resolves to an array of {@link AISession} objects sorted by update time descending.
  */
-export async function findSessions(workspacePath: string, repoPaths: string[] = [], source?: SessionSource): Promise<AISession[]> {
+/** A conversation the user can continue: its own thread, recorded in a folder. */
+export const isResumableSession = (session: AISession): boolean => session.threadKind !== 'subagent' && Boolean(session.recordedCwd);
+
+/** Paths with their modification time, newest first. A file that cannot be read goes last. */
+async function byRecentActivity(files: readonly string[]): Promise<string[]> {
+  const stamped = await Promise.all(files.map(async (file) => ({ file, at: await fs.stat(file).then((s) => s.mtimeMs, () => 0) })));
+  return stamped.sort((a, b) => b.at - a.at).map((entry) => entry.file);
+}
+
+/**
+ * Every saved session of the workspace from the AI tools' history, newest first. With `newest`, only that many
+ * resumable sessions per Claude and Codex are needed: their history is read in order of last activity and the scan
+ * stops once they are found, instead of parsing every transcript (hundreds of megabytes on a busy machine).
+ */
+export async function findSessions(workspacePath: string, repoPaths: string[] = [], source?: SessionSource, options: { newest?: number } = {}): Promise<AISession[]> {
   const sessions: AISession[] = [];
+  const enough = (assistant: AISession['assistant']) => options.newest !== undefined
+    && sessions.filter((session) => session.assistant === assistant && isResumableSession(session)).length >= options.newest;
   const wsFolderName = path.basename(workspacePath);
 
   // Normalization helper for accurate path comparison
@@ -764,21 +780,23 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
       ...repoPaths.map(r => ({ folder: getClaudeProjectFolderName(r), targetPath: r }))
     ];
 
+    const transcripts: Array<{ filePath: string; targetPath: string }> = [];
     for (const { folder, targetPath } of candidateTargets) {
       const projectPath = path.join(claudeProjectsDir, folder);
       try {
         const files = await fs.readdir(projectPath);
-        const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
-
-        for (const file of jsonlFiles) {
-          const filePath = path.join(projectPath, file);
-          const sessionId = path.basename(file, '.jsonl');
-
-          try {
-            const parsed = await parsedTranscript(filePath, (content) => parseClaudeTranscript(content, sessionId, file));
-            sessions.push({ ...parsed, workspacePath: targetPath });
-          } catch {}
-        }
+        for (const file of files.filter(f => f.endsWith('.jsonl'))) transcripts.push({ filePath: path.join(projectPath, file), targetPath });
+      } catch {}
+    }
+    const targetOf = new Map(transcripts.map((entry) => [entry.filePath, entry.targetPath]));
+    const ordered = options.newest === undefined ? transcripts.map((entry) => entry.filePath) : await byRecentActivity(transcripts.map((entry) => entry.filePath));
+    for (const filePath of ordered) {
+      if (enough('claude')) break;
+      const file = path.basename(filePath);
+      const sessionId = path.basename(file, '.jsonl');
+      try {
+        const parsed = await parsedTranscript(filePath, (content) => parseClaudeTranscript(content, sessionId, file));
+        sessions.push({ ...parsed, workspacePath: targetOf.get(filePath)! });
       } catch {}
     }
   } catch {}
@@ -795,8 +813,11 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
     // Sort candidate rollout files so most recent / newest are scanned first
     const sortedCodexFiles = [...codexFiles].sort((a, b) => b.localeCompare(a));
     const MAX_CODEX_SCAN = 200;
-    const filesToScan = sortedCodexFiles.slice(0, MAX_CODEX_SCAN);
+    const newestByName = sortedCodexFiles.slice(0, MAX_CODEX_SCAN);
+    // A rollout's name holds its start; a long conversation can be the most recently active, so `newest` goes by mtime.
+    const filesToScan = options.newest === undefined ? newestByName : await byRecentActivity(newestByName);
     for (const file of filesToScan) {
+      if (enough('codex')) break;
       try {
         // Rollouts record their cwd up front, and it never changes. Skip
         // unrelated conversations before opening their sometimes very large logs.

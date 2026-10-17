@@ -9,6 +9,9 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQueries, useQuery, 
 
 import { apiFetch } from './client.js';
 import type { PlanChangeInput, PlanView } from '../../features/plan/planTypes.js';
+import { workingIn } from '../../features/chat/liveSessions.js';
+import { RUNNING_TERMINALS_KEY } from '../../features/chat/useRunningTerminals.js';
+import type { RunningTerminal } from '../../features/terminal/client.js';
 import type {
   AISession,
   DetectedAI,
@@ -304,18 +307,21 @@ export function useCreateRepo() {
   });
 }
 
-export function useAiDetect() {
+/** AI detection starts each tool's program to ask its version, so callers enable it where it is shown. */
+export function useAiDetect({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['ai-detect'],
     queryFn: ({ signal }) => apiFetch<DetectedAI[]>('/api/ai-detect', { signal }),
+    enabled,
     staleTime: 60_000,
   });
 }
 
-export function useEditorDetect() {
+export function useEditorDetect({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['editor-detect'],
     queryFn: ({ signal }) => apiFetch<DetectedEditor[]>('/api/editor-detect', { signal }),
+    enabled,
     staleTime: 60_000,
   });
 }
@@ -747,6 +753,7 @@ export function useWorkspaceLifecycle(wsId: string | null) {
   return useQuery({
     queryKey: ['workspace-lifecycle', wsId],
     queryFn: async ({ signal }) => {
+      // Without the branch fleet (several git processes per repository): only the Plan tab's checks show it, and ask for it.
       const data = await apiFetch<WorkspaceLifecycleResponse>(
         `/api/workspace/${encodeURIComponent(wsId!)}/lifecycle`, { signal }
       );
@@ -791,17 +798,25 @@ export const progressFactsKey = (wsId: string | null) => ['progress-facts', wsId
 const fetchProgressFacts = async (wsId: string, signal?: AbortSignal) =>
   (await apiFetch<{ facts: ProgressFacts }>(`/api/workspace/${encodeURIComponent(wsId)}/progress-facts`, { signal })).facts;
 
+/** How often the strip reads progress facts while an AI in the workspace is working, and while none is. */
+export const PROGRESS_FACTS_WORKING_MS = 8_000;
+export const PROGRESS_FACTS_IDLE_MS = 30_000;
+
 /**
  * Checkable progress facts: milestones (with reopened work), open questions, changed
  * files and the last check. Polled only while the workspace is on screen; the live
  * feed asks for a fresh read the moment something changes.
  */
 export function useProgressFacts(wsId: string | null, active: boolean) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: progressFactsKey(wsId),
     queryFn: ({ signal }) => fetchProgressFacts(wsId!, signal),
     enabled: Boolean(wsId) && active,
-    refetchInterval: 8000,
+    // Each read runs git status on every repository, slow on a big repository and on Windows, so it waits longer while
+    // no AI in the workspace is working. The list of running terminals is already polled, and reading it costs nothing.
+    refetchInterval: () => workingIn(queryClient.getQueryData<RunningTerminal[]>(RUNNING_TERMINALS_KEY), wsId ?? '', Date.now())
+      ? PROGRESS_FACTS_WORKING_MS : PROGRESS_FACTS_IDLE_MS,
     staleTime: 3000,
     // The strip is on screen all the time, so a failure is reported after one quick retry rather than after three slow ones.
     retry: 1,
@@ -811,16 +826,19 @@ export function useProgressFacts(wsId: string | null, active: boolean) {
 
 /**
  * The facts and the goal of every open chat, for the tabs and the chat list. The strip polls the chat on screen every
- * eight seconds; these are the others, read slowly and only while the chat is on screen, because a progress read looks
- * at every repository. Both use the strip's own cache keys, so the chat on screen is never read twice.
+ * 8 or 30 seconds; these are the others, read slowly and only while the chat is on screen, because a progress read looks
+ * at every repository: every 30 seconds while an AI works there, every 5 minutes while none does, since every chat
+ * opened stays open and each one would otherwise add its git work for good. Both use the strip's own cache keys, so the
+ * chat on screen is never read twice, and switching to a chat reads its facts fresh.
  */
 export function useOpenChatFacts(workspaceIds: readonly string[], enabled: boolean) {
+  const queryClient = useQueryClient();
   const facts = useQueries({
     queries: workspaceIds.map((wsId) => ({
       queryKey: progressFactsKey(wsId),
       queryFn: ({ signal }: { signal: AbortSignal }) => fetchProgressFacts(wsId, signal),
       enabled,
-      refetchInterval: 30_000,
+      refetchInterval: () => (workingIn(queryClient.getQueryData<RunningTerminal[]>(RUNNING_TERMINALS_KEY), wsId, Date.now()) ? 30_000 : 300_000),
       staleTime: 10_000,
       retry: 1,
     })),
@@ -888,15 +906,19 @@ export function useAcknowledgeQuestions(wsId: string) {
  * terminal or an editor is flagged soon after, not only when the window next gets focus.
  */
 export const WORKSPACE_REPOSITORIES_POLL_MS = 30_000;
+/** While no AI works in the workspace, branches and changes rarely move; each read runs several git processes per repository. */
+export const WORKSPACE_REPOSITORIES_IDLE_POLL_MS = 120_000;
 
 export function useWorkspaceRepositories(wsId: string | null) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: ['workspace-repositories', wsId],
     queryFn: async ({ signal }) => (await apiFetch<{ repositories: WorkspaceRepository[] }>(
       `/api/workspace/${encodeURIComponent(wsId!)}/repositories`, { signal },
     )).repositories,
     enabled: Boolean(wsId),
-    refetchInterval: WORKSPACE_REPOSITORIES_POLL_MS,
+    refetchInterval: () => (workingIn(queryClient.getQueryData<RunningTerminal[]>(RUNNING_TERMINALS_KEY), wsId ?? '', Date.now())
+      ? WORKSPACE_REPOSITORIES_POLL_MS : WORKSPACE_REPOSITORIES_IDLE_POLL_MS),
   });
 }
 

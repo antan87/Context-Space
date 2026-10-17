@@ -6,6 +6,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { execa } from 'execa';
+import { gitStateFingerprint, reuseWhileGitStateIs } from './git-state.js';
 
 /**
  * Checks whether the given directory is a git repository
@@ -52,6 +53,12 @@ export async function gitFetch(repoPath: string): Promise<void> {
  * @returns The name of the default branch.
  */
 export async function detectDefaultBranch(repoPath: string): Promise<string> {
+  // Up to three git processes, asked on every repository listing and status read; the answer only changes with the
+  // refs, so it is reused while they are unchanged.
+  return reuseWhileGitStateIs(repoPath, 'default-branch', await gitStateFingerprint(repoPath), () => findDefaultBranch(repoPath));
+}
+
+async function findDefaultBranch(repoPath: string): Promise<string> {
   // 1. origin/HEAD is what `git clone` records as the remote's default branch.
   try {
     const { stdout } = await execa(

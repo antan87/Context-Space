@@ -13,11 +13,11 @@ vi.mock('./lifecycle.js', () => ({ loadWorkspaceLifecycle: vi.fn() }));
 vi.mock('./attention.js', () => ({ listOpenInputRequests: vi.fn() }));
 vi.mock('./repository-changes.js', () => ({ listRepositoryChanges: vi.fn() }));
 vi.mock('./workspace-state.js', () => ({ loadWorkspaceState: vi.fn() }));
-vi.mock('../utils/multi-git.js', () => ({ getWorkspaceRepos: vi.fn() }));
+vi.mock('../utils/multi-git.js', () => ({ getWorkspaceRepoPaths: vi.fn() }));
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
 import { execa } from 'execa';
-import { getWorkspaceRepos } from '../utils/multi-git.js';
+import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { listOpenInputRequests } from './attention.js';
 import { loadWorkspaceLifecycle } from './lifecycle.js';
 import { listRepositoryChanges } from './repository-changes.js';
@@ -190,7 +190,7 @@ describe('getProgressFacts', () => {
       step('plan', { status: 'completed' }), step('build', { status: 'in_progress' }), step('ship'),
     ], 'build'));
     vi.mocked(listOpenInputRequests).mockResolvedValue([{ id: 'q1', timestamp: '2026-10-02T11:00:00.000Z', harness: 'claude', message: 'Which branch?' }]);
-    vi.mocked(getWorkspaceRepos).mockResolvedValue([{ name: 'app', path: '/repos/app' }, { name: 'lib', path: '/repos/lib' }] as any);
+    vi.mocked(getWorkspaceRepoPaths).mockResolvedValue([{ name: 'app', path: '/repos/app' }, { name: 'lib', path: '/repos/lib' }] as any);
     vi.mocked(listRepositoryChanges).mockImplementation(async (repoPath: string) => repoPath === '/repos/app'
       ? [{ file: 'a.ts', type: 'modified', rawStatus: 'M', additions: 10, deletions: 2 }, { file: 'b.ts', type: 'added', rawStatus: '??', additions: 4, deletions: 0 }]
       : []);
@@ -275,7 +275,7 @@ describe('getProgressFacts', () => {
   });
 
   it('reports changes as unavailable when the workspace repositories cannot be listed', async () => {
-    vi.mocked(getWorkspaceRepos).mockRejectedValue(new Error('manifest missing'));
+    vi.mocked(getWorkspaceRepoPaths).mockRejectedValue(new Error('manifest missing'));
     const facts = await getProgressFacts('/w', NOW);
     expect(facts.changes).toEqual({ repos: [], files: 0, additions: 0, deletions: 0 });
     expect(facts.unavailable).toEqual([{ source: 'changes', reason: 'manifest missing' }]);

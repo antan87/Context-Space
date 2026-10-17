@@ -41,13 +41,14 @@ real backend and production GUI in headless Chromium on tier S:
 
 | Rule | Passes when |
 |---|---|
-| R1 | A hidden window makes no API requests and starts no git processes |
+| R1 | A hidden window makes no API requests and starts no git processes, apart from the check that alerts you when an AI waits |
 | R2a | A repeated sessions request re-reads no transcript in full |
 | R2b | An idle, visible Code panel starts at most one git process per 10 s |
 | R3a | A slow response for a workspace the user left is never shown |
 | R3b | Leaving a workspace aborts its in-flight requests |
 | R4 | The overview is usable while optional calls are delayed 5 s |
 | R5 | New sessions in nested folders and new files appear on the next request |
+| R6 | Switching workspaces leaves one plan on screen, and no plan is polled for a workspace the user left |
 
 `--enforce` fails when a rule listed in `perf/rules-enforced.json` does not
 pass. Add a rule there in the change that makes it pass.
@@ -77,6 +78,14 @@ Reports go to `perf/results/` (ignored by Git). Baselines are copied to
 backend per sample and times each endpoint the GUI calls at startup, with the
 processes, git runs and history reads of each request. Each request is capped at
 120 s. `--cpu-prof` also writes a V8 CPU profile of one startup sequence.
+
+## Work sweep
+
+`node perf/sweep.mjs [--tier L] [--idle-seconds 60]` takes the real backend and production GUI through a session of
+ordinary use: startup, opening a workspace, a minute idle on the chat, the plan and the code, twenty switches across
+up to five workspaces, and a minute idle after them. Each phase reports requests and git processes by route, history read
+and backend CPU (Linux). The idle minute after the switches should cost what the one before them did; more means
+something the user left keeps working. Page elements before and after the switches show what stays behind.
 
 ## Instrumentation in the product
 

@@ -32,6 +32,16 @@ const at = (timestamp: string | undefined) => {
   return Number.isFinite(time) ? time : undefined;
 };
 
+const printedRecently = (terminal: RunningTerminal, now: number) => {
+  const output = at(terminal.lastOutputAt);
+  return output !== undefined && now - output <= WORKING_WINDOW_MS;
+};
+
+/** Whether a CLI running in the workspace printed something a moment ago: the rule the working dot follows. */
+export function workingIn(terminals: readonly RunningTerminal[] | undefined, workspace: string, now: number): boolean {
+  return (terminals ?? []).some((terminal) => terminal.workspace === workspace && terminal.state === 'running' && printedRecently(terminal, now));
+}
+
 export function liveSessions(terminals: readonly RunningTerminal[], waiting: ReadonlySet<string>, now: number): Map<string, LiveSessions> {
   const groups = new Map<string, RunningTerminal[]>();
   for (const terminal of terminals) {
@@ -44,10 +54,7 @@ export function liveSessions(terminals: readonly RunningTerminal[], waiting: Rea
     const targets = [...new Set(ordered.map((terminal) => terminal.target))];
     const shown = group.some((terminal) => terminal.attached);
     const stops = group.map((terminal) => at(terminal.stopsAt)).filter((time): time is number => time !== undefined);
-    const working = group.some((terminal) => {
-      const output = at(terminal.lastOutputAt);
-      return output !== undefined && now - output <= WORKING_WINDOW_MS;
-    });
+    const working = group.some((terminal) => printedRecently(terminal, now));
     const state: LiveState = waiting.has(workspace) ? 'waiting' : !shown ? 'closing' : working ? 'working' : 'idle';
     out.set(workspace, {
       workspace, targets, state,

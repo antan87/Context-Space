@@ -8,6 +8,11 @@ import { registerWorkGuidanceRoutes } from './work-guidance-routes.js';
 vi.mock('../core/refresh.js', () => ({
   refreshWorkspace: vi.fn().mockResolvedValue({ workspacePath: '/tmp/test', analyzedRepos: [], reusedRepos: [], refreshedHandoff: false }),
 }));
+vi.mock('../core/lifecycle.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/lifecycle.js')>();
+  return { ...actual, loadWorkspaceLifecycle: vi.fn(actual.loadWorkspaceLifecycle) };
+});
+import { loadWorkspaceLifecycle } from '../core/lifecycle.js';
 let root: string;
 let app: Hono;
 beforeEach(async () => {
@@ -135,4 +140,9 @@ it('lists data files outside the workspace repositories, opens them by name, and
   // An unreadable manifest must not take the listing down: every data file is listed instead.
   await fs.writeFile(path.join(root, 'contextspace.json'), '{ not json');
   expect(await names()).toEqual(['api/package.json', 'api/README.md', 'spec.json']);
+});
+
+it('reads the brief without the branch fleet, which runs git in every repository', async () => {
+  expect((await app.request('/api/workspace/test/work')).status).toBe(200);
+  expect(vi.mocked(loadWorkspaceLifecycle)).toHaveBeenLastCalledWith(root, { includeFleet: false });
 });

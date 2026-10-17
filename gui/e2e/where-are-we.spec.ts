@@ -47,7 +47,16 @@ async function openChat(page: Page, options: { facts?: ReturnType<typeof factsBo
   await page.route('**/api/terminals/bootstrap', (route) => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/terminals/feature-x/status', (route) => route.fulfill({ json: { available: true, sessions: [session], targets: [{ id: session.target, name: session.label, available: true, reason: null }] } }));
   await page.route('**/api/workspace/feature-x/progress-facts', (route) => route.fulfill({ json: typeof options.facts === 'function' ? options.facts() : options.facts ?? factsBody() }));
-  if (options.events) await page.route('**/api/workspace/feature-x/screen-events**', (route) => route.fulfill({ status: 200, contentType: 'text/event-stream', body: options.events }));
+  // The AI's screen events arrive once the chat runs, as they do for real. Delivered first, a "show" can open the code
+  // in the chat's place before the chat reports Running, and the check below would race it.
+  let releaseEvents = () => {};
+  const chatRunning = new Promise<void>((resolve) => { releaseEvents = resolve; });
+  if (options.events) {
+    await page.route('**/api/workspace/feature-x/screen-events**', async (route) => {
+      await chatRunning;
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: options.events }).catch(() => {});
+    });
+  }
   await page.routeWebSocket('**/ws/terminal', (socket: WebSocketRoute) => {
     socket.onMessage((message) => {
       const parsed = JSON.parse(String(message));
@@ -61,6 +70,7 @@ async function openChat(page: Page, options: { facts?: ReturnType<typeof factsBo
   await page.goto('/#/workspaces/feature-x/sessions');
   await page.getByRole('button', { name: 'Open CLI Chat', exact: true }).click();
   await expect(page.getByRole('region', { name: 'CLI Chat', exact: true }).getByTestId('terminal-state')).toHaveText('Running');
+  releaseEvents();
   return chat;
 }
 

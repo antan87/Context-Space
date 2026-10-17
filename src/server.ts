@@ -95,6 +95,7 @@ import {
   canTransferClaudeSessionInWorkspace,
   findActiveAssistants,
   findSessions,
+  isResumableSession,
   getSessionTranscript,
   SESSION_SOURCES,
 } from './utils/session-finder.js';
@@ -2967,7 +2968,9 @@ app.get('/api/workspace/:id/lifecycle', async (c) => {
     const config = await loadConfig();
     const workspacePath = resolveWorkspacePath(config.workspacesDir, id);
     const { loadWorkspaceLifecycle, renderLifecyclePlan } = await import('./core/lifecycle.js');
-    const lifecycle = await loadWorkspaceLifecycle(workspacePath);
+    // ?fleet=1 adds the other branches of this work. They cost several git processes per repository, and only the
+    // Plan tab's checks show them, so the page that reads the steps on every switch leaves them out.
+    const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: c.req.query('fleet') === '1' });
     const report = (await loadWorkspaceState(workspacePath)).lastVerification ?? null;
     return c.json({ lifecycle, report, plan: renderLifecyclePlan(lifecycle) });
   } catch (error) {
@@ -3622,6 +3625,15 @@ app.get('/api/workspace/:id/sessions', async (c) => {
         return c.json({ error: 'Session limit must be an integer from 1 to 20.' }, 400);
       }
     }
+    // ?newest=N: the N most recently active conversations that can be continued, found without parsing older history.
+    const newestParam = c.req.query('newest');
+    let newest: number | undefined;
+    if (newestParam !== undefined) {
+      newest = Number(newestParam);
+      if (!Number.isSafeInteger(newest) || newest < 1 || newest > 5 || desktopHandoffOnly) {
+        return c.json({ error: 'Newest must be an integer from 1 to 5, without desktop handoff.' }, 400);
+      }
+    }
     const config = await loadConfig();
     const requestedWorkspacePath = resolveWorkspacePath(config.workspacesDir, id);
     let workspacePath = requestedWorkspacePath;
@@ -3645,7 +3657,14 @@ app.get('/api/workspace/:id/sessions', async (c) => {
       return c.json({ error: 'Workspace configuration not found.' }, 404);
     }
 
-    const discoveredSessions = await findSessions(workspacePath, feature.repos, source);
+    const discoveredSessions = newest
+      ? await findSessions(workspacePath, feature.repos, source, { newest })
+      : await findSessions(workspacePath, feature.repos, source);
+    if (newest) {
+      const resumable = discoveredSessions.filter(isResumableSession);
+      const perTool = [...new Set(resumable.map((session) => session.assistant))].flatMap((assistant) => resumable.filter((session) => session.assistant === assistant).slice(0, newest));
+      return c.json({ sessions: perTool });
+    }
     if (!desktopHandoffOnly) {
       return c.json({ sessions: limit === undefined ? discoveredSessions : discoveredSessions.slice(0, limit) });
     }

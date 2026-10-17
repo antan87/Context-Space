@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { execa } from 'execa';
@@ -84,6 +86,25 @@ vi.mock('./core/new-repo.js', async (importOriginal) => {
 });
 vi.mock('./orchestration/index.js');
 
+
+
+/** Runs `run` with only `commands` on PATH, standing for installed editors (node:fs/promises is mocked here, so sync fs). */
+async function withEditorsOnPath<T>(commands: readonly string[], run: () => Promise<T>): Promise<T> {
+  const bin = fsSync.mkdtempSync(path.join(os.tmpdir(), 'editor-bin-'));
+  const savedPath = process.env.PATH;
+  for (const command of commands) {
+    fsSync.writeFileSync(path.join(bin, process.platform === 'win32' ? `${command}.cmd` : command), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
+  }
+  process.env.PATH = bin;
+  clearEditorDetectionCache();
+  try {
+    return await run();
+  } finally {
+    process.env.PATH = savedPath;
+    clearEditorDetectionCache();
+    fsSync.rmSync(bin, { recursive: true, force: true });
+  }
+}
 
 describe('Server API Endpoints Unit Tests', () => {
   beforeEach(() => {
@@ -362,18 +383,16 @@ describe('Server API Endpoints Unit Tests', () => {
         workspacePath,
       } as any);
 
-      vi.mocked(execa).mockImplementation((async (command: any, args?: readonly string[]): Promise<any> => ({
-        exitCode: args?.[0] === '--version' && command === 'code-insiders' ? 0 : 1,
-      })) as any);
+      vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
-      const response = await app.request('/api/open-editor', {
+      const response = await withEditorsOnPath(['code-insiders'], () => app.request('/api/open-editor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workspacePath,
           command: 'code-insiders'
         })
-      });
+      }));
 
       expect(response.status).toBe(200);
       const data = await response.json();
@@ -402,14 +421,12 @@ describe('Server API Endpoints Unit Tests', () => {
         workspacePath,
       } as any);
 
-      vi.mocked(execa).mockImplementation((async (command: any, args?: readonly string[]): Promise<any> => ({
-        exitCode: args?.[0] === '--version' && command === 'code-insiders' ? 0 : 1,
-      })) as any);
+      vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
       const targetFile = 'src/example.ts';
       const expectedTarget = path.resolve(workspacePath, targetFile);
 
-      const response = await app.request('/api/open-editor', {
+      const response = await withEditorsOnPath(['code-insiders'], () => app.request('/api/open-editor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -417,7 +434,7 @@ describe('Server API Endpoints Unit Tests', () => {
           command: 'code-insiders',
           filePath: targetFile,
         })
-      });
+      }));
 
       expect(response.status).toBe(200);
       const data = await response.json();
@@ -445,18 +462,16 @@ describe('Server API Endpoints Unit Tests', () => {
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
 
-      vi.mocked(execa).mockImplementation((async (command: any, args?: readonly string[]): Promise<any> => ({
-        exitCode: args?.[0] === '--version' && command === 'code' ? 0 : 1,
-      })) as any);
+      vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
-      const response = await app.request('/api/open-editor', {
+      const response = await withEditorsOnPath(['code'], () => app.request('/api/open-editor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workspacePath: repoDir,
           command: 'code',
         })
-      });
+      }));
 
       expect(response.status).toBe(200);
       const data = await response.json();
@@ -925,6 +940,26 @@ describe('Server API Endpoints Unit Tests', () => {
         const piResponse = await app.request('/api/workspace/safe-workspace/sessions?source=pi');
         expect(piResponse.status).toBe(200);
         expect(find).toHaveBeenCalledWith(workspacePath, [path.join(workspacePath, 'repo')], 'pi');
+      } finally {
+        find.mockRestore();
+      }
+    });
+
+    it('returns the newest conversations that can be continued, per tool, when asked with newest', async () => {
+      expect((await app.request('/api/workspace/safe-workspace/sessions?source=claude&newest=9')).status).toBe(400);
+      expect((await app.request('/api/workspace/safe-workspace/sessions?newest=1&desktopHandoffOnly=true')).status).toBe(400);
+
+      vi.spyOn(config, 'loadConfig').mockResolvedValue({ workspacesDir } as any);
+      vi.mocked(workspace.loadFeatureConfig).mockResolvedValue({ id: 'safe-workspace', repos: [], workspacePath } as any);
+      const session = (id: string, extra: object = {}) => ({ id, assistant: 'claude', title: id, updatedAt: '', recordedCwd: workspacePath, ...extra });
+      const find = vi.spyOn(sessionFinder, 'findSessions').mockResolvedValue([
+        session('helper', { threadKind: 'subagent' }), session('newest'), session('older'), session('no-folder', { recordedCwd: undefined }),
+      ] as any);
+      try {
+        const response = await app.request('/api/workspace/safe-workspace/sessions?source=claude&newest=1');
+        expect(response.status).toBe(200);
+        expect(find).toHaveBeenCalledWith(workspacePath, [], 'claude', { newest: 1 });
+        expect((await response.json() as { sessions: Array<{ id: string }> }).sessions.map((s) => s.id)).toEqual(['newest']);
       } finally {
         find.mockRestore();
       }
@@ -3217,6 +3252,9 @@ describe('Server API Endpoints Unit Tests', () => {
       const response = await app.request('/api/workspace/demo/lifecycle');
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ lifecycle, report, plan: '' });
+      expect(lifecycleSpy).toHaveBeenLastCalledWith(expect.any(String), { includeFleet: false });
+      expect((await app.request('/api/workspace/demo/lifecycle?fleet=1')).status).toBe(200);
+      expect(lifecycleSpy).toHaveBeenLastCalledWith(expect.any(String), { includeFleet: true });
     } finally {
       lifecycleSpy.mockRestore();
       stateSpy.mockRestore();

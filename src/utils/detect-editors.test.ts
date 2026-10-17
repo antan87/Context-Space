@@ -1,125 +1,81 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { execa } from 'execa';
-import { clearEditorDetectionCache, detectEditors } from './detect-editors.js';
-import { PROBE_TIMEOUT_MS } from './probe.js';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { DETECTION_TTL_MS, clearEditorDetectionCache, detectEditors } from './detect-editors.js';
 
 vi.mock('execa');
 
+const isWin = process.platform === 'win32';
+let bin: string;
+let savedPath: string | undefined;
+
+/** Puts an executable named `command` on the test PATH. */
+async function install(command: string) {
+  const file = path.join(bin, isWin ? `${command}.cmd` : command);
+  await fs.writeFile(file, isWin ? '@echo off\r\n' : '#!/bin/sh\n');
+  if (!isWin) await fs.chmod(file, 0o755);
+}
+
+const shells = isWin ? [{ name: 'PowerShell', command: 'powershell', detected: true }, { name: 'Command Prompt', command: 'cmd', detected: true }] : [];
+const expected = (installed: string[]) => [
+  { name: 'VS Code', command: 'code' },
+  { name: 'VS Code Insiders', command: 'code-insiders' },
+  { name: 'Cursor', command: 'cursor' },
+  { name: 'Antigravity', command: 'antigravity' },
+  ...shells,
+  { name: 'IntelliJ IDEA', command: 'idea' },
+  { name: 'WebStorm', command: 'webstorm' },
+  { name: 'PyCharm', command: 'charm' },
+  { name: 'Sublime Text', command: 'subl' },
+  { name: 'Zed', command: 'zed' },
+  { name: 'Windsurf', command: 'windsurf' },
+].map((editor) => ('detected' in editor ? editor : { ...editor, detected: installed.includes(editor.command) }));
+
 describe('detectEditors', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     clearEditorDetectionCache();
     vi.useRealTimers();
+    bin = await fs.mkdtemp(path.join(os.tmpdir(), 'editors-'));
+    savedPath = process.env.PATH;
+    process.env.PATH = bin;
+  });
+  afterEach(async () => {
+    process.env.PATH = savedPath;
+    await fs.rm(bin, { recursive: true, force: true });
   });
 
-  it('should return detected = true for editors whose commands exit with 0', async () => {
-    vi.mocked(execa).mockImplementation((command: any, args?: any, options?: any): any => {
-      if (command === 'code' || command === 'cursor') {
-        return Promise.resolve({ exitCode: 0 } as any);
-      }
-      return Promise.resolve({ exitCode: 1 } as any);
+  it('detects the editors whose command is on PATH, without starting any of them', async () => {
+    await install('code');
+    await install('cursor');
+
+    expect(await detectEditors()).toEqual(expected(['code', 'cursor']));
+    expect(execa).not.toHaveBeenCalled();
+  });
+
+  it('detects none when nothing is on PATH (the built-in Windows shells excepted)', async () => {
+    expect(await detectEditors()).toEqual(expected([]));
+  });
+
+  if (!isWin) {
+    it('does not count a file on PATH that cannot be run', async () => {
+      await fs.writeFile(path.join(bin, 'zed'), '#!/bin/sh\n');
+      expect((await detectEditors()).find((e) => e.command === 'zed')?.detected).toBe(false);
     });
+  }
 
-    const result = await detectEditors();
-
-    const isWin = process.platform === 'win32';
-    const expected = isWin
-      ? [
-          { name: 'VS Code', command: 'code', detected: true },
-          { name: 'VS Code Insiders', command: 'code-insiders', detected: false },
-          { name: 'Cursor', command: 'cursor', detected: true },
-          { name: 'Antigravity', command: 'antigravity', detected: false },
-          { name: 'PowerShell', command: 'powershell', detected: true },
-          { name: 'Command Prompt', command: 'cmd', detected: true },
-          { name: 'IntelliJ IDEA', command: 'idea', detected: false },
-          { name: 'WebStorm', command: 'webstorm', detected: false },
-          { name: 'PyCharm', command: 'charm', detected: false },
-          { name: 'Sublime Text', command: 'subl', detected: false },
-          { name: 'Zed', command: 'zed', detected: false },
-          { name: 'Windsurf', command: 'windsurf', detected: false },
-        ]
-      : [
-          { name: 'VS Code', command: 'code', detected: true },
-          { name: 'VS Code Insiders', command: 'code-insiders', detected: false },
-          { name: 'Cursor', command: 'cursor', detected: true },
-          { name: 'Antigravity', command: 'antigravity', detected: false },
-          { name: 'IntelliJ IDEA', command: 'idea', detected: false },
-          { name: 'WebStorm', command: 'webstorm', detected: false },
-          { name: 'PyCharm', command: 'charm', detected: false },
-          { name: 'Sublime Text', command: 'subl', detected: false },
-          { name: 'Zed', command: 'zed', detected: false },
-          { name: 'Windsurf', command: 'windsurf', detected: false },
-        ];
-
-    expect(result).toEqual(expected);
-
-    expect(execa).toHaveBeenCalledWith('code', ['--version'], { reject: false, timeout: PROBE_TIMEOUT_MS, shell: isWin, windowsHide: true });
-    expect(execa).toHaveBeenCalledWith('code-insiders', ['--version'], { reject: false, timeout: PROBE_TIMEOUT_MS, shell: isWin, windowsHide: true });
-    expect(execa).toHaveBeenCalledWith('cursor', ['--version'], { reject: false, timeout: PROBE_TIMEOUT_MS, shell: isWin, windowsHide: true });
-    expect(execa).toHaveBeenCalledWith('antigravity', ['--version'], { reject: false, timeout: PROBE_TIMEOUT_MS, shell: isWin, windowsHide: true });
-  });
-
-  it('should return detected = false for all editors if execa throws an error (except built-in Windows shells)', async () => {
-    vi.mocked(execa).mockRejectedValue(new Error('Spawn error'));
-
-    const result = await detectEditors();
-    const isWin = process.platform === 'win32';
-    const expected = isWin
-      ? [
-          { name: 'VS Code', command: 'code', detected: false },
-          { name: 'VS Code Insiders', command: 'code-insiders', detected: false },
-          { name: 'Cursor', command: 'cursor', detected: false },
-          { name: 'Antigravity', command: 'antigravity', detected: false },
-          { name: 'PowerShell', command: 'powershell', detected: true },
-          { name: 'Command Prompt', command: 'cmd', detected: true },
-          { name: 'IntelliJ IDEA', command: 'idea', detected: false },
-          { name: 'WebStorm', command: 'webstorm', detected: false },
-          { name: 'PyCharm', command: 'charm', detected: false },
-          { name: 'Sublime Text', command: 'subl', detected: false },
-          { name: 'Zed', command: 'zed', detected: false },
-          { name: 'Windsurf', command: 'windsurf', detected: false },
-        ]
-      : [
-          { name: 'VS Code', command: 'code', detected: false },
-          { name: 'VS Code Insiders', command: 'code-insiders', detected: false },
-          { name: 'Cursor', command: 'cursor', detected: false },
-          { name: 'Antigravity', command: 'antigravity', detected: false },
-          { name: 'IntelliJ IDEA', command: 'idea', detected: false },
-          { name: 'WebStorm', command: 'webstorm', detected: false },
-          { name: 'PyCharm', command: 'charm', detected: false },
-          { name: 'Sublime Text', command: 'subl', detected: false },
-          { name: 'Zed', command: 'zed', detected: false },
-          { name: 'Windsurf', command: 'windsurf', detected: false },
-        ];
-
-    expect(result).toEqual(expected);
-  });
-
-  it('counts a command that starts but never answers as installed', async () => {
-    vi.mocked(execa).mockImplementation((command: any): any => Promise.resolve(
-      command === 'antigravity' ? { exitCode: undefined, timedOut: true } : { exitCode: 1 },
-    ));
-
-    const result = await detectEditors();
-
-    expect(result.find((e) => e.command === 'antigravity')?.detected).toBe(true);
-    expect(result.find((e) => e.command === 'code')?.detected).toBe(false);
-  });
-
-  it('shares one probe run between concurrent callers and reuses it for 60 s', async () => {
+  it('shares one run between concurrent callers and reuses it for 60 s', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
-
     const [first, second] = await Promise.all([detectEditors(), detectEditors()]);
-    const probesPerRun = vi.mocked(execa).mock.calls.length;
     expect(second).toBe(first);
 
-    vi.setSystemTime(Date.now() + 59_000);
-    await detectEditors();
-    expect(execa).toHaveBeenCalledTimes(probesPerRun);
+    await install('code');
+    vi.setSystemTime(Date.now() + DETECTION_TTL_MS - 1_000);
+    expect((await detectEditors()).find((e) => e.command === 'code')?.detected).toBe(false);
 
     vi.setSystemTime(Date.now() + 2_000);
-    await detectEditors();
-    expect(execa).toHaveBeenCalledTimes(probesPerRun * 2);
+    expect((await detectEditors()).find((e) => e.command === 'code')?.detected).toBe(true);
   });
 });

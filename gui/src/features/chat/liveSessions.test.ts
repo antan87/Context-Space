@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RunningTerminal } from '../terminal/client.js';
-import { WORKING_WINDOW_MS, liveSessions, liveText, runningFirst } from './liveSessions.js';
+import { WORKING_WINDOW_MS, liveSessions, liveText, runningFirst, workingIn } from './liveSessions.js';
 
 const NOW = Date.parse('2026-10-04T10:00:00.000Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -57,6 +57,17 @@ describe('liveSessions', () => {
     const live = liveSessions([terminal('alpha', { lastOutputAt: 'yesterday', attached: false, stopsAt: 'soon' })], new Set(), NOW);
     expect(live.get('alpha')).toMatchObject({ state: 'closing', stopsAt: undefined });
     expect(liveText(live.get('alpha')!, NOW)).toBe('Claude Code is running with no chat open');
+  });
+});
+
+describe('workingIn', () => {
+  it('is true while a running CLI in that workspace printed a moment ago, and false otherwise', () => {
+    const terminals = [terminal('alpha', { lastOutputAt: ago(2_000) }), terminal('beta', { lastOutputAt: ago(WORKING_WINDOW_MS + 1) }),
+      terminal('gamma', { lastOutputAt: ago(1_000), state: 'exited' })];
+    expect(workingIn(terminals, 'alpha', NOW)).toBe(true);
+    expect(workingIn(terminals, 'beta', NOW)).toBe(false);
+    expect(workingIn(terminals, 'gamma', NOW)).toBe(false);
+    expect(workingIn(undefined, 'alpha', NOW)).toBe(false);
   });
 });
 

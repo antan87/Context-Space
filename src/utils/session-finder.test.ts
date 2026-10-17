@@ -387,6 +387,20 @@ describe('JSON error boundaries and malformed lines resilience', () => {
     expect((await findSessions(workspaceDir)).map(session => session.id)).toEqual([workspaceId, claudeId]);
   });
 
+  it('with newest, reads Claude history from the most recently active and stops once it has enough', async () => {
+    const claudeProjDir = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', getClaudeProjectFolderName(workspaceDir));
+    await fs.mkdir(claudeProjDir, { recursive: true });
+    const ids = ['0199a213-81c0-7800-8aa1-bbab2a035b01', '0199a213-81c0-7800-8aa1-bbab2a035b02', '0199a213-81c0-7800-8aa1-bbab2a035b03'];
+    for (const [index, id] of ids.entries()) {
+      const file = path.join(claudeProjDir, `${id}.jsonl`);
+      await fs.writeFile(file, JSON.stringify({ type: 'user', sessionId: id, cwd: workspaceDir, timestamp: '2026-08-19T08:00:00.000Z', message: { content: `Prompt ${index}` } }));
+      // The last one written is the most recently active.
+      await fs.utimes(file, new Date(2026, 7, 19, 8, index), new Date(2026, 7, 19, 8, index));
+    }
+    expect((await findSessions(workspaceDir, [], 'claude')).length).toBe(3);
+    expect((await findSessions(workspaceDir, [], 'claude', { newest: 1 })).map((session) => session.id)).toEqual([ids[2]]);
+  });
+
   it('continues parsing Antigravity transcript despite malformed JSON lines', async () => {
     const convId = '0199a213-81c0-7800-8aa1-bbab2a035a98';
     const brainLogDir = path.join(process.env.ANTIGRAVITY_CLI_HOME!, 'brain', convId, '.system_generated', 'logs');

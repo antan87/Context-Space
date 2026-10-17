@@ -66,7 +66,7 @@ export function WorkspaceChecks({ workspaceId, readOnly = false }: { workspaceId
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = await apiFetch<{ lifecycle: WorkspaceLifecycle; report?: WorkspaceVerificationReport | null }>(`${base}/lifecycle`, { signal });
+      const data = await apiFetch<{ lifecycle: WorkspaceLifecycle; report?: WorkspaceVerificationReport | null }>(`${base}/lifecycle?fleet=1`, { signal });
       // A response for a workspace the user already left must not replace the current one.
       if (signal?.aborted) return;
       setLifecycle(data.lifecycle);

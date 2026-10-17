@@ -40,6 +40,7 @@
     "perf": "node perf/timing.mjs",
     "perf:fixture": "node perf/fixture/generate.mjs",
     "perf:rules": "node perf/rules.mjs",
+    "perf:sweep": "node perf/sweep.mjs",
     "smoke:chat": "npx tsx scripts/smoke-chat-engines.ts",
     "clean": "rimraf dist",
     "prepublishOnly": "npm run build",

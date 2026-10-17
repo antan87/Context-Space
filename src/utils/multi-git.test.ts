@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { execa } from 'execa';
+import { PRIMARY_MANIFEST_FILE } from '../core/constants.js';
 import {
   rebaseRepo,
   getRepoBranch,
@@ -9,6 +13,7 @@ import {
   commitAndPush,
   parsePorcelainZ,
   isSensitiveFile,
+  getWorkspaceRepoPaths,
 } from './multi-git.js';
 
 vi.mock('execa');
@@ -163,6 +168,26 @@ describe('rebaseRepo', () => {
     expect(result.status).toBe('stash-conflict');
     expect(result.stashed).toBe(true);
     expect(result.message).toMatch(/stash preserved/i);
+  });
+});
+
+describe('getWorkspaceRepoPaths', () => {
+  beforeEach(() => vi.mocked(execa).mockReset());
+
+  it('reads names and paths from the manifest without running git', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'repo-paths-'));
+    try {
+      const inPlace = { id: 'w', name: 'w', branchName: 'w', mode: 'in-place', repos: ['/src/app', '/src/lib'],
+        isolatedRepos: { lib: { worktreePath: path.join(dir, 'lib'), branchName: 'feat/w' } } };
+      await fs.writeFile(path.join(dir, PRIMARY_MANIFEST_FILE), JSON.stringify(inPlace));
+      expect(await getWorkspaceRepoPaths(dir)).toEqual([{ name: 'app', path: '/src/app' }, { name: 'lib', path: path.join(dir, 'lib') }]);
+
+      await fs.writeFile(path.join(dir, PRIMARY_MANIFEST_FILE), JSON.stringify({ ...inPlace, mode: 'worktree', isolatedRepos: undefined }));
+      expect(await getWorkspaceRepoPaths(dir)).toEqual([{ name: 'app', path: path.join(dir, 'app') }, { name: 'lib', path: path.join(dir, 'lib') }]);
+      expect(execa).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

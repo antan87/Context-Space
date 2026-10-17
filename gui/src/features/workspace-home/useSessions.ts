@@ -13,7 +13,7 @@ import type { AISession } from '../../types.js';
  * A workspace's sessions as the home shows them: the tools that can start, the terminals running now, and the saved
  * conversations to continue. Starting, continuing or showing one switches to the session's tab.
  */
-export function useWorkspaceSessions(workspace: string, enabled = true) {
+export function useWorkspaceSessions(workspace: string, enabled = true, { withSaved = true }: { /** Also read the saved conversations, which scans the AI tools' history. */ withSaved?: boolean } = {}) {
   const navigate = useNavigate();
   const [use, setUse] = useState(readToolUse);
   // Shared with the session tabs, which read the same list.
@@ -25,7 +25,7 @@ export function useWorkspaceSessions(workspace: string, enabled = true) {
     retry: 1,
   });
   const running = useRunningTerminals();
-  const saved = useWorkspaceSessionSources(workspace, enabled);
+  const saved = useWorkspaceSessionSources(workspace, enabled && withSaved);
 
   const available = useMemo(() => (status.data?.available ? status.data.targets.filter((target) => target.available).map((target) => target.id) : []), [status.data]);
   const tools = useMemo(() => rankTools(available, use), [available, use]);

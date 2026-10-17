@@ -1,5 +1,6 @@
 import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { openMenuFor } from './menus';
 
 const ACTIVE = {
   id: 'demo', branchName: 'demo', name: 'Invoice speed-up', description: 'Make invoice totals load under a second',
@@ -71,7 +72,7 @@ test('archive previews what happens, parks unmerged work on request, and restore
   // Plan, Sessions, Code, Docs, Skills and Services.
   await expect(workspaceNav(page).getByRole('link')).toHaveCount(6);
 
-  await page.getByRole('button', { name: 'Workspace actions' }).click();
+  await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Archive workspace…' }));
   await page.getByRole('menuitem', { name: 'Archive workspace…' }).click();
   const dialog = page.getByRole('dialog', { name: 'Archive workspace' });
   await expect(dialog.getByRole('list', { name: 'Repositories' })).toContainText('Blocks archive');
@@ -144,7 +145,7 @@ test('archive previews what happens, parks unmerged work on request, and restore
 test('delete says what is lost and offers archive instead', async ({ page }) => {
   await mockArchiveBackend(page);
   await page.goto('/#/workspaces/demo');
-  await page.getByRole('button', { name: 'Workspace actions' }).click();
+  await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Delete workspace…' }));
   await page.getByRole('menuitem', { name: 'Delete workspace…' }).click();
   const remove = page.getByRole('dialog', { name: 'Delete workspace' });
   await expect(remove).toContainText('milestones, verification results, planning notes, knowledge and documents');
