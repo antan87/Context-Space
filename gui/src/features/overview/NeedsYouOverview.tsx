@@ -4,7 +4,7 @@ import { CircleDashed, CircleHelp, CircleX, ListChecks, MessageCircleQuestion, R
 import { Button } from '../../components/ui/button.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
-import { useChangePlan } from '../../lib/api/queries.js';
+import { useChangePlanFile } from '../plan/planFile.js';
 import { AnswerBox } from '../plan/AnswerBox.js';
 import { questionWhy, whenText, whoName } from '../plan/planView.js';
 import { aiClosedLately, isUrgent, needItems, useNeedsYou, type NeedItem, type QuestionNeed } from './needsYou.js';
@@ -19,7 +19,7 @@ const base = (workspaceId: string) => `/workspaces/${encodeURIComponent(workspac
  * a box for the developer's own. The answer goes into the plan, where every AI reads it, and the card goes away.
  */
 function QuestionCard({ item, workspace }: { item: QuestionNeed; workspace?: string }) {
-  const change = useChangePlan(item.workspaceId);
+  const change = useChangePlanFile(item.workspaceId);
   const when = whenText(item.at);
   const asked = [workspace, item.by ? `${whoName(item.by)} asked${when ? ` ${when}` : ''}` : '', item.waiting ? 'waits in the chat' : ''].filter(Boolean).join(' · ') || 'A question for you';
   const urgent = isUrgent(item);
@@ -41,7 +41,7 @@ function QuestionCard({ item, workspace }: { item: QuestionNeed; workspace?: str
       {why && <p className="line-clamp-4 whitespace-pre-wrap break-words text-xs text-muted-foreground">{why}</p>}
       <AnswerBox
         question={item.text} detail={item.detail} error={change.error?.message}
-        onAnswer={(answer) => change.mutateAsync({ change: { type: 'answer', id: item.id, answer } }).then(() => true, () => false)}
+        onAnswer={(answer) => change.mutateAsync({ type: 'answer', key: item.id, answer, expected: item.text }).then(() => true, () => false)}
       />
       <Link to={`${base(item.workspaceId)}/plan`} className="inline-block text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">Open in the plan</Link>
     </div>

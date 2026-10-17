@@ -87,6 +87,15 @@ describe('plan routes', () => {
     expect((await file()).checkpoints[0]!.done).toBe(true);
   });
 
+  it('reopens a checkpoint with what is wrong as a step under it', async () => {
+    await fs.writeFile(path.join(root, 'PLAN.md'), PLAN.replace('- [ ] Reports export to CSV', '- [x] Reports export to CSV'));
+    const reopened = await post({ type: 'reopen', key: 'reports-export-to-csv', reason: 'The file has no header row', expected: 'Reports export to CSV' });
+    expect(reopened).toMatchObject({ status: 200, body: { message: 'Reopened "Reports export to CSV".' } });
+    const checkpoint = (await file()).checkpoints[0]!;
+    expect(checkpoint.done).toBe(false);
+    expect(checkpoint.steps.map((step) => step.text)).toEqual(['Write the CSV writer', 'Reopened: The file has no header row']);
+  });
+
   it('refuses a change to a line that changed since the tab read it', async () => {
     await fs.writeFile(path.join(root, 'PLAN.md'), PLAN.replace('Write the CSV writer', 'Write the CSV writer and reader'));
     const stale = await post({ type: 'tick', key: 'write-the-csv-writer', done: true, expected: 'Write the CSV writer' });

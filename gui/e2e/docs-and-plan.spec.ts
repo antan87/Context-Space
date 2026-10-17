@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { planItem, planView } from './planData';
+import { checkpoint, planFile, step } from './planData';
 
 /**
  * Docs is the one place to read: what ContextSpace keeps for the work, by what each file is for, above the developer's
@@ -131,11 +131,11 @@ test.describe('the plan', () => {
         expectedOutput: 'A cached lookup with a test', stopCondition: 'Stop before the release' } },
       lifecycle, sharedDocuments: [], assignment: 'Stage: implement' } }));
     await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: null } }));
-    await page.route('**/api/workspace/demo/plan/items', (route) => route.fulfill({ json: planView([
-      planItem({ id: 'measure', title: 'Measure the slow page', status: 'done', resolution: 'Passed its check' }),
-      planItem({ id: 'cache', title: 'Cache the lookups', status: 'in_progress', history: [{ at: '2026-10-10T10:00:00.000Z', by: 'claude', action: 'started' }] }),
-      planItem({ id: 'ship', title: 'Ship behind a flag', waitsFor: [{ id: 'cache', label: 'cache Cache the lookups', status: 'in_progress' }] }),
-    ]) }));
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ checkpoints: [
+      checkpoint('Measure the slow page', { done: true, outcome: 'Passed its check' }),
+      checkpoint('Cache the lookups', { steps: [step('Cache the totals', true), step('Expire them on change')] }),
+      checkpoint('Ship behind a flag'),
+    ] }) }));
     await page.goto('/#/workspaces/demo/plan');
     const goal = page.getByRole('region', { name: 'Goal', exact: true });
     await expect(goal).toContainText('Make invoices load in under a second.');
@@ -148,12 +148,11 @@ test.describe('the plan', () => {
     await expect(goal.getByText(/Today they take four/)).toBeVisible();
     await expect(page.getByLabel('Current objective')).toHaveCount(0);
 
-    // Under the goal, the plan: the milestones in order, each saying where it is.
+    // Under the goal, the plan: the checkpoints in order, each saying how far it is.
     const plan = page.getByRole('region', { name: 'The plan', exact: true });
-    await expect(plan).toContainText('1 of 3 milestones done');
-    await expect(plan.getByRole('listitem')).toHaveText([
-      /Measure the slow page.*Done · Passed its check/, /Cache the lookups.*In progress · Claude/, /Ship behind a flag.*To do · starts after Cache the lookups/,
-    ]);
+    await expect(plan).toContainText('1 of 3 checkpoints done');
+    await expect(plan.getByRole('heading', { level: 4 })).toHaveText(['Measure the slow page', 'Cache the lookups', 'Ship behind a flag']);
+    await expect(plan).toContainText('1 of 2 steps');
 
     // Editing opens the form in place, and Done closes it again.
     await page.getByRole('button', { name: 'Edit the goal' }).click();

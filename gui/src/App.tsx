@@ -96,7 +96,7 @@ function beginWorkspaceLoad(loads: Map<string, AbortController>, kind: string): 
 }
 
 /** The last changes, sessions and plan shown for a workspace. */
-interface RecentWorkspaceData { changes?: any[]; sessions?: AISession[]; plan?: string }
+interface RecentWorkspaceData { changes?: any[]; sessions?: AISession[] }
 const RECENT_WORKSPACE_DATA_LIMIT = 16;
 
 function rememberWorkspaceData(recent: Map<string, RecentWorkspaceData>, wsId: string, data: RecentWorkspaceData): void {
@@ -240,12 +240,8 @@ function AppInner() {
   const [editedKnowledge, setEditedKnowledge] = useState<string>('');
   const [saveKnowledgeLoading, setSaveKnowledgeLoading] = useState<boolean>(false);
   const [saveKnowledgeError, setSaveKnowledgeError] = useState<string | null>(null);
-  const [planContent, setPlanContent] = useState<string>('');
-  const [planLoading, setPlanLoading] = useState<boolean>(false);
-  const [planError, setPlanError] = useState<string | null>(null);
   const activeWorkspaceRef = useRef<string | null>(null);
   const knowledgeLoadRequestRef = useRef(0);
-  const planLoadRequestRef = useRef(0);
   const saveKnowledgeRequestRef = useRef(0);
   // One in-flight load per kind of workspace data; see beginWorkspaceLoad.
   const workspaceLoadsRef = useRef(new Map<string, AbortController>());
@@ -682,38 +678,6 @@ function AppInner() {
     }
   };
 
-  const fetchPlan = async (wsId: string) => {
-    const requestId = ++planLoadRequestRef.current;
-    const isCurrentRequest = () =>
-      activeWorkspaceRef.current === wsId && planLoadRequestRef.current === requestId;
-
-    const signal = beginWorkspaceLoad(workspaceLoadsRef.current, 'plan');
-    setPlanLoading(true);
-    setPlanError(null);
-    try {
-      const encodedId = encodeURIComponent(wsId);
-      const res = await fetch(`${API_BASE}/api/workspace/${encodedId}/plan`, { signal });
-      if (!res.ok) throw new Error('plan request failed');
-      const data: unknown = await res.json();
-      if (!data || typeof data !== 'object' || typeof (data as { content?: unknown }).content !== 'string') {
-        throw new Error('plan response was malformed');
-      }
-      perfMark('cs:ws-data', { id: wsId, kind: 'plan', applied: isCurrentRequest() });
-      if (!isCurrentRequest()) return;
-
-      setPlanContent((data as { content: string }).content);
-      rememberWorkspaceData(recentWorkspaceDataRef.current, wsId, { plan: (data as { content: string }).content });
-      setPlanError(null);
-    } catch (e) {
-      if (!isCurrentRequest()) return;
-      console.error('Failed to load workspace plan:', e);
-      setPlanError('Could not load Plan. Existing content was kept. Retry when ready.');
-    } finally {
-      if (isCurrentRequest()) setPlanLoading(false);
-    }
-  };
-
-
   const handleSyncAll = async (wsId: string) => {
     setSyncLoading(true);
     setSyncResults(null);
@@ -880,7 +844,6 @@ function AppInner() {
     // view. Late responses then fail their identity check and cannot repopulate
     // this state with another workspace's document or draft.
     knowledgeLoadRequestRef.current += 1;
-    planLoadRequestRef.current += 1;
     saveKnowledgeRequestRef.current += 1;
     for (const controller of workspaceLoadsRef.current.values()) controller.abort();
     workspaceLoadsRef.current.clear();
@@ -897,11 +860,8 @@ function AppInner() {
     isEditingKnowledgeRef.current = false;
     setEditedKnowledge('');
     setIsEditingKnowledge(false);
-    setPlanContent(recent?.plan ?? '');
-    setPlanError(null);
-    setPlanLoading(false);
     if (activeWsId && recent) {
-      for (const kind of ['changes', 'sessions', 'plan'] as const) {
+      for (const kind of ['changes', 'sessions'] as const) {
         if (recent[kind] !== undefined) perfMark('cs:ws-data', { id: activeWsId, kind, applied: true, cached: true });
       }
     }
@@ -925,13 +885,6 @@ function AppInner() {
   useEffect(() => {
     if (activeWsId && subTab === 'knowledge') {
       fetchKnowledge(activeWsId);
-    }
-  }, [activeWsId, subTab]);
-
-  // Load plan when on overview or plan or active workspace changes
-  useEffect(() => {
-    if (activeWsId && (subTab === 'overview' || subTab === 'plan')) {
-      fetchPlan(activeWsId);
     }
   }, [activeWsId, subTab]);
 
@@ -1137,7 +1090,6 @@ Core Instructions:
         handleSaveKnowledge,
         handleRetryKnowledge: fetchKnowledge,
       }}
-      planProps={{ planContent, planLoading, planError, handleRetryPlan: fetchPlan }}
       showToast={showToast}
     />
   );

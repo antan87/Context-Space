@@ -5,9 +5,8 @@ import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import type { VerificationGateTelemetry } from '../cockpit/cockpitStore.js';
-import { usePlan } from '../../lib/api/queries.js';
-import { milestoneProgress } from '../plan/planView.js';
-import { nextLine, verificationTitle, verificationText } from './workspaceStatus.js';
+import { usePlanFile } from '../plan/planFile.js';
+import { verificationTitle, verificationText } from './workspaceStatus.js';
 
 interface WorkspaceHeaderProps {
   workspaceId: string;
@@ -45,12 +44,12 @@ function Fact({ label, children, to }: { label: string; children: ReactNode; to?
 export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCount, changedFiles, verification, marks, actions, compact = false }: WorkspaceHeaderProps) {
   const [copied, setCopied] = useState(false);
   const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
-  // Now and Next come from the plan, by the rule the plan, the strip and the AI use.
-  const plan = usePlan(compact ? null : workspaceId).data;
-  const now = plan?.focus.current;
-  const next = nextLine(plan?.focus);
-  const progress = plan ? milestoneProgress(plan) : { done: 0, total: 0 };
-  const done = progress.total > 0 && progress.done === progress.total;
+  // Now and Next are the plan's first two checkpoints still open.
+  const plan = usePlanFile(compact ? null : workspaceId).data;
+  const open = plan?.checkpoints.filter((checkpoint) => !checkpoint.done) ?? [];
+  const now = open[0];
+  const next = open[1] ? { title: open[1].title, waits: '' } : null;
+  const done = Boolean(plan?.checkpoints.length) && open.length === 0;
 
   return (
     <header className="border-b border-border/40 bg-card/60 px-4 py-1.5 backdrop-blur-xs sm:px-6">
@@ -80,7 +79,7 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
                 <span className="truncate"><InlinePlanMarkdown content={next.title} />{next.waits && <span className="font-normal text-muted-foreground"> · {next.waits}</span>}</span>
               </span>
             </Fact>
-          ) : done ? <Fact label="Milestones">All done</Fact> : null}
+          ) : done ? <Fact label="Checkpoints">All done</Fact> : null}
           <Fact label="Changes" to={`${base}/changes`}>
             {changedFiles === null ? 'Unknown' : changedFiles === 0 ? 'None' : `${changedFiles} ${changedFiles === 1 ? 'file' : 'files'}`}
           </Fact>

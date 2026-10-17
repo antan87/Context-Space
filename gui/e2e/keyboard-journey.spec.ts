@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 /**
  * The primary journey — create → brief → verify → review — completed with the
@@ -70,7 +71,7 @@ test.describe('keyboard-only primary journey', () => {
     let report: unknown = null;
     const lifecycle = { workspaceId: 'demo', flowType: 'feature', revision: 0, updatedAt: '', fleet: [], steps: [] };
     const work = () => ({ guidance, lifecycle, sharedDocuments: [], assignment: '' });
-    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
     await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report } }));
     await page.route('**/api/workspace/demo/work', async (route) => {
       if (route.request().method() === 'PUT') {

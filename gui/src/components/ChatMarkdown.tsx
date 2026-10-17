@@ -4,36 +4,9 @@ import remarkGfm from 'remark-gfm';
 import { Check, Copy, ExternalLink } from 'lucide-react';
 import { safeCopyToClipboard } from '../lib/clipboard.js';
 import { classifyMarkdownLink, headingSlug, type MarkdownLinkContext } from './markdownLinks.js';
-import { splitPlanCodes } from '../features/plan/planView.js';
 
 const remarkPlugins = [remarkGfm];
 
-type MdNode = { type: string; value?: string; children?: MdNode[]; data?: Record<string, unknown> };
-/** Text that stays as written: code, and the text of links. */
-const KEEP = new Set(['code', 'inlineCode', 'link', 'linkReference', 'definition', 'html']);
-
-/**
- * Shows plan codes the plan knows ("M2") with their names, as small chips, so a reader never has to
- * look a code up. When the name already follows the code, only the code is marked.
- */
-function remarkPlanCodes(names: Map<string, string>) {
-  return () => (tree: MdNode) => {
-    const visit = (node: MdNode) => {
-      if (KEEP.has(node.type) || !node.children) return;
-      node.children = node.children.flatMap((child): MdNode[] => {
-        if (child.type !== 'text' || !child.value) { visit(child); return [child]; }
-        return splitPlanCodes(child.value, names).map((part) => typeof part === 'string'
-          ? { type: 'text', value: part }
-          : {
-            type: 'planCode',
-            data: { hName: 'span', hProperties: { className: ['plan-code'], title: `${part.id} ${part.title}` } },
-            children: [{ type: 'text', value: part.named ? part.id : `${part.id} ${part.title}` }],
-          });
-      });
-    };
-    visit(tree);
-  };
-}
 // Every URL is classified by `classifyMarkdownLink` below; nothing reaches the
 // DOM unchecked, so the default transform (which blanks Windows paths) is not needed.
 const keepUrl = (url: string) => url;
@@ -47,8 +20,6 @@ export interface MarkdownDocumentLinks extends MarkdownLinkContext {
 interface ChatMarkdownProps {
   content: string;
   links?: MarkdownDocumentLinks;
-  /** The workspace plan's codes and names, to show codes in the text with their names. */
-  planNames?: Map<string, string>;
 }
 
 function nodeText(node: React.ReactNode): string {
@@ -78,9 +49,8 @@ function LocalPath({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, planNames }) => {
+export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links }) => {
   const container = useRef<HTMLDivElement>(null);
-  const plugins = useMemo(() => (planNames?.size ? [...remarkPlugins, remarkPlanCodes(planNames)] : remarkPlugins), [planNames]);
 
   const components = useMemo<Components>(() => {
     const heading = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
@@ -125,7 +95,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, plan
 
   return (
     <div ref={container} className="prose prose-sm max-w-none text-foreground prose-a:text-primary prose-code:text-foreground prose-headings:text-foreground prose-pre:border prose-pre:border-border prose-pre:bg-muted/50 prose-strong:text-foreground prose-li:marker:text-muted-foreground">
-      <ReactMarkdown remarkPlugins={plugins} urlTransform={keepUrl} components={components}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} urlTransform={keepUrl} components={components}>
         {content}
       </ReactMarkdown>
     </div>

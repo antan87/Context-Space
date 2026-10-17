@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 /**
  * Workspace discovery in the docked CLI chat.
@@ -42,7 +43,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/terminals/bootstrap', route => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/terminals/*/status', route => route.fulfill({ json: { available: true, sessions: [], targets: [] } }));
   await page.route('**/api/workspace/*/sessions', route => route.fulfill({ json: { sessions: [] } }));
-  await page.route('**/api/workspace/*/plan', route => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/*/plan', route => route.fulfill({ json: planFile() }));
 });
 
 /** The picker button for a workspace. Its accessible name is "<branch> <description>". */

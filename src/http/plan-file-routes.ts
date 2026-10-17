@@ -24,6 +24,7 @@ export const planFileChangeSchema = z.discriminatedUnion('type', [
     }).strict(),
   }).strict(),
   z.object({ type: z.literal('check'), key }).strict(),
+  z.object({ type: z.literal('reopen'), key, reason: words(300), expected: words(300) }).strict(),
 ]);
 
 const STATUS_FOR: Record<PlanFileError['code'], number> = { not_found: 404, invalid: 400, conflict: 409 };

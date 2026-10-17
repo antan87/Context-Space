@@ -1,5 +1,6 @@
 import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 import { openMenuFor } from './menus';
 
 const ACTIVE = {
@@ -54,7 +55,7 @@ async function mockArchiveBackend(page: Page) {
     current = ACTIVE;
     return route.fulfill({ json: { workspacePath: '/ws/demo', workspaceId: 'demo', restored: true, notes: [] } });
   });
-  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ json: {
     guidance: { version: 1, revision: 0, workType: 'performance', size: 'standard', documents: [],

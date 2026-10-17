@@ -60,7 +60,8 @@ export type PlanFileAppChange =
   | { type: 'answer'; key: string; answer: string; expected: string }
   | { type: 'add'; step: string; checkpoint?: string }
   | { type: 'decide'; decision: NewDecision; checkpoint?: string }
-  | { type: 'check'; key: string };
+  | { type: 'check'; key: string }
+  | { type: 'reopen'; key: string; reason: string; expected: string };
 
 /**
  * Applies one change as the user and returns a sentence saying what happened. Ticking a checkpoint with a check runs
@@ -90,6 +91,13 @@ export async function changePlanFileForApp(workspacePath: string, change: PlanFi
     case 'decide':
       await changePlanFile(workspacePath, (text) => addToPlan(text, { decision: change.decision }, { checkpoint: change.checkpoint }).text, { by });
       return { message: `Added the decision "${change.decision.question.trim()}".` };
+    case 'reopen':
+      // Unticked, with what is wrong as a step under it, where the AI reads it.
+      await changePlanFile(workspacePath, (text) => {
+        const unticked = setDone(text, change.key, false, change.expected);
+        return addToPlan(unticked, { step: `Reopened: ${change.reason}` }, { checkpoint: change.key }).text;
+      }, { by });
+      return { message: `Reopened "${change.expected}".` };
     case 'check': {
       const evidence = await runPlanCheck(workspacePath, change.key);
       return { message: evidence.canProgress ? 'The check passed.' : `The check ${evidence.lastVerificationStatus === 'timeout' ? 'took too long' : 'failed'}.` };

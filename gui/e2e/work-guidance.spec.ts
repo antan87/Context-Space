@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 test.use({ workspacesData: [{
   id: 'demo', branchName: 'demo', description: 'Improve invoice performance', repos: ['C:/dev/demo'],
@@ -17,7 +18,7 @@ async function setupWork(page: import('@playwright/test').Page, empty = false) {
   };
   const originals = new Map<string, string>();
   const context = () => ({ guidance, lifecycle, projectId: 'billing', sharedDocuments: [], assignment: `Stage: ${guidance.assignment.stage}\n${guidance.assignment.objective}` });
-  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Repository dependencies' } }));
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: null } }));
   await page.route('**/api/workspace/demo/work', async (route) => {
     if (route.request().method() === 'PUT') {

@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { API_BASE } from '../../lib/apiBase.js';
-import { planKey, progressFactsKey } from '../../lib/api/queries.js';
+import { progressFactsKey } from '../../lib/api/queries.js';
 import type { ScreenEvent } from '../../types.js';
 import { addScreenEvent, connectScreenFeed } from './screenFeed.js';
+import { planFileKey } from '../plan/planFile.js';
 
 /** A burst of events (the replay when a stream opens) asks for one fresh read, not one each. */
 const REFRESH_DELAY_MS = 300;
@@ -26,9 +27,9 @@ export function useScreenFeed(workspace: string, enabled: boolean): { events: re
     const connection = connectScreenFeed({
       url: (since) => `${API_BASE}/api/workspace/${encodeURIComponent(workspace)}/screen-events${since ? `?since=${encodeURIComponent(since)}` : ''}`,
       onLive: (live) => {
-        // A plan changed by an AI's CLI or MCP shows at once everywhere it is read, not at the next poll.
+        // PLAN.md changed by an AI's own edit or the CLI shows at once everywhere it is read, not at the next poll.
         if (live.type === 'plan') {
-          for (const queryKey of [planKey(workspace), ['workspace-work', workspace], ['workspace-lifecycle', workspace], ['needs-you']]) {
+          for (const queryKey of [planFileKey(workspace), ['workspace-work', workspace], ['workspace-lifecycle', workspace], ['needs-you']]) {
             void queryClient.invalidateQueries({ queryKey });
           }
         }

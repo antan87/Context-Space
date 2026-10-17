@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 test.use({ workspacesData: [{
   id: 'demo', branchName: 'demo', description: 'Verification feedback', repos: ['C:/dev/demo'],
@@ -8,7 +9,7 @@ test.use({ workspacesData: [{
 for (const status of ['no-tests', 'timeout', 'fail'] as const) {
   test(`explains ${status} and displays repository verification details`, async ({ page }) => {
     let report: any = null;
-    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
     await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: {
       lifecycle: { workspaceId: 'demo', flowType: 'feature', steps: [], fleet: [], updatedAt: '' }, report,
     } }));
@@ -36,7 +37,7 @@ for (const status of ['no-tests', 'timeout', 'fail'] as const) {
 
 test('a verification run updates the shared header gate in the same interaction', async ({ page }) => {
   let report: any = null;
-  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: {
     lifecycle: { workspaceId: 'demo', flowType: 'feature', steps: [], fleet: [], updatedAt: '' }, report,
   } }));
@@ -55,7 +56,7 @@ test('a verification run updates the shared header gate in the same interaction'
 });
 
 test('a pass without a recorded duration shows no invented one', async ({ page }) => {
-  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: {
     lifecycle: { workspaceId: 'demo', flowType: 'feature', steps: [], fleet: [], updatedAt: '' },
     report: { overallStatus: 'pass', canProgress: true, repos: [] },

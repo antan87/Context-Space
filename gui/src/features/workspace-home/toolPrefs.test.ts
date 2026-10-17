@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { defaultTool, firstMessageFor, rankTools, readToolUse, rememberToolStarted } from './toolPrefs.js';
+import { defaultTool, rankTools, readToolUse, rememberToolStarted } from './toolPrefs.js';
 
 describe('session tool preferences', () => {
   let store: Map<string, string>;
@@ -34,10 +34,4 @@ describe('session tool preferences', () => {
     expect(readToolUse()).toEqual({ counts: {} });
   });
 
-  it('writes a first message that names the item and the plan command', () => {
-    expect(firstMessageFor({ id: 'M2', label: 'M2 CSV export endpoint', status: 'todo' }))
-      .toBe('Work on M2 CSV export endpoint. Read the plan with `ctxspace plan` first. If it is not started yet, start it with `ctxspace plan start M2`.');
-    expect(firstMessageFor({ id: 'M2', label: 'M2 CSV export endpoint', status: 'in_progress' }))
-      .toBe('Work on M2 CSV export endpoint. Read the plan with `ctxspace plan` first.');
-  });
 });

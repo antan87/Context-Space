@@ -3,14 +3,13 @@ import { Check, CircleHelp, ListChecks, RotateCcw } from 'lucide-react';
 
 import { IconButton } from '../../components/ui/icon-button.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
-import type { PlanChangeEntry, PlanItemView } from '../plan/planTypes.js';
 import { AnswerBox } from '../plan/AnswerBox.js';
 import { questionWhy, whenText, whoName } from '../plan/planView.js';
 import { ReopenForm } from './ProgressPanel.js';
-import { questionContext } from './stripPlan.js';
+import type { PlanClose, PlanQuestion } from './stripPlan.js';
 
 export interface PlanQuestionBarProps {
-  item: PlanItemView;
+  item: PlanQuestion;
   /** How many more wait after this one. */
   more: number;
   busy: boolean;
@@ -30,7 +29,7 @@ export function PlanQuestionBar({ item, more, busy, error, onAnswer, onShowAll }
     <div role="group" aria-label="A question in the plan waits for your answer" className="flex items-start gap-2.5 border-t border-[color-mix(in_oklab,var(--state-needs)_45%,transparent)] bg-[color-mix(in_oklab,var(--state-needs)_7%,var(--card))] px-3 py-2">
       <CircleHelp aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[var(--state-needs)]" />
       <div className="min-w-0 flex-1 space-y-1.5">
-        <p className="text-[11px] text-muted-foreground">{questionContext(item)}</p>
+        <p className="text-[11px] text-muted-foreground">{item.context}</p>
         <p className="line-clamp-3 break-words text-[13px] leading-snug text-foreground"><InlinePlanMarkdown content={item.title} /></p>
         {why && <p className="line-clamp-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{why}</p>}
         <AnswerBox question={item.title} detail={item.detail} busy={busy} error={error} onAnswer={onAnswer} />
@@ -48,7 +47,7 @@ const CLOSE_WORDS: Record<string, string> = { done: 'finished', dropped: 'droppe
 
 export interface AiClosedBarProps {
   workspace: string;
-  entry: PlanChangeEntry;
+  entry: PlanClose;
   /** The milestone's name, without its code. */
   title: string;
   /** How many more the AI closed since the developer last looked. */
