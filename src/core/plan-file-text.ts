@@ -48,10 +48,10 @@ export function proofWords(checkpoint: PlanCheckpoint, evidence: PlanEvidence | 
   return when ? `${result} · ${when}` : result;
 }
 
-/** Done, being worked on (some steps ticked), or not started. */
-function glyph(checkpoint: PlanCheckpoint): string {
+/** Done, being worked on (the first one open, or one with steps ticked), or not started. */
+function glyph(checkpoint: PlanCheckpoint, current: boolean): string {
   if (checkpoint.done) return '✓';
-  return checkpoint.steps.some((step) => step.done) ? '◐' : '○';
+  return current || checkpoint.steps.some((step) => step.done) ? '◐' : '○';
 }
 
 function decisionLines(decision: PlanDecision, holder: PlanCheckpoint | undefined): string[] {
@@ -72,6 +72,7 @@ export function renderPlanStanding(read: PlanFileRead, checks: Record<string, Pl
   if (plan.checkpoints.length) {
     lines.push('CHECKPOINTS');
     const width = Math.min(60, Math.max(...plan.checkpoints.map((checkpoint) => checkpoint.title.length)));
+    const current = plan.checkpoints.find((checkpoint) => !checkpoint.done);
     for (const checkpoint of plan.checkpoints) {
       const ticked = checkpoint.steps.filter((step) => step.done).length;
       const facts = [
@@ -79,7 +80,7 @@ export function renderPlanStanding(read: PlanFileRead, checks: Record<string, Pl
         proofWords(checkpoint, checks[checkpoint.key], now),
       ].filter(Boolean).join(' · ');
       const title = checkpoint.title.length > width ? `${checkpoint.title.slice(0, width - 1)}…` : checkpoint.title.padEnd(width);
-      lines.push(`  ${glyph(checkpoint)} ${title}${facts ? `  ${facts}` : ''}`.trimEnd());
+      lines.push(`  ${glyph(checkpoint, checkpoint === current)} ${title}${facts ? `  ${facts}` : ''}`.trimEnd());
       const next = checkpoint.done ? undefined : checkpoint.steps.find((step) => !step.done);
       if (next) lines.push(`      next: ${next.text}`);
     }

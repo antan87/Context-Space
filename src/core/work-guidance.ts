@@ -12,7 +12,7 @@ import { loadWorkspaceState } from './workspace-state.js';
 import { planStoreExists } from './plan.js';
 
 export const WORK_GUIDANCE_FILE = 'contextspace-work.json';
-/** Retired: refresh removes it. The brief is at the top of contextspace-plan.md, and `ctxspace flow --assignment` prints it. */
+/** Retired: refresh removes it. `ctxspace flow --assignment` prints the brief. */
 export const WORK_ASSIGNMENT_FILE = 'contextspace-assignment.md';
 export const workTypes = ['bug', 'feature', 'performance', 'refactor', 'rewrite'] as const;
 export const workSizes = ['small', 'standard', 'epic'] as const;

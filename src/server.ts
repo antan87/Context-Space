@@ -3,7 +3,6 @@ import { resolveFileReference } from './core/file-reference-resolve.js';
 import { decodeImageAttachment, InvalidImageAttachment } from './services/image-attachment.js';
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
-import { registerPlanRoutes } from './http/plan-routes.js';
 import { registerPlanFileRoutes } from './http/plan-file-routes.js';
 import { registerNeedsYouRoute } from './http/needs-you-routes.js';
 import { extractAstSymbols } from './services/symbolService.js';
@@ -2909,10 +2908,6 @@ app.post('/api/workspace/:id/knowledge/entry', async (c) => {
 });
 
 registerWorkGuidanceRoutes(app, async (id) => {
-  const config = await loadConfig();
-  return resolveExactWorkspaceById(config.workspacesDir, id);
-});
-registerPlanRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

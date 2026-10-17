@@ -75,7 +75,6 @@ import {
   CLI_NAME,
   GITHUB_RELEASE_URL,
   KNOWLEDGE_FILE,
-  PLAN_FILE,
 } from './brand.js';
 
 /** A stable empty list, so a hook that depends on the workspaces does not run again on every render while they load. */
@@ -900,7 +899,7 @@ Workspace Metadata:
 
 Core Instructions:
 1. Read "AGENTS.md" at the workspace root first — it names the repos, how they depend on each other, which to change first, and how to verify each.
-2. Search "${KNOWLEDGE_FILE}" for decisions and gotchas from earlier sessions rather than reading it whole, and record new ones with \`${CLI_NAME} knowledge add\`. "${PLAN_FILE}" carries the phase order when a change spans repos.
+2. Search "${KNOWLEDGE_FILE}" for decisions and gotchas from earlier sessions rather than reading it whole, and record new ones with \`${CLI_NAME} knowledge add\`. "PLAN.md" is the plan: keep it true as you work.
 3. Follow all project-specific rules in "CLAUDE.md", ".cursorrules", or "AGENTS.md" inside sub-repositories.
 `;
     const copied = await safeCopyToClipboard(prompt);

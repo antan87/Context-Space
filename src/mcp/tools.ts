@@ -1,5 +1,4 @@
-import { readPlanningNotes } from '../core/planning-notes.js';
-import { planningTools, useThePlanCommand } from './planning-tools.js';
+import { planningTools } from './planning-tools.js';
 import { screenTools } from './screen-tools.js';
 /**
  * @module mcp/tools
@@ -187,16 +186,6 @@ async function requireWorkspace(ctx: ToolContext): Promise<void> {
 export const tools: NexusFlowTool[] = [
   ...planningTools,
   ...screenTools,
-  {
-    name: 'get_planning_notes',
-    description: `${useThePlanCommand('get_planning_notes')} Read the older authored notes in contextspace-milestones.md: delivery order, questions, existing work and deferred decisions.`,
-    annotations: { readOnlyHint: true },
-    inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
-    handler: async (_args, ctx) => {
-      try { return json({ deprecated: useThePlanCommand('get_planning_notes'), ...(await readPlanningNotes(ctx.workspacePath)) }); }
-      catch (error) { return errorResult(error instanceof Error ? error.message : String(error)); }
-    },
-  },
   {
     name: 'get_work_context',
     description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is where PLAN.md stands (as `ctxspace plan` prints it) followed by its text. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan by editing PLAN.md.',
@@ -1474,7 +1463,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   review: [
     'search_workspace',
@@ -1492,7 +1480,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   ci: [
     'search_workspace',
@@ -1509,7 +1496,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   developer: ['*'],
   interactive: ['*'],

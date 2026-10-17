@@ -170,7 +170,7 @@ describe('ClaudeSdkAdapter', () => {
   });
 
   it.each(['workspace-write', 'review'] as const)('respects the %s profile for planning tools', async (profile) => {
-    const names = ['update_milestone_plan', 'update_work_assignment', 'add_work_document', 'update_work_document', 'save_planning_notes'];
+    const names = ['update_work_assignment', 'add_work_document', 'update_work_document'];
     const { handle, approvals } = createMockHandle(names.map((name, index) => ({
       type: 'approval_required', requestId: `planning-${index}`, tool: `mcp__contextspace-mcp__${name}`, input: {},
     })));
@@ -182,7 +182,7 @@ describe('ClaudeSdkAdapter', () => {
   });
 
   it.each(['workspace-write', 'review'] as const)('respects the %s profile for the screen tools', async (profile) => {
-    const names = ['show_in_reader', 'annotate_document', 'suggest_next', 'get_screen_context', 'request_user_input', 'set_milestone'];
+    const names = ['show_in_reader', 'annotate_document', 'suggest_next', 'get_screen_context', 'request_user_input'];
     const { handle, approvals } = createMockHandle(names.map((name, index) => ({
       type: 'approval_required', requestId: `screen-${index}`, tool: `mcp__contextspace-mcp__${name}`, input: {},
     })));

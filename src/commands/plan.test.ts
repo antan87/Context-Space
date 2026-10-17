@@ -106,7 +106,7 @@ describe('reading the plan', () => {
     await changePlan(root, { type: 'add', kind: 'milestone', title: 'CSV export endpoint' }, { actor: { by: 'user' } });
     await planShow(context());
     expect(output()).toContain('CSV export · PLAN.md (written from the older plan on the first change)');
-    expect(output()).toContain('○ CSV export endpoint');
+    expect(output()).toContain('◐ CSV export endpoint');
   });
 
   it('finds an item by its words, or the start of them, and names the matches when several fit', async () => {

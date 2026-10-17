@@ -76,50 +76,39 @@ locked, until you pick.
 
 ## The plan
 
-The plan holds the milestones, the tasks, the questions with who answers them, the
-decisions, and the work that already exists. It is one store, `contextspace-plan.json`,
-committed with the workspace. You change it in the Plan tab; AI tools change it with
-`ctxspace plan`. Both use the same items and the same words.
+The plan is `PLAN.md` in the workspace, committed with it: plain markdown that any AI
+or person edits directly. Free text says what the work is for and how. Under a
+`## Checkpoints` heading, each top-level checkbox is an outcome someone could demo,
+with its steps as checkboxes under it and an optional `Check:` line naming the command
+that proves it. A checkbox that starts with `Decide:` is a question only you can
+answer, placed under what it holds up:
 
-| Status | Means |
-| --- | --- |
-| To do | Not started yet. |
-| In progress | Someone is working on it, and it says who. |
-| Blocked | Stuck, and it always says why. |
-| Done | Finished, with what came out of it or the answer. |
-| Dropped | Not needed any more, with why. |
-| Later | Not now, with when to look again. |
+```markdown
+## Checkpoints
 
-**Needs you** is not a status: it collects the questions waiting for your answer and
-the AI's proposals waiting for your OK. The rules:
+- [ ] Reports export to CSV
+  Check: `npm test`
+  - [x] Write the CSV writer
+  - [ ] Decide: Should archived reports be exported?
+    Suggested: Yes, all of them · Only the last year
+    If no answer: only the last year
+```
 
-1. Every close has a reason. Nothing is deleted.
-2. The AI closes only its own items. For your items, and for milestones, it asks: you
-   see it under Needs you, and accept it or send it back with what still needs doing.
-3. A milestone is done when everything it waits for is done and its check passes on the
-   latest code. Closing a milestone, or accepting an AI's "done" on one, runs its check.
-4. Nothing starts by itself. When a milestone is done, the next one is suggested.
-5. Plans change: anyone can add, move, block or reopen an item at any time. Each item
-   keeps its history: who did what, and when.
-6. Before the workspace is finished, everything a milestone waits for must be handled.
-   Other open items only warn. Finishing anyway needs a reason.
+- A step or checkpoint is done when it is ticked. A checkpoint with a check is ticked
+  only once its check passes: the Plan tab and `ctxspace plan done` run it first, and
+  keep the result as its proof.
+- A decision waits for you while the checkpoint it sits under is open; once that
+  checkpoint is done, it is moot by itself. Decisions outside the checkpoints are
+  folded away on the Overview: nothing in particular waits for them.
+- Before the workspace is finished, every checkpoint is ticked. Open steps and decisions
+  outside the checkpoints only warn. Finishing anyway needs a reason.
 
-Every item has a code and a name, "M2 CSV export endpoint"; the name always comes first.
-A row in the Plan tab opens the item: what it must deliver, what it waits for and holds
-up, its check and the last result, where the work is, and its history. **How it works**
-shows the statuses and rules again. Branch labels describe the intended work; they do not
-create branches or PRs.
-
-### Start a session from the plan
-
-With no session running, a **Start a session** card sits beside the plan: pick a tool and
-what to work on, then **Start**. A ready item has its own **Start**, which starts your
-last-used tool on it. A session started on an item begins with a first message that names
-it and tells the AI to read the plan with `ctxspace plan` (Claude Code, Codex, Pi and agy
-take it; Copilot and Cursor start without it); the AI then marks the item started itself,
-so the history names the tool. Running sessions show as tabs beside **Plan**, named after
-the item they work on, and **Continue where you left off** resumes a saved conversation.
-`/chat` and `/sessions` still open the sessions directly.
+There are no codes, statuses or approval requests. The Plan tab shows the file as a
+document: its text as written, the checkpoints with their steps and proof, decisions you
+answer in place, and what changed and who changed it, whether in the app, with the
+command, or by editing the file. A workspace with the older `contextspace-plan.json`
+moves to `PLAN.md` at its first change or refresh; the old file is kept in
+`.contextspace/archive/`.
 
 ## Give an AI the current context
 
@@ -130,17 +119,18 @@ ctxspace flow --assignment
 ctxspace flow --assignment --json
 ```
 
-AI tools read the plan with `ctxspace plan` and change it one item at a time with
-`ctxspace plan add|start|done|answer|block|later|drop|reopen|edit` (`--help` shows how,
-`--json` gives every field). The generated `AGENTS.md` gives them the rules and a short
-work routine. MCP clients can call `get_work_context`, which also returns the plan as
-`ctxspace plan` prints it, then `read_work_document` using document IDs in the assignment. Read originals before relying on summaries. Approved
+AI tools read `PLAN.md` and change it with their own file edits; `ctxspace plan` says
+where it stands, and `ctxspace plan done "<checkpoint>"` runs a checkpoint's check before
+ticking it (`--help` shows the few other commands, `--json` gives every field). The
+generated `AGENTS.md` gives them the routine in five lines. MCP clients can call
+`get_work_context`, which also returns where the plan stands and its text, then
+`read_work_document` using document IDs in the assignment. Read originals before relying on summaries. Approved
 requirements establish intended behavior; drafts are proposals. Conflicting
 sources should be surfaced to the owner.
 
 ### Planning through MCP
 
-AIs change the plan only with `ctxspace plan`; there are no MCP plan tools. The
+AIs change the plan by editing `PLAN.md`; there are no MCP plan tools. The
 `interactive`, `developer`, and `full` MCP roles can edit the assignment and sources.
 The `readonly`, `review`, and `ci` roles can read them but cannot edit them.
 Reconnect an already running MCP server after upgrading to discover new tools.
@@ -158,8 +148,7 @@ Reconnect an already running MCP server after upgrading to discover new tools.
   document metadata. It preserves original text and URLs. Use `scope: {}` for
   workspace scope and `status: "superseded"` to retain a source as history.
 - `update_milestone_plan`, `set_milestone`, `get_planning_notes` and
-  `save_planning_notes` still work for one release; their descriptions and results
-  name the `ctxspace plan` command that replaces them.
+  `save_planning_notes` are gone: the plan is `PLAN.md`.
 
 All writes reject stale revisions. Reread and merge after a conflict rather than
 retrying an old replacement. Write results return the new revision. Workroom
