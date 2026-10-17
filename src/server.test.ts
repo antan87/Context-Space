@@ -87,6 +87,25 @@ vi.mock('./core/new-repo.js', async (importOriginal) => {
 vi.mock('./orchestration/index.js');
 
 
+
+/** Runs `run` with only `commands` on PATH, standing for installed editors (node:fs/promises is mocked here, so sync fs). */
+async function withEditorsOnPath<T>(commands: readonly string[], run: () => Promise<T>): Promise<T> {
+  const bin = fsSync.mkdtempSync(path.join(os.tmpdir(), 'editor-bin-'));
+  const savedPath = process.env.PATH;
+  for (const command of commands) {
+    fsSync.writeFileSync(path.join(bin, process.platform === 'win32' ? `${command}.cmd` : command), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
+  }
+  process.env.PATH = bin;
+  clearEditorDetectionCache();
+  try {
+    return await run();
+  } finally {
+    process.env.PATH = savedPath;
+    clearEditorDetectionCache();
+    fsSync.rmSync(bin, { recursive: true, force: true });
+  }
+}
+
 describe('Server API Endpoints Unit Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -364,18 +383,16 @@ describe('Server API Endpoints Unit Tests', () => {
         workspacePath,
       } as any);
 
-      vi.mocked(execa).mockImplementation((async (command: any, args?: readonly string[]): Promise<any> => ({
-        exitCode: args?.[0] === '--version' && command === 'code-insiders' ? 0 : 1,
-      })) as any);
+      vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
-      const response = await app.request('/api/open-editor', {
+      const response = await withEditorsOnPath(['code-insiders'], () => app.request('/api/open-editor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workspacePath,
           command: 'code-insiders'
         })
-      });
+      }));
 
       expect(response.status).toBe(200);
       const data = await response.json();
@@ -404,14 +421,12 @@ describe('Server API Endpoints Unit Tests', () => {
         workspacePath,
       } as any);
 
-      vi.mocked(execa).mockImplementation((async (command: any, args?: readonly string[]): Promise<any> => ({
-        exitCode: args?.[0] === '--version' && command === 'code-insiders' ? 0 : 1,
-      })) as any);
+      vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
 
       const targetFile = 'src/example.ts';
       const expectedTarget = path.resolve(workspacePath, targetFile);
 
-      const response = await app.request('/api/open-editor', {
+      const response = await withEditorsOnPath(['code-insiders'], () => app.request('/api/open-editor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -419,7 +434,7 @@ describe('Server API Endpoints Unit Tests', () => {
           command: 'code-insiders',
           filePath: targetFile,
         })
-      });
+      }));
 
       expect(response.status).toBe(200);
       const data = await response.json();
@@ -448,29 +463,15 @@ describe('Server API Endpoints Unit Tests', () => {
       });
 
       vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as any);
-      // An editor counts as installed when its command is on PATH (node:fs/promises is mocked here, so sync fs).
-      const bin = fsSync.mkdtempSync(path.join(os.tmpdir(), 'editor-bin-'));
-      const savedPath = process.env.PATH;
-      fsSync.writeFileSync(path.join(bin, process.platform === 'win32' ? 'code.cmd' : 'code'), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
-      process.env.PATH = bin;
-      const { clearEditorDetectionCache } = await import('./utils/detect-editors.js');
-      clearEditorDetectionCache();
 
-      let response: Response;
-      try {
-        response = await app.request('/api/open-editor', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            workspacePath: repoDir,
-            command: 'code',
-          })
-        });
-      } finally {
-        process.env.PATH = savedPath;
-        clearEditorDetectionCache();
-        fsSync.rmSync(bin, { recursive: true, force: true });
-      }
+      const response = await withEditorsOnPath(['code'], () => app.request('/api/open-editor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspacePath: repoDir,
+          command: 'code',
+        })
+      }));
 
       expect(response.status).toBe(200);
       const data = await response.json();
