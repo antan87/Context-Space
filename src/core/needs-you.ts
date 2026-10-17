@@ -19,9 +19,11 @@ export interface WorkspaceNeeds {
   workspaceId: string;
   /** The newest question the AI asked in the chat and still waits on, when the plan does not hold it already. */
   chatQuestion?: { message: string; timestamp: string; harness: string; options?: string[] };
-  /** The plan's questions for the user, oldest first. */
-  /** What each holds up is the open work only; `detail` carries why it is asked and its suggested answers. */
-  questions: Array<{ id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string }>;
+  /**
+   * The plan's questions for the user, oldest first. What each holds up is the open work only; `detail` carries why
+   * it is asked and its suggested answers; `waiting` says the AI asked it in the chat and waits there for the answer.
+   */
+  questions: Array<{ id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string; waiting?: true }>;
   /** Closes an AI proposed under the earlier rule, still waiting for the user. */
   proposals: Array<{ id: string; title: string; action: string; by: string; at: string }>;
   /** Open milestones whose last check here failed. */
@@ -70,8 +72,10 @@ export async function workspaceNeeds(workspaceId: string, workspacePath: string,
     workspaceId,
     ...(plan ? fromPlan(plan, failed, now) : { questions: [], proposals: [], failedChecks: [], closedByAi: [] }),
   };
-  // The AI puts its chat question in the plan too; then it is listed once, as the plan's question.
-  if (request && !needs.questions.some((question) => question.title === questionTitle(request.message))) {
+  // The AI puts its chat question in the plan too; then it is listed once, as the plan's question it waits on.
+  const asked = request ? needs.questions.find((question) => question.title === questionTitle(request.message)) : undefined;
+  if (asked) asked.waiting = true;
+  else if (request) {
     needs.chatQuestion = { message: request.message, timestamp: request.timestamp, harness: request.harness, ...(request.options ? { options: request.options } : {}) };
   }
   return needs;

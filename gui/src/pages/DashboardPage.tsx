@@ -8,6 +8,7 @@ import { repoName } from '../lib/status.js';
 import { useWorktreeNavigationState } from '../features/worktrees/worktreeStore.js';
 import { WorkspaceChatResume } from '../features/chat/WorkspaceChatResume.js';
 import { NeedsYouOverview } from '../features/overview/NeedsYouOverview.js';
+import { workspaceTitle } from '../features/overview/workspaceTitle.js';
 import { perfMarkOnce } from '../lib/perfMarks.js';
 
 /** How many workspaces Recent work lists. The rest are in the sidebar. */
@@ -50,7 +51,7 @@ export function DashboardPage({
   }, [workspacesLoading, workspaces.length, checkedWorkspaceCount, statusesComplete]);
 
   const { customTitles } = useWorktreeNavigationState();
-  const titleOf = (ws: Feature) => customTitles[ws.branchName]?.title || ws.name || ws.description || ws.branchName;
+  const titleOf = (ws: Feature) => workspaceTitle(ws, customTitles[ws.branchName]?.title);
   const titles = Object.fromEntries(workspaces.map((ws) => [ws.branchName, titleOf(ws)]));
   const withChanges = workspaces.filter((ws) => (workspaceStatuses[ws.branchName]?.changedFiles ?? 0) > 0);
   const recent = workspaces.slice(0, RECENT_MAX);

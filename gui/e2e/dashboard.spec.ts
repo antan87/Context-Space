@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { planView } from './planData';
 
 const feature = {
   id: 'feature-x',
@@ -22,15 +23,24 @@ test.describe('Redesigned ContextSpace shell', () => {
     },
   });
 
-  test('says what needs you across the workspaces, then the changes to review and the recent work', async ({ page }) => {
+  test('says what needs you across the workspaces, answers a question in place, then the changes to review and the recent work', async ({ page }) => {
     const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
     const asked: string[] = [];
+    const answered: unknown[] = [];
+    await page.route('**/api/workspace/feature-x/plan/items', (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      answered.push(route.request().postDataJSON());
+      return route.fulfill({ json: { message: 'Answered Q1', plan: planView([]) } });
+    });
     await page.route('**/api/needs-you?*', (route) => {
       asked.push(new URL(route.request().url()).searchParams.get('workspaces') ?? '');
       return route.fulfill({ json: { workspaces: [{
         workspaceId: 'feature-x',
         chatQuestion: { message: 'Which branch should I target?', timestamp: minutesAgo(2), harness: 'claude' },
-        questions: [{ id: 'Q1', title: 'Should archived reports be exported?', holdsUp: ['CSV export endpoint'], askedBy: 'codex', at: minutesAgo(30) }],
+        questions: answered.length ? [] : [
+          { id: 'Q1', title: 'Should **archived** reports be exported?', holdsUp: ['CSV export endpoint'], detail: 'Archived reports are a third of the rows.\n\nSuggested answers: Yes, all of them · Only the last year', askedBy: 'codex', at: minutesAgo(30) },
+          { id: 'Q2', title: 'Keep the old PDF export?', holdsUp: [], askedBy: 'claude', at: minutesAgo(600) },
+        ],
         proposals: [],
         failedChecks: [{ id: 'M2', title: 'CSV export endpoint' }],
         closedByAi: [{ id: 'M1', title: 'Database query for report rows', action: 'done', by: 'claude', at: minutesAgo(90), note: 'Tests pass' }],
@@ -46,7 +56,20 @@ test.describe('Redesigned ContextSpace shell', () => {
     const chat = needs.getByRole('link', { name: /Which branch should I target\?/ });
     await expect(chat).toContainText('Claude asked in the chat 2 min ago');
     await expect(chat).toHaveAttribute('href', '#/workspaces/feature-x');
-    await expect(needs.getByRole('link', { name: /Should archived reports be exported\?/ })).toContainText('Codex asked 30 min ago · holds up CSV export endpoint');
+    // A question that holds up work is answered where it is shown, its text formatted, with the answers the AI suggests.
+    const question = needs.getByRole('group', { name: 'Should archived reports be exported?' });
+    await expect(question).toContainText('Codex asked 30 min ago');
+    await expect(question).toContainText('Holds up CSV export endpoint');
+    await expect(question.locator('strong')).toHaveText('archived');
+    await expect(question).toContainText('Archived reports are a third of the rows.');
+    await expect(question).not.toContainText('Suggested answers:');
+    await expect(question.getByRole('link', { name: 'Open in the plan' })).toHaveAttribute('href', '#/workspaces/feature-x/plan');
+    // A question nothing waits for is folded away and not counted.
+    const aside = needs.getByText('1 question nothing waits for');
+    await expect(aside).toBeVisible();
+    await expect(needs.getByRole('group', { name: 'Keep the old PDF export?' })).toBeHidden();
+    await aside.click();
+    await expect(needs.getByRole('group', { name: 'Keep the old PDF export?' })).toContainText('Test feature workspace · Claude asked');
     await expect(needs.getByRole('link', { name: /CSV export endpoint.*Its check failed/ })).toHaveAttribute('href', '#/workspaces/feature-x/plan');
     await expect(page.getByRole('region', { name: 'Finished by the AI lately' })).toContainText('Claude finished “Database query for report rows”: Tests pass');
 
@@ -58,6 +81,15 @@ test.describe('Redesigned ContextSpace shell', () => {
     await expect(page.getByRole('button', { name: /Open workspace/ })).toHaveCount(0);
     await expect(page.getByText('Assistant launchers')).toHaveCount(0);
     await page.screenshot({ path: 'test-results/overview-needs-you.png', fullPage: true });
+
+    await question.getByRole('button', { name: 'Yes, all of them' }).click();
+    const box = question.getByRole('textbox', { name: 'Your answer to Should archived reports be exported?' });
+    await expect(box).toHaveValue('Yes, all of them');
+    await expect(box).toBeFocused();
+    await question.getByRole('button', { name: 'Answer' }).click();
+    await expect.poll(() => answered).toEqual([{ change: { type: 'answer', id: 'Q1', answer: 'Yes, all of them' } }]);
+    await expect(question).toHaveCount(0);
+    await expect(needs.getByRole('heading')).toHaveText('Needs you 2');
     await review.getByRole('link', { name: /Test feature workspace/ }).click();
     await expect(page).toHaveURL(/#\/workspaces\/feature-x\/changes/);
   });

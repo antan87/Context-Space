@@ -55,6 +55,11 @@ export function suggestedAnswers(detail: string | undefined): string[] {
   return line ? line.slice('Suggested answers: '.length).split(' · ').map((answer) => answer.trim()).filter(Boolean) : [];
 }
 
+/** Why the AI asks, as it wrote in the question's detail, without the suggested answers shown as buttons. */
+export function questionWhy(detail: string | undefined): string {
+  return detail?.split('\n').filter((line) => !line.startsWith('Suggested answers: ')).join('\n').trim() ?? '';
+}
+
 /**
  * The tasks each milestone waits for, so they are shown under it. A task several milestones wait for is
  * shown under the first, in plan order; `nested` says which tasks are shown that way.

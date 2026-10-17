@@ -67,7 +67,7 @@ describe('what needs the user in a workspace', () => {
     expect((await workspaceNeeds('reports', root)).chatQuestion).toMatchObject({ message: 'Which branch should I target?', harness: 'claude' });
     await addChatQuestionToPlan(root, { message: 'Which branch should I target?', harness: 'claude' });
     const needs = await workspaceNeeds('reports', root);
-    expect(needs.questions.map((question) => question.title)).toEqual(['Which branch should I target?']);
+    expect(needs.questions).toMatchObject([{ title: 'Which branch should I target?', holdsUp: [], waiting: true }]);
     expect(needs).not.toHaveProperty('chatQuestion');
   });
 

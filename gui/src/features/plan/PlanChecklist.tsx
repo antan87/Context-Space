@@ -9,9 +9,10 @@ import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { usePlan, useChangePlan, useRunMilestoneCheck } from '../../lib/api/queries.js';
 import { cn } from '../../lib/utils.js';
 import { AddPlanItemDialog } from './AddPlanItem.js';
+import { AnswerBox } from './AnswerBox.js';
 import { PlanItemDetail } from './PlanItemDetail.js';
 import {
-  TONE_CLASS, changeText, itemLook, milestoneProgress, nameOf, proposalLine, shortCommits, stateLine, suggestedAnswers, tasksUnderMilestones,
+  TONE_CLASS, changeText, itemLook, milestoneProgress, nameOf, proposalLine, questionWhy, shortCommits, stateLine, tasksUnderMilestones,
   visibleChanges, whenText, whoName,
 } from './planView.js';
 import type { PlanChangeInput, PlanItemView, PlanView } from './planTypes.js';
@@ -75,15 +76,12 @@ const QUESTION_ASK: Record<QuestionAction, string> = { later: 'When should it be
 function QuestionRow({ item, busy, readOnly, onChange, onOpen }: {
   item: PlanItemView; busy: boolean; readOnly: boolean; onChange: (change: PlanChangeInput) => Promise<boolean>; onOpen: () => void;
 }) {
-  const [answer, setAnswer] = useState('');
   const [asking, setAsking] = useState<QuestionAction | null>(null);
   const [reason, setReason] = useState('');
   const added = item.history?.find((entry) => entry.action === 'added');
   const asked = added ? `${whoName(added.by)} asked${whenText(added.at) ? ` ${whenText(added.at)}` : ''}` : 'Question';
   const holdsUp = item.holdsUp.map((label) => label.replace(/^\S+\s/, ''));
-  const options = suggestedAnswers(item.detail);
-  const why = item.detail?.split('\n').filter((line) => !line.startsWith('Suggested answers: ')).join('\n').trim();
-  const submitAnswer = () => { const text = answer.trim(); if (text) void onChange({ type: 'answer', id: item.id, answer: text }).then((ok) => { if (ok) setAnswer(''); }); };
+  const why = questionWhy(item.detail);
 
   return <li className="space-y-1.5 p-3">
     <div className="flex items-start justify-between gap-2">
@@ -108,18 +106,7 @@ function QuestionRow({ item, busy, readOnly, onChange, onOpen }: {
       <Input aria-label={QUESTION_ASK[asking]} autoFocus placeholder={QUESTION_ASK[asking]} className="h-7 min-w-48 flex-1 text-xs" value={reason} onChange={(event) => setReason(event.target.value)} />
       <Button size="xs" type="submit" disabled={busy || !reason.trim()}>{asking === 'later' ? 'Put off' : 'Drop'}</Button>
       <Button size="xs" type="button" variant="ghost" disabled={busy} onClick={() => setAsking(null)}>Cancel</Button>
-    </form> : <>
-      {options.length > 0 && <div role="group" aria-label="Suggested answers" className="flex flex-wrap gap-1.5">
-        {options.map((option) => <Button key={option} size="xs" variant="outline" title="Puts this answer in the box" onClick={() => setAnswer(option)}>{option}</Button>)}
-      </div>}
-      <form className="flex items-end gap-1.5 pt-0.5" onSubmit={(event) => { event.preventDefault(); submitAnswer(); }}>
-        <Textarea aria-label={`Your answer to ${item.title}`} rows={2} placeholder="Your answer" value={answer}
-          className="min-h-14 flex-1 resize-y text-xs"
-          onChange={(event) => setAnswer(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submitAnswer(); } }} />
-        <Button size="xs" variant="outline" type="submit" className="h-7 shrink-0 px-2.5 text-xs" disabled={busy || !answer.trim()}>Answer</Button>
-      </form>
-    </>)}
+    </form> : <AnswerBox question={item.title} detail={item.detail} busy={busy} onAnswer={(text) => onChange({ type: 'answer', id: item.id, answer: text })} />)}
   </li>;
 }
 

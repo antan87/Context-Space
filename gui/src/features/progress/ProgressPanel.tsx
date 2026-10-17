@@ -4,8 +4,8 @@ import { Check, CircleHelp, CornerDownLeft, RotateCcw, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { Input } from '../../components/ui/input.js';
-import { Textarea } from '../../components/ui/textarea.js';
 import type { MilestoneFact, MilestoneState, ProgressFacts, RepoChangeListing, WorkGuidance } from '../../types.js';
+import { AnswerBox } from '../plan/AnswerBox.js';
 import type { PlanItemView } from '../plan/planTypes.js';
 import { checkIsFailing, formatAge, verificationLine, type ActiveProposal, type StripTone } from './progressView.js';
 import { questionContext } from './stripPlan.js';
@@ -59,24 +59,11 @@ export function ReopenForm({ id, title, reason, pending, error, onChange, onSubm
 
 /** A question in the plan, answered from the panel. The box takes several lines; Ctrl+Enter sends it. */
 function PlanQuestion({ item, onAnswer }: { item: PlanItemView; onAnswer: (id: string, answer: string) => Promise<boolean> }) {
-  const [answer, setAnswer] = useState('');
-  const [sending, setSending] = useState(false);
-  const submit = () => {
-    const text = answer.trim();
-    if (!text || sending) return;
-    setSending(true);
-    void onAnswer(item.id, text).then((ok) => { setSending(false); if (ok) setAnswer(''); });
-  };
   return (
     <li className="rounded-md border border-border p-2">
       <p className="text-[11px] text-muted-foreground">{questionContext(item)}</p>
       <p className="mt-0.5 whitespace-pre-wrap break-words">{item.title}</p>
-      <form className="mt-1.5 flex items-end gap-1.5" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-        <Textarea aria-label={`Your answer to ${item.title}`} rows={1} value={answer} placeholder="Your answer" className="max-h-32 flex-1 text-xs" style={{ minHeight: '2rem' }}
-          onChange={(event) => setAnswer(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); } }} />
-        <Button type="submit" size="xs" disabled={sending || !answer.trim()}>{sending ? 'Saving…' : 'Answer'}</Button>
-      </form>
+      <div className="mt-1.5 space-y-1.5"><AnswerBox question={item.title} detail={item.detail} onAnswer={(answer) => onAnswer(item.id, answer)} /></div>
     </li>
   );
 }
