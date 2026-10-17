@@ -1486,53 +1486,6 @@ describe('Server API Endpoints Unit Tests', () => {
     });
   });
 
-  describe('GET /api/workspace/:id/plan', () => {
-    it('should get workspace plan content', async () => {
-      vi.spyOn(config, 'loadConfig').mockResolvedValue({
-        workspacesDir: '/mock/workspaces'
-      } as any);
-      // Only the Markdown plan exists: no state file and no plan store yet.
-      const missing = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
-      vi.spyOn(fs, 'readFile').mockImplementation((async (file: unknown) => {
-        if (String(file).endsWith('.md')) return '# Mock Plan content';
-        throw missing();
-      }) as any);
-      vi.spyOn(fs, 'realpath').mockImplementation((async (candidate: unknown) => String(candidate)) as any);
-      vi.spyOn(fs, 'lstat').mockImplementation((async () => { throw missing(); }) as any);
-
-      const response = await app.request('/api/workspace/test-ws/plan');
-      expect(response.status).toBe(200);
-      const data = await response.json();
-      expect(data.content).toBe('# Mock Plan content');
-    });
-
-    it('should return placeholder content when plan file does not exist (ENOENT)', async () => {
-      vi.spyOn(config, 'loadConfig').mockResolvedValue({
-        workspacesDir: '/mock/workspaces',
-      } as any);
-      const enoentErr = Object.assign(new Error('File not found'), { code: 'ENOENT' });
-      vi.spyOn(fs, 'readFile').mockRejectedValue(enoentErr);
-
-      const response = await app.request('/api/workspace/test-ws/plan');
-      expect(response.status).toBe(200);
-      const data = await response.json();
-      expect(data.content).toContain('No implementation plan file yet.');
-    });
-
-    it('should return 500 error when reading plan fails with permission or IO error', async () => {
-      vi.spyOn(config, 'loadConfig').mockResolvedValue({
-        workspacesDir: '/mock/workspaces',
-      } as any);
-      const eaccesErr = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
-      vi.spyOn(fs, 'readFile').mockRejectedValue(eaccesErr);
-
-      const response = await app.request('/api/workspace/test-ws/plan');
-      expect(response.status).toBe(500);
-      const data = await response.json();
-      expect(data.error).toBeDefined();
-    });
-  });
-
   describe('GET /api/workspace/:id/stream', () => {
     it('returns messages joined with live authoritative workflow progress', async () => {
       vi.spyOn(config, 'loadConfig').mockResolvedValue({

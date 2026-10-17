@@ -25,7 +25,8 @@ async function fixture(legacy = false) {
     projectId: canary, env: { TOKEN: canary },
   }));
   await fs.writeFile(path.join(root, legacy ? 'nexusflow-knowledge.md' : 'contextspace-knowledge.md'), canary);
-  await fs.writeFile(path.join(root, legacy ? 'nexusflow-plan.md' : 'contextspace-plan.md'), canary);
+  // The plan file has one name, PLAN.md, whatever the brand of the rest.
+  await fs.writeFile(path.join(root, 'PLAN.md'), canary);
   for (const dir of ['.contextspace', '.contextspace-logs', 'workrooms']) await fs.mkdir(path.join(root, dir));
   for (const file of ['.contextspace/chat.jsonl', '.contextspace-logs/service.log', 'workrooms/host-credential.json', 'contextspace-work.json']) {
     await fs.writeFile(path.join(root, file), canary);
@@ -43,7 +44,7 @@ describe('status-only diagnostics', () => {
     expect(text).not.toContain(root);
     expect(preview.report.sections.workspace).toMatchObject({ alias: 'workspace-1', repositoryCount: 1, projectLinked: true });
     expect(preview.report.sections.checks?.every(check => check.status === 'present')).toBe(true);
-    expect(read.mock.calls.some(([filename]) => /knowledge|plan\.md|chat|service\.log|credential|contextspace-work/.test(String(filename)))).toBe(false);
+    expect(read.mock.calls.some(([filename]) => /knowledge|plan\.md|PLAN\.md|chat|service\.log|credential|contextspace-work/.test(String(filename)))).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
     expect(await fs.readFile(path.join(root, 'contextspace-work.json'), 'utf8')).toBe(canary);
     expect(await fs.readFile(path.join(root, '.contextspace/chat.jsonl'), 'utf8')).toBe(canary);

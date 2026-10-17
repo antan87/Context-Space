@@ -110,10 +110,6 @@ async function mutateGuidance<T>(workspacePath: string, revision: number | undef
       const result = await change(guidance);
       guidance.revision++;
       await writeWorkspaceFile(root, feature.id, WORK_GUIDANCE_FILE, JSON.stringify(guidanceSchema.parse(guidance), null, 2) + '\n');
-      // The brief is at the top of the plan summary. The JSON record is authoritative, and the next
-      // plan change or refresh rewrites the summary, so a failure here does not undo the save.
-      const { writePlanSummary } = await import('./plan-summary.js');
-      await writePlanSummary(root).catch(() => undefined);
       return { guidance, result };
     } finally { await release(); }
   });

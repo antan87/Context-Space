@@ -163,8 +163,8 @@ describe('source documents and assignments', () => {
     setActiveStorageProvider(new InMemoryAdapter());
     const guidance = await addWorkDocument(root, 0, source());
     expect(files.has(WORK_GUIDANCE_FILE)).toBe(true);
-    // The brief is written into the plan summary; the old assignment file is no longer written.
-    expect(files.get('contextspace-plan.md')).toContain('Goal');
+    // Neither the old assignment file nor a plan summary is written: the brief is its own record.
+    expect(files.has('contextspace-plan.md')).toBe(false);
     expect(files.has(WORK_ASSIGNMENT_FILE)).toBe(false);
     expect((await readWorkDocument(root, guidance.documents[0].id)).location).toContain('https://storage.example/');
     expect((await getWorkContext(root)).assignment).toContain('https://storage.example/');

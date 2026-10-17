@@ -96,7 +96,8 @@ export async function readPlanFile(workspacePath: string): Promise<PlanFileRead>
   return read;
 }
 
-const lockOf = (location: Location) => acquireLock(path.join(location.root, '.contextspace-plan.lock'), {
+// Its own lock: moving an older store runs the older store's writes, which take that store's lock.
+const lockOf = (location: Location) => acquireLock(path.join(location.root, '.contextspace', 'plan-file.lock'), {
   staleMs: 60_000, timeoutMs: 10_000, timeoutMessage: 'The plan is busy in another session. Retry.',
 });
 
@@ -114,8 +115,9 @@ export async function changePlanFile(
   try {
     await moveOldStore(location);
     const current = await readAt(location);
-    // Whatever changed in the file before this change is someone else's.
+    // Whatever changed in the file before this change is someone else's; a plan that starts here starts empty.
     if (current.source === 'file') await noticeChanges(location, current, 'file', { locked: true });
+    else if (current.source === 'none') await saveSeen(location, current.plan, hash(''));
     const text = change(current.text, current.plan);
     if (text === current.text) return current;
     await writeWorkspaceFile(location.root, location.featureId, PLAN_FILE, text.endsWith('\n') ? text : `${text}\n`);

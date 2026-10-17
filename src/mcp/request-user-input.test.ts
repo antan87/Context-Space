@@ -7,9 +7,9 @@ import { enabledTools, findTool, INPUT_REQUEST_MAX_LENGTH, type ToolContext } fr
 import * as workspace from '../core/workspace.js';
 import { PRIMARY_MANIFEST_FILE, readWorkspaceChatMessages } from '../core/constants.js';
 import { INPUT_REQUEST_HARNESS_LIMIT } from '../core/attention.js';
-import { changePlan, readPlan, PLAN_STORE_FILE } from '../core/plan.js';
-import { answerChatQuestionsInPlan, questionTitle } from '../core/plan-questions.js';
-import { ANSWERED_IN_CHAT } from '../core/plan-words.js';
+import { parsePlanFile } from '../core/plan-file.js';
+import { readPlanChanges } from '../core/plan-file-store.js';
+import { ANSWERED_IN_CHAT, answerChatQuestionsInPlan, questionTitle } from '../core/plan-questions.js';
 import type { NexusFlowConfig } from '../types.js';
 
 const config: NexusFlowConfig = {
@@ -103,78 +103,70 @@ describe('request_user_input', () => {
     expect(entries[0].id.length).toBeGreaterThan(0);
   });
 
-  it('puts the question in the plan too, held up by the milestone in progress, and tells the AI its code', async () => {
+  const planNow = async (dir: string) => parsePlanFile(await fs.readFile(path.join(dir, 'PLAN.md'), 'utf8'));
+  const decisionsOf = (plan: ReturnType<typeof parsePlanFile>) => [...plan.checkpoints.flatMap((checkpoint) => checkpoint.decisions), ...plan.decisions];
+
+  it('puts the question in PLAN.md too, under the checkpoint being worked on, and tells the AI how to record the answer', async () => {
     const { dir } = await makeWorkspace();
-    const user = { actor: { by: 'user' } } as const;
-    await changePlan(dir, { type: 'add', kind: 'milestone', title: 'Chat docked' }, user);
-    await changePlan(dir, { type: 'start', id: 'M1' }, user);
+    await fs.writeFile(path.join(dir, 'PLAN.md'), '# Chat\n\n## Checkpoints\n\n- [x] Chat opens\n- [ ] Chat docked\n  - [ ] Dock it\n');
 
     const payload = body(await tool().handler({ message: 'Which branch should I target?', options: ['main', 'release'], harness: 'claude' }, ctxFor(dir)));
-    expect(payload).toMatchObject({ status: 'requested', planQuestion: 'Q1 Which branch should I target?' });
-    expect(payload.message).toContain('record their words: ctxspace plan answer Q1 "<their answer>"');
+    expect(payload).toMatchObject({ status: 'requested', planQuestion: 'Which branch should I target?' });
+    expect(payload.message).toContain('It is a decision in PLAN.md too; when the user answers, tick it and add their words on an "Answer:" line under it.');
 
-    const plan = await readPlan(dir);
-    const question = plan.items.find((item) => item.id === 'Q1')!;
-    expect(question).toMatchObject({ kind: 'question', owner: 'user', status: 'todo', title: 'Which branch should I target?', detail: 'Suggested answers: main · release' });
-    expect(question.history[0]).toMatchObject({ by: 'claude', action: 'added' });
-    // The milestone cannot be finished while the user's question is open.
-    expect(plan.items.find((item) => item.id === 'M1')!.waitsFor).toEqual(['Q1']);
+    const plan = await planNow(dir);
+    expect(plan.checkpoints[1]!.decisions).toEqual([expect.objectContaining({ question: 'Which branch should I target?', done: false, suggested: ['main', 'release'] })]);
+    expect((await readPlanChanges(dir))[0]).toMatchObject({ by: 'claude', action: 'added', kind: 'decision' });
 
-    // The same question asked again after the repeat window, still open in the plan: one question.
+    // The same question asked again after the repeat window, still open in the plan: one decision.
     vi.useFakeTimers({ now: Date.now() + 10 * 60_000, toFake: ['Date'] });
     try {
-      expect(body(await tool().handler({ message: 'Which branch should I target?', harness: 'claude' }, ctxFor(dir)))).toMatchObject({ planQuestion: 'Q1 Which branch should I target?' });
+      expect(body(await tool().handler({ message: 'Which branch should I target?', harness: 'claude' }, ctxFor(dir)))).toMatchObject({ planQuestion: 'Which branch should I target?' });
     } finally {
       vi.useRealTimers();
     }
-    expect((await readPlan(dir)).items.filter((item) => item.kind === 'question')).toHaveLength(1);
+    expect(decisionsOf(await planNow(dir))).toHaveLength(1);
   });
 
-  it('reopens the question a reply in the chat closed when the AI asks it again, rather than adding a second one', async () => {
+  it('opens again the decision a reply in the chat answered when the AI asks it again, rather than adding a second one', async () => {
     const { dir } = await makeWorkspace();
-    expect(body(await tool().handler({ message: 'Which branch?', harness: 'claude' }, ctxFor(dir)))).toMatchObject({ planQuestion: 'Q1 Which branch?' });
-    expect(await answerChatQuestionsInPlan(dir, ['Which branch?'])).toEqual(['Q1 Which branch?']);
-    expect((await readPlan(dir)).items[0]).toMatchObject({ status: 'done', resolution: ANSWERED_IN_CHAT });
+    body(await tool().handler({ message: 'Which branch?', harness: 'claude' }, ctxFor(dir)));
+    expect(await answerChatQuestionsInPlan(dir, ['Which branch?'])).toEqual(['Which branch?']);
+    expect(decisionsOf(await planNow(dir))[0]).toMatchObject({ done: true, answer: ANSWERED_IN_CHAT });
 
     // The reply was not the answer, so the AI asks again after the repeat window.
     vi.useFakeTimers({ now: Date.now() + 10 * 60_000, toFake: ['Date'] });
     try {
-      expect(body(await tool().handler({ message: 'Which branch?', harness: 'claude' }, ctxFor(dir)))).toMatchObject({ planQuestion: 'Q1 Which branch?' });
+      body(await tool().handler({ message: 'Which branch?', harness: 'claude' }, ctxFor(dir)));
     } finally {
       vi.useRealTimers();
     }
-    const questions = (await readPlan(dir)).items.filter((item) => item.kind === 'question');
-    expect(questions).toHaveLength(1);
-    expect(questions[0]).toMatchObject({ status: 'todo', reopenReason: 'Asked again in the chat.' });
+    const decisions = decisionsOf(await planNow(dir));
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({ done: false });
   });
 
-  it('answers in the plan only the questions the chat asked, and leaves one that waits for something', async () => {
+  it('answers in the plan only the decisions the chat asked', async () => {
     const { dir } = await makeWorkspace();
-    const user = { actor: { by: 'user' } } as const;
-    await changePlan(dir, { type: 'add', kind: 'question', title: 'Which branch?', owner: 'user' }, user);
-    await changePlan(dir, { type: 'add', kind: 'question', title: 'Which tests?', owner: 'user' }, user);
-    await changePlan(dir, { type: 'add', kind: 'task', title: 'Read the CI config', before: ['Q2'] }, user);
-    await changePlan(dir, { type: 'add', kind: 'question', title: 'Something else?', owner: 'user' }, user);
-
-    expect(await answerChatQuestionsInPlan(dir, ['Which branch?', 'Which tests?'])).toEqual(['Q1 Which branch?']);
-    const plan = await readPlan(dir);
-    expect(plan.items.map((item) => [item.id, item.status])).toEqual([['Q1', 'done'], ['Q2', 'todo'], ['T1', 'todo'], ['Q3', 'todo']]);
+    await fs.writeFile(path.join(dir, 'PLAN.md'), '# Plan\n\n## Decisions\n\n- [ ] Decide: Which branch?\n- [ ] Decide: Something else?\n');
+    expect(await answerChatQuestionsInPlan(dir, ['Which branch?', 'Which tests?'])).toEqual(['Which branch?']);
+    expect(decisionsOf(await planNow(dir)).map((decision) => [decision.question, decision.done])).toEqual([['Which branch?', true], ['Something else?', false]]);
     expect(await answerChatQuestionsInPlan(dir, [])).toEqual([]);
   });
 
   it('still alerts the user when the plan cannot be changed', async () => {
     const { dir, ledger } = await makeWorkspace();
-    await fs.writeFile(path.join(dir, PLAN_STORE_FILE), '{ broken', 'utf8');
+    await fs.mkdir(path.join(dir, 'PLAN.md'));
     const payload = body(await tool().handler({ message: 'Ship it?', harness: 'claude' }, ctxFor(dir)));
     expect(payload).toMatchObject({ status: 'requested' });
     expect(payload).not.toHaveProperty('planQuestion');
     expect(await ledgerEntries(ledger)).toHaveLength(1);
   });
 
-  it('names a long question by its opening, cut at a word, and keeps the whole question as its detail', () => {
-    const long = `Should the reader ${'open each document in its own tab and remember the scroll position, '.repeat(4)}or not?`;
+  it('cuts a long question at a word for its line in the plan, and keeps the whole question under it', () => {
+    const long = `Should the reader ${'open each document in its own tab and remember the scroll position, '.repeat(6)}or not?`;
     const title = questionTitle(long);
-    expect(title.length).toBeLessThanOrEqual(200);
+    expect(title.length).toBeLessThanOrEqual(300);
     expect(title.endsWith('…')).toBe(true);
     expect(long.startsWith(title.slice(0, -1).trimEnd())).toBe(true);
     expect(questionTitle('  Which   branch?\n')).toBe('Which branch?');

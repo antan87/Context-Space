@@ -1,4 +1,5 @@
-import { importPlanningNotes } from '../core/plan-import.js';
+import { movePlanToFile } from '../core/plan-file-store.js';
+import { PLAN_FILE } from '../core/plan-file.js';
 import { generateWorkspaceTools } from '../core/workspace-tools.js';
 import chalk from 'chalk';
 import path from 'node:path';
@@ -11,7 +12,6 @@ import { generateCopilotConfig } from './copilot.js';
 import { generateCursorConfig } from './cursor.js';
 import { buildContextContent } from './base.js';
 import { ensureWorkGuidance, WORK_ASSIGNMENT_FILE } from '../core/work-guidance.js';
-import { generateImplementationPlan } from './plan-generator.js';
 import { generateSkills } from './skills-generator.js';
 import { resolveResourceLockPath } from '../resources/materializer.js';
 import { deleteWorkspaceFile, readWorkspaceFile, writeWorkspaceFile, workspaceFileExists } from '../core/storage.js';
@@ -26,7 +26,6 @@ import { getActiveStorageProvider } from '../core/adapters/registry.js';
 
 import {
   PRIMARY_KNOWLEDGE_FILE,
-  PRIMARY_PLAN_FILE,
   PRIMARY_CURSOR_RULE_FILE,
   BRAND_NAME,
   CLI_NAME,
@@ -75,13 +74,12 @@ ${repos || '_None._'}
 | \`AGENTS.md\` | The context your assistant loads: projects, relationships, verification commands |
 | \`CLAUDE.md\` | A one-line \`@AGENTS.md\` import, plus anything Claude-specific |
 | \`${PRIMARY_KNOWLEDGE_FILE}\` | Accumulated decisions and gotchas, one per \`###\` heading. Search it; do not read it whole |
-| \`contextspace-plan.json\` | The plan: milestones, tasks, questions, decisions and existing work. Change it with \`${CLI_NAME} plan\`, never by hand |
-| \`${PRIMARY_PLAN_FILE}\` | The brief and the plan in short, plus the build order between repos. Generated |
+| \`${PLAN_FILE}\` | The plan: what the work is for, the checkpoints, their steps and the decisions for you. Any AI or person edits it |
 
 ## Useful commands
 
 \`\`\`
-${CLI_NAME} plan        # the plan: what needs you, the milestones, what is next
+${CLI_NAME} plan        # where the plan stands: checkpoints, their checks, what waits for you
 ${CLI_NAME} status      # what changed, across every repo
 ${CLI_NAME} diff        # the actual changes
 ${CLI_NAME} refresh     # regenerate these files
@@ -180,7 +178,6 @@ export function buildBaseKnowledgeContent(repoName: string): string {
  * Also generates:
  * - WORKSPACE.md — a short index for people, not an assistant-facing file
  * - contextspace-knowledge.md — accumulated decisions and gotchas, if absent
- * - contextspace-plan.md — implementation order based on dependency analysis
  *
  * Every file it writes describes the whole workspace, so there is no per-repo or
  * base-only subset to generate.
@@ -278,24 +275,11 @@ export async function generateContextFiles(
     }
   }
 
-  // The old notes file moves into the plan once; the plan then holds everything it held.
-  await importPlanningNotes(workspacePath);
+  // An older plan (the plan store, a lifecycle, the notes file) moves to PLAN.md once; the generated summary goes with it.
+  await movePlanToFile(workspacePath);
   await ensureWorkGuidance(workspacePath);
 
-  // The plan summary follows the plan, which changes between refreshes, so the lock does not
-  // record it as a snapshot: a plan change would read as drift. It is still committed.
-  try {
-    await generateImplementationPlan(renderCtx, workspacePath);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(
-      chalk.red('  ✖'),
-      `Failed to generate implementation plan: ${message}`,
-    );
-    throw error;
-  }
-
-  // Retired: the brief is at the top of contextspace-plan.md, and `ctxspace flow --assignment` prints it in full.
+  // Retired: \`ctxspace flow --assignment\` prints the brief in full.
   await deleteWorkspaceFile(workspacePath, ctx.feature.id, WORK_ASSIGNMENT_FILE);
 
   // Resource materialization
@@ -329,4 +313,3 @@ export { generateCodexConfig } from './codex.js';
 export { generateCopilotConfig } from './copilot.js';
 export { generateCursorConfig } from './cursor.js';
 export { buildContextContent } from './base.js';
-export { generateImplementationPlan } from './plan-generator.js';

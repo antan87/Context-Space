@@ -4,7 +4,8 @@ import { execa } from 'execa';
 
 import { readWorkspaceKnowledge } from '../core/knowledge.js';
 import { readWorkspaceFile } from '../core/storage.js';
-import { PRIMARY_PLAN_FILE, PRIMARY_HANDOFF_FILE } from '../core/constants.js';
+import { PRIMARY_HANDOFF_FILE } from '../core/constants.js';
+import { PLAN_FILE } from '../core/plan-file.js';
 import { loadFeatureConfig, resolveRepoInfos } from '../core/workspace.js';
 import type { Feature } from '../types.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
@@ -167,7 +168,7 @@ export async function buildPortableWorkroomPreview(workspacePath: string): Promi
   });
 
   const [plan, decisions, handoff] = await Promise.all([
-    readOptionalText(workspacePath, feature.id, PRIMARY_PLAN_FILE),
+    readOptionalText(workspacePath, feature.id, PLAN_FILE),
     readWorkspaceKnowledge(workspacePath).then((value) => limitPortableDocument(value ?? '')).catch(() => ''),
     readOptionalText(workspacePath, feature.id, PRIMARY_HANDOFF_FILE),
   ]);

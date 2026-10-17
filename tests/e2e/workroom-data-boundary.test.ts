@@ -43,7 +43,7 @@ it('shares reviewed documents across two processes and retains host/export/peer 
   await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify({
     id: 'fixture', branchName: 'fixture', workspacePath: workspace, repos: [], createdAt: '2026-01-01T00:00:00Z',
   }));
-  await fs.writeFile(path.join(workspace, 'contextspace-plan.md'), plan);
+  await fs.writeFile(path.join(workspace, 'PLAN.md'), plan);
   await fs.writeFile(path.join(workspace, 'contextspace-handoff.md'), '# Reviewed handoff');
   await fs.mkdir(path.join(workspace, '.contextspace'));
   await fs.writeFile(path.join(workspace, '.contextspace', 'chat.jsonl'), privateCanary);

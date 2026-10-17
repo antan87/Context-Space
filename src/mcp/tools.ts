@@ -1283,9 +1283,9 @@ export const tools: NexusFlowTool[] = [
             workspaceId: feature.id,
             harness,
             timestamp: entry.timestamp,
-            ...(inPlan ? { planQuestion: inPlan.label } : {}),
+            ...(inPlan ? { planQuestion: inPlan.question } : {}),
             message: inPlan
-              ? `${waitNote} It is in the plan as ${inPlan.label}; when the user answers, record their words: ctxspace plan answer ${inPlan.id} "<their answer>".`
+              ? `${waitNote} It is a decision in PLAN.md too; when the user answers, tick it and add their words on an "Answer:" line under it.`
               : waitNote,
           });
         });

@@ -133,7 +133,6 @@ import {
   setScheduleEnabled,
   startScheduler,
 } from './core/scheduler.js';
-import { startPlanFreshness } from './core/plan-freshness-pass.js';
 import {
   detectAllServices,
   suggestProcfiles,
@@ -2909,47 +2908,6 @@ app.post('/api/workspace/:id/knowledge/entry', async (c) => {
   }
 });
 
-// 13c. Get workspace plan (contextspace-plan.md / nexusflow-plan.md)
-app.get('/api/workspace/:id/plan', async (c) => {
-  try {
-    const id = c.req.param('id');
-    const config = await loadConfig();
-    const workspacePath = resolveWorkspacePath(config.workspacesDir, id);
-    const { resolveWorkspaceFilePath } = await import('./core/brand-config.js');
-    const resolved = await resolveWorkspaceFilePath(workspacePath, 'plan');
-
-    let content = '';
-    try {
-      content = await fs.readFile(resolved.path, 'utf-8');
-    } catch (err: any) {
-      if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
-        content = '# Workspace Plan\n\nNo implementation plan file yet.';
-      } else {
-        throw err;
-      }
-    }
-
-    const state = await loadWorkspaceState(workspacePath);
-    const { planStoreExists } = await import('./core/plan.js');
-    if (state.lifecycle || await planStoreExists(workspacePath)) {
-      const marker = /<!-- CONTEXTSPACE:MILESTONES:START -->[\s\S]*?<!-- CONTEXTSPACE:MILESTONES:END -->/;
-      if (marker.test(content)) {
-        // A file from before the plan summary: its milestone block is replaced with the live one.
-        const { renderLifecyclePlan, loadWorkspaceLifecycle } = await import('./core/lifecycle.js');
-        const milestones = renderLifecyclePlan(await loadWorkspaceLifecycle(workspacePath, { includeFleet: false }));
-        content = content.replace(marker, () => milestones);
-      } else {
-        // The summary as it reads now, keeping the build order the last refresh wrote.
-        const { buildPlanSummary, buildOrderOf } = await import('./core/plan-summary.js');
-        content = await buildPlanSummary(workspacePath, { buildOrder: buildOrderOf(content) ?? '' });
-      }
-    }
-    return c.json({ content });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
 registerWorkGuidanceRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
@@ -5064,8 +5022,6 @@ export function startServer(
       // The dashboard server doubles as the host for recurring workspace
       // jobs (nexusflow schedule ...); jobs are re-read from disk each tick.
       startScheduler({ log: (message) => console.log(`[scheduler] ${message}`) });
-      // Questions nobody needs answered any more are withdrawn shortly after start and then daily.
-      startPlanFreshness({ log: (message) => console.log(`[plan] ${message}`) });
       resolve({ port: info.port, server });
     }) as import('node:http').Server;
 
