@@ -58,6 +58,8 @@ test.describe('Skill Library', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
     await page.getByLabel('Scope:').selectOption('global');
+    // The explorer acts on the skill that is selected in its list.
+    await page.getByText('Shared Skill', { exact: true }).click();
     await page.getByRole('button', { name: 'Delete skill' }).click();
     await expect(page.getByRole('dialog').getByText('Delete Global Skill')).toBeVisible();
     await page.getByRole('button', { name: 'Delete Permanently' }).click();
@@ -83,7 +85,7 @@ test.describe('Skill Library', () => {
   test('a key pressed on a card\'s button acts on that button, not on the card', async ({ page }) => {
     await mockSkills(page);
     await page.goto('/#/skills');
-    await expect(page.getByText('Shared Skill', { exact: true })).toBeVisible();
+    await page.getByText('Shared Skill', { exact: true }).click();
 
     await page.getByRole('button', { name: 'Move to another category' }).focus();
     await page.keyboard.press('Enter');
@@ -95,6 +97,7 @@ test.describe('Skill Library', () => {
   test('says so when a skill cannot be moved, and keeps the dialog open', async ({ page }) => {
     const seen = await mockSkills(page, { failSaves: true });
     await page.goto('/#/skills');
+    await page.getByText('Shared Skill', { exact: true }).click();
     await page.getByRole('button', { name: 'Move to another category' }).click();
     await page.getByRole('dialog').getByRole('button', { name: /Operations/ }).click();
 

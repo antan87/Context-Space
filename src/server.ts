@@ -164,6 +164,8 @@ import {
   saveWorkspaceSkillsConfig,
   WorkspaceResourceRevisionError,
 } from './utils/skills-catalog.js';
+import { listQuarantinedHarnessSkills, quarantineHarnessSkill, restoreHarnessSkill } from './utils/harness-skill-quarantine.js';
+import { revealFolder } from './utils/reveal-folder.js';
 import {
   deleteAgent,
   getAllAgents,
@@ -4020,6 +4022,54 @@ app.post('/api/skills', async (c) => {
 });
 
 // Delete a custom skill
+// Harness-owned skills in quarantine (moved out of their harness folder, restorable)
+app.get('/api/harness-skills/quarantine', async (c) => {
+  try {
+    return c.json({ entries: await listQuarantinedHarnessSkills() });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// Opens a skill's folder in the file manager. The folder comes from the catalog, not from the request:
+// the client names the skill and, for a tool's skill, the tool's skills folder it was listed under.
+app.post('/api/skills/reveal', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const id = typeof body.id === 'string' ? body.id : '';
+    const root = typeof body.root === 'string' ? body.root : undefined;
+    const skill = (await getAllSkills()).find((s) => s.id === id && (root ? s.source?.root === root : !s.source));
+    if (!skill) return c.json({ error: 'Skill not found.' }, 404);
+    const folder = skill.source ? path.join(skill.source.root, skill.id) : skill.sourcePath;
+    if (!folder) return c.json({ error: 'This skill has no folder on disk.' }, 400);
+    await revealFolder(folder);
+    return c.json({ success: true, folder });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 400);
+  }
+});
+
+app.post('/api/harness-skills/:id/quarantine', async (c) => {
+  try {
+    const id = decodeURIComponent(c.req.param('id'));
+    return c.json({ success: true, entry: await quarantineHarnessSkill(id) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 400);
+  }
+});
+
+app.post('/api/harness-skills/:id/restore', async (c) => {
+  try {
+    const id = decodeURIComponent(c.req.param('id'));
+    return c.json({ success: true, entry: await restoreHarnessSkill(id) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 400);
+  }
+});
+
 app.delete('/api/skills/:id', async (c) => {
   try {
     const id = decodeURIComponent(c.req.param('id'));

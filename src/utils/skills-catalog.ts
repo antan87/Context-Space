@@ -12,6 +12,7 @@ import fse from 'fs-extra';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 
 import { slugify } from './slug.js';
+import { findHarnessSkillDirs } from './harness-skill-sources.js';
 import { acquireLock, createMutationQueue } from '../core/locks.js';
 import {
   resolveBrandHomeDir,
@@ -472,6 +473,7 @@ async function loadSkillFromDir(
     tags,
     allowedTools,
     content,
+    rawFile: raw,
     custom,
     sourcePath: skillDir,
     references: references.length > 0 ? references : undefined,
@@ -493,6 +495,8 @@ export interface SkillDiagnostic {
   message: string;
   /** 'error': the skill was not loaded. 'warning': it loaded, but something is off. Absent means 'error'. */
   level?: 'error' | 'warning';
+  /** Harness id when the skill belongs to a harness's own folder, which the user does not maintain here. */
+  source?: string;
 }
 
 /** A skill that names no category loads fine but lands in 'general', where it looks missing. */
@@ -505,17 +509,75 @@ function categoryNotice(id: string, scope: SkillDiagnostic['scope']): SkillDiagn
   };
 }
 
-export async function getAllSkills(workspacePath?: string, diagnostics?: SkillDiagnostic[]): Promise<SkillItem[]> {
+/**
+ * Adds the skills each harness keeps in its own global folders (see `HARNESS_SKILL_SOURCES`).
+ * They are listed read-only (`custom: false`, `source` set): the harness owns the files.
+ * Problems are warnings, since the user cannot fix a harness's files from here.
+ */
+async function addHarnessSkills(
+  skillMap: Map<string, SkillItem>,
+  homeDir: string,
+  diagnostics?: SkillDiagnostic[],
+): Promise<void> {
+  // A harness can ship one skill in several of its folders, so report each problem once.
+  const reported = new Set<string>();
+  for (const found of await findHarnessSkillDirs(homeDir)) {
+    const source = { harness: found.harness, label: found.label, root: found.root };
+    try {
+      const loaded = await loadSkillFromDir(found.skillDir, false, found.root);
+      if (!loaded) continue;
+      const existing = skillMap.get(loaded.id);
+      if (existing) {
+        if (existing.source && existing.source.harness !== found.harness) {
+          diagnostics?.push({
+            id: loaded.id,
+            scope: 'global',
+            level: 'warning',
+            source: found.harness,
+            message: `${found.label} also provides this skill (${found.skillDir}). Showing the ${existing.source.label} copy.`,
+          });
+        }
+        continue;
+      }
+      // The user cannot add a category to a harness's file, so do not flag it as missing.
+      skillMap.set(loaded.id, { ...loaded, categoryAssumed: undefined, scope: 'global', source });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const key = `${found.harness}\0${path.basename(found.skillDir)}\0${message}`;
+      if (reported.has(key)) continue;
+      reported.add(key);
+      diagnostics?.push({
+        id: path.basename(found.skillDir),
+        scope: 'global',
+        level: 'warning',
+        source: found.harness,
+        message: `${found.label}: ${message}`,
+      });
+    }
+  }
+}
+
+export async function getAllSkills(
+  workspacePath?: string,
+  diagnostics?: SkillDiagnostic[],
+  options: { harnessHomeDir?: string } = {},
+): Promise<SkillItem[]> {
   const skillMap = new Map<string, SkillItem>();
+  const csHome = process.env.CONTEXTSPACE_HOME?.trim();
+  const nfHome = process.env.NEXUSFLOW_HOME?.trim();
 
   // 1. Built-in template skills
   for (const s of DEFAULT_SKILLS) {
     skillMap.set(s.id, { ...s, scope: 'global' });
   }
 
-  // 2. User directory (~/.nexusflow/skills/ and ~/.contextspace/skills/, or isolated custom home)
-  const csHome = process.env.CONTEXTSPACE_HOME?.trim();
-  const nfHome = process.env.NEXUSFLOW_HOME?.trim();
+  // 2. Skills the harnesses load from their own global folders (~/.claude/skills, ~/.codex/skills, ...).
+  // Read first so the ContextSpace catalog below wins an id clash. An isolated custom home skips them
+  // (like the user directory below), unless the caller names a home.
+  const harnessHomeDir = options.harnessHomeDir ?? (csHome || nfHome ? undefined : os.homedir());
+  if (harnessHomeDir) await addHarnessSkills(skillMap, harnessHomeDir, diagnostics);
+
+  // 3. User directory (~/.nexusflow/skills/ and ~/.contextspace/skills/, or isolated custom home)
   const candidateDirs: string[] = (csHome || nfHome)
     ? [getUserSkillsDir()]
     : [
@@ -563,7 +625,7 @@ export async function getAllSkills(workspacePath?: string, diagnostics?: SkillDi
     }
   }
 
-  // 3. Workspace-local skills (<workspace>/.agents/skills/)
+  // 4. Workspace-local skills (<workspace>/.agents/skills/)
   if (workspacePath) {
     try {
       const canonicalWorkspace = await fs.realpath(workspacePath).catch(() => path.resolve(workspacePath));

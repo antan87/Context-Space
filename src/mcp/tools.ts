@@ -1438,6 +1438,7 @@ export const tools: NexusFlowTool[] = [
             tags: s.tags,
             scope: s.scope ?? 'global',
             category: s.category,
+            source: s.source && { harness: s.source.harness, label: s.source.label },
           })),
         });
       } catch (error: any) {

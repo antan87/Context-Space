@@ -119,7 +119,7 @@ test.describe('Resource Library', () => {
     // A warning is not "not loaded": the skill is there, it is only filed under "general".
     await expect(notices).toContainText('plain-skill (global): No category is set');
     await expect(notices).not.toContainText('plain-skill (global) — not loaded');
-    await expect(notices).toContainText('ctxspace skills lint');
+    await expect(notices).toContainText('ctxspace skill lint');
   });
 
   test('shows no notices on the global Skills page when every skill loads', async ({ page }) => {

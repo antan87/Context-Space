@@ -39,7 +39,7 @@ import { isolateCommand } from './commands/isolate.js';
 import { mcpRunCommand, mcpSetupCommand } from './commands/mcp.js';
 import { handoffCommand } from './commands/handoff.js';
 import { tagListCommand, tagAddCommand, tagRemoveCommand, tagShowCommand } from './commands/tag.js';
-import { skillListCommand, skillLintCommand, skillCreateCommand, skillDeleteCommand, skillShowCommand } from './commands/skill.js';
+import { skillListCommand, skillLintCommand, skillCreateCommand, skillDeleteCommand, skillShowCommand, skillQuarantineCommand, skillRestoreCommand, skillQuarantinedCommand } from './commands/skill.js';
 import { refreshCommand } from './commands/refresh.js';
 import { progressCommand } from './commands/progress.js';
 import { remoteAddCommand, remotePullCommand, remotePushCommand } from './commands/remote.js';
@@ -384,6 +384,29 @@ skillCmd
   .action(runAction(async (workspace: string | undefined, options: any, cmd: any) => {
     const merged = resolveCliOptions(cmd, options);
     await skillLintCommand(workspace, merged);
+  }));
+
+skillCmd
+  .command('quarantine')
+  .description('Move a harness-owned skill (e.g. ~/.claude/skills/<id>) out of its folder so it stops loading. Reversible.')
+  .argument('<id>', 'Skill id to quarantine')
+  .action(runAction(async (id: string) => {
+    await skillQuarantineCommand(id);
+  }));
+
+skillCmd
+  .command('restore')
+  .description('Put a quarantined harness skill back where it was')
+  .argument('<id>', 'Skill id to restore')
+  .action(runAction(async (id: string) => {
+    await skillRestoreCommand(id);
+  }));
+
+skillCmd
+  .command('quarantined')
+  .description('List harness skills in quarantine')
+  .action(runAction(async () => {
+    await skillQuarantinedCommand();
   }));
 
 skillCmd

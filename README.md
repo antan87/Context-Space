@@ -507,6 +507,16 @@ When a workspace is refreshed, ContextSpace reconciles enabled resources through
 
 Codex custom agents are separate resources and deploy to `.codex/agents/<name>.toml`.
 
+### Skills Your Harnesses Already Have
+
+The skills list also shows the skills each assistant loads from its own global folders, for example `~/.claude/skills` (including skills synced from claude.ai), `~/.codex/skills`, and Antigravity's built-in and plugin skills. They are labelled with their harness and are read-only here: edit or delete them in the harness, or use **Create editable copy** to bring one into the ContextSpace catalog.
+
+- A skill in the ContextSpace catalog (`~/.contextspace/skills`) always wins over a harness skill with the same ID. When two harnesses ship the same ID, the first one registered is shown and the other is reported as a warning.
+- A harness skill that does not follow the `SKILL.md` rules (for example an underscore in `name`) is not listed, and the Skills page says why. `ctxspace skill lint` ignores these, since the files are not yours.
+- A custom `CONTEXTSPACE_HOME` (or the legacy `NEXUSFLOW_HOME`), as used for isolated setups and tests, turns this discovery off.
+
+To teach ContextSpace where a new harness keeps its skills, add the harness to `CLI_HARNESSES` in `src/utils/cli-harnesses.ts`, then add one entry to `HARNESS_SKILL_SOURCES` in `src/utils/harness-skill-sources.ts`: its folders (`~/...` or absolute) and, if its layout nests deeper than three levels, a `maxDepth`. The compiler rejects a harness without an entry.
+
 ## 🏷️ Enterprise Categories & Domain Packs
 
 Large enterprise codebases suffer from AI context bloat when company-wide standards and domain-specific rules are mixed together. ContextSpace solves this with a generic 3-tier hierarchy:
