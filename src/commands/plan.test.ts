@@ -5,49 +5,52 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
 import { setActiveStorageProvider } from '../core/adapters/registry.js';
-import { mutatePlan, readPlan, PlanError, type PlanActor } from '../core/plan.js';
-import { saveWorkspaceState } from '../core/workspace-state.js';
+import { changePlan } from '../core/plan.js';
+import { parsePlanFile } from '../core/plan-file.js';
+import { readPlanChanges } from '../core/plan-file-store.js';
 
 const PASSED = { overallStatus: 'pass', canProgress: true, repos: [{ headSha: 'abc1234def5678' }] };
+const FAILED = { overallStatus: 'fail', canProgress: false, repos: [{ headSha: 'abc1234def5678' }] };
 const check = vi.hoisted(() => ({ result: undefined as unknown }));
 vi.mock('../core/verify.js', () => ({ verifyWorkspace: async () => check.result }));
-import {
-  codeList,
-  confirmWithin,
-  planChange,
-  planCheck,
-  planLog,
-  planShow,
-  registerPlanCommand,
-  resolvePlanActor,
-  type PlanCommandContext,
-} from './plan.js';
-import { runsInsideAiTool } from '../utils/ai-tool.js';
+import { findByWords, planAdd, planAnswer, planChangeBy, planCheck, planDone, planLog, planShow, registerPlanCommand, type PlanCommandContext } from './plan.js';
 
 let root: string;
 let printed: string[];
-const claude: PlanActor = { by: 'agent', harness: 'claude' };
+
+const PLAN = `# CSV export
+
+Customers export their reports.
+
+## Checkpoints
+
+- [x] Report rows load fast
+  - [x] Query the report rows
+- [ ] Reports export to CSV
+  Check: \`npm test\`
+  - [x] Write the CSV writer
+  - [ ] Add the Export button
+  - [ ] Decide: Should archived reports be exported?
+    Suggested: Yes, all of them · Only the last year
+    If no answer: only the last year
+
+## Steps
+
+- [ ] Tidy the old export script
+`;
 
 function context(over: Partial<PlanCommandContext> = {}): PlanCommandContext {
-  return {
-    workspacePath: root, actor: claude, interactive: false, json: false,
-    confirmAsUser: async () => { throw new Error('should not ask'); },
-    print: (text) => printed.push(text),
-    now: new Date('2026-10-10T12:00:00.000Z'),
-    ...over,
-  };
+  return { workspacePath: root, by: 'claude', json: false, print: (text) => printed.push(text), now: new Date('2026-10-10T12:00:00.000Z'), ...over };
 }
 const output = () => printed.join('\n');
-/** A proposal as an AI saved it under the earlier rule, before it could close a milestone itself. */
-const seedProposal = (id: string, note: string) => mutatePlan(root, (plan) => {
-  plan.items.find((item) => item.id === id)!.proposal = { action: 'done', by: 'claude', note, at: '2026-10-01T00:00:00.000Z' };
-});
+const planNow = async () => parsePlanFile(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8'));
 
 beforeEach(async () => {
   check.result = PASSED;
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'plan-cli-'));
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plan-cli-')));
   setActiveStorageProvider(new LocalStorageAdapter());
-  await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ id: 'csv', branchName: 'feat/csv', description: 'Add CSV export to reports', repos: [], assistants: [] }));
+  await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ id: 'csv', name: 'CSV export', branchName: 'feat/csv', description: 'Add CSV export to reports', repos: [], assistants: [] }));
+  await fs.writeFile(path.join(root, 'PLAN.md'), PLAN);
   printed = [];
 });
 afterEach(async () => {
@@ -56,184 +59,113 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-describe('who is acting', () => {
-  it('is the AI, named after its tool when known', () => {
-    expect(resolvePlanActor({}, {}, false)).toEqual({ by: 'agent' });
-    expect(resolvePlanActor({ harness: 'Codex' }, {}, false)).toEqual({ by: 'agent', harness: 'codex' });
-    expect(resolvePlanActor({}, { CTXSPACE_HARNESS: 'pi' }, false)).toEqual({ by: 'agent', harness: 'pi' });
-    expect(resolvePlanActor({}, { CLAUDECODE: '1' }, false)).toEqual({ by: 'agent', harness: 'claude' });
-  });
-
-  it('is still the AI in a terminal: some AI tools run commands in one', () => {
-    expect(resolvePlanActor({}, {}, true)).toEqual({ by: 'agent' });
-    expect(resolvePlanActor({}, { CTXSPACE_HARNESS: 'agy' }, true)).toEqual({ by: 'agent', harness: 'agy' });
-  });
-
-  it('is the user only when a person asks for it in their own terminal', () => {
-    expect(resolvePlanActor({ as: 'user' }, {}, true)).toEqual({ by: 'user' });
-    expect(resolvePlanActor({}, {}, true, { userOnly: true })).toEqual({ by: 'user' });
-  });
-
-  it('will not act as the user from an AI tool or without a terminal', () => {
-    expect(() => resolvePlanActor({ as: 'user' }, {}, false)).toThrow(/Only the user acts as the user/);
-    expect(() => resolvePlanActor({ as: 'user' }, { ANTIGRAVITY_AGENT: '1' }, true)).toThrow(/Only the user acts as the user/);
-    expect(resolvePlanActor({}, { CLAUDECODE: '1' }, true, { userOnly: true })).toEqual({ by: 'agent', harness: 'claude' });
-    expect(() => resolvePlanActor({ as: 'robot' }, {}, false)).toThrow(/"user" or "agent"/);
-  });
-
-  it('knows the variables AI tools set', () => {
-    expect(runsInsideAiTool({ CLAUDECODE: '1' })).toBe(true);
-    expect(runsInsideAiTool({ AGY_SESSION: 'x' })).toBe(true);
-    expect(runsInsideAiTool({ CODEX_SANDBOX: 'seatbelt' })).toBe(true);
-    expect(runsInsideAiTool({ HOME: '/home/a', CLAUDECODE: '' })).toBe(false);
-  });
-
-  it('stops waiting for an answer nobody gives, and counts it as no', async () => {
-    const ask = (_config: unknown, context: { signal: AbortSignal }) => new Promise<boolean>((_resolve, reject) => {
-      context.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortPromptError' })));
-    });
-    await expect(confirmWithin('Do it?', 20, ask)).resolves.toBe(false);
-    await expect(confirmWithin('Do it?', 20, async () => true)).resolves.toBe(true);
-  });
-});
-
-describe('changing the plan from an AI tool', () => {
-  it('adds, starts and finishes its own work, and says what happened by label', async () => {
-    await planChange(context(), { type: 'add', kind: 'task', title: 'Background job queue' });
-    await planChange(context(), { type: 'start', id: 'T1' });
-    await planChange(context(), { type: 'done', id: 'T1', resolution: 'Runs in the background' });
-    expect(printed[0]).toBe('Added T1 Background job queue.\nPlan: Needs you 0 · In progress 0 · To do 1 · Done 0. Run "ctxspace plan" to see it.');
-    expect(printed[2]).toContain('Done: T1 Background job queue.');
-    expect((await readPlan(root)).items[0]!.history.map((entry) => entry.by)).toEqual(['claude', 'claude', 'claude']);
-  });
-
-  it('finishes a milestone itself, and the history names it', async () => {
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
-    await planChange(context(), { type: 'start', id: 'M1' });
-    await planChange(context(), { type: 'done', id: 'M1', resolution: 'Tests pass' });
-    expect(printed[2]).toBe('Done: M1 CSV export endpoint.\nPlan: Needs you 0 · In progress 0 · To do 0 · Done 1. Run "ctxspace plan" to see it.');
-    const [item] = (await readPlan(root)).items;
-    expect(item).toMatchObject({ status: 'done', resolution: 'Tests pass' });
-    expect(item!.history.at(-1)).toMatchObject({ by: 'claude', action: 'done' });
-  });
-
-  it('runs a milestone\'s check before finishing it, and leaves it open when the check fails', async () => {
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint', gate: { required: true, command: 'npm test' } });
-    await planChange(context(), { type: 'start', id: 'M1' });
-    check.result = { overallStatus: 'fail', canProgress: false, repos: [{ headSha: 'abc1234def5678' }] };
-    await expect(planChange(context(), { type: 'done', id: 'M1', resolution: 'Tests pass' })).rejects.toThrow(/did not permit progress/);
-    expect((await readPlan(root)).items[0]!.status).toBe('in_progress');
-
-    check.result = PASSED;
-    await planChange(context(), { type: 'done', id: 'M1', resolution: 'Tests pass' });
-    expect(printed.at(-1)).toContain('Done: M1 CSV export endpoint. Its check passed.');
-    const [item] = (await readPlan(root)).items;
-    expect(item).toMatchObject({ status: 'done' });
-    expect(item!.resolution).toMatch(/^Tests pass\. Passed its check on /);
-    expect(item!.history.at(-1)).toMatchObject({ by: 'claude', action: 'done' });
-  });
-
-  it('refuses to accept a proposal: that is the user\'s', async () => {
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
-    await seedProposal('M1', 'Tests pass');
-    await expect(planChange(context(), { type: 'accept', id: 'M1' })).rejects.toThrow(/Only the user can accept/);
-  });
-
-  it('shows how to type it when a reason is missing', async () => {
-    await planChange(context(), { type: 'add', kind: 'task', title: 'Work' });
-    const error = await planChange(context(), { type: 'done', id: 'T1', resolution: '' }).catch((e) => e);
-    expect(error).toBeInstanceOf(PlanError);
-    expect(error.message).toBe('Closing needs a reason: say what came out of T1 Work.\nUse: ctxspace plan done <code> --resolution "what came out of it"');
-  });
-
-  it('answers in JSON with the item, its label, the outcome and the counts', async () => {
-    await planChange(context({ json: true }), { type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user' });
-    const result = JSON.parse(printed[0]!);
-    expect(result).toMatchObject({ ok: true, outcome: 'applied', revision: 1, item: { id: 'Q1', label: 'Q1 Which time zone?', status: 'todo' }, counts: { needsYou: 1 } });
-  });
-});
-
-describe('changing the plan from an interactive terminal', () => {
-  const user = (answer: boolean) => {
-    const asked: string[] = [];
-    return { asked, context: context({ actor: { by: 'user' }, interactive: true, confirmAsUser: async (question) => { asked.push(question); return answer; } }) };
-  };
-
-  it('asks before deciding a proposal as the user, and does nothing when declined', async () => {
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
-    await seedProposal('M1', 'Shipped');
-    const declined = user(false);
-    await planChange(declined.context, { type: 'accept', id: 'M1' });
-    expect(declined.asked).toEqual(["M1 CSV export endpoint: this is the user's decision. Do it as the user?"]);
-    expect(printed.at(-1)).toBe('Nothing changed.');
-    expect((await readPlan(root)).items[0]!.status).toBe('todo');
-    const accepted = user(true);
-    await planChange(accepted.context, { type: 'accept', id: 'M1' });
-    expect((await readPlan(root)).items[0]).toMatchObject({ status: 'done', resolution: 'Shipped' });
-  });
-
-  it('does not ask for everyday changes, finishing a milestone included', async () => {
-    const { asked, context: ctx } = user(false);
-    await planChange(ctx, { type: 'add', kind: 'task', title: 'Write docs' });
-    await planChange(ctx, { type: 'start', id: 'T1' });
-    await planChange(ctx, { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
-    await planChange(ctx, { type: 'done', id: 'M1', resolution: 'Shipped' });
-    expect(asked).toEqual([]);
-    expect((await readPlan(root)).items.map((item) => item.status)).toEqual(['in_progress', 'done']);
-  });
-
-  it('lets the user accept or send back a proposal', async () => {
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
-    await seedProposal('M1', 'Tests pass');
-    const { context: ctx } = user(true);
-    await planChange(ctx, { type: 'reject', id: 'M1', reason: 'Also cap at 50,000 rows' });
-    expect(printed.at(-1)).toContain('Sent back to claude: M1 CSV export endpoint. Also cap at 50,000 rows');
-    await seedProposal('M1', 'Capped too');
-    await planChange(ctx, { type: 'accept', id: 'M1' });
-    expect((await readPlan(root)).items[0]).toMatchObject({ status: 'done', resolution: 'Capped too' });
+describe('who the log names', () => {
+  it('is the AI tool when known, the user at their own terminal, else the AI', () => {
+    expect(planChangeBy({}, { CTXSPACE_HARNESS: 'Codex' }, false)).toBe('codex');
+    expect(planChangeBy({}, { CLAUDECODE: '1' }, true)).toBe('claude');
+    expect(planChangeBy({ harness: 'gemini' }, {}, false)).toBe('gemini');
+    expect(planChangeBy({}, {}, true)).toBe('user');
+    expect(planChangeBy({}, {}, false)).toBe('ai');
+    expect(planChangeBy({ as: 'user' }, { CLAUDECODE: '1' }, true)).toBe('claude');
   });
 });
 
 describe('reading the plan', () => {
-  it('shows the goal and the sections, and the same in JSON', async () => {
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+  it('says where it stands: checkpoints with their steps and proof, the next step, and what waits for the user', async () => {
     await planShow(context());
-    expect(printed.at(-1)).toContain('GOAL        Add CSV export to reports');
-    expect(printed.at(-1)).toContain('MILESTONES  in order\n  ○   M1 CSV export endpoint · to do · ready to start');
+    expect(output()).toBe([
+      'CSV export · PLAN.md',
+      '',
+      'CHECKPOINTS',
+      '  ✓ Report rows load fast',
+      '  ◐ Reports export to CSV  1 of 2 steps · not checked yet',
+      '      next: Add the Export button',
+      '',
+      'WAITING FOR THE USER',
+      '  Should archived reports be exported?  (holds up: Reports export to CSV)',
+      '    Suggested: Yes, all of them · Only the last year',
+      '    If no answer: only the last year',
+      '',
+      'OTHER STEPS  1 open',
+      '  ○ Tidy the old export script',
+    ].join('\n'));
+  });
+
+  it('gives the same in JSON', async () => {
     await planShow(context({ json: true }));
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ revision: 1, goal: { objective: 'Add CSV export to reports' }, milestones: [{ label: 'M1 CSV export endpoint' }] });
+    const json = JSON.parse(output());
+    expect(json).toMatchObject({ file: 'PLAN.md', source: 'file', title: 'CSV export', waitingForTheUser: ['Should archived reports be exported?'] });
+    expect(json.checkpoints[1]).toMatchObject({ title: 'Reports export to CSV', done: false, check: 'npm test', steps: [{ text: 'Write the CSV writer', done: true }, { text: 'Add the Export button', done: false }] });
   });
 
-  it('includes milestones saved by an older release', async () => {
-    await saveWorkspaceState({ workspacePath: root, repos: {}, updatedAt: '', lifecycle: {
-      workspaceId: 'csv', flowType: 'feature', updatedAt: '', revision: 2,
-      steps: [{ id: 'query', title: 'Database query', status: 'in_progress' }],
-    } });
+  it('shows an older plan as the PLAN.md it will become, and says how to start one without', async () => {
+    await fs.rm(path.join(root, 'PLAN.md'));
     await planShow(context());
-    expect(output()).toContain('◐   query Database query · in progress');
+    expect(output()).toContain('No plan yet. Write PLAN.md');
+    printed = [];
+    await changePlan(root, { type: 'add', kind: 'milestone', title: 'CSV export endpoint' }, { actor: { by: 'user' } });
+    await planShow(context());
+    expect(output()).toContain('CSV export · PLAN.md (written from the older plan on the first change)');
+    expect(output()).toContain('○ CSV export endpoint');
   });
 
-  it('shows one item\'s history, or the latest changes', async () => {
-    await planChange(context(), { type: 'add', kind: 'task', title: 'Work' });
-    await planChange(context(), { type: 'block', id: 'T1', reason: 'No access' });
-    printed = [];
-    await planLog(context(), 'T1');
-    expect(output()).toContain('T1 Work · Task · blocked: No access');
-    expect(output()).toContain('Claude       blocked: No access');
+  it('finds an item by its words, or the start of them, and names the matches when several fit', async () => {
+    const plan = await planNow();
+    expect(findByWords(plan, 'add the export')).toMatchObject({ text: 'Add the Export button' });
+    expect(findByWords(plan, 'Reports export to CSV', 'checkpoint')).toMatchObject({ title: 'Reports export to CSV' });
+    expect(() => findByWords(plan, 'Re')).toThrow(/matches 2 items: "Report rows load fast", "Reports export to CSV"/);
+    expect(() => findByWords(plan, 'nothing like it')).toThrow(/No item in PLAN.md matches/);
+  });
+});
+
+describe('changing the plan', () => {
+  it('ticks a step, and logs who did', async () => {
+    await planDone(context(), 'Add the Export button');
+    expect((await planNow()).checkpoints[1]!.steps[1]!.done).toBe(true);
+    expect(output()).toBe('Ticked "Add the Export button".\nPlan: 1 of 2 checkpoints done · 1 waiting for the user. Run "ctxspace plan" to see it.');
+    expect((await readPlanChanges(root))[0]).toMatchObject({ by: 'claude', action: 'ticked', text: 'Add the Export button' });
+  });
+
+  it('runs a checkpoint\'s check before ticking it, and leaves it open when the check fails', async () => {
+    check.result = FAILED;
+    await expect(planDone(context(), 'Reports export to CSV')).rejects.toThrow('"Reports export to CSV" stays open: its check failed on abc1234 · now. Fix what fails and run it again.');
+    expect((await planNow()).checkpoints[1]!.done).toBe(false);
+    check.result = PASSED;
+    await planDone(context(), 'Reports export to CSV');
+    expect((await planNow()).checkpoints[1]!.done).toBe(true);
+  });
+
+  it('runs a check without ticking, and fails the command when it fails', async () => {
+    check.result = FAILED;
+    await planCheck(context());
+    expect(output()).toBe('"Reports export to CSV": check failed on abc1234 · now.');
+    expect(process.exitCode).toBe(1);
+    expect((await planNow()).checkpoints[1]!.done).toBe(false);
+  });
+
+  it('answers a decision, and will not tick one as done', async () => {
+    await expect(planDone(context(), 'Should archived')).rejects.toThrow(/is a decision: answer it with ctxspace plan answer/);
+    await planAnswer(context({ by: 'user' }), 'Should archived', 'Yes, all of them');
+    expect((await planNow()).checkpoints[1]!.decisions[0]).toMatchObject({ done: true, answer: 'Yes, all of them' });
+    expect(output()).toContain('Answered "Should archived reports be exported?": Yes, all of them');
+  });
+
+  it('adds a step or a decision under a checkpoint, or on its own', async () => {
+    await planAdd(context(), { step: 'Show a progress bar' }, 'Reports export');
+    await planAdd(context(), { decision: { question: 'Which delimiter?', suggested: ['Comma', 'Semicolon'], ifNoAnswer: 'comma' } });
+    const plan = await planNow();
+    expect(plan.checkpoints[1]!.steps.map((step) => step.text)).toContain('Show a progress bar');
+    expect(plan.decisions[0]).toMatchObject({ question: 'Which delimiter?', suggested: ['Comma', 'Semicolon'], ifNoAnswer: 'comma' });
+    expect(printed[0]).toContain('Added the step "Show a progress bar" under "Reports export to CSV".');
+  });
+
+  it('lists what changed lately and who changed it', async () => {
+    await planLog(context());
+    expect(output()).toBe('Nothing has changed in the plan yet.');
+    await planDone(context(), 'Tidy the old');
     printed = [];
     await planLog(context());
-    expect(output().split('\n')[0]).toBe('WHAT CHANGED');
-    await expect(planLog(context(), 'T9')).rejects.toMatchObject({ code: 'not_found' });
-  });
-
-  it('checks the plan and says when nothing is wrong', async () => {
-    await planCheck(context());
-    expect(printed.at(-1)).toBe('No problems found.');
-    await planChange(context(), { type: 'add', kind: 'task', title: 'Parked' });
-    await planChange(context(), { type: 'add', kind: 'milestone', title: 'Needs it', after: ['T1'] });
-    await planChange(context(), { type: 'later', id: 'T1', revisitWhen: 'next quarter' });
-    await planCheck(context());
-    expect(printed.at(-1)).toContain('PROBLEMS\n  M1 Needs it waits for T1 Parked, which is set for later.');
+    expect(output()).toMatch(/now\s+Claude\s+ticked step "Tidy the old export script"/);
   });
 });
 
@@ -249,73 +181,25 @@ describe('the command line', () => {
     return { lines, failures };
   }
 
-  it('takes the workspace before or after the verb, and joins unquoted words', async () => {
-    await cli('-w', root, 'add', 'milestone', 'CSV', 'export', 'endpoint');
-    await cli('add', 'task', 'Background job queue', '--before', 'M1', '-w', root, '--harness', 'codex');
-    const plan = await readPlan(root);
-    expect(plan.items.map((item) => item.title)).toEqual(['CSV export endpoint', 'Background job queue']);
-    expect(plan.items[0]!.waitsFor).toEqual(['T1']);
-    expect(plan.items[1]!.history[0]!.by).toBe('codex');
+  it('shows the plan when no verb is given, and takes the workspace before or after the verb', async () => {
+    expect((await cli('-w', root)).lines.join('\n')).toContain('◐ Reports export to CSV');
+    await cli('done', 'Add', 'the', 'Export', 'button', '-w', root, '--harness', 'codex');
+    expect((await readPlanChanges(root))[0]).toMatchObject({ by: 'codex', text: 'Add the Export button' });
   });
 
-  it('takes a reason as words, --reason or -m', async () => {
-    await cli('-w', root, 'add', 'task', 'One');
-    await cli('-w', root, 'add', 'task', 'Two');
-    await cli('-w', root, 'add', 'task', 'Three');
-    await cli('-w', root, 'block', 'T1', 'No', 'access');
-    await cli('-w', root, 'drop', 'T2', '--reason', 'Not needed');
-    await cli('-w', root, 'later', 'T3', '-m', 'Next quarter');
-    const items = (await readPlan(root)).items;
-    expect(items.map((item) => [item.status, item.blockedReason ?? item.resolution ?? item.revisitWhen])).toEqual([
-      ['blocked', 'No access'], ['dropped', 'Not needed'], ['later', 'Next quarter'],
-    ]);
+  it('takes the decision\'s suggestions as repeated options', async () => {
+    await cli('-w', root, 'decide', 'Which', 'delimiter?', '--under', 'Reports export', '--suggest', 'Comma', '--suggest', 'Semicolon', '--if-no-answer', 'comma');
+    expect((await planNow()).checkpoints[1]!.decisions[1]).toMatchObject({ question: 'Which delimiter?', suggested: ['Comma', 'Semicolon'] });
   });
 
-  it('shows the plan when no verb is given', async () => {
-    await cli('-w', root, 'add', 'milestone', 'CSV export endpoint');
-    const { lines } = await cli('-w', root);
-    expect(lines.join('\n')).toContain('M1 CSV export endpoint · to do · ready to start');
+  it('tells an AI with older instructions that the plan is PLAN.md now', async () => {
+    const { failures } = await cli('-w', root, 'start', 'M1');
+    expect(failures[0]).toMatch(/"ctxspace plan start" is gone: the plan is PLAN.md now. Edit it directly/);
   });
 
   it('prints errors as JSON with --json, and fails', async () => {
-    const { lines, failures } = await cli('-w', root, 'start', 'M9', '--json');
-    expect(failures).toEqual([]);
-    expect(JSON.parse(lines[0]!)).toEqual({ ok: false, error: 'There is no item "M9" in the plan. Read the plan to see the codes.', code: 'not_found' });
+    const { lines } = await cli('-w', root, '--json', 'done', 'nothing like it');
+    expect(JSON.parse(lines[0]!)).toMatchObject({ ok: false, code: 'not_found' });
     expect(process.exitCode).toBe(1);
-  });
-
-  it('reports errors the usual way without --json', async () => {
-    const { failures } = await cli('-w', root, 'add', 'thing', 'Whatever');
-    expect(failures[0]).toMatch(/^"thing" is not a kind of item\. Use one of: milestone, task, question, decision, existing\./);
-  });
-
-  it('says where to run it when there is no workspace', async () => {
-    const elsewhere = await fs.mkdtemp(path.join(os.tmpdir(), 'plan-cli-none-'));
-    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(elsewhere);
-    const { failures } = await cli('show');
-    cwd.mockRestore();
-    await fs.rm(elsewhere, { recursive: true, force: true });
-    expect(failures[0]).toContain('Run this inside a workspace folder, or pass --workspace <path>.');
-  });
-
-  it('lists the rules in its help', () => {
-    const program = new Command();
-    registerPlanCommand(program, () => undefined);
-    const plan = program.commands.find((command) => command.name() === 'plan')!;
-    let help = '';
-    plan.configureOutput({ writeOut: (text) => { help += text; } });
-    plan.outputHelp();
-    expect(help).toContain('1. Every close has a reason. Nothing is deleted.');
-    expect(help).toContain('Who acts: every change is made as the AI');
-    expect(help).toContain('ctxspace plan add task "Rate limit for logins" --before M2   M2 then waits for the new task');
-    expect(help).not.toContain('--harness');
-    expect(help).not.toMatch(/^\s+--as <who>/m);
-    expect(help).toContain('accept');
-  });
-});
-
-describe('codeList', () => {
-  it('splits commas and joins repeats', () => {
-    expect(codeList('M1, M2', ['T1'])).toEqual(['T1', 'M1', 'M2']);
   });
 });

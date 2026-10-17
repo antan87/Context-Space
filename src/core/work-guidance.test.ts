@@ -79,8 +79,8 @@ describe('source documents and assignments', () => {
 
   it('returns the plan text without moving an older lifecycle into the store', async () => {
     const context = await getWorkContext(root);
-    expect(context.plan).toContain('MILESTONES');
-    expect(context.plan).toContain('step_discovery');
+    expect(context.plan).toContain('CHECKPOINTS');
+    expect(context.plan).toContain('- [ ] Measure current invoice timings');
     expect(context.assignment).toContain('`ctxspace plan`');
     expect(context.assignment).not.toContain('get_planning_notes');
     await expect(fs.stat(path.join(root, 'contextspace-plan.json'))).rejects.toMatchObject({ code: 'ENOENT' });

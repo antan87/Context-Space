@@ -222,12 +222,14 @@ export async function getWorkContext(workspacePath: string) {
   const guidance = await loadWorkGuidance(workspacePath);
   const state = await loadWorkspaceState(workspacePath);
   // Read-only: the milestones as the plan store holds them, or as an older lifecycle will be moved there.
-  const { readWorkspaceLifecycle, readPlanReadOnly } = await import('./lifecycle.js');
+  const { readWorkspaceLifecycle } = await import('./lifecycle.js');
   const hasPlan = Boolean(state.lifecycle) || await planStoreExists(workspacePath);
   const lifecycle = hasPlan ? await readWorkspaceLifecycle(workspacePath) : undefined;
-  // The plan as `ctxspace plan` prints it, for tools that only have MCP and for read-only roles.
-  const { renderPlanText, goalFromBrief } = await import('./plan-text.js');
-  const plan = hasPlan ? renderPlanText(await readPlanReadOnly(workspacePath), { goal: goalFromBrief(guidance.assignment, feature.description) }) : null;
+  // Where the plan stands, as `ctxspace plan` prints it, for tools that only have MCP and for read-only roles.
+  const { readPlanFile, readPlanChecks } = await import('./plan-file-store.js');
+  const { renderPlanStanding } = await import('./plan-file-text.js');
+  const read = await readPlanFile(workspacePath);
+  const plan = read.source === 'none' ? null : `${renderPlanStanding(read, await readPlanChecks(workspacePath))}\n\n${read.text.trim()}`;
   const shared = await sharedProjectDocuments(workspacePath);
   const sources = new Map(shared.map((item) => [item.document.id, documentLocation(item.workspacePath, item.workspaceId, item.document)]));
   return { guidance, projectId: feature.projectId, lifecycle: lifecycle ?? null, plan,

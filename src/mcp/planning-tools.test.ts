@@ -54,17 +54,16 @@ it('creates a feature plan, scopes an assignment and source, edits notes, then c
 it('returns the plan as ctxspace plan prints it, and the old planning tools say to use the command', async () => {
   expect((await call('get_work_context')).plan).toBeNull();
   const saved = await call('update_milestone_plan', { revision: 0, steps: [{ id: 'reports', title: 'Open root reports' }] });
-  expect(saved.deprecated).toMatch(/^Deprecated: run `ctxspace plan add milestone/);
+  expect(saved.deprecated).toMatch(/^Deprecated: edit the Checkpoints list in `PLAN.md`/);
   const { plan } = await call('get_work_context');
-  expect(plan).toContain('GOAL');
+  expect(plan).toContain('CHECKPOINTS');
   expect(plan).toContain('Browse reports');
-  expect(plan).toContain('MILESTONES');
-  expect(plan).toContain('reports Open root reports');
-  expect((await call('get_planning_notes')).deprecated).toContain('`ctxspace plan`');
+  expect(plan).toContain('- [ ] Open root reports');
+  expect((await call('get_planning_notes')).deprecated).toContain('`PLAN.md`');
   for (const name of ['get_planning_notes', 'save_planning_notes', 'update_milestone_plan', 'set_milestone']) {
-    expect(findTool(name)!.description).toMatch(/^Deprecated: run `ctxspace plan.*This tool goes away in the next release\./);
+    expect(findTool(name)!.description).toMatch(/^Deprecated: .*PLAN\.md.*This tool goes away in the next release\./);
   }
-  expect(findTool('get_work_context')!.description).toContain('Change the plan with `ctxspace plan`');
+  expect(findTool('get_work_context')!.description).toContain('Change the plan by editing PLAN.md');
 });
 
 it('rejects stale plan, assignment, document, and note writes without losing newer work', async () => {

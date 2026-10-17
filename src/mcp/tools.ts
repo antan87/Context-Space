@@ -199,7 +199,7 @@ export const tools: NexusFlowTool[] = [
   },
   {
     name: 'get_work_context',
-    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is the text `ctxspace plan` prints, `lifecycle` holds the milestones. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan with `ctxspace plan` in your shell.',
+    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is where PLAN.md stands (as `ctxspace plan` prints it) followed by its text. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan by editing PLAN.md.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
     handler: async (_args, ctx) => {

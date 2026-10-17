@@ -40,17 +40,17 @@ function planningTool<T extends z.ZodObject>(
   };
 }
 
-/** The command that replaces each old planning tool. AIs change the plan only with `ctxspace plan`. */
+/** What replaces each old planning tool: the plan is PLAN.md, which AIs edit directly. */
 const PLAN_COMMAND_INSTEAD = {
-  get_planning_notes: '`ctxspace plan`',
-  save_planning_notes: '`ctxspace plan add question|decision|existing "<name>"`',
-  update_milestone_plan: '`ctxspace plan add milestone "<name>"`, `ctxspace plan edit <code>` or `ctxspace plan drop <code> --reason "<why>"`',
-  set_milestone: '`ctxspace plan start|block|done <code>`',
+  get_planning_notes: 'read `PLAN.md` (`ctxspace plan` says where it stands)',
+  save_planning_notes: 'edit `PLAN.md`',
+  update_milestone_plan: 'edit the Checkpoints list in `PLAN.md`',
+  set_milestone: 'tick the checkpoint in `PLAN.md` (`ctxspace plan done "<checkpoint>"` runs its check first)',
 } as const;
 
 /** Said by an old planning tool in its description and its result, for one release before it goes away. */
 export function useThePlanCommand(tool: keyof typeof PLAN_COMMAND_INSTEAD): string {
-  return `Deprecated: run ${PLAN_COMMAND_INSTEAD[tool]} in your shell instead (\`ctxspace plan --help\` shows how). This tool goes away in the next release.`;
+  return `Deprecated: ${PLAN_COMMAND_INSTEAD[tool]} instead. This tool goes away in the next release.`;
 }
 
 const revision = z.number().int().nonnegative();
