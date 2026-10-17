@@ -94,8 +94,12 @@ test.describe('desktop app', () => {
   // suite (Chromium against the built GUI), so we don't re-drive it here where
   // Electron-on-Windows cold-start timing makes nav clicks flaky.
   test('boots the backend and loads the dashboard shell', async () => {
-    // The dashboard sidebar renders the brand; an error/blank page would not.
-    await expect(window.getByText('ContextSpace', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+    // The served GUI shows the dashboard's brand, or on a first run with no config the setup page; the backend
+    // error page ("ContextSpace could not start its backend") and a blank page show neither. Waiting for the brand
+    // alone raced the setup page, which replaces the briefly drawn shell once the config is read.
+    const dashboard = window.getByText('ContextSpace', { exact: true });
+    const firstRunSetup = window.getByRole('heading', { level: 1, name: 'Set up ContextSpace', exact: true });
+    await expect(dashboard.or(firstRunSetup).first()).toBeVisible({ timeout: 30_000 });
 
     // The preload bridge reports the backend port the window actually loaded.
     const port = await window.evaluate(() => (window.contextspaceBridge || window.nexusBridge)?.getServerPort());

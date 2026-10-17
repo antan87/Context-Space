@@ -32,6 +32,9 @@ async function activate(page: Page, target: Locator, key: 'Enter' | 'Space' = 'E
 }
 
 test.describe('keyboard-only primary journey', () => {
+  // Every step is reached by pressing Tab, often over a hundred times, and each press is a round trip to the page.
+  test.describe.configure({ timeout: 90_000 });
+
   test.use({
     reposData: [{ name: 'api', path: '/dev/api', defaultBranch: 'main' }],
     workspacesData: [{

@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { openMenuFor } from './menus';
 
 const base = { mode: 'in-place', repos: ['/dev/api'], assistants: [], createdAt: '2026-06-01T00:00:00.000Z' };
 const OLD = {
@@ -149,7 +150,7 @@ test.describe('deleting the workspace on screen', () => {
     await expect(sidebarOf(page).locator('[data-sidebar-session="live"]')).toBeVisible();
     await page.goto('/#/workspaces/live/plan');
 
-    await page.getByRole('button', { name: 'Workspace actions' }).click();
+    await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Delete workspace…' }));
     await page.getByRole('menuitem', { name: 'Delete workspace…' }).click();
     await confirmDelete(page, 'live');
 
@@ -171,7 +172,7 @@ test.describe('deleting the workspace on screen', () => {
     });
 
     await page.goto('/#/workspaces/live/plan');
-    await page.getByRole('button', { name: 'Workspace actions' }).click();
+    await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Delete workspace…' }));
     await page.getByRole('menuitem', { name: 'Delete workspace…' }).click();
     await confirmDelete(page, 'live');
 
@@ -220,7 +221,7 @@ test.describe('archiving a workspace that has a session', () => {
     }
     await page.goto('/#/workspaces/live/plan');
 
-    await page.getByRole('button', { name: 'Workspace actions' }).click();
+    await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Archive workspace…' }));
     await page.getByRole('menuitem', { name: 'Archive workspace…' }).click();
     const dialog = page.getByRole('dialog', { name: 'Archive workspace' });
     await expect(dialog).toContainText('any assistant running in it stops');
@@ -263,7 +264,7 @@ test.describe('archiving a workspace that has a session', () => {
     await page.goto('/#/workspaces/live/chat');
     await expect(sidebarOf(page).locator('[data-sidebar-session="live"]')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Workspace actions' }).click();
+    await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Archive workspace…' }));
     await page.getByRole('menuitem', { name: 'Archive workspace…' }).click();
     await page.getByRole('dialog', { name: 'Archive workspace' }).getByRole('button', { name: 'Archive workspace' }).click();
 
