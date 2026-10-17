@@ -66,6 +66,17 @@ failed or needs a person, `2` paused, `3` timed out while waiting (run it again)
 It never approves a deployment, cancels a run, force-pushes, or edits repository settings. If the
 `release` environment still lists required reviewers, the run waits for them and the command says so.
 
+### Nightly release
+
+[`nightly-release.yml`](./.github/workflows/nightly-release.yml) runs the same command every night at
+03:00 UTC. It releases whatever is unreleased on `main`, with no approval step. A night with nothing
+unreleased exits quietly. It needs the repository secret `RELEASE_TOKEN` (a personal access token with
+contents, pull requests and Actions access), and it still stops for the same reasons as a manual release:
+the brake, a failing required check, or a release PR that is not a plain version bump.
+
+Its version bump comes from the unreleased commits, as with a manual release, so every merged `feat`
+adds a minor version. Pass `--bump patch` in the workflow to keep nightly bumps to patches.
+
 ### The brake
 
 Set the repository variable `RELEASES_PAUSED` to `true` to stop every release, whoever or whatever
