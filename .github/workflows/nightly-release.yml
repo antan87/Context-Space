@@ -1,0 +1,60 @@
+name: Nightly release
+
+# Ships whatever is unreleased on main, every night, without a human approval step.
+# It runs the same `release:ship` command a person would run: it opens the version-bump
+# PR, merges it only when it is a plain bump, waits for every required check on main, and
+# dispatches the release pinned to that commit. Nights with nothing unreleased exit quietly.
+#
+# Still enforced: every required check must pass on the exact commit, the release brake
+# (repository variable RELEASES_PAUSED=true) stops everything, and the `release` environment
+# restricts publishing to main. See RELEASING.md.
+#
+# Needs one repository secret, RELEASE_TOKEN: a personal access token that can read and write
+# contents, pull requests and Actions. The default GITHUB_TOKEN cannot dispatch the release
+# workflow, and pushes made with it do not start CI, so it is not enough.
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC every night
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Shares the release group with release.yml, so a nightly and a manual release never race.
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    # release:ship waits for CI and the release run; the release itself can take a while.
+    timeout-minutes: 180
+    steps:
+      - name: Require the release token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "The RELEASE_TOKEN secret is missing. Add a personal access token as a repository secret named RELEASE_TOKEN." >&2
+            exit 1
+          fi
+
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # The token is used for pushes, so the release branch push is attributed to the owner.
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Ship the unreleased changes
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: node scripts/release-ship.mjs --timeout 150 --poll 60
