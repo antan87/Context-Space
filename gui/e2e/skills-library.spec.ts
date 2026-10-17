@@ -132,3 +132,34 @@ test.describe('Skill Library', () => {
     await expect(scope.locator('option', { hasText: 'Retired work (retired) · archived' })).toHaveCount(1);
   });
 });
+
+test.describe('Skills of one workspace', () => {
+  test('are reached from the Skill Library, since the workspace rail has no Skills item', async ({ page }) => {
+    await mockSkills(page);
+    await page.route('**/api/agents', (route) => route.fulfill({ json: { agents: [] } }));
+    await page.goto('/#/skills');
+    await expect(page.getByRole('heading', { name: 'Skill Library' })).toBeVisible();
+    const link = page.getByRole('link', { name: "This workspace's skills" });
+    // The global catalog belongs to no workspace, and an archived workspace has no skills view to open.
+    await expect(link).toHaveCount(0);
+    await page.getByLabel('Scope:').selectOption('retired');
+    await expect(link).toHaveCount(0);
+
+    await page.getByLabel('Scope:').selectOption('example');
+    await link.click();
+    await expect(page).toHaveURL(/#\/workspaces\/example\/skills$/);
+    await expect(page.getByRole('heading', { name: 'Workspace Skills & Agents' })).toBeVisible();
+    // Skills are not on the rail, so nothing there is marked.
+    const rail = page.getByRole('navigation', { name: 'Workspace' });
+    await expect(rail.getByRole('link')).toHaveText(['Plan', 'Code', 'Docs', 'Services']);
+    await expect(rail.locator('[aria-current="page"]')).toHaveCount(0);
+  });
+
+  test('still open at the old workspace address', async ({ page }) => {
+    await mockSkills(page);
+    await page.route('**/api/agents', (route) => route.fulfill({ json: { agents: [] } }));
+    await page.goto('/#/workspaces/example/skills');
+    await expect(page.getByRole('heading', { name: 'Workspace Skills & Agents' })).toBeVisible();
+    await expect(page.getByText('Local Skill', { exact: true })).toBeVisible();
+  });
+});

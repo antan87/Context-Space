@@ -407,7 +407,7 @@ Session data is read directly from each assistant's local storage:
 | OpenAI Codex | `~/.codex/sessions/` |
 | GitHub Copilot | `~/.copilot/` |
 
-Access sessions via the Web Dashboard's **Sessions** tab or through the API:
+Open **Session history** from the toolbar of a workspace's chat in the Web Dashboard, or use the API:
 
 ```
 GET /api/workspace/:id/sessions

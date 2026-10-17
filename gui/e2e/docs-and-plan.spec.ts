@@ -118,7 +118,7 @@ test.describe('Docs', () => {
 });
 
 test.describe('the plan', () => {
-  test('is read first: the goal in a line, the rest on request, and the milestones as a checklist', async ({ page }) => {
+  test('is read first: the plan, then the goal in a line with the rest on request, and the milestones as a checklist', async ({ page }) => {
     const steps = [
       { id: 'measure', title: 'Measure the slow page', status: 'completed' },
       { id: 'cache', title: 'Cache the lookups', status: 'in_progress' },
@@ -148,11 +148,12 @@ test.describe('the plan', () => {
     await expect(goal.getByText(/Today they take four/)).toBeVisible();
     await expect(page.getByLabel('Current objective')).toHaveCount(0);
 
-    // Under the goal, the plan: the checkpoints in order, each saying how far it is.
+    // Above the goal, the plan: the checkpoints in order, each saying how far it is.
     const plan = page.getByRole('region', { name: 'The plan', exact: true });
     await expect(plan).toContainText('1 of 3 checkpoints done');
     await expect(plan.getByRole('heading', { level: 4 })).toHaveText(['Measure the slow page', 'Cache the lookups', 'Ship behind a flag']);
     await expect(plan).toContainText('1 of 2 steps');
+    expect((await plan.boundingBox())!.y).toBeLessThan((await goal.boundingBox())!.y);
 
     // Editing opens the form in place, and Done closes it again.
     await page.getByRole('button', { name: 'Edit the goal' }).click();
@@ -160,4 +161,89 @@ test.describe('the plan', () => {
     await page.getByRole('button', { name: 'Done with the goal' }).click();
     await expect(page.getByLabel('Current objective')).toHaveCount(0);
   });
+
+  const OBJECTIVE = 'Make invoices load in under a second. Today they take four, because totals are read three times.';
+  const INTRO = 'Invoices must load in **under a second**, so the report page feels instant.';
+
+  /** A workspace with milestones, a brief whose objective is OBJECTIVE, and a PLAN.md that opens with `intro`. */
+  async function routeBriefAndPlan(page: Page, intro: string) {
+    const lifecycle = { workspaceId: 'demo', flowType: 'feature', revision: 1, currentStepId: 'cache', fleet: [], updatedAt: '', steps: [
+      { id: 'measure', title: 'Measure the slow page', status: 'completed' },
+      { id: 'cache', title: 'Cache the lookups', status: 'in_progress' },
+    ] };
+    const work = { guidance: { version: 1, revision: 1, workType: 'performance', size: 'standard', documents: [], assignment: {
+      stage: 'implement', objective: OBJECTIVE, expectedOutput: '', stopCondition: '' } },
+      lifecycle, sharedDocuments: [], assignment: 'Stage: implement' };
+    const saves: unknown[] = [];
+    await page.route('**/api/workspace/demo/work', (route) => {
+      if (route.request().method() === 'PUT') saves.push(route.request().postDataJSON());
+      return route.fulfill({ json: work });
+    });
+    await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: null } }));
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ title: 'Invoice speed-up', intro, checkpoints: [
+      checkpoint('Measure the slow page', { done: true, outcome: 'Passed its check' }),
+      checkpoint('Cache the lookups', { steps: [step('Cache the totals', true), step('Expire them on change')] }),
+    ] }) }));
+    return saves;
+  }
+
+  test('says the goal once: with opening text in PLAN.md the brief shrinks to a line and does not repeat it', async ({ page }) => {
+    const saves = await routeBriefAndPlan(page, INTRO);
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await page.goto('/#/workspaces/demo/plan');
+    const plan = page.getByRole('region', { name: 'The plan', exact: true });
+    await expect(plan).toContainText('Invoices must load in under a second');
+    const brief = page.getByRole('region', { name: 'Brief', exact: true });
+    await expect(brief).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Goal', exact: true })).toHaveCount(0);
+    // The objective is nowhere on the page but the plan's own words, and no "whole goal" is offered.
+    await expect(page.getByText('Make invoices load in under a second')).toHaveCount(0);
+    await expect(brief.getByText('The whole goal')).toHaveCount(0);
+    // A line of chips instead, and the way to edit it.
+    await expect(brief.getByText('Implement', { exact: true })).toBeVisible();
+    await expect(brief.getByText('Performance', { exact: true })).toBeVisible();
+    await expect(brief.getByText('Standard change', { exact: true })).toBeVisible();
+    await expect(brief.getByRole('button', { name: 'Edit the brief' })).toBeVisible();
+    // The sources stay, with their own edit action.
+    await expect(page.getByRole('region', { name: 'Sources', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Edit sources' })).toBeVisible();
+
+    // The plan first, then the brief, then the sources and the checks.
+    const checks = page.getByRole('region', { name: 'Checks', exact: true });
+    const ys = await Promise.all([plan, brief, page.getByRole('region', { name: 'Sources', exact: true }), checks].map(async (part) => (await part.boundingBox())?.y ?? NaN));
+    expect(ys.every(Number.isFinite)).toBe(true);
+    expect([...ys].sort((a, b) => a - b)).toEqual(ys);
+    if (process.env.PLAN_SHOTS_DIR) await page.screenshot({ path: `${process.env.PLAN_SHOTS_DIR}/workspace-plan-tab.png` });
+
+    // Editing is what it was: the form holds the objective, and saving sends the brief.
+    await brief.getByRole('button', { name: 'Edit the brief' }).click();
+    await expect(page.getByLabel('Current objective')).toHaveValue(OBJECTIVE);
+    await page.getByLabel('Current objective').fill('Make invoices load in under 800 ms');
+    await page.getByRole('button', { name: 'Save goal' }).click();
+    await expect.poll(() => saves.length).toBe(1);
+    expect(saves[0]).toMatchObject({ workType: 'performance', size: 'standard', assignment: { objective: 'Make invoices load in under 800 ms' } });
+    await expect(page.getByRole('status').filter({ hasText: 'Goal saved.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Done with the brief' }).click();
+    await expect(page.getByLabel('Current objective')).toHaveCount(0);
+  });
+
+  for (const [what, intro] of [['no opening text', ''], ['only blank lines for opening text', '   \n']] as const) {
+    test(`shows the objective as the Goal when PLAN.md has ${what}`, async ({ page }) => {
+      await routeBriefAndPlan(page, intro);
+      await page.goto('/#/workspaces/demo/plan');
+      const goal = page.getByRole('region', { name: 'Goal', exact: true });
+      await expect(goal).toContainText('Make invoices load in under a second.');
+      await expect(goal.getByRole('button', { name: 'Edit the goal' })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Brief', exact: true })).toHaveCount(0);
+    });
+  }
+
+  test('shows the objective as the Goal when there is no PLAN.md at all', async ({ page }) => {
+    await routeBriefAndPlan(page, '');
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
+    await page.goto('/#/workspaces/demo/plan');
+    await expect(page.getByRole('region', { name: 'Goal', exact: true })).toContainText('Make invoices load in under a second.');
+    await expect(page.getByRole('region', { name: 'Brief', exact: true })).toHaveCount(0);
+  });
 });
+
