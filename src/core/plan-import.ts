@@ -29,11 +29,8 @@ import { loadFeatureConfig } from './workspace.js';
 import type { PlanKind } from './plan-words.js';
 
 export const PLAN_ARCHIVE_DIR = '.contextspace/archive';
-/**
- * The question that holds whatever in the notes was not a table row. A question for the user, so it
- * shows under Needs you and no AI starts it as work.
- */
-export const IMPORTED_NOTES_TITLE = `Is anything in the notes kept from ${PLANNING_NOTES_FILE} still needed?`;
+/** The question older imports added for leftover text; core/plan-freshness withdraws it. */
+export { IMPORTED_NOTES_TITLE } from './plan-freshness.js';
 
 type Table = 'outcomes' | 'questions' | 'existing' | 'decisions';
 
@@ -240,15 +237,7 @@ export function applyPlanningNotes(plan: PlanDocument, parsed: ParsedNotes, at: 
     });
   }
 
-  if (parsed.leftover.some((line) => line.trim())) {
-    const where = archivedAs ? `The whole file is kept in ${archivedAs}.` : '';
-    const text = parsed.leftover.join('\n');
-    const room = DETAIL_MAX - where.length - 2;
-    const detail = [text.length > room ? `${text.slice(0, room - 1)}…` : text, where].filter(Boolean).join('\n\n');
-    if (!plan.items.some((item) => item.kind === 'question' && same(item.title, IMPORTED_NOTES_TITLE) && item.detail === detail)) {
-      add({ id: nextId(plan, 'question'), kind: 'question', title: IMPORTED_NOTES_TITLE, owner: 'user', status: 'todo', detail });
-    }
-  }
+  // Text outside the template's tables stays in the archived notes file; it is not a question for the user.
   return { added, updated };
 }
 
