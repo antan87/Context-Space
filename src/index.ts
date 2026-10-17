@@ -24,6 +24,7 @@ import { verifyCommand } from './commands/verify.js';
 import { flowCommand } from './commands/flow.js';
 import { registerPlanCommand } from './commands/plan.js';
 import { askCommand, type AskOptions } from './commands/ask.js';
+import { newsCommand, type NewsOptions } from './commands/news.js';
 import { runsInsideAiTool } from './utils/ai-tool.js';
 import { uiCommand } from './commands/ui.js';
 import { tuiCommand } from './commands/tui.js';
@@ -246,6 +247,20 @@ program
   .addHelpText('after', '\nExamples:\n  ctxspace ask "Which branch should I target?" --option main --option release\n\nThen write the full question in the chat and end your turn; the user replies there.\n')
   .action(runAction(async (question: string, options: AskOptions) => {
     await askCommand(question, options);
+  }));
+
+// What changed since this reader last looked: AI tools run it when they start and after their context is compacted.
+program
+  .command('news')
+  .description('Show what changed in the workspace since you last looked, and who made each change (AI tools run this when they start)')
+  .option('--as <name>', 'Read as this name, such as "claude" (defaults to the AI tool running this, else you)')
+  .option('--peek', 'Look without recording that you have, so the same changes show next time')
+  .option('--since <time>', 'Reach back to this date and time (ISO, such as 2026-10-17T09:00:00Z) instead of your last look')
+  .option('--json', 'Output in JSON format')
+  .option('-w, --workspace <path>', 'Workspace path or name (defaults to the workspace you are in)')
+  .addHelpText('after', '\nExamples:\n  ctxspace news            what changed since you last looked (then marks it seen)\n  ctxspace news --peek     the same, without marking it seen\n')
+  .action(runAction(async (options: NewsOptions) => {
+    await newsCommand(options);
   }));
 
 program

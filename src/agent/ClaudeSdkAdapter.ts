@@ -173,8 +173,8 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
               const toolPrefixPattern = new RegExp(`^(?:mcp__)?(?:${MCP_ADAPTER_SERVER_NAME}|${LEGACY_MCP_ADAPTER_SERVER_NAME}|${MCP_SERVER_NAME}|${LEGACY_MCP_SERVER_NAME})__`);
               const toolName = event.tool.replace(toolPrefixPattern, '');
 
-              // A plain `ctxspace plan …`, `ask …` or `knowledge search …` only changes the plan or the chat's alerts, as the AI,
-              // or reads, so it needs no prompt each time.
+              // A plain `ctxspace plan …`, `ask …`, `knowledge search …` or `news …` only changes the plan, the chat's alerts or
+              // the note of what the AI has looked at, as the AI, or reads, so it needs no prompt each time.
               const aiCommand = toolName === 'Bash' && isPlainAiCommand(String((event as any).input?.command ?? ''));
               if (this.currentExecutionProfile === 'workspace-write' && (CORE_ALLOWED_TOOLS.has(toolName) || READONLY_MCP_TOOLS.has(toolName) || WORKSPACE_EDIT_MCP_TOOLS.has(toolName) || aiCommand)) {
                 handle.respondToApproval(event.requestId, { behavior: 'allow' });

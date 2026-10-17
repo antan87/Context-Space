@@ -225,6 +225,17 @@ describe('buildContextContent', () => {
       expect(line.indexOf('knowledge search')).toBeLessThan(line.indexOf('search_knowledge'));
     });
 
+    it('tells every session to run the news command when it starts and after its context is compacted, in one line', async () => {
+      const content = await buildContextContent(ctxFor({}));
+      const lines = content.split('\n').filter((l) => l.includes('`ctxspace news`'));
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('start');
+      expect(lines[0]).toContain('compacted');
+      expect(lines[0]).toContain('who made it');
+      expect(content.indexOf('## Where to look')).toBeLessThan(content.indexOf('`ctxspace news`'));
+    });
+
     it('steers knowledge capture toward facts not recoverable from code', async () => {
       const content = await buildContextContent(ctxFor({}));
 

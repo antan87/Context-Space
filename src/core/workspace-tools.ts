@@ -12,11 +12,11 @@ import { installedLastingRuntime, isTemporaryRuntimePath, startedLastingRuntime 
 export const CLI_LAUNCHER = '.contextspace/bin/ctxspace';
 export const CLI_ALIAS_LAUNCHER = '.contextspace/bin/contextspace';
 /**
- * Claude Code permission rules for the commands an AI runs while it works: the plan, asking the user, and searching the
- * knowledge. Each is allowed from PATH and from the workspace's own copy. There is no rule for `ctxspace` or
- * `ctxspace knowledge` as a whole: `knowledge add`, `promote` and `remote` write and push, so they keep asking.
+ * Claude Code permission rules for the commands an AI runs while it works: the plan, asking the user, searching the
+ * knowledge, and reading what is new. Each is allowed from PATH and from the workspace's own copy. There is no rule for
+ * `ctxspace` or `ctxspace knowledge` as a whole: `knowledge add`, `promote` and `remote` write and push, so they keep asking.
  */
-export const CLAUDE_CLI_PERMISSIONS = ['plan', 'knowledge search', 'ask'].flatMap((command) => [`Bash(ctxspace ${command}:*)`, `Bash(./${CLI_LAUNCHER} ${command}:*)`]);
+export const CLAUDE_CLI_PERMISSIONS = ['plan', 'knowledge search', 'ask', 'news'].flatMap((command) => [`Bash(ctxspace ${command}:*)`, `Bash(./${CLI_LAUNCHER} ${command}:*)`]);
 export interface CliRuntime { command: string; entry: string; electron?: boolean }
 export function currentCliRuntime(): CliRuntime {
   return { command: process.execPath, entry: fileURLToPath(new URL('../index.js', import.meta.url)), electron: Boolean(process.versions.electron) };
@@ -193,8 +193,8 @@ export async function generateWorkspaceTools(root: string, assistants: AIAssista
       else await atomicWriteFile(target, JSON.stringify(old, null, 2) + '\n');
     }
   }
-  // Claude Code may run `ctxspace plan`, `ask` and `knowledge search` without asking each time: they only change the
-  // plan or the chat's alerts, as the AI, or read.
+  // Claude Code may run `ctxspace plan`, `ask`, `knowledge search` and `news` without asking each time: they only change
+  // the plan, the chat's alerts or the note of what the AI has looked at, as the AI, or read.
   // The rules go in the local file, which is never committed: Claude Code applies allow rules from the
   // shared .claude/settings.json, or from a tracked local file, only after a person trusts the folder,
   // and never in `claude -p` or SDK runs.

@@ -282,6 +282,7 @@ ${renderLessonsSection(ctx.lessons ?? [])}## Where to look
 
 If \`ctxspace\` is not on PATH, use \`./.contextspace/bin/ctxspace\` (bash) or \`.\\.contextspace\\bin\\ctxspace.cmd\` (PowerShell) with the same arguments. Trust workspace MCP configs in your assistant.
 
+- When you start, and again after your context is compacted, run \`${CLI_NAME} news\`: it lists what changed since you last looked (plan, documents, knowledge, commits) and who made it.
 - \`${PRIMARY_KNOWLEDGE_FILE}\` — decisions and gotchas, one per \`###\` heading. Search it, not the whole file, with \`${CLI_NAME} knowledge search <words>\` (MCP \`search_knowledge\` also works). Add a rule and its reason, if they cannot be recovered from the code or git history, with \`${CLI_NAME} knowledge add -t decision|gotcha --title "..." -m "..."\`.
 - \`contextspace-work.json\` — assignment and sources. Read live guidance with \`ctxspace flow --assignment\` or MCP \`get_work_context\`.
 - \`.agents/skills/\` — enabled playbooks; Claude copies: \`.claude/skills/\`.

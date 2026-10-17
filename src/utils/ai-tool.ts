@@ -22,11 +22,12 @@ export function asPersonEnv(env: NodeJS.ProcessEnv = process.env): Record<string
 const CLI_LAUNCHERS = ['ctxspace', './.contextspace/bin/ctxspace', '.contextspace/bin/ctxspace'];
 
 /**
- * What an AI tool may run without asking each time: the plan, asking the user a question, and searching the knowledge.
- * They change nothing but the plan and the chat's alerts, or read. Every other command stays behind the usual
- * approval, `ctxspace knowledge add`, `promote` and `remote` among them, since those write and push.
+ * What an AI tool may run without asking each time: the plan, asking the user a question, searching the knowledge, and
+ * reading what is new. They change nothing but the plan, the chat's alerts and the note of what a reader has looked
+ * at, or read. Every other command stays behind the usual approval, `ctxspace knowledge add`, `promote` and `remote`
+ * among them, since those write and push.
  */
-const ALLOWED_COMMANDS: readonly (readonly string[])[] = [['plan'], ['ask'], ['knowledge', 'search']];
+const ALLOWED_COMMANDS: readonly (readonly string[])[] = [['plan'], ['ask'], ['knowledge', 'search'], ['news']];
 
 /**
  * Only the commands in {@link ALLOWED_COMMANDS}, so an AI tool may run them without asking each time. Several may

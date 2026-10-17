@@ -193,7 +193,7 @@ describe('ClaudeSdkAdapter', () => {
     expect(approvals.every((item) => item.decision.behavior === (profile === 'workspace-write' ? 'allow' : 'deny'))).toBe(true);
   });
 
-  it.each(['workspace-write', 'review'] as const)('lets the AI run a plain ctxspace plan, ask or knowledge search command in the %s profile only when it may write', async (profile) => {
+  it.each(['workspace-write', 'review'] as const)('lets the AI run a plain ctxspace plan, ask, knowledge search or news command in the %s profile only when it may write', async (profile) => {
     const commands = [
       'ctxspace plan',
       './.contextspace/bin/ctxspace plan done T1 --resolution "Tests pass"',
@@ -208,8 +208,12 @@ describe('ClaudeSdkAdapter', () => {
       'ctxspace knowledge search `whoami`',
       'ctxspace knowledge add -t gotcha --title x -m y',
       'ctxspace knowledge search plan && ctxspace knowledge promote --all',
+      'ctxspace news --peek',
+      './.contextspace/bin/ctxspace news --as claude --json',
+      'ctxspace news; rm -rf ~',
+      'ctxspace news --as "$(whoami)"',
     ];
-    const allowedInWriteProfile = [true, true, false, false, true, false, false, true, true, false, false, false, false];
+    const allowedInWriteProfile = [true, true, false, false, true, false, false, true, true, false, false, false, false, true, true, false, false];
     const { handle, approvals } = createMockHandle(commands.map((command, index) => ({
       type: 'approval_required', requestId: `bash-${index}`, tool: 'Bash', input: { command },
     })));

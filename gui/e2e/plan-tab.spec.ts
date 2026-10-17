@@ -1,7 +1,8 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { checkpoint, decision, planFile, step } from './planData';
+import { checkpoint, decision, planFile, step, whatsNew } from './planData';
 import type { PlanFileChangeInput, PlanFileView } from '../src/features/plan/planFile.ts';
+import type { WhatsNewView } from '../src/features/plan/whatsNew.ts';
 
 /**
  * The Plan tab: PLAN.md as a document. Its free text reads as written; its checkpoints, steps and decisions are
@@ -165,4 +166,107 @@ test('says when the plan cannot be read, and reads it again on Retry', async ({ 
   fail = false;
   await page.getByRole('button', { name: 'Retry' }).click();
   await expect(planRegion(page)).toBeVisible();
+});
+
+/** Since the user last looked: two hours ago, an AI ticked a step and two others added, a document came and two commits landed. */
+function sinceLastLook(): WhatsNewView {
+  return whatsNew({
+    from: minutesAgo(120),
+    plan: { items: [
+      { at: minutesAgo(40), by: 'codex', action: 'ticked', kind: 'step', key: 'write-the-csv-writer', text: 'Write the CSV writer' },
+      { at: minutesAgo(30), by: 'file', action: 'added', kind: 'step', key: 'add-the-export-button', text: 'Add the Export button' },
+      { at: minutesAgo(20), by: 'claude', action: 'answered', kind: 'decision', key: 'which-time-zone', text: 'Which time zone?', note: 'UTC' },
+    ], more: 0 },
+    documents: { items: [{ name: 'docs/export-flow.png', kind: 'image', change: 'added', at: minutesAgo(60) }], more: 0 },
+    commits: [{ repo: 'api', more: 0, commits: [
+      { sha: 'a1b2c3d', author: 'Anna', subject: 'Fix rounding in totals', at: minutesAgo(180) },
+      { sha: 'b2c3d4e', author: 'Ben', subject: 'Add the CSV writer', at: minutesAgo(90) },
+    ] }],
+  });
+}
+
+const sinceCard = (page: Page) => page.getByRole('region', { name: 'Since you last looked' });
+
+test('says what changed since the user last looked, lists it on Show, and hides the card when they say Got it', async ({ page }) => {
+  await routePlan(page, csvExportPlan());
+  const report = sinceLastLook();
+  const seen: unknown[] = [];
+  let current = report;
+  await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: current }));
+  await page.route('**/api/workspace/demo/news/seen', (route) => {
+    seen.push(route.request().postDataJSON());
+    current = whatsNew({ from: report.at });
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto('/#/workspaces/demo/plan');
+  const card = sinceCard(page);
+  await expect(card).toContainText('Since you last looked, 2 h ago: 3 plan changes, 1 new document, 2 commits');
+  // It sits above the plan, and nothing in it is a code.
+  await expect(card).not.toContainText(/\b[MTQ]\d\b/);
+  const above = await Promise.all([card.boundingBox(), planRegion(page).boundingBox()]);
+  expect(above[0]!.y).toBeLessThan(above[1]!.y);
+
+  await expect(card).not.toContainText('Fix rounding in totals');
+  await card.getByRole('button', { name: 'Show' }).click();
+  await expect(card.getByRole('button', { name: 'Hide' })).toHaveAttribute('aria-expanded', 'true');
+  await expect(card.getByRole('region', { name: 'Plan' })).toContainText('Codex ticked “Write the CSV writer” · 40 min ago');
+  await expect(card.getByRole('region', { name: 'Plan' })).toContainText('An edit to PLAN.md added “Add the Export button” · 30 min ago');
+  await expect(card.getByRole('region', { name: 'Plan' })).toContainText('Claude answered “Which time zone?”: UTC · 20 min ago');
+  await expect(card.getByRole('region', { name: 'Documents' })).toContainText('docs/export-flow.png added · 1 h ago');
+  await expect(card.getByRole('region', { name: 'Commits' })).toContainText('api: a1b2c3d Fix rounding in totals (Anna) · 3 h ago');
+  await expect(card.getByRole('region', { name: 'Knowledge' })).toHaveCount(0);
+  if (SHOTS) {
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await page.screenshot({ path: `${SHOTS}/since-you-looked.png` });
+  }
+
+  await card.getByRole('button', { name: 'Got it' }).click();
+  await expect(card).toHaveCount(0);
+  expect(seen).toEqual([{ reader: 'user', at: report.at }]);
+  // The plan itself is still there.
+  await expect(planRegion(page)).toBeVisible();
+});
+
+test('shows no card when nothing changed since the user last looked', async ({ page }) => {
+  await routePlan(page, csvExportPlan());
+  await page.goto('/#/workspaces/demo/plan');
+  await expect(planRegion(page)).toBeVisible();
+  await expect(sinceCard(page)).toHaveCount(0);
+});
+
+test('says why Got it was refused when the list changed meanwhile, and reads the list again', async ({ page }) => {
+  await routePlan(page, csvExportPlan());
+  let reads = 0;
+  let current = sinceLastLook();
+  await page.route('**/api/workspace/demo/news', (route) => { reads += 1; return route.fulfill({ json: current }); });
+  await page.route('**/api/workspace/demo/news/seen', (route) => {
+    current = { ...sinceLastLook(), at: new Date().toISOString(), commits: [] };
+    return route.fulfill({ status: 409, json: { error: 'The list changed; read it again.' } });
+  });
+  await page.goto('/#/workspaces/demo/plan');
+  const card = sinceCard(page);
+  await expect(card).toContainText('3 plan changes, 1 new document, 2 commits');
+  const readsBefore = reads;
+  await card.getByRole('button', { name: 'Got it' }).click();
+  await expect(card.getByRole('alert')).toHaveText('The list changed; read it again.');
+  await expect(card).not.toContainText('2 commits');
+  await expect(card).toContainText('3 plan changes, 1 new document');
+  expect(reads).toBeGreaterThan(readsBefore);
+});
+
+test.describe('an archived workspace', () => {
+  const archived = { ...workspace, archivedAt: '2026-09-28T10:00:00.000Z', archive: { archivedAt: '2026-09-28T10:00:00.000Z', previousMode: 'in-place', parked: true, repos: [] } };
+  test.use({ workspacesData: [[archived], { option: true }] });
+
+  test('shows what changed, but cannot say it was seen', async ({ page }) => {
+    await routePlan(page, csvExportPlan());
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: sinceLastLook() }));
+    await page.goto('/#/workspaces/demo/plan');
+    const card = sinceCard(page);
+    await expect(card).toContainText('Since you last looked, 2 h ago: 3 plan changes');
+    await card.getByRole('button', { name: 'Show' }).click();
+    await expect(card).toContainText('Fix rounding in totals');
+    await expect(card.getByRole('button', { name: 'Got it' })).toHaveCount(0);
+  });
 });

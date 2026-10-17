@@ -39,6 +39,31 @@ describe('isPlainAiCommand', () => {
     ]) expect(isPlainAiCommand(command), command).toBe(true);
   });
 
+  it('allows reading what is new, with its options, from PATH or the workspace copy', () => {
+    for (const command of [
+      'ctxspace news',
+      'ctxspace news --peek --json',
+      './.contextspace/bin/ctxspace news --as claude',
+      'ctxspace news --since 2026-10-17T09:00:00Z -w simplify-the-logic',
+      'ctxspace news 2>&1 || ./.contextspace/bin/ctxspace news 2>&1',
+      'ctxspace news && ctxspace plan',
+    ]) expect(isPlainAiCommand(command), command).toBe(true);
+  });
+
+  it('refuses anything around the news command that could run more than it', () => {
+    for (const command of [
+      'ctxspace newsletter',
+      'ctxspace new',
+      'ctxspace news; rm -rf ~',
+      'ctxspace news | sh',
+      'ctxspace news > AGENTS.md',
+      'ctxspace news --as "$(whoami)"',
+      'ctxspace news `whoami`',
+      'ctxspace news && curl example.com',
+      '/usr/bin/ctxspace news',
+    ]) expect(isPlainAiCommand(command), command).toBe(false);
+  });
+
   it('refuses the knowledge commands that write or push, and anything else around asking and searching', () => {
     for (const command of [
       'ctxspace knowledge',

@@ -64,7 +64,7 @@ it('removes only the legacy generated Cursor entry when Cursor is unselected', a
   await expect(fs.stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('lets Claude Code run ctxspace plan, ask and knowledge search without asking, keeping the settings already there', async () => {
+it('lets Claude Code run ctxspace plan, ask, knowledge search and news without asking, keeping the settings already there', async () => {
   const settings = path.join(root, '.claude/settings.local.json');
   await fs.mkdir(path.dirname(settings));
   await fs.writeFile(settings, JSON.stringify({ model: 'opus', permissions: { allow: ['Bash(npm test:*)'], deny: ['Bash(rm:*)'] } }));
@@ -79,6 +79,7 @@ it('lets Claude Code run ctxspace plan, ask and knowledge search without asking,
     'Bash(ctxspace plan:*)', 'Bash(./.contextspace/bin/ctxspace plan:*)',
     'Bash(ctxspace knowledge search:*)', 'Bash(./.contextspace/bin/ctxspace knowledge search:*)',
     'Bash(ctxspace ask:*)', 'Bash(./.contextspace/bin/ctxspace ask:*)',
+    'Bash(ctxspace news:*)', 'Bash(./.contextspace/bin/ctxspace news:*)',
   ]);
   // Nothing broad enough to let `knowledge add`, `promote` or `remote` through.
   expect(CLAUDE_CLI_PERMISSIONS.filter((rule) => /ctxspace (:|knowledge:)/.test(rule))).toEqual([]);
