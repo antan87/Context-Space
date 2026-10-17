@@ -384,4 +384,27 @@ describe('isolateWorkspaceRepo & on-demand worktree isolation', { timeout: 30000
       expect.objectContaining({ category: 'Explicit Contracts', name: 'http-envelope', status: 'pass' }),
     ]));
   });
+
+  it('doctor finds the knowledge entry a contract names when its title is written as words', async () => {
+    await fs.mkdir(path.join(repo1Dir, 'apps', 'bff'), { recursive: true });
+    await fs.mkdir(path.join(repo1Dir, 'apps', 'spa'), { recursive: true });
+    const feature: Feature = {
+      id: 'contract-test', mode: 'in-place', branchName: 'contract-test', description: 'Contract test',
+      repos: [repo1Dir], originalRepos: [repo1Dir], assistants: [], workspacePath: workspaceDir,
+      createdAt: new Date().toISOString(),
+      contracts: [
+        { from: 'apps/bff', to: 'apps/spa', kind: 'http-envelope', entry: '2026-08-25-bff-errors' },
+        { from: 'apps/spa', to: 'apps/bff', kind: 'retry', entry: '2026-08-26-missing-entry' },
+      ],
+    };
+    await saveFeatureConfig(workspaceDir, feature);
+    await fs.writeFile(path.join(workspaceDir, 'nexusflow-knowledge.md'), '### 2026-08-25 — BFF errors\n**Gotcha:** Decode once.\n');
+
+    const report = await runDoctor(workspaceDir);
+
+    expect(report.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: 'Explicit Contracts', name: 'http-envelope', status: 'pass' }),
+      expect.objectContaining({ category: 'Explicit Contracts', name: 'retry', status: 'warn' }),
+    ]));
+  });
 });

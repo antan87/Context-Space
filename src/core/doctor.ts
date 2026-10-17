@@ -17,7 +17,7 @@ import { workspaceFileExists } from './storage.js';
 import { analyzeAllReposCached } from '../analyzers/index.js';
 import { findExecutable } from '../agent/cliAvailability.js';
 import { checkGenerationLock } from './generation-lock.js';
-import { readWorkspaceKnowledge } from './knowledge.js';
+import { hasKnowledgeEntry, readWorkspaceKnowledge } from './knowledge.js';
 import { inspectAgentMcp } from './agent-mcp.js';
 import { describeWorkspaceBackup } from './workspace-backup.js';
 import { CLI_NAME } from './constants.js';
@@ -126,7 +126,6 @@ export async function runDoctor(workspacePath: string): Promise<DoctorReport> {
       const values = [contract.from, contract.to];
       const invalidPath = values.some((value) => !value || value.includes('..') || path.isAbsolute(value));
       const validEntry = /^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(contract.entry);
-      const heading = contract.entry.replace(/^(\d{4}-\d{2}-\d{2})-/, '$1 — ');
       if (invalidPath || !contract.kind || !validEntry) {
         const message = `Invalid explicit contract ${contract.from || '?'} -> ${contract.to || '?'}.`;
         errors.push(message);
@@ -135,7 +134,7 @@ export async function runDoctor(workspacePath: string): Promise<DoctorReport> {
         const message = `Contract ${contract.from} -> ${contract.to} references a repository or path that does not exist.`;
         errors.push(message);
         checks.push({ category: 'Explicit Contracts', name: contract.kind, status: 'fail', message });
-      } else if (!knowledge.includes(`### ${heading}`)) {
+      } else if (!hasKnowledgeEntry(knowledge, contract.entry)) {
         const message = `Contract ${contract.from} -> ${contract.to} references missing knowledge entry ${contract.entry}.`;
         warnings.push(message);
         checks.push({ category: 'Explicit Contracts', name: contract.kind, status: 'warn', message });

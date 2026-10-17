@@ -9,7 +9,9 @@ import { execa } from 'execa';
 import {
   captureGenerationSnapshot,
   checkGenerationLock,
+  readGenerationLock,
   renderFreshnessBanner,
+  updateGeneratedViews,
   writeGenerationLock,
 } from './generation-lock.js';
 import { getStorageProvider, setActiveStorageProvider } from './adapters/registry.js';
@@ -279,5 +281,84 @@ describe('generation lock', () => {
     documents.set('AGENTS.md', '# Changed adapter context\n');
     const result = await checkGenerationLock(workspacePath);
     expect(result.drift).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'output', name: 'AGENTS.md' })]));
+  });
+
+  describe('changing generated views in place', () => {
+    async function createViews(): Promise<void> {
+      const snapshot = await captureGenerationSnapshot([{ name: 'repo', path: repoPath, defaultBranch: 'main' }]);
+      await fs.writeFile(path.join(workspacePath, 'AGENTS.md'), `${renderFreshnessBanner(snapshot)}\n\n# Test\n\nold list\n`);
+      await fs.writeFile(path.join(workspacePath, 'COPY.md'), 'copy of the old list\n');
+      await fs.writeFile(path.join(workspacePath, 'OTHER.md'), 'old list in another view\n');
+      await writeGenerationLock(workspacePath, snapshot, [
+        { path: 'AGENTS.md', source: 'workspace snapshot' },
+        { path: 'COPY.md', source: 'AGENTS.md' },
+        { path: 'OTHER.md', source: 'something else' },
+      ]);
+    }
+    const swap = (content: string) => content.replace('old list', 'new list');
+    const read = (name: string) => fs.readFile(path.join(workspacePath, name), 'utf-8');
+
+    it('changes the source view and the views copied from it, and records their new hashes', async () => {
+      await createViews();
+
+      const changed = await updateGeneratedViews(workspacePath, 'AGENTS.md', swap);
+
+      expect(changed.sort()).toEqual(['AGENTS.md', 'COPY.md']);
+      expect(await read('AGENTS.md')).toContain('new list');
+      expect(await read('COPY.md')).toBe('copy of the new list\n');
+      expect(await read('OTHER.md')).toBe('old list in another view\n');
+      // The change does not read as drift.
+      await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+    });
+
+    it('keeps the snapshot, so a stale context stays stale', async () => {
+      await createViews();
+      const before = await readGenerationLock(workspacePath);
+      await fs.writeFile(path.join(repoPath, 'README.md'), '# changed\n');
+
+      await updateGeneratedViews(workspacePath, 'AGENTS.md', swap);
+
+      const after = await readGenerationLock(workspacePath);
+      expect(after).toMatchObject({ generatedAt: before!.generatedAt, toolVersion: before!.toolVersion, repos: before!.repos });
+      const check = await checkGenerationLock(workspacePath);
+      expect(check.drift).toEqual([expect.objectContaining({ kind: 'repo', name: 'repo' })]);
+    });
+
+    it('leaves a view someone edited by hand for a refresh to report', async () => {
+      await createViews();
+      await fs.writeFile(path.join(workspacePath, 'AGENTS.md'), '# My own notes\n\nold list\n');
+
+      const changed = await updateGeneratedViews(workspacePath, 'AGENTS.md', swap);
+
+      expect(changed).toEqual(['COPY.md']);
+      expect(await read('AGENTS.md')).toBe('# My own notes\n\nold list\n');
+      const check = await checkGenerationLock(workspacePath);
+      expect(check.drift).toEqual([expect.objectContaining({ kind: 'output', name: 'AGENTS.md' })]);
+    });
+
+    it('writes nothing when the change leaves a view as it was', async () => {
+      await createViews();
+      const lockBefore = await fs.readFile(path.join(workspacePath, PRIMARY_LOCK_FILE), 'utf-8');
+
+      expect(await updateGeneratedViews(workspacePath, 'AGENTS.md', (content) => content)).toEqual([]);
+
+      expect(await fs.readFile(path.join(workspacePath, PRIMARY_LOCK_FILE), 'utf-8')).toBe(lockBefore);
+    });
+
+    it('does nothing for a workspace that was never generated', async () => {
+      await fs.writeFile(path.join(workspacePath, 'AGENTS.md'), 'old list\n');
+
+      expect(await updateGeneratedViews(workspacePath, 'AGENTS.md', swap)).toEqual([]);
+
+      expect(await read('AGENTS.md')).toBe('old list\n');
+      await expect(fs.access(path.join(workspacePath, PRIMARY_LOCK_FILE))).rejects.toThrow();
+    });
+
+    it('skips a view that is missing instead of failing the others', async () => {
+      await createViews();
+      await fs.rm(path.join(workspacePath, 'COPY.md'));
+
+      expect(await updateGeneratedViews(workspacePath, 'AGENTS.md', swap)).toEqual(['AGENTS.md']);
+    });
   });
 });

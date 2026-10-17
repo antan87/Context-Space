@@ -213,11 +213,57 @@ export async function writeGenerationLock(
     generatedAt: unchanged ? previous.generatedAt : snapshot.generatedAt,
     outputs: outputState,
   };
+  await saveGenerationLock(workspacePath, lock);
+  return lock;
+}
+
+async function saveGenerationLock(workspacePath: string, lock: GenerationLock): Promise<void> {
   const target = path.join(workspacePath, PRIMARY_LOCK_FILE);
   const temp = `${target}.tmp-${process.pid}-${randomUUID()}`;
   await fs.writeFile(temp, JSON.stringify(lock, null, 2) + '\n', 'utf-8');
   await fs.rename(temp, target);
-  return lock;
+}
+
+/**
+ * Changes generated views in place for a change that does not touch the repos (a new knowledge entry, say), and records
+ * their new hashes so the change does not read as drift. The views are `source` itself and every view generated from it.
+ * Only a view that still matches its recorded hash is touched: one edited by hand is left for a refresh to report. The
+ * snapshot the lock was made from is kept, so a stale banner stays stale. Callers hold the generation lock.
+ *
+ * @returns The views it changed; none when there is no lock to keep true.
+ */
+export async function updateGeneratedViews(
+  workspacePath: string,
+  source: string,
+  change: (content: string) => string,
+): Promise<string[]> {
+  const lock = await readGenerationLock(workspacePath);
+  if (!lock) return [];
+  const feature = await loadFeatureConfig(workspacePath);
+  const featureId = feature?.id ?? path.basename(workspacePath);
+  const outputs = { ...lock.outputs };
+  const changed: string[] = [];
+
+  for (const [relativePath, output] of Object.entries(lock.outputs)) {
+    if (relativePath !== source && output.source !== source) continue;
+    const safePath = assertRelativeOutput(relativePath);
+    const location = output.location ?? inferOutputLocation(safePath);
+    try {
+      const raw = await readOutput(workspacePath, featureId, safePath, location);
+      if (typeof raw !== 'string' || hashGeneratedContent(raw) !== output.hash) continue;
+      const updated = change(raw);
+      if (updated === raw) continue;
+      if (location === 'workspace') await writeWorkspaceFile(workspacePath, featureId, safePath, updated);
+      else await fs.writeFile(path.join(workspacePath, safePath), updated, 'utf-8');
+      outputs[relativePath] = { ...output, hash: hashGeneratedContent(updated) };
+      changed.push(relativePath);
+    } catch {
+      // A view that cannot be read is already reported as output drift.
+    }
+  }
+
+  if (changed.length) await saveGenerationLock(workspacePath, { ...lock, outputs });
+  return changed;
 }
 
 export async function readGenerationLock(workspacePath: string): Promise<GenerationLock | null> {
