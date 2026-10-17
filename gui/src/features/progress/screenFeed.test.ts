@@ -44,11 +44,12 @@ describe('cleanScreenEvent', () => {
 });
 
 describe('parseLiveFrame', () => {
-  it('reads screen, question and answered frames', () => {
+  it('reads screen, question, answered and plan frames', () => {
     expect(parseLiveFrame(screen('next', { title: 't', reason: 'r' }))).toMatchObject({ type: 'screen', event: { event: 'next' } });
     expect(parseLiveFrame(frame('question', { request: { id: 'q', timestamp: base.timestamp, harness: 'claude', message: 'Which?', options: ['a', '', 'b', 4] } })))
       .toEqual({ type: 'question', request: { id: 'q', timestamp: base.timestamp, harness: 'claude', message: 'Which?', options: ['a', 'b'] } });
     expect(parseLiveFrame(frame('answered', { timestamp: base.timestamp }))).toEqual({ type: 'answered', timestamp: base.timestamp });
+    expect(parseLiveFrame(frame('plan', { timestamp: base.timestamp }))).toEqual({ type: 'plan', timestamp: base.timestamp });
   });
 
   it('keeps at most six options on a question', () => {
@@ -59,7 +60,7 @@ describe('parseLiveFrame', () => {
 
   it('returns null for anything malformed, never throwing', () => {
     for (const data of [undefined, null, 5, '', 'not json', '[]', 'null', '"x"', '{}', frame('screen', {}), frame('screen', { event: null }), frame('question', { request: { id: 'q' } }),
-      frame('answered', {}), frame('answered', { timestamp: '' }), frame('ping', {})]) {
+      frame('answered', {}), frame('answered', { timestamp: '' }), frame('plan', {}), frame('ping', {})]) {
       expect(parseLiveFrame(data), String(data)).toBeNull();
     }
   });

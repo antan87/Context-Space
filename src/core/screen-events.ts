@@ -24,6 +24,7 @@ import {
   type InputRequest,
 } from './attention.js';
 import { resolveWorkspaceChatLedger } from './constants.js';
+import { PLAN_STORE_FILE } from './plan.js';
 import { readLedgerTail } from './ledger-tail.js';
 import {
   cleanLineNumber as lineNumber,
@@ -74,7 +75,9 @@ export type ScreenEventInput = { [E in ScreenEvent as E['event']]: { event: E['e
 export type LiveEvent =
   | { type: 'screen'; event: ScreenEvent }
   | { type: 'question'; request: InputRequest }
-  | { type: 'answered'; timestamp: string };
+  | { type: 'answered'; timestamp: string }
+  /** The plan changed on disk, whoever changed it (an AI's CLI or MCP, another window): read it again. */
+  | { type: 'plan'; timestamp: string };
 
 // ─── Cleaning ───────────────────────────────────────────────────────────────
 
@@ -327,9 +330,15 @@ export async function* watchLiveEvents(
   const seen = new Set<string>();
   let last = '';
   let first = true;
+  const planFile = path.join(workspaceRoot, PLAN_STORE_FILE);
+  let planLast: string | undefined;
 
   while (!options.signal?.aborted) {
     const now = clock();
+    // A plan written by any tool is on screen within a poll, not at the next read of the plan.
+    const planNow = await signature([planFile]);
+    if (planLast !== undefined && planNow !== planLast) yield { type: 'plan', timestamp: new Date(now).toISOString() };
+    planLast = planNow;
     // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.
     const files = await liveFiles(workspaceRoot);
     const current = await signature([files.screen, ...files.chat]);

@@ -915,7 +915,9 @@ export type ScreenEvent = { id: string; timestamp: string; harness: string } & (
 export type LiveEvent =
   | { type: 'screen'; event: ScreenEvent }
   | { type: 'question'; request: OpenQuestion }
-  | { type: 'answered'; timestamp: string };
+  | { type: 'answered'; timestamp: string }
+  /** The plan changed on disk, whoever changed it: read it again. */
+  | { type: 'plan'; timestamp: string };
 
 /** One changed file, as GET /api/workspace/:id/changes lists it. */
 export interface ChangedFileEntry {

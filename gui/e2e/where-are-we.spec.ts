@@ -208,6 +208,16 @@ test('opens what the AI shows as it arrives, but not what it showed before the c
   expect(opened).not.toContain('src/old.ts');
 });
 
+test('reads the plan again the moment it changes on disk, without waiting for the next poll', async ({ page }) => {
+  let planReads = 0;
+  await page.route('**/api/workspace/feature-x/plan/items', (route) => { planReads += 1; return route.fulfill({ json: planView([]) }); });
+  const changedAt = new Date(Date.now() + 60_000).toISOString();
+  await openChat(page, { events: frame('plan', { timestamp: changedAt }, changedAt) });
+  const readsWhenOpen = planReads;
+  // The plan polls every 15 s; the change arrives over the live feed, so the read follows within moments.
+  await expect.poll(() => planReads, { timeout: 5_000 }).toBeGreaterThan(readsWhenOpen);
+});
+
 test('puts the answer to a question into the prompt when its option is chosen', async ({ page }) => {
   const chat = await openChat(page, { facts: factsBody({ question: true }) });
   // The question comes first, ahead of anything the AI suggested.
