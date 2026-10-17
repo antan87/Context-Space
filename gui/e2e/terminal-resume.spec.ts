@@ -282,7 +282,7 @@ test('Sessions tab defaults to conversations and can reveal delegated tasks', as
 
 test('workspace creation shows harness choices without preselecting a provider', async ({ page }) => {
   await page.goto('/#/new');
-  await page.getByRole('button', { name: /Advanced setup/ }).click();
+  await page.getByRole('button', { name: /More options/ }).click();
   const choices = page.getByRole('region', { name: 'AI harnesses' });
   await expect(choices).toBeVisible();
   const checkboxes = choices.getByRole('checkbox');

@@ -15,6 +15,8 @@ interface RepoChecklistProps {
   emptyHint?: string;
   className?: string;
   freshnessMap?: Record<string, RepoFreshness>;
+  /** Put the keyboard cursor in the filter when the list appears, so choosing starts at once. */
+  autoFocusFilter?: boolean;
 }
 
 /**
@@ -29,6 +31,7 @@ export function RepoChecklist({
   emptyHint,
   className,
   freshnessMap,
+  autoFocusFilter,
 }: RepoChecklistProps) {
   const [search, setSearch] = useState('');
 
@@ -48,6 +51,7 @@ export function RepoChecklist({
           placeholder="Filter repositories…"
           className="pl-8"
           aria-label="Filter repositories"
+          autoFocus={autoFocusFilter}
         />
       </div>
       <div className="max-h-56 overflow-y-auto rounded-lg border border-border">
