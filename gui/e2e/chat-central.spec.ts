@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 /**
  * The chat is the centre of the app. It takes most of the screen, the other parts of a workspace
@@ -36,7 +37,7 @@ test.beforeEach(async ({ page }) => {
     id: `term-${id}`, workspace: id, target: 'shell', label: 'bash', cwd: `/tmp/${id}`, state: 'running', startedAt: '2026-09-24T00:00:00Z', attached: true,
   })) } }));
   await page.route('**/api/workspace/*/sessions', (route) => route.fulfill({ json: { sessions: [] } }));
-  await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planFile() }));
   await page.routeWebSocket('**/ws/terminal', (socket) => {
     socket.onMessage((message) => {
       const parsed = JSON.parse(String(message));

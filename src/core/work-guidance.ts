@@ -12,7 +12,7 @@ import { loadWorkspaceState } from './workspace-state.js';
 import { planStoreExists } from './plan.js';
 
 export const WORK_GUIDANCE_FILE = 'contextspace-work.json';
-/** Retired: refresh removes it. The brief is at the top of contextspace-plan.md, and `ctxspace flow --assignment` prints it. */
+/** Retired: refresh removes it. `ctxspace flow --assignment` prints the brief. */
 export const WORK_ASSIGNMENT_FILE = 'contextspace-assignment.md';
 export const workTypes = ['bug', 'feature', 'performance', 'refactor', 'rewrite'] as const;
 export const workSizes = ['small', 'standard', 'epic'] as const;
@@ -110,10 +110,6 @@ async function mutateGuidance<T>(workspacePath: string, revision: number | undef
       const result = await change(guidance);
       guidance.revision++;
       await writeWorkspaceFile(root, feature.id, WORK_GUIDANCE_FILE, JSON.stringify(guidanceSchema.parse(guidance), null, 2) + '\n');
-      // The brief is at the top of the plan summary. The JSON record is authoritative, and the next
-      // plan change or refresh rewrites the summary, so a failure here does not undo the save.
-      const { writePlanSummary } = await import('./plan-summary.js');
-      await writePlanSummary(root).catch(() => undefined);
       return { guidance, result };
     } finally { await release(); }
   });
@@ -222,12 +218,14 @@ export async function getWorkContext(workspacePath: string) {
   const guidance = await loadWorkGuidance(workspacePath);
   const state = await loadWorkspaceState(workspacePath);
   // Read-only: the milestones as the plan store holds them, or as an older lifecycle will be moved there.
-  const { readWorkspaceLifecycle, readPlanReadOnly } = await import('./lifecycle.js');
+  const { readWorkspaceLifecycle } = await import('./lifecycle.js');
   const hasPlan = Boolean(state.lifecycle) || await planStoreExists(workspacePath);
   const lifecycle = hasPlan ? await readWorkspaceLifecycle(workspacePath) : undefined;
-  // The plan as `ctxspace plan` prints it, for tools that only have MCP and for read-only roles.
-  const { renderPlanText, goalFromBrief } = await import('./plan-text.js');
-  const plan = hasPlan ? renderPlanText(await readPlanReadOnly(workspacePath), { goal: goalFromBrief(guidance.assignment, feature.description) }) : null;
+  // Where the plan stands, as `ctxspace plan` prints it, for tools that only have MCP and for read-only roles.
+  const { readPlanFile, readPlanChecks } = await import('./plan-file-store.js');
+  const { renderPlanStanding } = await import('./plan-file-text.js');
+  const read = await readPlanFile(workspacePath);
+  const plan = read.source === 'none' ? null : `${renderPlanStanding(read, await readPlanChecks(workspacePath))}\n\n${read.text.trim()}`;
   const shared = await sharedProjectDocuments(workspacePath);
   const sources = new Map(shared.map((item) => [item.document.id, documentLocation(item.workspacePath, item.workspaceId, item.document)]));
   return { guidance, projectId: feature.projectId, lifecycle: lifecycle ?? null, plan,

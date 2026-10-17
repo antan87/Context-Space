@@ -33,6 +33,8 @@ import {
   type PlanItem,
 } from './plan.js';
 import { itemLabel } from './plan-words.js';
+import { PlanFileError } from './plan-file.js';
+import { advanceCheckpoint, lifecycleFromPlanFile, planFileIfAny, reopenCheckpoint } from './plan-file-lifecycle.js';
 import { loadFeatureConfig, resolveRepoInfos } from './workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
 import { getRepoBranch, getAheadBehind } from '../utils/multi-git.js';
@@ -350,7 +352,17 @@ export function lifecycleView(
   return lifecycle;
 }
 
-async function loadView(workspacePath: string, options: { write: boolean }): Promise<{ plan: PlanDocument; lifecycle: WorkspaceLifecycle }> {
+type PlanFileView = NonNullable<Awaited<ReturnType<typeof planFileIfAny>>>;
+
+async function loadView(workspacePath: string, options: { write: boolean }): Promise<{ plan: PlanDocument; lifecycle: WorkspaceLifecycle; file?: PlanFileView }> {
+  // A workspace whose plan is PLAN.md: its checkpoints are the milestones, and nothing older is moved or written.
+  const file = await planFileIfAny(workspacePath);
+  if (file) {
+    const feature = await loadFeatureConfig(workspacePath);
+    const state = await loadWorkspaceState(workspacePath);
+    const flowType = feature?.flowType ?? state.lifecycle?.flowType ?? detectFlowType(feature);
+    return { plan: emptyPlan(), file, lifecycle: lifecycleFromPlanFile(file.plan, file.checks, { workspaceId: feature?.id ?? state.lifecycle?.workspaceId ?? 'workspace', flowType }) };
+  }
   const plan = options.write ? await ensurePlanStore(workspacePath) : undefined;
   let state = await loadWorkspaceState(workspacePath);
   const feature = await loadFeatureConfig(workspacePath);
@@ -427,7 +439,11 @@ export async function advanceLifecycleStep(
   /** For complete: what came out of it, kept with the check's result. */
   options: { resolution?: string } = {},
 ): Promise<WorkspaceLifecycle> {
-  const { plan, lifecycle } = await loadView(workspacePath, { write: true });
+  const { plan, lifecycle, file } = await loadView(workspacePath, { write: true });
+  if (file) {
+    await advanceCheckpoint(workspacePath, file.plan, stepId, action, actor.by === 'user' ? 'user' : (actor.harness?.trim().toLowerCase() || 'ai'));
+    return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
+  }
   const step = lifecycle.steps.find((s) => s.id === stepId);
   const item = plan.items.find((candidate) => candidate.id === stepId);
 
@@ -537,7 +553,16 @@ export async function reopenLifecycleStep(
   input: { reason: string; by: 'user' | 'agent'; harness?: string },
 ): Promise<WorkspaceLifecycle> {
   const { reason, by, harness } = reopenSchema.parse(input);
-  const { plan, lifecycle } = await loadView(workspacePath, { write: true });
+  const { plan, lifecycle, file } = await loadView(workspacePath, { write: true });
+  if (file) {
+    try {
+      await reopenCheckpoint(workspacePath, file.plan, stepId, reason, by === 'user' ? 'user' : (harness?.toLowerCase() || 'ai'));
+    } catch (error) {
+      if (error instanceof PlanFileError) throw new LifecycleStepError(error.message, error.code === 'not_found' ? 'not_found' : error.code === 'conflict' ? 'conflict' : 'not_reopenable');
+      throw error;
+    }
+    return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
+  }
   const step = lifecycle.steps.find((candidate) => candidate.id === stepId);
   const item = plan.items.find((candidate) => candidate.id === stepId);
   if (!step || !item) throw new LifecycleStepError(`Step "${stepId}" not found in workspace lifecycle.`, 'not_found');
@@ -570,7 +595,10 @@ export async function blockLifecycleStep(
   actor: PlanActor = { by: 'user' },
 ): Promise<WorkspaceLifecycle> {
   const { reason } = blockSchema.parse(input);
-  const { plan, lifecycle } = await loadView(workspacePath, { write: true });
+  const { plan, lifecycle, file } = await loadView(workspacePath, { write: true });
+  if (file) {
+    throw new LifecycleStepError('The plan is PLAN.md now: say what the checkpoint is stuck on under it, in the file.', 'not_blockable');
+  }
   const step = lifecycle.steps.find((candidate) => candidate.id === stepId);
   const item = plan.items.find((candidate) => candidate.id === stepId);
   if (!step || !item) throw new LifecycleStepError(`Step "${stepId}" not found in workspace lifecycle.`, 'not_found');
@@ -619,6 +647,7 @@ export async function updateLifecyclePlan(
   actor: PlanActor = { by: 'user' },
 ): Promise<WorkspaceLifecycle> {
   const update = lifecyclePlanSchema.parse(input);
+  if (await planFileIfAny(workspacePath)) throw new Error('The plan is PLAN.md now: edit its Checkpoints list instead.');
   await ensurePlanStore(workspacePath);
   const release = await lockWorkGuidance(workspacePath);
   try {

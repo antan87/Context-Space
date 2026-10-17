@@ -266,15 +266,15 @@ const RULES = {
     expected: 'one visible plan after switching back and forth, and no plan polled for a workspace the user left',
     async run(ctx) {
       const page = await ctx.context.newPage();
-      const planFile = (id) => path.join(ctx.fixture.home, 'dev', 'workspaces', id, 'contextspace-plan.json');
+      const workspaceDir = (id) => path.join(ctx.fixture.home, 'dev', 'workspaces', id);
+      // What a run writes: the plan, and what ContextSpace keeps about it. Each is put back as it was.
+      const files = (id) => ['PLAN.md', '.contextspace/plan-seen.json', '.contextspace/plan-changes.jsonl'].map((file) => path.join(workspaceDir(id), file));
       const saved = new Map();
       try {
         for (const id of [WS[0], WS[1]]) {
-          saved.set(id, await fs.readFile(planFile(id), 'utf8').catch(() => null));
-          await ctx.backend.json(`/api/workspace/${id}/plan/items`, {
-            method: 'POST', headers: { 'content-type': 'application/json', origin: ctx.backend.base },
-            body: JSON.stringify({ change: { type: 'add', kind: 'milestone', title: `R6 plan of ${id}` } }),
-          });
+          for (const file of files(id)) saved.set(file, await fs.readFile(file, 'utf8').catch(() => null));
+          // As an AI writes it: straight into the file.
+          await fs.writeFile(files(id)[0], `# ${id}\n\n## Checkpoints\n\n- [ ] R6 plan of ${id}\n`);
         }
         await openOverview(ctx, page);
         const plans = page.getByRole('region', { name: 'The plan', exact: true });
@@ -286,19 +286,19 @@ const RULES = {
         }
         await sleep(2_000);
         await ctx.backend.counters(true);
-        await sleep(31_000); // two of the plan's 15 s polls
+        await sleep(31_000); // one of the plan's 30 s polls
         const c = await ctx.backend.counters();
         const leftBehind = Object.entries(c.requests)
-          .filter(([request]) => /\/plan\/items/.test(request) && !request.includes(`/${WS[1]}/`))
+          .filter(([request]) => /\/plan(\?|$)/.test(request) && !request.includes(`/${WS[1]}/`))
           .map(([request, r]) => `${request} ×${r.count}`);
         const pass = seen.every((s) => s.visiblePlans === 1) && leftBehind.length === 0;
         return { verdict: pass ? 'pass' : 'fail', observed: { seen, plansPolledForWorkspacesLeft: leftBehind } };
       } finally {
         await page.close();
-        // The fixture is shared between runs: put the plans back as they were.
-        for (const [id, content] of saved) {
-          if (content === null) await fs.rm(planFile(id), { force: true });
-          else await fs.writeFile(planFile(id), content);
+        // The fixture is shared between runs: put the files back as they were.
+        for (const [file, content] of saved) {
+          if (content === null) await fs.rm(file, { force: true });
+          else await fs.writeFile(file, content);
         }
       }
     },

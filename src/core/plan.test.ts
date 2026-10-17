@@ -23,7 +23,7 @@ import {
   type PlanChange,
   type PlanDocument,
 } from './plan.js';
-import { ANSWERED_IN_CHAT, PLAN_RULES, PLAN_SECTIONS, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
+import { ANSWERED_IN_CHAT, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
 
 const user: PlanActor = { by: 'user' };
 const claude: PlanActor = { by: 'agent', harness: 'claude' };
@@ -53,11 +53,9 @@ afterEach(async () => {
 });
 
 describe('the words', () => {
-  it('has a word and a meaning for every status, six sections and six rules', () => {
+  it('has a word and a meaning for every status', () => {
     for (const status of PLAN_STATUSES) expect(STATUS_WORDS[status].label).toMatch(/^[A-Z]/);
     expect(PLAN_STATUSES).toHaveLength(6);
-    expect(PLAN_SECTIONS.map((section) => section.label)).toEqual(['Goal', 'Needs you', 'Milestones', 'Other open work', 'Done and dropped', 'What changed']);
-    expect(PLAN_RULES).toHaveLength(6);
   });
 
   it('names an item by its code and its name, never the code alone', () => {

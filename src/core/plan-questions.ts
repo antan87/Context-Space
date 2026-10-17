@@ -1,71 +1,81 @@
 /**
  * @module core/plan-questions
- * A question the AI asks in the chat is also a question in the plan. The user sees one list of what
- * waits for them (the strip above the chat and Needs you), the plan says what the question holds up,
- * and the AI records the answer where every surface reads it.
+ * A question the AI asks in the chat is also a decision in PLAN.md. The user sees one list of what waits for them
+ * (the strip above the chat and Needs you), the plan says what the question holds up, and the answer is kept where
+ * every AI reads it.
  */
 
-import { preparePlan } from './plan-import.js';
-import { TITLE_MAX, changePlan, planFocus, readPlan, type PlanActor } from './plan.js';
-import { ANSWERED_IN_CHAT, isOpenStatus, itemLabel } from './plan-words.js';
+import { addToPlan, answerDecision, parsePlanFile, setDone } from './plan-file.js';
+import { changePlanFile, readPlanFile } from './plan-file-store.js';
 
-/** A chat question's name in the plan: its words on one line, cut at a word when longer than a name may be. */
+/** The longest a chat question's words may be on its line in the plan. */
+const QUESTION_MAX = 300;
+
+/**
+ * What the app writes as the answer when the developer replies in the chat. The app sees that they replied, not what
+ * they said, so the AI then writes their words over it with `ctxspace plan answer`.
+ */
+export const ANSWERED_IN_CHAT = 'Answered in the chat.';
+
+/** A chat question's words on one line, cut at a word when longer than a line of the plan may be. */
 export function questionTitle(message: string): string {
   const text = message.replace(/\s+/g, ' ').trim();
-  if (text.length <= TITLE_MAX) return text;
-  const cut = text.slice(0, TITLE_MAX - 1);
+  if (text.length <= QUESTION_MAX) return text;
+  const cut = text.slice(0, QUESTION_MAX - 1);
   const atWord = cut.replace(/\s+\S*$/, '');
-  return `${(atWord.length > TITLE_MAX / 2 ? atWord : cut).trimEnd()}…`;
+  return `${(atWord.length > QUESTION_MAX / 2 ? atWord : cut).trimEnd()}…`;
 }
 
 /**
- * Adds the AI's chat question to the plan as the user's question. The milestone being worked on waits
- * for it, so it cannot be finished with the question open. Asking again while the same question is open
- * adds nothing. Returns the question as the AI names it.
+ * Adds the AI's chat question to PLAN.md as a decision, under the checkpoint being worked on, so that checkpoint
+ * shows what it waits for. Asking again while the same question is open adds nothing. Returns the question as the
+ * plan words it.
  */
 export async function addChatQuestionToPlan(
   workspacePath: string,
   input: { message: string; options?: string[]; harness: string },
-): Promise<{ id: string; label: string }> {
-  const title = questionTitle(input.message);
-  // Prepared first, so a workspace whose milestones are still in an older file keeps them.
-  const plan = await preparePlan(workspacePath);
-  const open = plan.items.find((item) => item.kind === 'question' && isOpenStatus(item.status) && item.title === title);
-  if (open) return { id: open.id, label: itemLabel(open) };
-  const actor: PlanActor = { by: 'agent', ...(input.harness && input.harness !== 'agent' ? { harness: input.harness } : {}) };
-  // Asked again after a reply in the chat closed it, before the AI wrote the answer down: the reply was not the answer.
-  const replied = [...plan.items].reverse().find((item) => item.kind === 'question' && item.status === 'done' && item.resolution === ANSWERED_IN_CHAT && item.title === title);
-  if (replied) {
-    const { item } = await changePlan(workspacePath, { type: 'reopen', id: replied.id, reason: 'Asked again in the chat.' }, { actor });
-    return { id: item.id, label: itemLabel(item) };
-  }
-  const current = planFocus(plan).current;
-  const detail = [
-    title !== input.message.trim() ? input.message.trim() : '',
-    input.options?.length ? `Suggested answers: ${input.options.join(' · ')}` : '',
-  ].filter(Boolean).join('\n\n');
-  const { item } = await changePlan(workspacePath, {
-    type: 'add', kind: 'question', title, owner: 'user',
-    ...(detail ? { detail } : {}),
-    ...(current ? { before: [current.id] } : {}),
-  }, { actor });
-  return { id: item.id, label: itemLabel(item) };
+): Promise<{ question: string }> {
+  const question = questionTitle(input.message);
+  const by = input.harness && input.harness !== 'agent' ? input.harness : 'ai';
+  await changePlanFile(workspacePath, (text, plan) => {
+    const decisions = [...plan.checkpoints.flatMap((checkpoint) => checkpoint.decisions), ...plan.decisions].filter((decision) => decision.question === question);
+    if (decisions.some((decision) => !decision.done)) return text;
+    // Asked again after a reply in the chat closed it, before the AI wrote the answer down: the reply was not the answer.
+    const replied = decisions.find((decision) => decision.answer === ANSWERED_IN_CHAT);
+    if (replied) return setDone(text, replied.key, false);
+    const current = plan.checkpoints.find((checkpoint) => !checkpoint.done);
+    return addToPlan(text, {
+      decision: {
+        question,
+        ...(question !== input.message.trim() ? { detail: input.message.trim() } : {}),
+        ...(input.options?.length ? { suggested: input.options } : {}),
+      },
+    }, current ? { checkpoint: current.key } : {}).text;
+  }, { by });
+  return { question };
 }
 
 /**
- * The developer replied in the chat to the AI's questions, so the same questions in the plan are answered too, as
- * theirs: one answer counts everywhere, and nothing asks them twice. The app sees that they replied, not what they
- * said; the AI writes their words over it with `ctxspace plan answer`. Returns the questions it answered.
+ * The developer replied in the chat to the AI's questions, so the same decisions in the plan are answered too, as
+ * theirs: one answer counts everywhere, and nothing asks them twice. Returns the questions it answered.
  */
 export async function answerChatQuestionsInPlan(workspacePath: string, messages: readonly string[]): Promise<string[]> {
   if (!messages.length) return [];
-  const titles = new Set(messages.map(questionTitle));
-  const plan = await readPlan(workspacePath);
+  const questions = new Set(messages.map(questionTitle));
+  const { plan, source } = await readPlanFile(workspacePath);
+  if (source === 'none') return [];
+  const open = [...plan.checkpoints.flatMap((checkpoint) => checkpoint.decisions), ...plan.decisions].filter((decision) => !decision.done && questions.has(decision.question));
+  if (!open.length) return [];
   const answered: string[] = [];
-  for (const question of plan.items.filter((item) => item.kind === 'question' && isOpenStatus(item.status) && titles.has(item.title))) {
-    // One that cannot be answered yet (it waits for something) stays open rather than stopping the others.
-    const result = await changePlan(workspacePath, { type: 'answer', id: question.id, answer: ANSWERED_IN_CHAT }, { actor: { by: 'user' } }).catch(() => null);
-    if (result) answered.push(itemLabel(result.item));
-  }
+  await changePlanFile(workspacePath, (text) => {
+    let next = text;
+    for (const decision of open) {
+      const now = [...parsePlanFile(next).checkpoints.flatMap((checkpoint) => checkpoint.decisions), ...parsePlanFile(next).decisions].find((candidate) => candidate.question === decision.question && !candidate.done);
+      if (!now) continue;
+      next = answerDecision(next, now.key, ANSWERED_IN_CHAT);
+      answered.push(decision.question);
+    }
+    return next;
+  }, { by: 'user' });
   return answered;
 }

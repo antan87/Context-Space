@@ -8,7 +8,8 @@ import { loadFeatureConfig } from './workspace.js';
 import { getActiveStorageProvider, isBuiltInLocalStorageProvider } from './adapters/registry.js';
 import { workspaceFileExists } from './storage.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
-import { PRIMARY_KNOWLEDGE_FILE, PRIMARY_PLAN_FILE } from './constants.js';
+import { PRIMARY_KNOWLEDGE_FILE } from './constants.js';
+import { PLAN_FILE } from './plan-file.js';
 import { assertNoLinkedPathComponents, assertFileHandleMatchesPath, readFileHandleAtMost } from '../resources/fs-safety.js';
 import { DIAGNOSTIC_EXCLUSIONS } from './data-inventory.js';
 
@@ -99,7 +100,7 @@ export async function collectDiagnostics(workspacePath?: string): Promise<Diagno
         checks.push({ id: 'repository-directory', target: `repository-${index + 1}`, status });
       }
       for (const [id, filename] of [
-        ['knowledge-file', PRIMARY_KNOWLEDGE_FILE], ['plan-file', PRIMARY_PLAN_FILE], ['assignment-file', 'contextspace-work.json'],
+        ['knowledge-file', PRIMARY_KNOWLEDGE_FILE], ['plan-file', PLAN_FILE], ['assignment-file', 'contextspace-work.json'],
       ] as const) {
         let status: z.infer<typeof checkSchema>['status'] = 'not-checked';
         // A third-party adapter may be remote: report the omission rather than calling it.

@@ -15,10 +15,10 @@ async function fixture() {
 }
 
 describe('Workroom data preview ownership', () => {
-  it.each(['contextspace', 'nexusflow'])('includes %s plan/handoff and warns without pretending to redact', async brand => {
+  it.each(['contextspace', 'nexusflow'])('includes the plan and the %s handoff, and warns without pretending to redact', async brand => {
     const root = await fixture();
     const plan = 'token=synthetic-value-that-should-be-reviewed';
-    await fs.writeFile(path.join(root, `${brand}-plan.md`), plan);
+    await fs.writeFile(path.join(root, 'PLAN.md'), plan);
     await fs.writeFile(path.join(root, `${brand}-handoff.md`), '# Handoff');
     const preview = await buildPortableWorkroomPreview(root);
     expect(preview.documents.plan).toBe(plan);
@@ -28,9 +28,9 @@ describe('Workroom data preview ownership', () => {
 
   it('reads reviewed documents from their configured adapter, not stray local files', async () => {
     const root = await fixture();
-    await fs.writeFile(path.join(root, 'nexusflow-plan.md'), 'wrong local document');
+    await fs.writeFile(path.join(root, 'PLAN.md'), 'wrong local document');
     const adapter = new LocalStorageAdapter();
-    adapter.readWorkspaceFile = async (_root, _id, name) => name === 'contextspace-plan.md' ? 'adapter plan' : name === 'contextspace-handoff.md' ? 'adapter handoff' : '';
+    adapter.readWorkspaceFile = async (_root, _id, name) => name === 'PLAN.md' ? 'adapter plan' : name === 'contextspace-handoff.md' ? 'adapter handoff' : '';
     setActiveStorageProvider(adapter);
     const preview = await buildPortableWorkroomPreview(root);
     expect(preview.documents.plan).toBe('adapter plan');

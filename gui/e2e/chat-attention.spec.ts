@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 const workspace = (name: string) => ({
   id: name, branchName: name, description: `${name} workspace`, repos: [], assistants: [], workspacePath: `/tmp/${name}`, createdAt: '2026-09-24T00:00:00Z',
@@ -46,7 +47,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/terminals/bootstrap', route => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/terminals/*/status', route => route.fulfill({ json: { available: true, sessions: [], targets: [] } }));
   await page.route('**/api/workspace/*/sessions', route => route.fulfill({ json: { sessions: [] } }));
-  await page.route('**/api/workspace/*/plan', route => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/*/plan', route => route.fulfill({ json: planFile() }));
   await page.route('**/api/attention?*', async route => {
     polls++;
     const wanted = new URL(route.request().url()).searchParams.get('workspaces')?.split(',') ?? [];

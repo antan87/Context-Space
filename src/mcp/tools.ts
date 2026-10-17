@@ -1,5 +1,4 @@
-import { readPlanningNotes } from '../core/planning-notes.js';
-import { planningTools, useThePlanCommand } from './planning-tools.js';
+import { planningTools } from './planning-tools.js';
 import { screenTools } from './screen-tools.js';
 /**
  * @module mcp/tools
@@ -188,18 +187,8 @@ export const tools: NexusFlowTool[] = [
   ...planningTools,
   ...screenTools,
   {
-    name: 'get_planning_notes',
-    description: `${useThePlanCommand('get_planning_notes')} Read the older authored notes in contextspace-milestones.md: delivery order, questions, existing work and deferred decisions.`,
-    annotations: { readOnlyHint: true },
-    inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
-    handler: async (_args, ctx) => {
-      try { return json({ deprecated: useThePlanCommand('get_planning_notes'), ...(await readPlanningNotes(ctx.workspacePath)) }); }
-      catch (error) { return errorResult(error instanceof Error ? error.message : String(error)); }
-    },
-  },
-  {
     name: 'get_work_context',
-    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is the text `ctxspace plan` prints, `lifecycle` holds the milestones. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan with `ctxspace plan` in your shell.',
+    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is where PLAN.md stands (as `ctxspace plan` prints it) followed by its text. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan by editing PLAN.md.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
     handler: async (_args, ctx) => {
@@ -1283,9 +1272,9 @@ export const tools: NexusFlowTool[] = [
             workspaceId: feature.id,
             harness,
             timestamp: entry.timestamp,
-            ...(inPlan ? { planQuestion: inPlan.label } : {}),
+            ...(inPlan ? { planQuestion: inPlan.question } : {}),
             message: inPlan
-              ? `${waitNote} It is in the plan as ${inPlan.label}; when the user answers, record their words: ctxspace plan answer ${inPlan.id} "<their answer>".`
+              ? `${waitNote} It is a decision in PLAN.md too; when the user answers, tick it and add their words on an "Answer:" line under it.`
               : waitNote,
           });
         });
@@ -1474,7 +1463,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   review: [
     'search_workspace',
@@ -1492,7 +1480,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   ci: [
     'search_workspace',
@@ -1509,7 +1496,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   developer: ['*'],
   interactive: ['*'],

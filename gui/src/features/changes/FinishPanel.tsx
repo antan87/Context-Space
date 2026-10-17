@@ -119,7 +119,7 @@ export function FinishPanel({ ws, onClose, onGitChanged }: Props) {
       )}
 
       <h6 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">Open in the plan</h6>
-      <PlanFinishList workspaceId={wsId} />
+      <PlanFinishList plan={policy?.plan} />
 
       <h6 className="mb-1.5 text-[11px] font-semibold text-muted-foreground">1. Verification evidence</h6>
       {progression.isLoading ? <Spinner className="size-4" /> : progression.isError ? (

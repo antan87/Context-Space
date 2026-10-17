@@ -21,7 +21,7 @@ export const DATA_INVENTORY: readonly DataClass[] = [
   },
   {
     id: 'authored-context', title: 'Briefs, assignments and sources', owner: 'ContextSpace, authored by you',
-    storage: 'Workspace manifest, contextspace-work.json, the plan (contextspace-plan.json: milestones, tasks, questions and decisions, each with its last 20 changes), contextspace-document-*.md, and older planning files moved into the plan, kept in .contextspace/archive/ for one release. Documents and the plan use the selected storage adapter; check results stay in the local state file.',
+    storage: 'Workspace manifest, contextspace-work.json, the plan (PLAN.md: the goal, checkpoints, steps and decisions, with the last 300 changes in .contextspace/plan-changes.jsonl), contextspace-document-*.md, and older planning files moved into the plan, kept in .contextspace/archive/. Documents and the plan use the selected storage adapter; check results stay in the local state file.',
     network: 'Local storage by default. Reading context with an assistant can send it through that assistant. Link attachments store the URL; viewing external links contacts their destination. Plugin adapters may use a remote store.',
     retention: 'No automatic expiry. Workspace deletion removes local documents; archiving keeps them readable. Active project-source owners cannot be deleted until sources are migrated or superseded.',
     controls: 'Manage sources in Plan. Shared project sources remain owned by their originating workspace; superseding a source does not erase its content.',
@@ -53,7 +53,7 @@ export const DATA_INVENTORY: readonly DataClass[] = [
   },
   {
     id: 'lifecycle', title: 'Milestones and verification history', owner: 'ContextSpace',
-    storage: '.contextspace-state.json (or legacy state) holds lifecycle and verification state. contextspace-plan.md is a generated view.',
+    storage: '.contextspace-state.json (or legacy state) holds lifecycle and verification state, including the last check of each checkpoint.',
     network: 'Stored locally. Verification executes your configured commands, which can access the network.',
     retention: 'No automatic expiry of stored state. New verification can replace prior evidence; workspace deletion removes the local file, archiving keeps it.',
     controls: 'Edit milestones through Plan or the lifecycle commands. Passing checks describe the tested code and must be rerun after changes.',

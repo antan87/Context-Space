@@ -761,7 +761,7 @@ export interface PlanFinishItem { id: string; label: string; status: string; hel
 export interface ProgressionDecision {
   ready: boolean;
   repos: RepoEvidence[];
-  /** What a milestone still waits for (it stops finishing), and other open items (they only warn). */
+  /** Checkpoints in PLAN.md not done (they stop finishing), and other open steps and decisions (they only warn). */
   plan?: { blocking: PlanFinishItem[]; open: PlanFinishItem[] };
   blockers: string[];
   warnings?: string[];

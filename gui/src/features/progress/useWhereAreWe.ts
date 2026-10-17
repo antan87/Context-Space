@@ -1,7 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { useAcknowledgeQuestions, useChangePlan, usePlan, useProgressFacts, useReopenMilestone, useWorkGuidance, useWorkspaceChanges } from '../../lib/api/queries.js';
+import { useAcknowledgeQuestions, useProgressFacts, useReopenMilestone, useWorkGuidance, useWorkspaceChanges } from '../../lib/api/queries.js';
+import { useChangePlanFile, usePlanFile } from '../plan/planFile.js';
 import type { OpenQuestion } from '../../types.js';
 import { activeProposals, answersQuestion, freshReveals, latestNext, nextAction, type NextAction } from './progressView.js';
 import { aiCloses, planQuestionsForYou, readSeenCloses, rememberSeenCloses } from './stripPlan.js';
@@ -38,8 +39,8 @@ export function useWhereAreWe({ workspace, active, fillPrompt, replyRef, openFil
   const [seenCloses, setSeenCloses] = useState(() => readSeenCloses(workspace) ?? new Date(Date.now() - CLOSES_WINDOW_MS).toISOString());
   const factsQuery = useProgressFacts(workspace, active);
   const guidanceQuery = useWorkGuidance(active ? workspace : null);
-  const planQuery = usePlan(active ? workspace : null);
-  const changePlan = useChangePlan(workspace);
+  const planQuery = usePlanFile(active ? workspace : null);
+  const changePlan = useChangePlanFile(workspace);
   const changesQuery = useWorkspaceChanges(workspace, active && expanded);
   const feed = useScreenFeed(workspace, active);
   const reopen = useReopenMilestone(workspace);
@@ -110,8 +111,10 @@ export function useWhereAreWe({ workspace, active, fillPrompt, replyRef, openFil
     fill(next.prompt);
   };
   const answerInPlan = async (id: string, answer: string) => {
+    const question = planQuestions.find((item) => item.id === id);
+    if (!question) return false;
     try {
-      await changePlan.mutateAsync({ change: { type: 'answer', id, answer }, ifRevision: plan?.revision });
+      await changePlan.mutateAsync({ type: 'answer', key: id, answer, expected: question.title });
       setNotice('Your answer is in the plan.');
       return true;
     } catch {
@@ -119,8 +122,10 @@ export function useWhereAreWe({ workspace, active, fillPrompt, replyRef, openFil
     }
   };
   const reopenInPlan = async (id: string, reason: string): Promise<string | null> => {
+    const closed = closes.find((entry) => entry.itemId === id);
+    if (!closed) return 'It is no longer in the plan.';
     try {
-      await changePlan.mutateAsync({ change: { type: 'reopen', id, reason }, ifRevision: plan?.revision });
+      await changePlan.mutateAsync({ type: 'reopen', key: id, reason, expected: closed.label });
       setNotice('Reopened. Tell the AI what is wrong in the chat.');
       return null;
     } catch (error) {

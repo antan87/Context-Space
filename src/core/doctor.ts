@@ -292,7 +292,6 @@ export async function runDoctor(workspacePath: string): Promise<DoctorReport> {
     { name: 'AGENTS.md', exists: () => workspaceFileExists(workspacePath, featureId, 'AGENTS.md') },
     { name: 'WORKSPACE.md', exists: () => workspaceFileExists(workspacePath, featureId, 'WORKSPACE.md') },
     { name: 'contextspace-knowledge.md', exists: () => workspaceFileExists(workspacePath, featureId, 'contextspace-knowledge.md') },
-    { name: 'contextspace-plan.md', exists: () => workspaceFileExists(workspacePath, featureId, 'contextspace-plan.md') },
     {
       name: 'contextspace.lock',
       exists: async () => {

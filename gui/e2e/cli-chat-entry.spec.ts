@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 const alpha = { id: 'alpha', branchName: 'alpha', description: 'Alpha workspace', repos: [], assistants: [], workspacePath: '/tmp/alpha', createdAt: '2026-09-24T00:00:00Z' };
 const beta = { id: 'beta', branchName: 'beta', description: 'Beta workspace', repos: [], assistants: [], workspacePath: '/tmp/beta', createdAt: '2026-09-24T00:00:00Z' };
@@ -13,7 +14,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/terminals/bootstrap', route => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/terminals/*/status', route => route.fulfill({ json: { available: true, sessions: [], targets: [] } }));
   await page.route('**/api/workspace/*/sessions', route => route.fulfill({ json: { sessions: [] } }));
-  await page.route('**/api/workspace/*/plan', route => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/*/plan', route => route.fulfill({ json: planFile() }));
 });
 
 test('workspace actions open the selected CLI chat without starting a session', async ({ page }) => {

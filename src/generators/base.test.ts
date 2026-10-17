@@ -4,8 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { buildContextContent } from './base.js';
-import { renderPlanInstructions } from '../core/plan-text.js';
-import { PLAN_RULES, WHO_ACTS } from '../core/plan-words.js';
+import { renderPlanFileInstructions } from '../core/plan-file-text.js';
 import type { Feature, ProjectAnalysis, WorkspaceContext } from '../types.js';
 
 /** Minimal ProjectAnalysis with the fields the context builder reads. */
@@ -191,7 +190,8 @@ describe('buildContextContent', () => {
       const content = await buildContextContent(ctxFor({}));
 
       expect(content).toContain('contextspace-knowledge.md');
-      expect(content).toContain('contextspace-plan.md');
+      expect(content).toContain('`PLAN.md`');
+      expect(content).not.toContain('contextspace-plan.md');
     });
 
     it('does not send the agent to read derived facts it could grep', async () => {
@@ -307,16 +307,18 @@ describe('buildContextContent', () => {
       expect(mentions[0]).toContain('No MCP');
     });
 
-    it('tells every AI tool to work with the plan through ctxspace plan, with the routine, the rules and who acts', async () => {
+    it('tells every AI tool the plan is PLAN.md, edited directly, in a few lines', async () => {
       const content = await buildContextContent(ctxFor({}));
+      const section = renderPlanFileInstructions();
 
-      expect(content).toContain(renderPlanInstructions());
+      expect(content).toContain(section);
       expect(content.indexOf('## Plan')).toBeLessThan(content.indexOf('## Where to look'));
-      expect(content).toContain('1. Start by running `ctxspace plan`.');
-      expect(content).toContain('   - stuck: `ctxspace plan block <code> --reason "<what you wait for>"`');
-      PLAN_RULES.forEach((rule, index) => expect(content).toContain(`${index + 1}. ${rule}`));
-      expect(content).toContain(WHO_ACTS.slice(0, 2).join(' '));
-      expect(content).toContain('./.contextspace/bin/ctxspace plan');
+      expect(section).toContain('`- [ ] Decide: <question>`');
+      expect(section).toContain('Never answer it yourself.');
+      expect(section).toContain('`ctxspace plan done "<checkpoint>"`');
+      // The plan instructions every session loads stay short: they were over 3 KB of rules and commands.
+      expect(section.length).toBeLessThan(1400);
+      expect(content).toContain('./.contextspace/bin/ctxspace');
       // The plan has no MCP tools: AIs are never sent to the old planning tools.
       for (const tool of ['update_milestone_plan', 'set_milestone', 'get_planning_notes', 'save_planning_notes']) expect(content).not.toContain(tool);
     });
@@ -338,16 +340,16 @@ describe('buildContextContent', () => {
       // not merely cost tokens. Two repos should be nowhere near that.
       const content = await buildContextContent(relatedCtx());
 
-      // The Plan section is allowed on top of the caps below: in the agy and Haiku test, its work
-      // routine cut agy's tool calls from 166 to 58. It has a cap of its own.
-      const plan = renderPlanInstructions();
+      // The Plan section has a cap of its own: a short routine told weaker AIs how to work (in the agy and Haiku
+      // test, a routine cut agy's tool calls from 166 to 58), and the plan file keeps it short.
+      const plan = renderPlanFileInstructions();
       expect(content.split('\n').length - plan.split('\n').length).toBeLessThan(40);
       // 1600 until the request_user_input pointer was added, then 1800 until the
       // screen-tool pointer. Agents that load MCP tools on demand need a line like
       // each to know the tools exist; these are the two lines allowed past the old cap.
       expect(content.length - plan.length).toBeLessThan(2000);
-      expect(plan.split('\n').length).toBeLessThan(25);
-      expect(plan.length).toBeLessThan(2600);
+      expect(plan.split('\n').length).toBeLessThan(10);
+      expect(plan.length).toBeLessThan(1400);
     });
   });
 
