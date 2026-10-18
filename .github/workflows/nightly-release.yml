@@ -15,15 +15,16 @@ name: Nightly release
 
 on:
   schedule:
-    - cron: '0 3 * * *' # 03:00 UTC every night
+    - cron: '23 3 * * *' # 03:23 UTC every night (non-zero minute avoids top-of-hour queue delay)
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # Shares the release group with release.yml, so a nightly and a manual release never race.
-  group: release
+  # Uses its own concurrency group so it never deadlocks with release.yml (which uses group: release).
+  # release:ship itself guards against racing an in-flight release.yml run.
+  group: nightly-release
   cancel-in-progress: false
 
 jobs:
@@ -49,6 +50,11 @@ jobs:
           # The token is used for pushes, so the release branch push is attributed to the owner.
           token: ${{ secrets.RELEASE_TOKEN }}
 
+      - name: Configure Git committer
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -57,4 +63,8 @@ jobs:
       - name: Ship the unreleased changes
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GIT_AUTHOR_NAME: 'github-actions[bot]'
+          GIT_AUTHOR_EMAIL: 'github-actions[bot]@users.noreply.github.com'
+          GIT_COMMITTER_NAME: 'github-actions[bot]'
+          GIT_COMMITTER_EMAIL: 'github-actions[bot]@users.noreply.github.com'
         run: node scripts/release-ship.mjs --timeout 150 --poll 60

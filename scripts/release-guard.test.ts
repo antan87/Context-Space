@@ -370,6 +370,30 @@ describe('release workflow wiring', () => {
   });
 });
 
+describe('nightly-release workflow wiring', () => {
+  const nightly = readYaml('.github/workflows/nightly-release.yml');
+  const release = readYaml('.github/workflows/release.yml');
+
+  it('uses a dedicated concurrency group that does not clash with release.yml', () => {
+    expect(nightly.concurrency.group).not.toBe(release.concurrency.group);
+    expect(nightly.concurrency.group).toBe('nightly-release');
+  });
+
+  it('configures git committer identity so release-ship can commit version bumps', () => {
+    const steps: any[] = nightly.jobs.ship.steps;
+    const configStep = steps.find((s) => String(s.run ?? '').includes('user.name') && String(s.run ?? '').includes('user.email'));
+    expect(configStep).toBeDefined();
+    expect(configStep.run).toContain('git config --global user.name');
+    expect(configStep.run).toContain('git config --global user.email');
+  });
+
+  it('uses a non-zero minute schedule to avoid top-of-the-hour queue latency', () => {
+    const cron = nightly.on.schedule[0].cron;
+    const [minute] = cron.split(' ');
+    expect(Number(minute)).toBeGreaterThan(0);
+  });
+});
+
 describe('release-guard CLI', () => {
   let server: Server | undefined;
 
