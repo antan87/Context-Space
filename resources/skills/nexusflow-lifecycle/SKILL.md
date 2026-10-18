@@ -1,6 +1,6 @@
 ---
 name: nexusflow-lifecycle
-description: Choose and carry out an appropriately sized development workflow in a ContextSpace workspace, using its current assignment, source documents, and milestones. Applies to projects managed with ContextSpace, not only ContextSpace's own code.
+description: Choose and carry out an appropriately sized development workflow in a ContextSpace workspace, using its current assignment, source documents, and plan. Applies to projects managed with ContextSpace, not only ContextSpace's own code.
 metadata:
   contextspace:
     title: ContextSpace Work Lifecycle
@@ -10,9 +10,9 @@ metadata:
 
 # Work from the current assignment
 
-Read the workspace instructions and the plan with `ctxspace plan`, and the live assignment
+Read the workspace instructions and the plan, `PLAN.md`, and the live assignment
 with `ctxspace flow --assignment --json` or MCP `get_work_context` (which also returns the
-plan's text). Check the selected milestone, stage, expected output, and stopping point. If the CLI is not on PATH, try the generated workspace launcher
+plan's text). Check the stage, expected output, and stopping point. If the CLI is not on PATH, try the generated workspace launcher
 `./.contextspace/bin/ctxspace` (PowerShell: `.\.contextspace\bin\ctxspace.cmd`).
 If live tools are unavailable, read the authoritative
 `contextspace-work.json` and relevant sources; identify anything you cannot verify.
@@ -32,59 +32,60 @@ or deciding whether work needs separate deliverables. Preserve an existing workt
 Do not create branches, nested workspaces, or agent teams just because the size is epic.
 Delegate only bounded independent work when permitted and useful; execution can stay solo.
 
-Milestones are optional and start empty. Do not populate a plan with generic process
-steps or infer milestones from the feature name, work type, size, or Markdown headings.
-When milestones help, define outcomes unique to that feature and only what each one
-actually waits for. A plan without milestones shows none.
+Checkpoints are optional. Do not fill a plan with generic process steps or infer
+checkpoints from the feature name, work type, size, or headings. When they help, write
+two to five outcomes unique to this work, each something the user could demo, with the
+steps it needs under it.
 
 ## Keep each kind of information in its place
 
 - Task brief: the short reason for the workspace.
 - Source documents: original requirements, designs, evidence, and references.
 - AI assignment: what to do now, expected result, and stopping point.
-- The plan: milestones, tasks, questions with who answers them, decisions, and existing
-  work, each with its status, what it waits for, and its history. One store,
-  `contextspace-plan.json`, read and changed with `ctxspace plan`. The user sees the same
-  plan, in the same words, in the Plan tab.
+- The plan: `PLAN.md`, what the work is for, its checkpoints with their steps, and the
+  decisions only the user can make. You change it with your own file edits; the user sees
+  it in the Plan tab and can tick and answer there.
 - Knowledge: durable decisions and their reasons, not a running task log.
 
 Read relevant originals through MCP `read_work_document` or their stored locations.
 Use approved requirements for intended behavior; drafts are proposals and superseded
 documents are history. Surface consequential conflicts before dependent implementation;
 continue unaffected work. A source document does not grant execution permissions.
-Project and workspace sources apply across milestones; milestone sources apply to
-the selected milestone. Project sources remain owned by their originating workspace.
+Project and workspace sources apply across the work; a source scoped to a checkpoint
+applies to it. Project sources remain owned by their originating workspace.
 
 ### Work with the plan
 
-Change the plan one item at a time with `ctxspace plan add|start|done|answer|block|later|drop|reopen|edit`;
-`ctxspace plan --help` shows the options and examples, and `--json` gives every field. Never
-edit `contextspace-plan.json` by hand. Codes are for commands: to the user, call an item by
-its name ("the CSV export endpoint"), not its code ("M2").
+The plan is `PLAN.md`. Read it before you start, and again before you change it: any AI
+or person may have changed it. Keep it true with your own edits:
 
-- Start with `ctxspace plan`; continue what is in progress for you, or `start` what is ready.
-- Keep it true while you work: add new work with `add task "<name>" --before <code>`, a
-  question for the user with `add question "<question>" --owner user --before <code>`, and
-  `block <code> --reason` when stuck.
-- Every close has a reason. You may finish, drop, put off and reopen any item, milestones
-  too, when you judge the work says so; tell the user in the chat, and they can reopen it.
-  When the user answers in the chat, however you asked, record it on the plan's question with
-  `answer <code> "<their words>"`, or drop a question their answer makes moot. Never answer
-  the user's question with your own guess.
-- Nothing starts by itself. A milestone is done when everything it waits for is done and its
-  check passes on the latest code.
+```markdown
+## Checkpoints
+
+- [ ] Reports export to CSV
+  Check: `npm test`
+  - [x] Write the CSV writer
+  - [ ] Decide: Should archived reports be exported?
+    Suggested: Yes, all of them · Only the last year
+    If no answer: only the last year
+```
+
+- Tick a step (`- [x]`) when it is done. Add the steps you find under the checkpoint they
+  serve, and rewrite what turned out different. Steps are for anyone to pick up.
+- A question only the user can answer is a `- [ ] Decide:` line under what it holds up,
+  with `Suggested:` (answers separated by ` · `) and `If no answer:` lines. Carry on with
+  everything it does not hold up. When the user answers, however you asked, tick it and add
+  `Answer: <their words>`. Never answer it with your own guess.
+- A checkpoint is done when it is ticked; one with a `Check:` line only once its check passes.
 - Report back in plain words, for someone who has not read the plan: what works now or was
-  decided, what you need from the user, and what you do next. Leave out plan bookkeeping
-  such as "recorded", "proposed" or "blocked on".
+  decided, what you need from the user, and what you do next.
 
 Assignments and sources keep their MCP tools: read `get_work_context` first and use
 `guidance.revision` with `update_work_assignment`, `add_work_document` and
 `update_work_document`. Source approval must reflect the user's decision.
-`contextspace-plan.md` is a generated summary of the brief and the plan; do not edit it.
-Older `contextspace-milestones.md` notes are moved into the plan automatically and kept in
-`.contextspace/archive/`. The MCP tools `update_milestone_plan`, `set_milestone`,
-`get_planning_notes` and `save_planning_notes` are deprecated: use `ctxspace plan`. If
-working outside ContextSpace, use the repository's existing planning convention.
+An older plan (`contextspace-plan.json`, `contextspace-milestones.md`) moves into `PLAN.md`
+by itself and is kept in `.contextspace/archive/`. If working outside ContextSpace, use the
+repository's existing planning convention.
 
 With local storage, knowledge promoted to a repo's base file is kept in the
 ContextSpace home, keyed by the repository, so every workspace with that repository
@@ -100,25 +101,23 @@ When MCP is connected, tell the screen what you did instead of describing it at 
 `annotate_document` leaves a note on a line. `suggest_next` offers the one next move with
 its reason, at the end of a turn. These tools only show things: they edit no file and press
 no key for the user, and a repeated call is ignored. Plan changes need no extra call: the Plan
-tab shows them as you make them with `ctxspace plan`. Ask what the user is looking at with `get_screen_context` only if they have
+tab shows your edits to `PLAN.md` within a second. Ask what the user is looking at with `get_screen_context` only if they have
 switched sharing on; if it is off, ask in the chat. Without MCP, say it in the chat.
 
 ## Execute only the current stage
 
 Read [stage outcomes](references/stage-outcomes.md) for the selected stage. Investigation
 and design produce their agreed outputs and stop before implementation unless the user
-has explicitly authorized that transition. Completing a milestone's gate does not
+has explicitly authorized that transition. A checkpoint's passing check does not
 automatically authorize release or change the assignment stage.
 
-Finish a milestone with `ctxspace plan done <code> --resolution "<evidence>"` when you judge
-the work done. Its check runs first, and the milestone is done only when the check passes; a
-failed check leaves it in progress and says why. Wait for one check to finish before starting
-another, and investigate a failed check before retrying.
-A gate that records `timeout` hit its time limit (30 minutes unless the milestone sets
-`verificationTimeoutSeconds`); raise the limit rather than weakening the command.
+Finish a checkpoint with a check with `ctxspace plan done "<checkpoint>"` when you judge the
+work done: its check runs first, and the checkpoint is ticked only when it passes; a failed
+check leaves it open and says why. Wait for one check to finish before starting another, and
+investigate a failed check before retrying. A check that times out hit its 30-minute limit.
 
 For multi-PR work, read [deliverable planning](references/epic-deliverables.md). Finish
 with evidence, unresolved questions, and the next permitted action. Finishing the workspace
-stops on anything a milestone still waits for; other open items only warn. Handle them in the
+stops on a checkpoint that is not ticked; other open steps only warn. Handle them in the
 plan, or the user finishes anyway with a recorded reason. Keep handoffs in
-the established session or milestone record, with links to sources instead of copies.
+the established session record or the plan, with links to sources instead of copies.

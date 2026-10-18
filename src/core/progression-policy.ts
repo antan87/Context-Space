@@ -6,8 +6,8 @@
  * Evidence is the latest verification of each editable repository, bound to
  * the content that was tested (HEAD plus a fingerprint of the working tree).
  * Missing, failed, timed-out, unreadable and stale evidence all block. So does
- * the plan's sixth rule: an open item that a milestone waits for blocks, and
- * other open items only warn. A caller may still proceed with an explicit
+ * a checkpoint in PLAN.md that is not ticked; other open steps and decisions
+ * only warn. A caller may still proceed with an explicit
  * override that states a reason; the override is recorded and returned, never
  * implied by a generic "yes".
  * Checkpoint commits are not gated by this policy — only finish/release is.
@@ -45,19 +45,20 @@ export interface RepoEvidence {
   command?: string;
 }
 
-/** A plan item named in the decision. */
+/** Something in PLAN.md named in the decision. */
 export interface PlanFinishItem {
+  /** Its key in PLAN.md. */
   id: string;
-  /** Code and name: "Q1 Which time zone?". */
+  /** Its words: "Reports export to CSV". */
   label: string;
   status: string;
-  /** Labels of the milestones and items that wait for it. */
+  /** Kept for older readers: nothing in PLAN.md waits by name. */
   heldUpBy: string[];
 }
 
 /** The policy decision for a workspace. */
 export interface ProgressionDecision {
-  /** True when every editable repository has fresh, acceptable evidence and nothing a milestone waits for is open. */
+  /** True when every editable repository has fresh, acceptable evidence and every checkpoint is ticked. */
   ready: boolean;
   repos: RepoEvidence[];
   /** What the plan still has open: what stops finishing, and what only warns. */
@@ -161,35 +162,35 @@ export async function evaluateProgression(
   const plan = await judgePlan(workspacePath);
   blockers.push(...plan.problems);
   for (const item of plan.blocking) {
-    blockers.push(`${item.heldUpBy.join(' and ')} ${item.heldUpBy.length === 1 ? 'waits' : 'wait'} for ${item.label}, which is ${item.status}. Finish, answer or drop it in the plan.`);
+    blockers.push(`The checkpoint "${item.label}" is not done (${item.status}). Tick it in PLAN.md once it is, or rewrite the plan.`);
   }
-  const warnings = plan.open.map((item) => `${item.label} is still ${item.status}.`);
+  const warnings = plan.open.map((item) => `"${item.label}" is still ${item.status}.`);
   return { ready: blockers.length === 0, repos, plan: { blocking: plan.blocking, open: plan.open }, blockers, warnings };
 }
 
 /**
- * The plan's part of the decision, read without writing anything. A plan that cannot be read stops finishing:
+ * The plan's part of the decision, read without writing anything: a checkpoint in PLAN.md that is not ticked stops
+ * finishing; open steps and decisions outside the checkpoints only warn. A plan that cannot be read stops finishing:
  * nobody can tell what it still waits for.
  */
 async function judgePlan(workspacePath: string): Promise<{ blocking: PlanFinishItem[]; open: PlanFinishItem[]; problems: string[] }> {
   // Imported here: the plan modules lead back to verification, which this module also uses.
-  const [{ readPlanReadOnly }, { planFinishCheck }, { heldUpBy }, { itemLabel, STATUS_WORDS }] = await Promise.all([
-    import('./lifecycle.js'), import('./plan-app.js'), import('./plan.js'), import('./plan-words.js'),
-  ]);
+  const { readPlanFile } = await import('./plan-file-store.js');
   let plan;
   try {
-    plan = await readPlanReadOnly(workspacePath);
+    plan = (await readPlanFile(workspacePath)).plan;
   } catch (error) {
     return { blocking: [], open: [], problems: [`The plan cannot be read: ${error instanceof Error ? error.message : String(error)}`] };
   }
-  const check = planFinishCheck(plan);
-  const describe = (item: typeof plan.items[number]): PlanFinishItem => ({
-    id: item.id,
-    label: itemLabel(item),
-    status: item.proposal ? "waiting for the user's OK" : STATUS_WORDS[item.status].label.toLowerCase(),
-    heldUpBy: heldUpBy(plan, item.id).map(itemLabel),
+  const blocking = plan.checkpoints.filter((checkpoint) => !checkpoint.done).map((checkpoint) => {
+    const ticked = checkpoint.steps.filter((step) => step.done).length;
+    return { id: checkpoint.key, label: checkpoint.title, status: checkpoint.steps.length ? `${ticked} of ${checkpoint.steps.length} steps done` : 'not ticked', heldUpBy: [] };
   });
-  return { blocking: check.blocks.map(describe), open: check.warns.map(describe), problems: [] };
+  const open = [
+    ...plan.steps.filter((step) => !step.done).map((step) => ({ id: step.key, label: step.text, status: 'open', heldUpBy: [] })),
+    ...plan.decisions.filter((decision) => !decision.done).map((decision) => ({ id: decision.key, label: decision.question, status: 'waiting for your answer', heldUpBy: [] })),
+  ];
+  return { blocking, open, problems: [] };
 }
 
 /** Keeps the override log bounded; the latest finish record also carries its override. */

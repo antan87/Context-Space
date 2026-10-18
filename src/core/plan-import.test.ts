@@ -194,8 +194,8 @@ describe('importPlanningNotes', () => {
     expect(await exists(PLANNING_NOTES_FILE)).toBe(false);
     const plan = await readPlan(root);
     expect(plan.imports).toEqual([expect.objectContaining({ file: PLANNING_NOTES_FILE, at: AT, archivedAs: archived, items: ['Q1'] })]);
-    // The summary follows the plan.
-    expect(await fs.readFile(path.join(root, 'contextspace-plan.md'), 'utf8')).toContain('Q1 Max rows?');
+    // No generated summary follows it any more: PLAN.md is the plan people read.
+    expect(await exists('contextspace-plan.md')).toBe(false);
 
     expect(await importPlanningNotes(root)).toMatchObject({ status: 'none' });
     expect((await readPlan(root)).items).toHaveLength(1);

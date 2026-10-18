@@ -337,3 +337,48 @@ describe('AppSidebar - Active and Archived lists', () => {
   });
 });
 
+describe('AppSidebar - Advanced tools', () => {
+  const advancedButton = /<button[^>]*aria-expanded="(true|false)"[^>]*>(?:(?!<\/button>).)*Advanced tools<\/button>/;
+
+  it('keeps Reusable setup in view and folds Workrooms and Strategies away by default', () => {
+    const html = renderSidebar({}, '/overview');
+
+    expect(html).toContain('Reusable setup');
+    expect(html).toContain('aria-label="Projects"');
+    expect(html).toContain('aria-label="Skills &amp; agents"');
+    const match = advancedButton.exec(html);
+    expect(match?.[1]).toBe('false');
+    expect(match?.[0]).toContain('aria-controls="sidebar-advanced-tools"');
+    // The items stay in the page behind `hidden`, so the button's aria-controls always points at something.
+    expect(html).toMatch(/<div id="sidebar-advanced-tools" hidden="">/);
+    expect(html).toContain('aria-label="Workrooms"');
+    expect(html).toContain('aria-label="Strategies"');
+  });
+
+  it('is open when the viewer left it open', () => {
+    storage.set('ctxspace_sidebar_advanced_open', 'true');
+    const html = renderSidebar({}, '/overview');
+
+    expect(advancedButton.exec(html)?.[1]).toBe('true');
+    expect(html).toMatch(/<div id="sidebar-advanced-tools">/);
+  });
+
+  it.each(['/workrooms', '/workrooms/room-1', '/workflows', '/strategies'])('is open by itself on %s', (path) => {
+    const html = renderSidebar({}, path);
+
+    expect(advancedButton.exec(html)?.[1]).toBe('true');
+    expect(html).toMatch(/<div id="sidebar-advanced-tools">/);
+  });
+
+  it('is folded away on a page outside the section even when storage cannot be read', () => {
+    const original = localStorageMock.getItem;
+    localStorageMock.getItem = () => { throw new DOMException('blocked', 'SecurityError'); };
+    try {
+      const html = renderSidebar({}, '/overview');
+      expect(advancedButton.exec(html)?.[1]).toBe('false');
+    } finally {
+      localStorageMock.getItem = original;
+    }
+  });
+});
+

@@ -5,6 +5,8 @@ import * as os from 'node:os';
 import { execa } from 'execa';
 import fse from 'fs-extra';
 import { generateContextFiles } from './index.js';
+import { checkGenerationLock, GENERATED_VIEW_HEADER, hashGeneratedContent } from '../core/generation-lock.js';
+import { commitWorkspaceArtifacts } from '../core/workspace-git.js';
 import type { WorkspaceContext } from '../types.js';
 
 describe('generateContextFiles with Pi harness', () => {
@@ -46,8 +48,8 @@ describe('generateContextFiles with Pi harness', () => {
     const agentsMd = await fs.readFile(path.join(tempWorkspace, 'AGENTS.md'), 'utf-8');
     expect(agentsMd).toContain('Testing workspace creation with Pi assistant');
 
-    const workspaceMd = await fs.readFile(path.join(tempWorkspace, 'WORKSPACE.md'), 'utf-8');
-    expect(workspaceMd).toContain('Testing workspace creation with Pi assistant');
+    // The index for people is no longer written: the Docs panel and AGENTS.md cover it.
+    expect(await fse.pathExists(path.join(tempWorkspace, 'WORKSPACE.md'))).toBe(false);
 
     const knowledgeMd = await fs.readFile(path.join(tempWorkspace, 'contextspace-knowledge.md'), 'utf-8');
     expect(knowledgeMd).toContain('Testing workspace creation with Pi assistant');
@@ -72,14 +74,12 @@ describe('generateContextFiles with Pi harness', () => {
     await generateContextFiles(ctx, ['claude'], tempWorkspace);
 
     const agentsMd = await fs.readFile(path.join(tempWorkspace, 'AGENTS.md'), 'utf-8');
-    const workspaceMd = await fs.readFile(path.join(tempWorkspace, 'WORKSPACE.md'), 'utf-8');
     const knowledgeMd = await fs.readFile(path.join(tempWorkspace, 'contextspace-knowledge.md'), 'utf-8');
 
     // No blank paragraph where the description would have been, and no placeholder in its place.
     expect(agentsMd).toMatch(/# no-description-feature\n\n[^\n]/);
-    expect(workspaceMd).toMatch(/# Workspace: no-description-feature\n\n> Assistant context lives/);
     expect(knowledgeMd).not.toContain('## Feature Goal');
-    for (const content of [agentsMd, workspaceMd, knowledgeMd]) {
+    for (const content of [agentsMd, knowledgeMd]) {
       expect(content).not.toContain('undefined');
     }
   });
@@ -121,7 +121,7 @@ describe('generateContextFiles retires the old planning files', () => {
     await fse.remove(workspace);
   });
 
-  it('moves the notes into the plan, commits the kept copy, removes the old assignment file, and keeps the summary out of the lock', async () => {
+  it('moves the notes and the plan into PLAN.md, commits it with the kept copies, and removes the old assignment file', async () => {
     const ctx: WorkspaceContext = {
       feature: { id: 'retire', branchName: 'retire', description: 'Retire old files', repos: [], assistants: ['claude'], workspacePath: workspace, createdAt: new Date().toISOString() },
       repos: [],
@@ -143,25 +143,75 @@ describe('generateContextFiles retires the old planning files', () => {
     const exists = (file: string) => fs.access(path.join(workspace, file)).then(() => true, () => false);
     expect(await exists('contextspace-milestones.md')).toBe(false);
     expect(await exists('contextspace-assignment.md')).toBe(false);
-    const plan = JSON.parse(await fs.readFile(path.join(workspace, 'contextspace-plan.json'), 'utf8'));
-    expect(plan.items.map((item: { id: string; title: string }) => `${item.id} ${item.title}`)).toEqual(['Q1 Which time zone?']);
-    const summary = await fs.readFile(path.join(workspace, 'contextspace-plan.md'), 'utf8');
-    expect(summary).toContain('Q1 Which time zone?');
-    expect(summary).not.toContain('<!--');
+    // The notes moved into the plan, and the plan into PLAN.md; the older store is kept in the archive.
+    const plan = await fs.readFile(path.join(workspace, 'PLAN.md'), 'utf8');
+    expect(plan).toContain('- [ ] Decide: Which time zone?');
+    expect(await exists('contextspace-plan.json')).toBe(false);
+    expect(await exists('contextspace-plan.md')).toBe(false);
 
     const tracked = (await execa('git', ['ls-files'], { cwd: workspace })).stdout.split('\n');
-    expect(tracked).toContain('contextspace-plan.json');
-    expect(tracked).toContain('contextspace-plan.md');
+    expect(tracked).toContain('PLAN.md');
+    expect(tracked).not.toContain('contextspace-plan.json');
     expect(tracked.some((file) => file.startsWith('.contextspace/archive/contextspace-milestones-'))).toBe(true);
+    expect(tracked.some((file) => file.startsWith('.contextspace/archive/contextspace-plan-'))).toBe(true);
     expect(tracked).not.toContain('contextspace-milestones.md');
-    expect((await execa('git', ['status', '--porcelain', '--', 'contextspace-milestones.md', '.contextspace/archive'], { cwd: workspace })).stdout).toBe('');
+    expect((await execa('git', ['status', '--porcelain', '--', 'contextspace-milestones.md', '.contextspace/archive', 'PLAN.md'], { cwd: workspace })).stdout).toBe('');
 
     const lock = JSON.parse(await fs.readFile(path.join(workspace, 'contextspace.lock'), 'utf8'));
-    expect(Object.keys(lock.outputs)).not.toContain('contextspace-plan.md');
+    expect(Object.keys(lock.outputs)).not.toContain('PLAN.md');
 
-    // A second refresh finds nothing more to move.
+    // A second refresh finds nothing more to move and leaves PLAN.md as it is.
     await generateContextFiles(ctx, ['claude'], workspace);
-    expect(JSON.parse(await fs.readFile(path.join(workspace, 'contextspace-plan.json'), 'utf8')).items).toHaveLength(1);
+    expect(await fs.readFile(path.join(workspace, 'PLAN.md'), 'utf8')).toBe(plan);
     expect(await exists('contextspace-milestones.md')).toBe(false);
+  });
+});
+
+describe('generateContextFiles retires WORKSPACE.md', () => {
+  let workspace: string;
+
+  beforeEach(async () => {
+    workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-index-test-'));
+    await execa('git', ['init'], { cwd: workspace });
+    await execa('git', ['config', 'user.name', 'Test Runner'], { cwd: workspace });
+    await execa('git', ['config', 'user.email', 'test@local'], { cwd: workspace });
+  });
+
+  afterEach(async () => {
+    await fse.remove(workspace);
+  });
+
+  it('removes an older WORKSPACE.md, commits the removal and leaves the generation lock without drift', async () => {
+    const ctx: WorkspaceContext = {
+      feature: { id: 'index', branchName: 'index', description: 'Drop the index', repos: [], assistants: ['claude'], workspacePath: workspace, createdAt: new Date().toISOString() },
+      repos: [],
+    };
+    await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify(ctx.feature));
+    // As the older version left it: written, listed in the lock and committed with the other generated files.
+    await generateContextFiles(ctx, ['claude'], workspace);
+    const index = `${GENERATED_VIEW_HEADER}\n\n# Workspace: index\n`;
+    await fs.writeFile(path.join(workspace, 'WORKSPACE.md'), index);
+    const lockPath = path.join(workspace, 'contextspace.lock');
+    const older = JSON.parse(await fs.readFile(lockPath, 'utf8'));
+    older.outputs['WORKSPACE.md'] = { hash: hashGeneratedContent(index), source: 'AGENTS.md', location: 'workspace' };
+    await fs.writeFile(lockPath, JSON.stringify(older, null, 2) + '\n');
+    await commitWorkspaceArtifacts(workspace, 'chore: older refresh');
+    expect((await execa('git', ['ls-files'], { cwd: workspace })).stdout.split('\n')).toContain('WORKSPACE.md');
+    await expect(checkGenerationLock(workspace)).resolves.toMatchObject({ fresh: true });
+
+    await generateContextFiles(ctx, ['claude'], workspace);
+
+    expect(await fse.pathExists(path.join(workspace, 'WORKSPACE.md'))).toBe(false);
+    const tracked = (await execa('git', ['ls-files'], { cwd: workspace })).stdout.split('\n');
+    expect(tracked).not.toContain('WORKSPACE.md');
+    expect(tracked).toContain('AGENTS.md');
+    expect((await execa('git', ['status', '--porcelain', '--', 'WORKSPACE.md'], { cwd: workspace })).stdout).toBe('');
+    const removed = await execa('git', ['log', '--diff-filter=D', '--name-only', '--format=%s', '--', 'WORKSPACE.md'], { cwd: workspace });
+    expect(removed.stdout).toContain('refresh workspace artifacts');
+    expect(removed.stdout).toContain('WORKSPACE.md');
+
+    const lock = JSON.parse(await fs.readFile(lockPath, 'utf8'));
+    expect(Object.keys(lock.outputs)).not.toContain('WORKSPACE.md');
+    await expect(checkGenerationLock(workspace)).resolves.toMatchObject({ fresh: true, drift: [] });
   });
 });

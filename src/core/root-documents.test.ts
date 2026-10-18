@@ -201,3 +201,15 @@ it('lists what opens: the three hidden folders and their documents, and nothing 
   // Every listed document opens, which is the point of one rule.
   for (const name of all) await expect(readRootDocument(root, name)).resolves.toMatchObject({ name });
 });
+
+it('does not enter the folders it is told to leave out, though it still names them', async () => {
+  for (const name of ['notes.md', 'docs/spec.md', 'api/README.md', 'api/docs/design.md', 'repos/web/README.md', 'repos/shared.md']) {
+    await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
+    await fs.writeFile(path.join(root, name), 'x');
+  }
+  const listing = await listRootDocuments(root, '', true, { leaveOut: ['api', '/repos/web/'] });
+  expect(listing.documents.map((doc) => doc.name)).toEqual(['docs/spec.md', 'notes.md', 'repos/shared.md']);
+  expect(listing.folders).toContain('api');
+  expect(listing.folders).not.toContain('api/docs');
+  expect((await listRootDocuments(root, '', true)).documents).toHaveLength(6);
+});

@@ -8,7 +8,6 @@ import { Popover, PopoverPopup } from '../../components/ui/popover.js';
 import { ApiError } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
 import type { OpenQuestion, ProgressFacts, WorkGuidance } from '../../types.js';
-import { nameOf } from '../plan/planView.js';
 import { ProgressPanel } from './ProgressPanel.js';
 import { currentMilestoneIndex, factsLine, goalLine, ringMilestones, stripState, type NextAction } from './progressView.js';
 import { AiClosedBar, PlanQuestionBar } from './StripNotices.js';
@@ -189,13 +188,13 @@ export function WhereAreWeNotices({ strip }: { strip: WhereAreWe }) {
   const latest = questions[questions.length - 1];
   const twin = latest ? planQuestionFor(plan, latest) : undefined;
   const close = closes[0];
-  const closedTitle = close ? (plan?.milestones.find((item) => item.id === close.itemId)?.title ?? nameOf({ id: close.itemId, label: close.label })) : '';
+  const closedTitle = close?.label ?? '';
   return (
     <>
       {latest ? (
         <AnswerBar
           question={latest} earlier={questions.length - 1} acknowledging={strip.acknowledge.isPending}
-          context={twin?.holdsUp.length ? `Holds up ${twin.holdsUp.map((label) => label.replace(/^\S+\s/, '')).join(', ')}` : undefined}
+          context={twin?.holdsUp ? `Holds up ${twin.holdsUp}` : undefined}
           onFill={strip.fill} onAcknowledge={() => strip.acknowledge.mutate()} onShowAll={() => strip.openPanel('open')}
         />
       ) : planQuestions[0] ? (

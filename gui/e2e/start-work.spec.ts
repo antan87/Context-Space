@@ -178,6 +178,13 @@ async function mockFailedCreationStream(page: Page) {
   });
 }
 
+/** Everything beyond the repositories and the task sits under More options, closed until opened. */
+async function openMoreOptions(page: Page) {
+  const toggle = page.getByRole('button', { name: /More options/ });
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
 test.describe('NexusFlow E2E GUI Tests', () => {
   test.use({
     configData: {
@@ -221,42 +228,12 @@ test.describe('NexusFlow E2E GUI Tests', () => {
 
   test('should create a workspace in worktree mode from the new workspace flow', async ({ page }) => {
     await mockCompletedCreationStream(page);
-    const chatFrames: Array<Record<string, unknown>> = [];
     const legacyRequests: string[] = [];
     let launchBody: Record<string, unknown> | null = null;
     page.on('request', (request) => {
       if (/\/resume$|\/api\/open-editor$/.test(new URL(request.url()).pathname)) {
         legacyRequests.push(request.url());
       }
-    });
-    await page.route('**/api/adapters/status', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([
-          {
-            id: 'claude-cli',
-            name: 'Claude Code (Local CLI)',
-            isConfigured: true,
-            executionProfiles: [
-              { id: 'review', label: 'Review only', description: 'Reads and plans; no source edits.' },
-              { id: 'workspace-write', label: 'Edit workspace', description: 'Auto-accepts in-workspace file edits.' },
-            ],
-            defaultExecutionProfile: 'review',
-            capabilities: {
-              transport: 'cli-print',
-              sessionIdentity: 'client-assigned',
-              workspaceAccess: 'harness-managed',
-              sessionIdFormat: 'uuid',
-            },
-          },
-        ]),
-      });
-    });
-    await page.routeWebSocket('**/ws', (socket) => {
-      socket.onMessage((message) => {
-        chatFrames.push(JSON.parse(String(message)));
-      });
     });
     await page.route('**/api/projects', async (route) => {
       await route.fulfill({
@@ -303,7 +280,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     await expect(page.getByRole('heading', { name: 'New workspace' })).toBeVisible();
 
     await page.getByLabel('Workspace name').fill('Demo work');
-    await page.getByRole('button', { name: 'Advanced setup' }).click();
+    await openMoreOptions(page);
     await page.getByRole('radio', { name: /New worktrees/ }).click();
     await page.getByLabel('Feature branch').fill('feature/demo-work');
     await page.getByLabel('What do you want to do?').fill('Implement the demo flow');
@@ -330,12 +307,12 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     });
     await page.goto('/#/new');
     await expect(page.getByRole('heading', { name: 'New workspace' })).toBeVisible();
+    await openMoreOptions(page);
     await expect(page.getByRole('checkbox', { name: 'Select Work lifecycle' })).toBeVisible();
     await expect(page.getByText('Small task', { exact: true })).toHaveCount(0);
     await expect(page.getByText('Standard change', { exact: true })).toHaveCount(0);
     await expect(page.getByText('Epic', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: 'test-results/new-workspace.png', fullPage: true });
-    await page.getByRole('link', { name: /Advanced setup/ }).click();
     await expect(page.getByRole('radio', { name: /New worktrees/ })).toBeVisible();
     await page.getByRole('checkbox', { name: 'nexus-frontend' }).click();
     await page.getByLabel('Workspace name').fill('Simple start');
@@ -375,7 +352,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     await page.getByRole('checkbox', { name: 'nexus-frontend' }).click();
     await page.getByLabel('Workspace name').fill('Review API');
     await page.getByLabel('What do you want to do?').fill('Review an existing release branch');
-    await page.getByRole('button', { name: /Advanced setup/ }).click();
+    await openMoreOptions(page);
     await page.getByRole('radio', { name: /New worktrees/ }).click();
     await expect(page.getByRole('checkbox', { name: 'nexus-frontend' })).toBeChecked();
     await expect(page.getByRole('radio', { name: /New worktrees/ })).toHaveAttribute('aria-checked', 'true');
@@ -520,7 +497,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     await page.goto('/#/new');
     await expect(page.getByRole('heading', { name: 'New workspace' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Advanced setup' }).click();
+    await openMoreOptions(page);
     await expect(page.getByRole('radio', { name: /Reference checkouts/ })).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByLabel('Feature branch')).toBeHidden();
     await page.getByRole('checkbox', { name: 'nexus-frontend' }).click();
@@ -538,11 +515,12 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     }));
     await page.goto('/#/new');
     await expect(page.getByRole('heading', { name: 'New workspace' })).toBeVisible();
+    await openMoreOptions(page);
     await expect(page.getByRole('checkbox', { name: 'Select Skill 29' })).toBeAttached();
     await expect(page.getByRole('button', { name: 'Create workspace' })).toBeInViewport();
   });
 
-  test('creates a workspace from just a name: name is focused first, Enter submits, description is optional', async ({ page }) => {
+  test('creates a workspace from just a name: the keyboard starts on the repositories, Enter submits, the description is optional with a name', async ({ page }) => {
     await mockCompletedCreationStream(page);
     let payload: any = null;
     await page.route('**/api/workspace', async (route) => {
@@ -555,12 +533,13 @@ test.describe('NexusFlow E2E GUI Tests', () => {
 
     const name = page.getByLabel('Workspace name');
     const description = page.getByLabel('What do you want to do?');
-    await expect(name).toBeFocused();
-    // The name is asked for before the optional description.
+    // The keyboard starts on the first thing to do: choosing repositories.
+    await expect(page.getByLabel('Filter repositories')).toBeFocused();
+    // The task is asked for first; the name that follows is optional.
     const nameBox = await name.boundingBox();
     const descriptionBox = await description.boundingBox();
-    expect(nameBox!.y).toBeLessThan(descriptionBox!.y);
-    await expect(page.locator('label', { has: description }).getByText('optional', { exact: true })).toBeVisible();
+    expect(descriptionBox!.y).toBeLessThan(nameBox!.y);
+    await expect(page.locator('label', { has: name }).getByText('optional', { exact: true })).toBeVisible();
 
     // Without a repository the form is not valid, so Enter must not create anything.
     await name.fill('Quick start');
@@ -599,6 +578,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
 
     test('shows each tool with its logo and installed state, and only lets installed ones be chosen', async ({ page }) => {
       await page.goto('/#/new');
+      await openMoreOptions(page);
       const picker = pickerOf(page);
       await expect(picker.getByRole('radio')).toHaveCount(4);
       for (const name of ['Claude Code', 'Codex', 'Pi']) {
@@ -622,6 +602,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
         await route.fulfill({ json: { success: true, jobId: 'harness-start' } });
       });
       await page.goto('/#/new');
+      await openMoreOptions(page);
       await page.getByRole('checkbox', { name: 'nexus-frontend' }).click();
       await page.getByLabel('Workspace name').fill('Harness start');
       const codex = pickerOf(page).getByRole('radio', { name: 'Codex', exact: true });
@@ -629,7 +610,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
       await expect(codex).toBeChecked();
       await page.getByRole('button', { name: 'Create workspace' }).click();
 
-      // The chosen tool receives the workspace instructions without being ticked under Advanced setup.
+      // The chosen tool receives the workspace instructions without being ticked under More options.
       await expect.poll(() => payload?.assistants).toEqual(['codex']);
       await expect(page).toHaveURL(/#\/workspaces\/harness-start/);
       await expect.poll(() => page.evaluate(() => {
@@ -640,6 +621,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
 
     test('moves with the arrow keys, skipping tools that are not installed', async ({ page }) => {
       await page.goto('/#/new');
+      await openMoreOptions(page);
       const picker = pickerOf(page);
       await picker.getByRole('radio', { name: 'Claude Code', exact: true }).focus();
       await page.keyboard.press('ArrowRight');
@@ -660,6 +642,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
         await route.fulfill({ json: { success: true, jobId: 'no-harness' } });
       });
       await page.goto('/#/new');
+      await openMoreOptions(page);
       const picker = pickerOf(page);
       await picker.getByRole('radio', { name: 'Claude Code', exact: true }).click();
       await expect(picker.getByRole('radio', { name: 'Claude Code', exact: true })).toBeChecked();
@@ -683,6 +666,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
         await route.fulfill({ json: { success: true, jobId: 'first-with-codex' } });
       });
       await page.goto('/#/new');
+      await openMoreOptions(page);
       const picker = pickerOf(page);
       await expect(picker.getByRole('radio')).toHaveCount(4);
       await expect(picker.getByRole('radio', { checked: true })).toHaveCount(0);
@@ -698,15 +682,18 @@ test.describe('NexusFlow E2E GUI Tests', () => {
       await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
       // Starting the next workspace begins with nothing chosen again, in the same window and after a reload.
       await page.goto('/#/new');
+      await openMoreOptions(page);
       await expect(picker.getByRole('radio')).toHaveCount(4);
       await expect(picker.getByRole('radio', { checked: true })).toHaveCount(0);
       await page.reload();
+      await openMoreOptions(page);
       await expect(picker.getByRole('radio')).toHaveCount(4);
       await expect(picker.getByRole('radio', { checked: true })).toHaveCount(0);
     });
 
     test('keeps keyboard focus in the picker when "Choose later" clears the pick', async ({ page }) => {
       await page.goto('/#/new');
+      await openMoreOptions(page);
       const picker = pickerOf(page);
       await picker.getByRole('radio', { name: 'Codex', exact: true }).click();
       const later = page.getByRole('button', { name: 'Choose later' });
@@ -725,6 +712,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
         await route.fulfill({ json: { success: true, jobId: 'never-created' } });
       });
       await page.goto('/#/new');
+      await openMoreOptions(page);
       await page.getByRole('checkbox', { name: 'nexus-frontend' }).click();
       await page.getByLabel('Workspace name').fill('Never created');
       await pickerOf(page).getByRole('radio', { name: 'Codex', exact: true }).click();
@@ -738,10 +726,10 @@ test.describe('NexusFlow E2E GUI Tests', () => {
       expect(preferred).toBeNull();
     });
 
-    test('lists the chosen tool under Advanced setup as always included', async ({ page }) => {
+    test('lists the chosen tool under More options as always included', async ({ page }) => {
       await page.goto('/#/new');
+      await openMoreOptions(page);
       await pickerOf(page).getByRole('radio', { name: 'Claude Code', exact: true }).click();
-      await page.getByRole('button', { name: 'Advanced setup' }).click();
       const instructions = page.getByRole('region', { name: 'AI harnesses' });
       await expect(instructions.getByText('The tool you start with is always included.')).toBeVisible();
       const chosen = instructions.getByRole('checkbox', { name: /Claude Code/ });
@@ -758,8 +746,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
       await route.fulfill({ json: { success: true, difficulty: 'simple', suggestedWorkflowId: 'plan-implement-review', customInstructions: '# Plan' } });
     });
     await page.goto('/#/new');
-    await page.getByRole('button', { name: 'Advanced setup' }).click();
-    await page.getByRole('button', { name: 'Agent collaboration' }).click();
+    await openMoreOptions(page);
     const suggest = page.getByRole('button', { name: 'Suggest with AI' });
 
     // With neither a name nor a task there is nothing to go on, and the message says how to fix it.
@@ -845,6 +832,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
         json: { skills: Array.from({ length: 30 }, (_, i) => ({ id: `skill-${i}`, name: `skill-${i}`, title: `Skill ${i}`, description: 'Guidance' })) },
       }));
       await page.goto('/#/new');
+      await openMoreOptions(page);
       await expect(page.getByRole('checkbox', { name: 'Select Skill 29' })).toBeAttached();
       const bar = (await page.getByTestId('create-footer').boundingBox())!;
       expect(Math.round(bar.y + bar.height)).toBe(520);
@@ -984,7 +972,7 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     await expect(repoCheckbox).toBeVisible();
     await repoCheckbox.click();
 
-    await page.getByRole('button', { name: 'Advanced setup' }).click();
+    await openMoreOptions(page);
     // Verify Base repository sync section appears
     await expect(page.locator('text=Base repository sync')).toBeVisible();
     await expect(page.locator('text=↓ 3 behind origin/main').first()).toBeVisible();
@@ -1015,5 +1003,211 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     await expect.poll(() => workspaceCreationPayload).not.toBeNull();
     expect(workspaceCreationPayload.autoUpdateBase).toBe(true);
     expect(workspaceCreationPayload.name).toBe('Freshness Workspace');
+  });
+  test.describe('one step: repositories and a task, everything else under More options', () => {
+    test.use({
+      reposData: [[
+        { name: 'api', path: 'C:\\mock-dev\\api', defaultBranch: 'main' },
+        { name: 'web', path: 'C:\\mock-dev\\web', defaultBranch: 'main' },
+        { name: 'docs', path: 'C:\\mock-dev\\docs', defaultBranch: 'main' },
+      ], { option: true }],
+      aiDetectData: [[
+        { name: 'claude', displayName: 'Claude Code', detected: true, command: 'claude' },
+        { name: 'codex', displayName: 'OpenAI Codex', detected: true, command: 'codex' },
+        { name: 'copilot', displayName: 'GitHub Copilot', detected: false },
+      ], { option: true }],
+    });
+
+    const listSkills = (page: Page) => page.route('**/api/skills', (route) => route.fulfill({ json: { skills: [
+      { id: 'work-lifecycle', name: 'Work lifecycle', title: 'Work lifecycle', description: 'Workspace guidance' },
+      { id: 'code-review', name: 'Code review', title: 'Code review', description: 'Review changes before they merge' },
+    ] } }));
+
+    test('only repositories and a description send the default payload; More options is closed until opened', async ({ page }) => {
+      await mockCompletedCreationStream(page);
+      await listSkills(page);
+      let payload: any = null;
+      await page.route('**/api/workspace', async (route) => {
+        payload = route.request().postDataJSON();
+        await route.fulfill({ json: { success: true, jobId: 'cache-invoice-lookups' } });
+      });
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto('/#/new');
+      await expect(page.getByRole('heading', { name: 'New workspace' })).toBeVisible();
+
+      // The main area is the repositories, the task, an optional name and Create: nothing else to read.
+      const more = page.getByRole('button', { name: /More options/ });
+      await expect(more).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.getByLabel('Workspace name')).toBeVisible();
+      for (const hidden of [
+        page.getByRole('radiogroup', { name: 'Start with' }),
+        page.getByRole('radiogroup', { name: 'Work mode' }),
+        page.getByLabel('Work type'),
+        page.getByRole('checkbox', { name: /Fast-forward/ }),
+        page.getByRole('checkbox', { name: 'Select Work lifecycle' }),
+        page.getByRole('region', { name: 'AI harnesses' }),
+        page.getByRole('combobox', { name: 'Teamwork strategy' }),
+      ]) await expect(hidden).toBeHidden();
+      // The closed button says nothing was changed, and its panel exists for aria-controls to point at.
+      await expect(more).toContainText('The defaults are fine');
+      await expect(page.locator('#' + (await more.getAttribute('aria-controls'))!)).toBeAttached();
+
+      await page.getByRole('checkbox', { name: 'api' }).click();
+      await page.getByLabel('What do you want to do?').fill('Cache invoice lookups. Then measure the totals.');
+      // Left empty, the name is the first line of the task, and the page says so before Create.
+      await expect(page.getByText('Leave empty to call it Cache invoice lookups', { exact: false })).toBeVisible();
+      await expect(page.getByLabel('Workspace name')).toHaveAccessibleDescription(/Leave empty to call it Cache invoice lookups/);
+
+      if (process.env.PLAN_SHOTS_DIR) {
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: `${process.env.PLAN_SHOTS_DIR}/new-workspace.png` });
+      }
+
+      await page.getByRole('button', { name: 'Create workspace' }).click();
+      await expect.poll(() => payload).not.toBeNull();
+      // Exactly what today's defaults send: no branch, no skills, agents, tags or instructions, no tool chosen.
+      expect(payload).toEqual({
+        workType: 'feature',
+        mode: 'in-place',
+        name: 'Cache invoice lookups',
+        description: 'Cache invoice lookups. Then measure the totals.',
+        repos: [{ name: 'api', path: 'C:\\mock-dev\\api', defaultBranch: 'main' }],
+        assistants: [],
+        autoUpdateBase: false,
+      });
+      await expect(page).toHaveURL(/#\/workspaces\/cache-invoice-lookups/);
+    });
+
+    test('More options opens and closes on click, and a Space or Enter press', async ({ page }) => {
+      await listSkills(page);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto('/#/new');
+      const more = page.getByRole('button', { name: /More options/ });
+      await expect(more).toHaveAttribute('aria-expanded', 'false');
+      await more.click();
+      await expect(more).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.getByRole('radiogroup', { name: 'Start with' })).toBeVisible();
+      await expect(page.getByRole('radio', { name: /Reference checkouts/ })).toHaveAttribute('aria-checked', 'true');
+      await expect(page.getByLabel('Work type')).toHaveValue('feature');
+      await expect(page.getByRole('checkbox', { name: /Fast-forward/ })).not.toBeChecked();
+      await expect(page.getByRole('checkbox', { name: 'Select Work lifecycle' })).not.toBeChecked();
+      await expect(page.getByRole('combobox', { name: 'Teamwork strategy' })).toContainText('None');
+
+      if (process.env.PLAN_SHOTS_DIR) {
+        await page.getByRole('checkbox', { name: 'api' }).click();
+        await page.getByLabel('What do you want to do?').fill('Cache invoice lookups');
+        await more.evaluate((button) => button.scrollIntoView({ block: 'start' }));
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: `${process.env.PLAN_SHOTS_DIR}/new-workspace-more.png` });
+        await more.evaluate((button) => button.closest('main')?.scrollTo(0, 0));
+      }
+
+      await more.focus();
+      await page.keyboard.press('Enter');
+      await expect(more).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.getByRole('radiogroup', { name: 'Start with' })).toBeHidden();
+      await page.keyboard.press('Space');
+      await expect(more).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    test('the closed button lists what was changed inside, so nothing set there is out of sight', async ({ page }) => {
+      await listSkills(page);
+      await page.goto('/#/new');
+      const more = page.getByRole('button', { name: /More options/ });
+      await more.click();
+      await page.getByRole('radio', { name: /New worktrees/ }).click();
+      await page.getByLabel('Work type').selectOption('bug');
+      await page.getByRole('checkbox', { name: 'Select Code review' }).check();
+      await page.getByRole('radiogroup', { name: 'Start with' }).getByRole('radio', { name: 'Codex', exact: true }).click();
+      await more.click();
+      await expect(more).toHaveAttribute('aria-expanded', 'false');
+      await expect(more).toContainText('Changed: New worktrees, Bug fix, Starts with Codex, 1 skill');
+      // Reopening shows the same choices: closing never throws them away.
+      await more.click();
+      await expect(page.getByRole('checkbox', { name: 'Select Code review' })).toBeChecked();
+      await expect(page.getByLabel('Work type')).toHaveValue('bug');
+    });
+
+    test('with no name typed, new worktrees get a name and a branch from the task', async ({ page }) => {
+      await mockCompletedCreationStream(page);
+      await listSkills(page);
+      let payload: any = null;
+      await page.route('**/api/workspace', async (route) => {
+        payload = route.request().postDataJSON();
+        await route.fulfill({ json: { success: true, jobId: 'feature/fix-invoice-rounding' } });
+      });
+      await page.goto('/#/new');
+      await openMoreOptions(page);
+      await page.getByRole('radio', { name: /New worktrees/ }).click();
+      await expect(page.getByLabel('Feature branch')).toHaveAttribute('placeholder', 'feature/my-work');
+      await page.getByRole('checkbox', { name: 'web' }).click();
+      await page.getByLabel('What do you want to do?').fill('Fix invoice rounding');
+      await expect(page.getByLabel('Feature branch')).toHaveAttribute('placeholder', 'feature/fix-invoice-rounding');
+      await page.getByRole('button', { name: 'Create workspace' }).click();
+      await expect.poll(() => payload).not.toBeNull();
+      expect(payload).toMatchObject({ mode: 'worktree', name: 'Fix invoice rounding', branchName: 'feature/fix-invoice-rounding', description: 'Fix invoice rounding' });
+    });
+
+    test('Create stays off until there is a repository and a task or a name, and says what is missing on Enter', async ({ page }) => {
+      let payload: any = null;
+      await page.route('**/api/workspace', async (route) => {
+        payload = route.request().postDataJSON();
+        await route.fulfill({ json: { success: true, jobId: 'x' } });
+      });
+      await page.goto('/#/new');
+      const create = page.getByRole('button', { name: 'Create workspace' });
+      await expect(create).toBeDisabled();
+      await page.getByRole('checkbox', { name: 'api' }).click();
+      await expect(create).toBeDisabled();
+      // Enter in the name field with nothing to name the workspace from says so, and creates nothing.
+      await page.getByLabel('Workspace name').focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('alert').filter({ hasText: 'Say what you want to do, or give the workspace a name' })).toBeVisible();
+      expect(payload).toBeNull();
+      await page.getByLabel('What do you want to do?').fill('Anything');
+      await expect(create).toBeEnabled();
+      await expect(page.getByRole('alert').filter({ hasText: 'Say what you want to do' })).toHaveCount(0);
+    });
+
+    test('a branch that cannot be built from the name opens More options and focuses the branch field', async ({ page }) => {
+      await mockCompletedCreationStream(page);
+      let payload: any = null;
+      await page.route('**/api/workspace', async (route) => {
+        payload = route.request().postDataJSON();
+        await route.fulfill({ json: { success: true, jobId: 'feature/own-branch' } });
+      });
+      await page.goto('/#/new');
+      const more = page.getByRole('button', { name: /More options/ });
+      await more.click();
+      await page.getByRole('radio', { name: /New worktrees/ }).click();
+      await more.click();
+      await expect(more).toHaveAttribute('aria-expanded', 'false');
+
+      await page.getByRole('checkbox', { name: 'api' }).click();
+      await page.getByLabel('Workspace name').fill('###');
+      const create = page.getByRole('button', { name: 'Create workspace' });
+      await expect(create).toBeEnabled();
+      await create.click();
+
+      // The field that needs attention is under More options: it opens, takes focus and explains itself.
+      await expect(more).toHaveAttribute('aria-expanded', 'true');
+      const branch = page.getByLabel('Feature branch');
+      await expect(branch).toBeFocused();
+      await expect(branch).toHaveAttribute('aria-invalid', 'true');
+      await expect(page.getByRole('alert').filter({ hasText: 'need a branch name' })).toBeVisible();
+      expect(payload).toBeNull();
+
+      await page.keyboard.type('feature/own-branch');
+      await expect(page.getByRole('alert').filter({ hasText: 'need a branch name' })).toHaveCount(0);
+      await create.click();
+      await expect.poll(() => payload?.branchName).toBe('feature/own-branch');
+      expect(payload.name).toBe('###');
+    });
+
+    test('with repositories already chosen by the link, the keyboard starts on the task', async ({ page }) => {
+      await page.goto('/#/new?repo=' + encodeURIComponent('C:\\mock-dev\\api'));
+      await expect(page.getByRole('checkbox', { name: 'api' })).toBeChecked();
+      await expect(page.getByLabel('What do you want to do?')).toBeFocused();
+    });
   });
 });

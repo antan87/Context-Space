@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { planItem, planView } from './planData';
+import { checkpoint, planFile, step } from './planData';
 
 test.use({
   workspacesData: [{
@@ -17,15 +17,14 @@ async function mockWorkspace(page: Page) {
   ] };
   const guidance = { version: 1, revision: 0, workType: 'performance', size: 'standard', documents: [],
     assignment: { stage: 'implement', objective: 'Find the bottleneck', expectedOutput: '', stopCondition: '' } };
-  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: { overallStatus: 'pass', canProgress: true, durationMs: 1200, repos: [] } } }));
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ json: { guidance, lifecycle, sharedDocuments: [], assignment: '' } }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
-  await page.route('**/api/workspace/demo/plan/items', (route) => route.fulfill({ json: planView([
-    planItem({ id: 'baseline', title: 'Measure baseline', status: 'done' }),
-    planItem({ id: 'cache', title: 'Cache invoice lookups', status: 'in_progress' }),
-    planItem({ id: 'report', title: 'Report the speed-up', waitsFor: [{ id: 'cache', label: 'cache Cache invoice lookups', status: 'in_progress' }] }),
-  ]) }));
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ checkpoints: [
+    checkpoint('Measure baseline', { done: true }),
+    checkpoint('Cache invoice lookups', { steps: [step('Cache the totals', true), step('Expire them on change')] }),
+    checkpoint('Report the speed-up'),
+  ] }) }));
 }
 
 const workspaceNav = (page: Page) => page.getByRole('navigation', { name: 'Workspace' });
@@ -40,9 +39,9 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(header).not.toContainText('Make invoice totals load under a second');
   const status = page.getByRole('group', { name: 'Task status' });
   await expect(status).not.toContainText('Stage');
-  // Now and Next come from the plan's one rule: Next names what it waits for instead of claiming it can start.
+  // Now and Next are the plan's first two checkpoints still open.
   await expect(status).toContainText('Now Cache invoice lookups');
-  await expect(status).toContainText('Next Report the speed-up · waits for Cache invoice lookups');
+  await expect(status).toContainText('Next Report the speed-up');
   await expect(status).toContainText('3 files');
   await expect(status).toContainText('Checks passed');
   // The workspace is named once; the old cockpit strip and stage switcher are gone.
@@ -50,8 +49,8 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(page.getByRole('button', { name: 'Diff Review' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Process DAG' })).toHaveCount(0);
 
-  // The rail beside the panel: what can open beside the chat, with the changed files counted.
-  await expect(workspaceNav(page).getByRole('link')).toHaveText([/^Plan$/, /^Sessions$/, /^Code3$/, /^Docs$/, /^Skills/, /^Services$/]);
+  // The rail beside the panel: what can open beside the chat, with the changed files counted. Sessions and Skills are not on it.
+  await expect(workspaceNav(page).getByRole('link')).toHaveText([/^Plan$/, /^Code3$/, /^Docs$/, /^Services$/]);
   await status.getByRole('link', { name: /Changes/ }).click();
   await expect(page).toHaveURL(/#\/workspaces\/demo\/changes$/);
   await expect(workspaceNav(page).getByRole('link', { name: /^Code/ })).toHaveAttribute('aria-current', 'page');
@@ -59,12 +58,12 @@ test('one header shows where the task stands and links to where to act', async (
 
 test('old section links still open, each marked on the rail when it has a place there, and back navigation works', async ({ page }) => {
   await mockWorkspace(page);
-  for (const [section, item] of [['documents', 'Docs'], ['services', 'Services'], ['plan', 'Plan'], ['sessions', 'Sessions']] as const) {
+  for (const [section, item] of [['documents', 'Docs'], ['services', 'Services'], ['plan', 'Plan'], ['changes', 'Code']] as const) {
     await page.goto(`/#/workspaces/demo/${section}`);
-    await expect(workspaceNav(page).getByRole('link', { name: item })).toHaveAttribute('aria-current', 'page');
+    await expect(workspaceNav(page).getByRole('link', { name: new RegExp(`^${item}`) })).toHaveAttribute('aria-current', 'page');
   }
-  // The overview and knowledge keep their addresses, with nothing marked on the rail.
-  for (const [section, region] of [['overview', 'Overview'], ['knowledge', 'Knowledge']] as const) {
+  // The overview, knowledge and the session history keep their addresses, with nothing marked on the rail.
+  for (const [section, region] of [['overview', 'Overview'], ['knowledge', 'Knowledge'], ['sessions', 'Session history']] as const) {
     await page.goto(`/#/workspaces/demo/${section}`);
     await expect(page.getByRole('region', { name: region, exact: true })).toBeVisible();
     await expect(workspaceNav(page).locator('[aria-current="page"]')).toHaveCount(0);

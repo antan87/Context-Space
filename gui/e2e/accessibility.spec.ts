@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 /**
  * Automated WCAG 2.2 AA checks for the primary journey (setup → new work →
@@ -17,7 +18,7 @@ async function mockWorkspace(page: Page) {
   const lifecycle = { workspaceId: 'demo', flowType: 'feature', revision: 0, updatedAt: '', fleet: [], steps: [
     { id: 'cache', title: 'Cache invoice lookups', status: 'in_progress' },
   ] };
-  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan\n\nCache lookups.' } }));
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: { overallStatus: 'fail', canProgress: false, durationMs: 900, repos: [] } } }));
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ json: {
     guidance: { version: 1, revision: 0, workType: 'feature', size: 'standard', documents: [], assignment: { stage: 'implement', objective: 'Cache lookups', expectedOutput: '', stopCondition: '' } },
@@ -285,7 +286,7 @@ test.describe('constrained windows', () => {
     const main = await page.getByRole('main').boundingBox();
     expect(main!.width).toBeGreaterThanOrEqual(800);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(900);
-    for (const name of ['Plan', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']) {
+    for (const name of ['Plan', 'Code', 'Docs', 'Services']) {
       await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInViewport();
     }
     // The rail still expands on request, by keyboard.

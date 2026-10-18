@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Archive, FileCode, FileText, Lightbulb, ListChecks, MessagesSquare, Puzzle, Server, type LucideIcon } from 'lucide-react';
+import { Archive, FileCode, FileText, Lightbulb, ListChecks, Server, type LucideIcon } from 'lucide-react';
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -7,15 +7,13 @@ import { railSectionsFor, type WorkspaceSection } from './destinations.js';
 
 interface RailItem { label: string; purpose: string; icon: LucideIcon }
 
-/** Short names that fit under an icon, and what each part is for, said in the tooltip. */
+/** Short names that fit under an icon, and what each part is for, said in the tooltip. Only the parts on the rail have one. */
 const ITEMS: Partial<Record<WorkspaceSection, RailItem>> = {
   overview: { label: 'Record', purpose: 'What this archived workspace did and where its work went', icon: Archive },
-  plan: { label: 'Plan', purpose: 'The brief, the milestones and what the assistant is asked to do', icon: ListChecks },
-  sessions: { label: 'Sessions', purpose: 'Session history, transcripts and token metrics', icon: MessagesSquare },
+  plan: { label: 'Plan', purpose: 'The plan and its checkpoints, the brief the assistant works from, and the checks', icon: ListChecks },
   changes: { label: 'Code', purpose: 'The code and its changes: read files, review, commit and finish the work', icon: FileCode },
   documents: { label: 'Docs', purpose: 'Documents in the workspace', icon: FileText },
   knowledge: { label: 'Knowledge', purpose: 'What the assistant has learned in this workspace', icon: Lightbulb },
-  skills: { label: 'Skills', purpose: 'Instructions the assistant follows here', icon: Puzzle },
   services: { label: 'Services', purpose: "Your app's own processes, such as a dev server, and their logs", icon: Server },
 };
 

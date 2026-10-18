@@ -6,7 +6,7 @@ import type { PermissionMode } from '../harness/types.js';
 import type { AgentExecutionProfile, AgentHarness } from './ProviderRegistry.js';
 import { isValidSessionUuid, type AgentSession } from './session.js';
 import { getLocalMcpServerConfig } from './mcp-config.js';
-import { isPlainPlanCommand } from '../utils/ai-tool.js';
+import { isPlainAiCommand } from '../utils/ai-tool.js';
 import {
   MCP_SERVER_NAME,
   LEGACY_MCP_SERVER_NAME,
@@ -25,16 +25,13 @@ const READONLY_MCP_TOOLS = new Set([
   'run_doctor', 'get_service_logs', 'list_workspaces', 'list_repos', 'preview_archive',
   'add_knowledge', 'promote_knowledge', 'search_knowledge',
   'read_workroom_stream', 'refresh_context',
-  'get_work_context', 'get_planning_notes', 'read_work_document',
+  'get_work_context', 'read_work_document',
   // They only show things to the user or alert them; none edits a file, so none needs an approval prompt.
   'request_user_input', 'show_in_reader', 'annotate_document', 'suggest_next', 'get_screen_context',
 ]);
 
 const WORKSPACE_EDIT_MCP_TOOLS = new Set([
-  'update_milestone_plan', 'update_work_assignment', 'add_work_document',
-  'update_work_document', 'save_planning_notes',
-  // Starts or blocks a milestone, which changes lifecycle state.
-  'set_milestone',
+  'update_work_assignment', 'add_work_document', 'update_work_document',
 ]);
 
 const MUTATING_LIFECYCLE_TOOLS = new Set([
@@ -176,9 +173,10 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
               const toolPrefixPattern = new RegExp(`^(?:mcp__)?(?:${MCP_ADAPTER_SERVER_NAME}|${LEGACY_MCP_ADAPTER_SERVER_NAME}|${MCP_SERVER_NAME}|${LEGACY_MCP_SERVER_NAME})__`);
               const toolName = event.tool.replace(toolPrefixPattern, '');
 
-              // A plain `ctxspace plan …` only changes the plan, as the AI, so it needs no prompt each time.
-              const planCommand = toolName === 'Bash' && isPlainPlanCommand(String((event as any).input?.command ?? ''));
-              if (this.currentExecutionProfile === 'workspace-write' && (CORE_ALLOWED_TOOLS.has(toolName) || READONLY_MCP_TOOLS.has(toolName) || WORKSPACE_EDIT_MCP_TOOLS.has(toolName) || planCommand)) {
+              // A plain `ctxspace plan …`, `ask …`, `knowledge search …` or `news …` only changes the plan, the chat's alerts or
+              // the note of what the AI has looked at, as the AI, or reads, so it needs no prompt each time.
+              const aiCommand = toolName === 'Bash' && isPlainAiCommand(String((event as any).input?.command ?? ''));
+              if (this.currentExecutionProfile === 'workspace-write' && (CORE_ALLOWED_TOOLS.has(toolName) || READONLY_MCP_TOOLS.has(toolName) || WORKSPACE_EDIT_MCP_TOOLS.has(toolName) || aiCommand)) {
                 handle.respondToApproval(event.requestId, { behavior: 'allow' });
               } else if (this.listenerCount('approval_request') > 0) {
                 // Interactive human-in-the-loop approval: forward to UI client

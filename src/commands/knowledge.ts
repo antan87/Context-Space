@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import { checkbox, select } from '@inquirer/prompts';
 
 import { getWorkspaceRepos } from '../utils/multi-git.js';
-import { resolveWorkspaceInteractive } from '../utils/resolve-workspace.js';
+import { resolveWorkspaceInteractive, resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import {
   addWorkspaceKnowledge,
@@ -17,8 +17,12 @@ import {
   readBaseKnowledge,
   parseKnowledgeEntries,
   promoteKnowledge,
+  searchKnowledge,
+  describeKnowledgeEntry,
+  knowledgeEntryId,
   MAX_ENTRY_CHARS,
   type KnowledgeEntryType,
+  type KnowledgeSearchResult,
   type ParsedKnowledgeEntry,
 } from '../core/knowledge.js';
 import { BRAND_NAME } from '../core/constants.js';
@@ -34,6 +38,15 @@ interface AddOptions {
   scope?: string;
   evidence?: string;
   repo?: string;
+}
+
+export interface KnowledgeSearchOptions {
+  type?: string;
+  scope?: string;
+  repo?: string;
+  limit?: string;
+  workspace?: string;
+  json?: boolean;
 }
 
 interface ShowOptions {
@@ -76,10 +89,14 @@ function reportKnowledgeDurability(result: { duplicate?: boolean; commit?: { sta
   }
 }
 
+function invalidType(type: string): string {
+  return `Invalid --type "${type}". Use one of: ${VALID_TYPES.join(', ')}`;
+}
+
 /** Validates a `--type` value, returning it typed or `null` (after printing an error). */
 function parseType(type: string): KnowledgeEntryType | null {
   if (!VALID_TYPES.includes(type as KnowledgeEntryType)) {
-    console.error(chalk.red(`✖ Invalid --type "${type}". Use one of: ${VALID_TYPES.join(', ')}`));
+    console.error(chalk.red(`✖ ${invalidType(type)}`));
     return null;
   }
   return type as KnowledgeEntryType;
@@ -109,6 +126,30 @@ export function checkEntryLength(message: string): boolean {
   console.log(chalk.dim('  Split genuinely separate findings into separate entries, and put long'));
   console.log(chalk.dim('  material in a document the entry points to.'));
   return false;
+}
+
+/** Most entries one search prints; the core search stops at the same number. */
+const MAX_SEARCH_LIMIT = 20;
+
+/** Validates a `--limit` value. @throws When it is not a whole number from 1 to {@link MAX_SEARCH_LIMIT}. */
+function parseLimit(limit: string): number {
+  const count = /^\d+$/.test(limit.trim()) ? Number(limit) : NaN;
+  if (!Number.isInteger(count) || count < 1 || count > MAX_SEARCH_LIMIT) {
+    throw new Error(`Invalid --limit "${limit}". Use a whole number from 1 to ${MAX_SEARCH_LIMIT}.`);
+  }
+  return count;
+}
+
+/** One search result as a person or an AI reads it: the title, what it is and when, then the whole entry. */
+function describeResult(result: KnowledgeSearchResult) {
+  const { title, date, body } = describeKnowledgeEntry(result);
+  return { title, type: result.type, date, source: result.source, ...(result.repo ? { repo: result.repo } : {}), section: result.section, body, score: result.score };
+}
+
+function renderResult(result: KnowledgeSearchResult): string {
+  const { title, type, date, repo, body } = describeResult(result);
+  const facts = [type ?? 'note', date, repo ? `${repo} base knowledge` : null].filter(Boolean).join(' · ');
+  return [chalk.bold(title), chalk.dim(facts), body].filter(Boolean).join('\n');
 }
 
 /** Collapses an entry's markdown to a single line for list display. */
@@ -199,6 +240,42 @@ export async function knowledgeAddCommand(workspaceArg: string | undefined, opti
   reportKnowledgeDurability(res);
 }
 
+/**
+ * `knowledge search` — find entries by words and print each in full, so an AI reads the whole entry instead of a
+ * snippet or the whole file. The same search the MCP `search_knowledge` tool runs.
+ *
+ * It never asks a question: an AI runs it, and a prompt would hang it. Whatever it cannot search it says so by
+ * throwing, which ends the command with a non-zero exit code, as `ctxspace ask` does.
+ *
+ * @throws When the type or limit is invalid, no workspace is found, or the repo is not in the workspace.
+ */
+export async function knowledgeSearchCommand(words: string[], options: KnowledgeSearchOptions): Promise<void> {
+  if (options.type !== undefined && !VALID_TYPES.includes(options.type as KnowledgeEntryType)) throw new Error(invalidType(options.type));
+  const type = options.type as KnowledgeEntryType | undefined;
+  const limit = options.limit === undefined ? undefined : parseLimit(options.limit);
+
+  const workspacePath = await resolveWorkspaceQuiet(options.workspace);
+  if (!workspacePath) throw new Error('No workspace here. Run this inside a workspace folder, or pass --workspace <path>.');
+
+  if (options.repo) {
+    const repos = await getWorkspaceRepos(workspacePath);
+    if (!repos.some((r) => r.name === options.repo)) {
+      throw new Error(`Repository "${options.repo}" is not in this workspace. Available: ${repos.map((r) => r.name).join(', ')}.`);
+    }
+  }
+
+  const query = words.join(' ').trim();
+  const results = await searchKnowledge(workspacePath, query, { type, scope: options.scope, repo: options.repo, limit });
+
+  if (options.json) {
+    console.log(JSON.stringify(results.map(describeResult), null, 2));
+  } else if (results.length === 0) {
+    console.log(chalk.yellow(`Nothing in the knowledge matches "${query}". Try fewer or different words.`));
+  } else {
+    console.log(results.map(renderResult).join('\n\n'));
+  }
+}
+
 /** `knowledge show` — print the workspace knowledge file (or a repo's base file). */
 export async function knowledgeShowCommand(workspaceArg: string | undefined, options: ShowOptions): Promise<void> {
   const workspacePath = await resolveWorkspaceInteractive(workspaceArg, 'Select a workspace:');
@@ -225,11 +302,12 @@ export async function knowledgeShowCommand(workspaceArg: string | undefined, opt
     const contractEntries = new Set(
       (feature?.contracts ?? [])
         .filter((contract) => contractMatchesScope(contract, options.scope!))
-        .map((contract) => contract.entry.replace(/^(\d{4}-\d{2}-\d{2})-/, '$1 — ')),
+        .map((contract) => contract.entry),
     );
-    const entries = parseKnowledgeEntries(content).filter((entry) =>
-      entry.text.toLowerCase().includes(needle) || [...contractEntries].some((id) => entry.text.includes(`### ${id}`)),
-    );
+    const entries = parseKnowledgeEntries(content).filter((entry) => {
+      const id = knowledgeEntryId(entry.text);
+      return entry.text.toLowerCase().includes(needle) || (id !== null && contractEntries.has(id));
+    });
     if (entries.length === 0) {
       console.log(chalk.yellow(`No knowledge entries match scope "${options.scope}".`));
       return;

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import { planView } from './planData';
+import { planFile } from './planData';
 
 const feature = {
   id: 'feature-x',
@@ -27,10 +27,10 @@ test.describe('Redesigned ContextSpace shell', () => {
     const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
     const asked: string[] = [];
     const answered: unknown[] = [];
-    await page.route('**/api/workspace/feature-x/plan/items', (route) => {
+    await page.route('**/api/workspace/feature-x/plan', (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
       answered.push(route.request().postDataJSON());
-      return route.fulfill({ json: { message: 'Answered Q1', plan: planView([]) } });
+      return route.fulfill({ json: { message: 'Answered', plan: planFile() } });
     });
     await page.route('**/api/needs-you?*', (route) => {
       asked.push(new URL(route.request().url()).searchParams.get('workspaces') ?? '');
@@ -87,7 +87,7 @@ test.describe('Redesigned ContextSpace shell', () => {
     await expect(box).toHaveValue('Yes, all of them');
     await expect(box).toBeFocused();
     await question.getByRole('button', { name: 'Answer' }).click();
-    await expect.poll(() => answered).toEqual([{ change: { type: 'answer', id: 'Q1', answer: 'Yes, all of them' } }]);
+    await expect.poll(() => answered).toEqual([{ change: { type: 'answer', key: 'Q1', answer: 'Yes, all of them', expected: 'Should **archived** reports be exported?' } }]);
     await expect(question).toHaveCount(0);
     await expect(needs.getByRole('heading')).toHaveText('Needs you 2');
     await review.getByRole('link', { name: /Test feature workspace/ }).click();
@@ -212,10 +212,10 @@ test.describe('Narrow-screen navigation', () => {
     expect(main?.width).toBe(390);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     // Every destination and section stays reachable by keyboard without growing the page.
-    const skills = page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Skills/ });
-    await skills.focus();
+    const services = page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Services/ });
+    await services.focus();
     await page.keyboard.press('Enter');
-    await expect(skills).toHaveAttribute('aria-current', 'page');
+    await expect(services).toHaveAttribute('aria-current', 'page');
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 });

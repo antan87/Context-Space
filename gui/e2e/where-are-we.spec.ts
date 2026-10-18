@@ -1,6 +1,6 @@
 import type { Page, WebSocketRoute } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { planItem, planView } from './planData';
+import { checkpoint, decision, planFile } from './planData';
 
 /**
  * The Where Are We strip above the CLI chat: what it shows from checkable facts, the Reopen
@@ -129,7 +129,7 @@ test('reopens a finished milestone with a reason, as the developer\'s own action
   await strip(page).getByRole('button', { expanded: false }).click();
   const detail = page.getByRole('region', { name: 'Progress details' });
   await detail.getByRole('button', { name: 'Reopen "Cache invoice lookups"' }).click();
-  const submit = detail.getByRole('button', { name: 'Reopen milestone' });
+  const submit = detail.getByRole('button', { name: 'Reopen it' });
   await expect(submit).toBeDisabled();
   await detail.getByLabel(/need rework/).fill('Misses the expiry case');
   await submit.click();
@@ -150,7 +150,7 @@ test('says why a reopen was refused and keeps what was typed', async ({ page }) 
   const detail = page.getByRole('region', { name: 'Progress details' });
   await detail.getByRole('button', { name: /^Reopen "/ }).click();
   await detail.getByLabel(/need rework/).fill('Because');
-  await detail.getByRole('button', { name: 'Reopen milestone' }).click();
+  await detail.getByRole('button', { name: 'Reopen it' }).click();
   await expect(detail.getByRole('alert')).toContainText('That milestone is not finished.');
   await expect(detail.getByLabel(/need rework/)).toHaveValue('Because');
 });
@@ -210,7 +210,7 @@ test('opens what the AI shows as it arrives, but not what it showed before the c
 
 test('reads the plan again the moment it changes on disk, without waiting for the next poll', async ({ page }) => {
   let planReads = 0;
-  await page.route('**/api/workspace/feature-x/plan/items', (route) => { planReads += 1; return route.fulfill({ json: planView([]) }); });
+  await page.route('**/api/workspace/feature-x/plan', (route) => { planReads += 1; return route.fulfill({ json: planFile() }); });
   const changedAt = new Date(Date.now() + 60_000).toISOString();
   await openChat(page, { events: frame('plan', { timestamp: changedAt }, changedAt) });
   const readsWhenOpen = planReads;
@@ -346,9 +346,9 @@ test.describe('the plan in the chat', () => {
   const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
   /** The plan as the strip reads it, recording each change the chat sends. */
-  async function routePlan(page: Page, plan: ReturnType<typeof planView>) {
+  async function routePlan(page: Page, plan: ReturnType<typeof planFile>) {
     const changes: unknown[] = [];
-    await page.route('**/api/workspace/feature-x/plan/items', (route) => {
+    await page.route('**/api/workspace/feature-x/plan', (route) => {
       if (route.request().method() === 'POST') {
         changes.push(route.request().postDataJSON());
         return route.fulfill({ json: { message: 'Saved.', plan } });
@@ -366,10 +366,10 @@ test.describe('the plan in the chat', () => {
   });
 
   test('asks a question from the plan above the chat, with who asked and what it holds up, and records the answer in the plan', async ({ page }) => {
-    const changes = await routePlan(page, planView([
-      planItem({ id: 'b', title: 'Add cache tests', status: 'in_progress' }),
-      planItem({ id: 'Q1', kind: 'question', title: 'Should the cache expire at midnight?', owner: 'user', holdsUp: ['b Add cache tests'], history: [{ at: minutesAgo(3), by: 'codex', action: 'added' }] }),
-    ]));
+    const changes = await routePlan(page, planFile({
+      checkpoints: [checkpoint('Add cache tests', { decisions: [decision('Should the cache expire at midnight?')] })],
+      changes: [{ at: minutesAgo(3), by: 'codex', action: 'added', kind: 'decision', key: 'should-the-cache-expire-at-midnight', text: 'Should the cache expire at midnight?' }],
+    }));
     await openChat(page);
     const question = page.getByRole('group', { name: 'A question in the plan waits for your answer' });
     await expect(question).toContainText('Codex asked 3 min ago · holds up Add cache tests');
@@ -377,19 +377,19 @@ test.describe('the plan in the chat', () => {
     await expect(strip(page)).toContainText('Needs you');
     await question.getByLabel('Your answer to Should the cache expire at midnight?').fill('No, after an hour');
     await question.getByRole('button', { name: 'Answer' }).click();
-    await expect.poll(() => changes).toEqual([{ change: { type: 'answer', id: 'Q1', answer: 'No, after an hour' }, ifRevision: 3 }]);
+    await expect.poll(() => changes).toEqual([{ change: { type: 'answer', key: 'should-the-cache-expire-at-midnight', answer: 'No, after an hour', expected: 'Should the cache expire at midnight?' } }]);
   });
 
   test('a reply in the chat answers the same question in the plan, so it is not asked again', async ({ page }) => {
     let acknowledged = 0;
     let planReads = 0;
-    const plan = (status: 'todo' | 'done') => planView([
-      planItem({ id: 'b', title: 'Add cache tests', status: 'in_progress' }),
-      planItem({ id: 'Q1', kind: 'question', title: 'Which cache backend should we use?', owner: 'user', status, holdsUp: ['b Add cache tests'], history: [{ at: minutesAgo(3), by: 'claude', action: 'added' }] }),
-    ]);
+    const plan = (status: 'todo' | 'done') => planFile({
+      checkpoints: [checkpoint('Add cache tests', { decisions: [decision('Which cache backend should we use?', { done: status === 'done' })] })],
+      changes: [{ at: minutesAgo(3), by: 'claude', action: 'added', kind: 'decision', key: 'which-cache-backend-should-we-use', text: 'Which cache backend should we use?' }],
+    });
     // The server answers the plan's copy when it records the reply.
-    await page.route('**/api/workspace/feature-x/input-requests/acknowledge', async (route) => { acknowledged++; await route.fulfill({ json: { acknowledged: 1, planAnswered: ['Q1 Which cache backend should we use?'] } }); });
-    await page.route('**/api/workspace/feature-x/plan/items', (route) => { planReads++; return route.fulfill({ json: plan(acknowledged ? 'done' : 'todo') }); });
+    await page.route('**/api/workspace/feature-x/input-requests/acknowledge', async (route) => { acknowledged++; await route.fulfill({ json: { acknowledged: 1, planAnswered: ['Which cache backend should we use?'] } }); });
+    await page.route('**/api/workspace/feature-x/plan', (route) => { planReads++; return route.fulfill({ json: plan(acknowledged ? 'done' : 'todo') }); });
     await openChat(page, { facts: () => factsBody({ question: acknowledged === 0 }), target: 'claude' });
     const answerBar = page.getByRole('group', { name: 'The AI is waiting for your answer' });
     await expect(answerBar).toContainText('Holds up Add cache tests');
@@ -407,21 +407,22 @@ test.describe('the plan in the chat', () => {
   test('says what the AI closed while you were in the chat, and reopens it from there', async ({ page }) => {
     // Forget what was seen on the first load only: the reload below must keep it.
     await page.addInitScript(() => { if (!sessionStorage.getItem('reloaded')) window.localStorage.removeItem('contextspace.strip.seen-closes.feature-x'); });
-    const changes = await routePlan(page, planView([planItem({ id: 'a', title: 'Cache invoice lookups', status: 'done' })], {
-      changes: [{ at: minutesAgo(4), by: 'claude', action: 'done', itemId: 'a', label: 'a Cache invoice lookups', note: 'Lookups hit the cache' }],
+    const changes = await routePlan(page, planFile({
+      checkpoints: [checkpoint('Cache invoice lookups', { done: true })],
+      changes: [{ at: minutesAgo(4), by: 'claude', action: 'ticked', kind: 'checkpoint', key: 'cache-invoice-lookups', text: 'Cache invoice lookups' }],
     }));
     await openChat(page);
     const closed = page.getByRole('group', { name: 'What the AI closed' });
-    await expect(closed).toContainText('Claude finished “Cache invoice lookups”: Lookups hit the cache · 4 min ago');
+    await expect(closed).toContainText('Claude finished “Cache invoice lookups” · 4 min ago');
     await closed.getByRole('button', { name: 'Reopen "Cache invoice lookups"' }).click();
     await closed.getByLabel('Why does “Cache invoice lookups” need rework?').fill('Misses the expiry case');
-    await closed.getByRole('button', { name: 'Reopen milestone' }).click();
-    await expect.poll(() => changes).toEqual([{ change: { type: 'reopen', id: 'a', reason: 'Misses the expiry case' }, ifRevision: 3 }]);
+    await closed.getByRole('button', { name: 'Reopen it' }).click();
+    await expect.poll(() => changes).toEqual([{ change: { type: 'reopen', key: 'cache-invoice-lookups', reason: 'Misses the expiry case', expected: 'Cache invoice lookups' } }]);
     // Seen once, it stays out of the way.
     await closed.getByRole('button', { name: 'Got it' }).click();
     await expect(closed).toHaveCount(0);
     await page.evaluate(() => sessionStorage.setItem('reloaded', '1'));
-    const planRead = page.waitForResponse('**/api/workspace/feature-x/plan/items');
+    const planRead = page.waitForResponse('**/api/workspace/feature-x/plan');
     await page.reload();
     await planRead;
     await expect(page.getByRole('region', { name: 'Where are we', exact: true })).toContainText('Now · Add cache tests');

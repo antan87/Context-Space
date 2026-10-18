@@ -80,6 +80,12 @@ describe('readableTitle', () => {
     expect(readableTitle('Already a title')).toBe('Already a title');
     expect(readableTitle('one')).toBe('One');
   });
+
+  it('keeps a title written as words exactly, capitals, dots, apostrophes and hyphens included', () => {
+    for (const title of ["PLAN.md has its own lock, apart from the AI's loop", 'Re-run', 'iOS notes', 'README']) {
+      expect(readableTitle(title), title).toBe(title);
+    }
+  });
 });
 
 describe('matchesKnowledge', () => {

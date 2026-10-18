@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 /**
  * The chat is the centre of the app. It takes most of the screen, the other parts of a workspace
@@ -15,6 +16,7 @@ test.use({
   viewport: { width: 1440, height: 900 },
 });
 
+const SHOTS = process.env.PLAN_SHOTS_DIR;
 const LAYOUT_KEY = 'contextspace_chat_layout_v1';
 const CHAT_KEY = 'contextspace_floating_chat_state_v1';
 
@@ -36,7 +38,7 @@ test.beforeEach(async ({ page }) => {
     id: `term-${id}`, workspace: id, target: 'shell', label: 'bash', cwd: `/tmp/${id}`, state: 'running', startedAt: '2026-09-24T00:00:00Z', attached: true,
   })) } }));
   await page.route('**/api/workspace/*/sessions', (route) => route.fulfill({ json: { sessions: [] } }));
-  await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planFile() }));
   await page.routeWebSocket('**/ws/terminal', (socket) => {
     socket.onMessage((message) => {
       const parsed = JSON.parse(String(message));
@@ -236,7 +238,62 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     expect(rail.width).toBeLessThanOrEqual(RAIL + 1);
     // What can open beside the chat; the chat itself and the overview have no place on it.
     // Knowledge is read in Docs, with the other files ContextSpace keeps.
-    await expect(destinations(page).getByRole('link')).toHaveText(['Plan', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']);
+    await expect(destinations(page).getByRole('link')).toHaveText(['Plan', 'Code', 'Docs', 'Services']);
+    await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/workspace-chat.png` });
+  });
+
+  test('has no item for the sessions or the skills: the history opens from the chat, the skills from the Skill Library', async ({ page }) => {
+    await page.goto('/#/workspaces/alpha/chat');
+    await expect(destinations(page).getByRole('link')).toHaveCount(4);
+    await expect(destinations(page).getByRole('link', { name: /Sessions|Skills/ })).toHaveCount(0);
+    // The way in is in the chat's own toolbar, named for what it opens.
+    await expect(chatOf(page).getByRole('button', { name: 'Session history' })).toBeVisible();
+  });
+
+  test('opens the session history beside the chat from its toolbar, and closes it from the same button', async ({ page }) => {
+    await page.goto('/#/workspaces/alpha/chat');
+    await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+    const history = chatOf(page).getByRole('button', { name: 'Session history' });
+    await expect(history).toHaveAttribute('aria-pressed', 'false');
+    await history.click();
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/sessions$/);
+    const panel = page.getByRole('region', { name: 'Session history', exact: true });
+    await expect(panel.getByRole('heading', { name: 'AI Sessions & History' })).toBeVisible();
+    // The chat stays where it is, on the left, and the button says the history is open and keeps the keyboard.
+    const [chat, beside] = [await boxOf(chatOf(page)), await boxOf(panel)];
+    expect(chat.x + chat.width).toBeLessThanOrEqual(beside.x + 1);
+    await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+    await expect(history).toHaveAttribute('aria-pressed', 'true');
+    await expect(history).toBeFocused();
+    // It is not a part of the rail, so nothing there is marked.
+    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
+
+    await history.click();
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
+    await expect(history).toHaveAttribute('aria-pressed', 'false');
+    await expect(history).toBeFocused();
+  });
+
+  test('opens the session history by keyboard and closes it with the panel cross', async ({ page }) => {
+    await page.goto('/#/workspaces/alpha/chat');
+    // The terminal takes the keyboard when it connects, so the button is reached once it has.
+    await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+    const history = chatOf(page).getByRole('button', { name: 'Session history' });
+    await history.focus();
+    await expect(history).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('region', { name: 'Session history', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Close this panel and give the chat the whole screen' }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
+  });
+
+  test('still opens the old address of the session history', async ({ page }) => {
+    await page.goto('/#/workspaces/alpha/sessions');
+    await expect(page.getByRole('heading', { name: 'AI Sessions & History' })).toBeVisible();
+    await expect(chatOf(page)).toBeVisible();
+    await expect(chatOf(page).getByRole('button', { name: 'Session history' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
   });
 
   test('marks the part that is open, names it above the panel, and closes it when chosen again', async ({ page }) => {

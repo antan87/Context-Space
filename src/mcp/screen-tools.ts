@@ -1,18 +1,14 @@
 /**
  * @module mcp/screen-tools
  * Tools that let the AI drive the screen: open a document or diff beside the
- * chat, leave a note on a line, suggest the next move, report where a milestone
- * stands, and ask what the user is looking at. They only show things. None edits
- * a file, none presses a key for the user, and the two decisions that belong to
- * the user (reopening and completing a milestone) are proposals the tool says it
- * cannot carry out itself.
+ * chat, leave a note on a line, suggest the next move, and ask what the user is
+ * looking at. They only show things: none edits a file, and none presses a key
+ * for the user. Where the plan stands is PLAN.md, which the AI edits itself.
  */
 
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
 
-import { advanceLifecycleStep, blockLifecycleStep, loadWorkspaceLifecycle, reopenLifecycleStep, LifecycleStepError } from '../core/lifecycle.js';
-import { refreshPlanningContext } from '../core/planning-refresh.js';
 import { readScreenContext } from '../core/screen-context.js';
 import {
   SCREEN_NOTE_LIMIT, SCREEN_REASON_LIMIT, SCREEN_TEXT_LIMIT, SCREEN_TITLE_LIMIT,
@@ -21,7 +17,6 @@ import {
 import { resolveScreenRepo, resolveScreenTarget, SCREEN_PATH_MAX_LENGTH } from '../core/screen-paths.js';
 import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
 import type { NexusFlowTool } from './tools.js';
-import { useThePlanCommand } from './planning-tools.js';
 
 const harness = z.string().max(40).optional().describe('Optional name of the assistant calling this, for example "claude" or "codex".');
 const repo = z.string().max(200).optional().describe('Name of one of the workspace repositories. Only needed when the path is relative to that repository and could be ambiguous.');
@@ -124,13 +119,6 @@ const nextSchema = z.object({
   harness,
 });
 
-const milestoneSchema = z.object({
-  id: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(100).describe('The milestone id, from get_work_context.'),
-  state: z.enum(['in_progress', 'blocked', 'reopened', 'done']),
-  note: z.string().max(SCREEN_TEXT_LIMIT).optional().describe('Required for blocked, reopened and done: what it waits on, what is wrong, or what shows it is finished.'),
-  harness,
-});
-
 const contextSchema = z.object({ harness });
 
 export const screenTools: NexusFlowTool[] = [
@@ -199,70 +187,6 @@ export const screenTools: NexusFlowTool[] = [
         payload: { title: input.title, reason: input.reason, ...target },
       });
       return { status, title: event.event === 'next' ? event.payload.title : input.title, message: status === 'shown' ? 'The suggestion is in the user\'s progress strip.' : 'The user already has this suggestion.', eventId: event.id };
-    },
-  ),
-
-  screenTool(
-    'set_milestone',
-    `${useThePlanCommand('set_milestone')} Report where a milestone stands. in_progress starts it (its dependencies must be finished). blocked says what it is waiting on; a note is required. done finishes it when you judge the work done: its check runs first when it has one, and the note says what came out of it. reopened sends finished work back, with the note saying what is wrong. Tell the user in the chat what you finished or reopened; they can reopen it. Read get_work_context for milestone ids.`,
-    milestoneSchema,
-    async (input, { root, workspacePath }) => {
-      const deprecated = useThePlanCommand('set_milestone');
-      const lifecycle = await loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
-      const step = lifecycle.steps.find((candidate) => candidate.id === input.id);
-      if (!step) throw new Error(`There is no milestone "${input.id}". Read get_work_context for the ids.`);
-      const needNote = (what: string) => { if (!input.note?.trim()) throw new Error(`Add a note: ${what}.`); };
-
-      if (input.state === 'in_progress') {
-        if (step.status === 'in_progress') return { deprecated, status: 'unchanged', milestone: input.id, message: 'It is already in progress.' };
-        if (step.status === 'completed' || step.status === 'verified') {
-          throw new Error(`"${step.title}" is already ${step.status}. Reopen it with a note saying what is wrong.`);
-        }
-        try {
-          await advanceLifecycleStep(workspacePath, input.id, 'start', { by: 'agent', harness: input.harness });
-        } catch (error) {
-          throw new Error(error instanceof Error ? error.message : String(error));
-        }
-        await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'in_progress', note: input.note } });
-        return { deprecated, status: 'started', milestone: input.id, ...(await refreshPlanningContext(root)) };
-      }
-
-      if (input.state === 'blocked') {
-        needNote('what the milestone is blocked on');
-        try {
-          await blockLifecycleStep(workspacePath, input.id, { reason: input.note! }, { by: 'agent', harness: input.harness });
-        } catch (error) {
-          if (error instanceof LifecycleStepError) throw new Error(error.message);
-          throw error;
-        }
-        await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'blocked', note: input.note } });
-        return { deprecated, status: 'blocked', milestone: input.id, message: 'The user can see what it is waiting on. Start it again when the block is gone.', ...(await refreshPlanningContext(root)) };
-      }
-
-      if (input.state === 'reopened') {
-        needNote('what is wrong with the finished work');
-        // A verified milestone passed its check but is not finished, and the user sees it as in progress.
-        if (step.status !== 'completed') {
-          throw new Error(`"${step.title}" is ${step.status.replace('_', ' ')}, so there is nothing to reopen. Only a finished milestone can be reopened; say what is wrong in the chat.`);
-        }
-        try {
-          await reopenLifecycleStep(workspacePath, input.id, { reason: input.note!, by: 'agent', harness: input.harness });
-        } catch (error) {
-          if (error instanceof LifecycleStepError) throw new Error(error.message);
-          throw error;
-        }
-        await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'reopened', note: input.note } });
-        return { deprecated, status: 'reopened', milestone: input.id, message: 'Reopened. Tell the user what is wrong and what you will do about it.', ...(await refreshPlanningContext(root)) };
-      }
-
-      needNote('what came out of the milestone');
-      if (step.status !== 'in_progress' && step.status !== 'verified') {
-        throw new Error(`"${step.title}" is ${step.status}, so it cannot be finished. Start it first.`);
-      }
-      // Runs the milestone's check when it has one; done only when the check passes.
-      await advanceLifecycleStep(workspacePath, input.id, 'complete', { by: 'agent', harness: input.harness }, { resolution: input.note! });
-      await appendScreenEvent(root, { harness: input.harness, event: 'milestone', payload: { stepId: input.id, state: 'done', note: input.note } });
-      return { deprecated, status: 'done', milestone: input.id, message: 'Done. Tell the user what you finished and what is next; they can reopen it.', ...(await refreshPlanningContext(root)) };
     },
   ),
 

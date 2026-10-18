@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 test.use({
   workspacesData: [{
@@ -24,7 +25,7 @@ async function openWorkspace(page: Page, initial: unknown[]) {
   const guidance = { version: 1, revision: 0, workType: 'feature', size: 'standard', documents: [],
     assignment: { stage: 'implement', objective: 'Find the bottleneck', expectedOutput: '', stopCondition: '' } };
   await page.route('**/api/workspace/demo/repositories', (route) => route.fulfill({ json: { repositories: state.repositories } }));
-  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: { overallStatus: 'pass', canProgress: true, durationMs: 1000, repos: [] } } }));
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ json: { guidance, lifecycle, sharedDocuments: [], assignment: '' } }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));

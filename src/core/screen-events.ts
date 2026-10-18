@@ -24,7 +24,7 @@ import {
   type InputRequest,
 } from './attention.js';
 import { resolveWorkspaceChatLedger } from './constants.js';
-import { PLAN_STORE_FILE } from './plan.js';
+import { PLAN_FILE } from './plan-file.js';
 import { readLedgerTail } from './ledger-tail.js';
 import {
   cleanLineNumber as lineNumber,
@@ -76,7 +76,7 @@ export type LiveEvent =
   | { type: 'screen'; event: ScreenEvent }
   | { type: 'question'; request: InputRequest }
   | { type: 'answered'; timestamp: string }
-  /** The plan changed on disk, whoever changed it (an AI's CLI or MCP, another window): read it again. */
+  /** PLAN.md changed on disk, whoever changed it (an AI's own edit, the CLI, another window): read it again. */
   | { type: 'plan'; timestamp: string };
 
 // ─── Cleaning ───────────────────────────────────────────────────────────────
@@ -330,7 +330,7 @@ export async function* watchLiveEvents(
   const seen = new Set<string>();
   let last = '';
   let first = true;
-  const planFile = path.join(workspaceRoot, PLAN_STORE_FILE);
+  const planFile = path.join(workspaceRoot, PLAN_FILE);
   let planLast: string | undefined;
 
   while (!options.signal?.aborted) {

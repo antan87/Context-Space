@@ -28,11 +28,11 @@ const SEARCH_DELAY_MS = 200;
  * They are pinned above the developer's own documents so there is one place to read them.
  */
 const CONTEXTSPACE_DOCUMENTS: ReadonlyArray<{ name: string; label: string; purpose: string; icon: LucideIcon }> = [
+  { name: 'PLAN.md', label: 'Plan', purpose: 'What the work is for, its checkpoints and decisions', icon: ListChecks },
   { name: 'contextspace-knowledge.md', label: 'Knowledge', purpose: 'Decisions and gotchas the assistants learned here', icon: Lightbulb },
   { name: 'contextspace-milestones.md', label: 'Delivery plan', purpose: 'Delivery order, open questions, decisions put off', icon: MapIcon },
   { name: 'AGENTS.md', label: 'Assistant instructions', purpose: 'What every assistant reads first here', icon: Bot },
   { name: 'contextspace-assignment.md', label: 'Current assignment', purpose: 'The goal as the assistants receive it', icon: ListChecks },
-  { name: 'contextspace-plan.md', label: 'Generated plan', purpose: 'Milestones and their order, generated', icon: ListChecks },
 ];
 const PINNED = new Set(CONTEXTSPACE_DOCUMENTS.map((doc) => doc.name));
 const KNOWLEDGE = 'contextspace-knowledge.md';

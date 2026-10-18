@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { PLAN_STORE_FILE } from './plan.js';
+import { PLAN_FILE } from './plan-file.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { acknowledgeInputRequests } from './attention.js';
@@ -263,12 +263,12 @@ describe('watchLiveEvents', () => {
   });
 
   it('says the plan changed whenever its file does, but not for the plan as it was when the feed opened', async () => {
-    await fs.writeFile(path.join(dir, PLAN_STORE_FILE), '{"before":true}\n');
+    await fs.writeFile(path.join(dir, PLAN_FILE), '# Plan\n');
     const controller = new AbortController();
     const feed = new Feed(watchLiveEvents(dir, { signal: controller.signal, pollMs: 10 }));
     expect(await feed.take(1, 200)).toHaveLength(0);
 
-    await fs.writeFile(path.join(dir, PLAN_STORE_FILE), '{"after":"a change from the CLI"}\n');
+    await fs.writeFile(path.join(dir, PLAN_FILE), '# Plan\n\n- [x] A step an AI ticked itself\n');
     expect((await feed.take(1))[0]).toMatchObject({ type: 'plan' });
     controller.abort();
   });

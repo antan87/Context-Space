@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 import { openMenuFor } from './menus';
 
 const base = { mode: 'in-place', repos: ['/dev/api'], assistants: [], createdAt: '2026-06-01T00:00:00.000Z' };
@@ -12,7 +13,7 @@ const LIVE = { ...base, id: 'live', branchName: 'live', name: 'Live billing work
 
 async function mockTwoWorkspaces(page: Page) {
   await page.route('**/api/workspaces', (route) => route.fulfill({ json: [OLD, LIVE] }));
-  await page.route(/\/api\/workspace\/(old|live)\/plan$/, (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route(/\/api\/workspace\/(old|live)\/plan$/, (route) => route.fulfill({ json: planFile() }));
   await page.route(/\/api\/workspace\/(old|live)\/documents$/, (route) => route.fulfill({ json: { documents: [] } }));
   await page.route(/\/api\/workspace\/(old|live)\/work$/, (route) => route.fulfill({ json: {
     guidance: { version: 1, revision: 0, workType: 'general', size: 'standard', documents: [],
@@ -129,7 +130,7 @@ test.describe('deleting the workspace on screen', () => {
   test('leaves for a workspace that is still there, and its session goes with it', async ({ page }) => {
     let remaining = [OLD, LIVE, second];
     await page.route('**/api/workspaces', (route) => route.fulfill({ json: remaining }));
-    await page.route(/\/api\/workspace\/(old|live|next)\/plan$/, (route) => route.fulfill({ json: { content: '# Plan' } }));
+    await page.route(/\/api\/workspace\/(old|live|next)\/plan$/, (route) => route.fulfill({ json: planFile() }));
     await page.route(/\/api\/workspace\/(old|live|next)\/documents$/, (route) => route.fulfill({ json: { documents: [] } }));
     await page.route(/\/api\/workspace\/(old|live|next)\/work$/, (route) => route.fulfill({ json: {
       guidance: { version: 1, revision: 0, workType: 'general', size: 'standard', documents: [],
@@ -164,7 +165,7 @@ test.describe('deleting the workspace on screen', () => {
   test('goes to Start a workspace when nothing active is left, and never to an archived record', async ({ page }) => {
     let remaining = [OLD, LIVE];
     await page.route('**/api/workspaces', (route) => route.fulfill({ json: remaining }));
-    await page.route(/\/api\/workspace\/(old|live)\/(plan|documents|work)$/, (route) => route.fulfill({ json: { content: '# Plan', documents: [], guidance: { version: 1, revision: 0, workType: 'general', size: 'standard', documents: [], assignment: { stage: 'implement', objective: 'x', expectedOutput: '', stopCondition: '' } }, lifecycle: null, assignment: '', sharedDocuments: [] } }));
+    await page.route(/\/api\/workspace\/(old|live)\/(plan|documents|work)$/, (route) => route.fulfill({ json: { ...planFile(), documents: [], guidance: { version: 1, revision: 0, workType: 'general', size: 'standard', documents: [], assignment: { stage: 'implement', objective: 'x', expectedOutput: '', stopCondition: '' } }, lifecycle: null, assignment: '', sharedDocuments: [] } }));
     await page.route('**/api/workspace/live', (route) => {
       if (route.request().method() !== 'DELETE') return route.fallback();
       remaining = [OLD];
@@ -189,7 +190,7 @@ test.describe('archiving a workspace that has a session', () => {
 
   async function mockThree(page: Page, list: () => unknown[]) {
     await page.route('**/api/workspaces', (route) => route.fulfill({ json: list() }));
-    await page.route(/\/api\/workspace\/(old|live|next|third)\/plan$/, (route) => route.fulfill({ json: { content: '# Plan' } }));
+    await page.route(/\/api\/workspace\/(old|live|next|third)\/plan$/, (route) => route.fulfill({ json: planFile() }));
     await page.route(/\/api\/workspace\/(old|live|next|third)\/documents$/, (route) => route.fulfill({ json: { documents: [] } }));
     await page.route(/\/api\/workspace\/(old|live|next|third)\/work$/, (route) => route.fulfill({ json: {
       guidance: { version: 1, revision: 0, workType: 'general', size: 'standard', documents: [],

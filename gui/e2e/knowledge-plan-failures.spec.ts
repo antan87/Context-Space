@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 const workspace = (branchName: string) => ({
   id: branchName,
@@ -43,7 +44,7 @@ test.describe('Knowledge and Plan failure recovery', () => {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ content: '# Plan fixture' }),
+        body: JSON.stringify(planFile({ intro: 'Plan fixture' })),
       });
     });
 

@@ -347,13 +347,7 @@ export async function mutatePlan<T>(
   mutation: (plan: PlanDocument, context: { exists: boolean }) => T,
   options: { keepRevision?: boolean; alwaysWrite?: boolean } = {},
 ): Promise<{ plan: PlanDocument; result: T; changed: boolean }> {
-  const outcome = await savePlanMutation(workspacePath, mutation, options);
-  if (outcome.changed) {
-    // contextspace-plan.md follows the plan. Imported here: the summary module reads the plan.
-    const { writePlanSummary } = await import('./plan-summary.js');
-    await writePlanSummary(workspacePath).catch(() => undefined);
-  }
-  return outcome;
+  return savePlanMutation(workspacePath, mutation, options);
 }
 
 async function savePlanMutation<T>(

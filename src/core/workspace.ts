@@ -783,7 +783,6 @@ export async function excludeNexusFlowFiles(workspacePath: string, feature: Feat
   const excludeEntries = [
     'CLAUDE.md',
     'AGENTS.md',
-    'WORKSPACE.md',
     BRAND_CONFIG.files.knowledge.primary,
     BRAND_CONFIG.files.knowledge.legacy,
     BRAND_CONFIG.files.plan.primary,
