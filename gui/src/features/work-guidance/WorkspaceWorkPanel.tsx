@@ -15,7 +15,7 @@ import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
-import { handleDelegatedRowClick, handleDelegatedRowKeyDown } from '../../lib/delegatedRowClick.js';
+import { handleDelegatedRowClick } from '../../lib/delegatedRowClick.js';
 import { usePlanFile } from '../plan/planFile.js';
 import { planStatesGoal } from '../plan/planView.js';
 import type { WorkDocument, WorkGuidance, WorkspaceLifecycle } from '../../types.js';
@@ -398,14 +398,10 @@ export function WorkspaceWorkPanel({ workspaceId, readOnly = false }: { workspac
           {context.guidance.documents.length || context.sharedDocuments?.length ? <ul className="space-y-1">
             {[...context.guidance.documents, ...(context.sharedDocuments ?? [])].map((doc) => <li
               key={doc.id}
-              role="button"
-              tabIndex={busy ? -1 : 0}
-              aria-disabled={busy}
               onClick={(e) => !busy && handleDelegatedRowClick(e, () => readDocument(doc.id))}
-              onKeyDown={(e) => !busy && handleDelegatedRowKeyDown(e, () => readDocument(doc.id))}
               className={cn(
                 'group flex items-center gap-2 text-sm rounded-lg px-2.5 py-1.5 -mx-1 transition-colors select-text',
-                busy ? 'opacity-60 cursor-not-allowed' : 'hover:bg-accent/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1'
+                busy ? 'opacity-60 cursor-not-allowed' : 'hover:bg-accent/40 cursor-pointer'
               )}
             >
               <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground group-hover:text-primary transition-colors" />

@@ -6,7 +6,7 @@ import { HarnessIcon, harnessName } from '../../components/icons/HarnessIcon.js'
 import { SessionActivity } from '../sessions/SessionActivity.js';
 import { SessionKind, mainSessionFor } from '../sessions/SessionKind.js';
 import { SessionUsageDetails } from './SessionUsage.js';
-import { handleDelegatedRowClick, handleDelegatedRowKeyDown } from '../../lib/delegatedRowClick.js';
+import { handleDelegatedRowClick } from '../../lib/delegatedRowClick.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 import type { AISession } from '../../types.js';
 import type { TerminalStatus } from './client.js';
@@ -114,12 +114,9 @@ export function ResumeSessions({ workspace, active, busy, status, fill, embedded
         const handleResume = () => { if (canResume && main) onResume(main); };
         return <div
           key={`${session.assistant}:${session.id}`}
-          className={`flex items-center gap-2 py-2 px-2 -mx-2 rounded-md transition-colors select-text ${canResume ? 'cursor-pointer hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1' : ''}`}
+          className={`flex items-center gap-2 py-2 px-2 -mx-2 rounded-md transition-colors select-text ${canResume ? 'cursor-pointer hover:bg-accent/40' : ''}`}
           data-testid="resume-session-row"
-          role={canResume ? 'button' : undefined}
-          tabIndex={canResume ? 0 : undefined}
           onClick={(e) => canResume && handleDelegatedRowClick(e, handleResume)}
-          onKeyDown={(e) => canResume && handleDelegatedRowKeyDown(e, handleResume)}
         >
           <HarnessIcon harness={session.assistant} className="size-5 shrink-0" />
           <div className="min-w-0 flex-1"><div className="truncate text-xs font-medium" title={session.title}>{session.title}</div><div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground"><span>{harnessName(session.assistant)}</span><SessionKind session={session} /><SessionActivity session={session} /><span>{session.messageCount} messages</span><span className="font-mono">{session.id.slice(0, 8)}</span></div><SessionUsageDetails session={session} />{status && !available && <p className="text-[10px] text-warning">{tool?.reason || status.reason || `${harnessName(session.assistant)} is unavailable on this device.`}</p>}{!main && <p className="text-[10px] text-warning">Main conversation unavailable in saved history.</p>}</div>

@@ -29,7 +29,7 @@ import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
 import { formatCompact, formatHeaderQuota } from './usageFormat.js';
-import { handleDelegatedRowClick, handleDelegatedRowKeyDown } from '../../lib/delegatedRowClick.js';
+import { handleDelegatedRowClick } from '../../lib/delegatedRowClick.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 
 export type SessionSortOption =
@@ -647,13 +647,10 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
               return (
                 <div
                   key={sess.id}
-                  role={canResume ? 'button' : undefined}
-                  tabIndex={canResume ? 0 : undefined}
                   onClick={(e) => canResume && handleDelegatedRowClick(e, handleResume)}
-                  onKeyDown={(e) => canResume && handleDelegatedRowKeyDown(e, handleResume)}
                   className={cn(
                     'group flex flex-col gap-2 p-3 transition-colors sm:flex-row sm:items-center sm:justify-between select-text',
-                    canResume && 'hover:bg-accent/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1'
+                    canResume && 'hover:bg-accent/40 cursor-pointer'
                   )}
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -861,13 +858,10 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                         return (
                         <div
                           key={sess.id}
-                          role={canResume ? 'button' : undefined}
-                          tabIndex={canResume ? 0 : undefined}
                           onClick={(e) => canResume && handleDelegatedRowClick(e, handleResume)}
-                          onKeyDown={(e) => canResume && handleDelegatedRowKeyDown(e, handleResume)}
                           className={cn(
                             'group flex flex-col gap-1.5 px-3.5 py-2.5 transition-colors sm:flex-row sm:items-center sm:justify-between select-text',
-                            canResume && 'hover:bg-accent/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1'
+                            canResume && 'hover:bg-accent/40 cursor-pointer'
                           )}
                         >
                           <div className="min-w-0 flex-1">
