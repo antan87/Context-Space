@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { questionWhy, suggestedAnswers, whenText, whoName } from './planView.js';
+import { planStatesGoal, questionWhy, suggestedAnswers, whenText, whoName } from './planView.js';
 
 describe('whoName', () => {
   it('says You, the AI tool by name, or ContextSpace', () => {
@@ -8,6 +8,22 @@ describe('whoName', () => {
     expect(whoName('claude')).toBe('Claude');
     expect(whoName('contextspace')).toBe('ContextSpace');
     expect(whoName('PO')).toBe('PO');
+  });
+});
+
+describe('planStatesGoal', () => {
+  it('is true when PLAN.md opens with words, so the brief need not repeat the goal', () => {
+    expect(planStatesGoal({ intro: 'Customers export their reports as **CSV**.' })).toBe(true);
+    expect(planStatesGoal({ intro: '\n  One line.  \n' })).toBe(true);
+  });
+
+  it('is false while the plan is unknown, without a PLAN.md, and for an intro with nothing in it', () => {
+    expect(planStatesGoal(undefined)).toBe(false);
+    expect(planStatesGoal(null)).toBe(false);
+    expect(planStatesGoal({})).toBe(false);
+    expect(planStatesGoal({ intro: '' })).toBe(false);
+    expect(planStatesGoal({ intro: ' \n\t ' })).toBe(false);
+    expect(planStatesGoal({ intro: null })).toBe(false);
   });
 });
 

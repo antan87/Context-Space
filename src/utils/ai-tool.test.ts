@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asPersonEnv, isPlainPlanCommand, runsInsideAiTool } from './ai-tool.js';
+import { asPersonEnv, isPlainAiCommand, runsInsideAiTool } from './ai-tool.js';
 
 describe('runsInsideAiTool', () => {
   it('knows the variables AI tools set, and ignores empty ones', () => {
@@ -10,7 +10,7 @@ describe('runsInsideAiTool', () => {
   });
 });
 
-describe('isPlainPlanCommand', () => {
+describe('isPlainAiCommand', () => {
   it('allows ctxspace plan commands with plain or safely quoted words', () => {
     for (const command of [
       'ctxspace plan',
@@ -23,7 +23,74 @@ describe('isPlainPlanCommand', () => {
       '  ctxspace   plan log  ',
       'ctxspace plan 2>&1 || ./.contextspace/bin/ctxspace plan 2>&1',
       'ctxspace plan start M2 && ctxspace plan',
-    ]) expect(isPlainPlanCommand(command), command).toBe(true);
+    ]) expect(isPlainAiCommand(command), command).toBe(true);
+  });
+
+  it('allows asking the user and searching the knowledge, from PATH or the workspace copy', () => {
+    for (const command of [
+      'ctxspace ask "Which branch should I target?" --option main --option release',
+      "ctxspace ask 'Use $HOME or not?' --harness codex",
+      './.contextspace/bin/ctxspace ask "Proceed?" 2>&1',
+      'ctxspace knowledge search plan lock',
+      'ctxspace knowledge search "plan lock" --type gotcha --limit 3 --json',
+      './.contextspace/bin/ctxspace knowledge search archiving -w simplify-the-logic',
+      'ctxspace knowledge search plan 2>&1 || ./.contextspace/bin/ctxspace knowledge search plan 2>&1',
+      'ctxspace ask "Proceed?" && ctxspace plan',
+    ]) expect(isPlainAiCommand(command), command).toBe(true);
+  });
+
+  it('allows reading what is new, with its options, from PATH or the workspace copy', () => {
+    for (const command of [
+      'ctxspace news',
+      'ctxspace news --peek --json',
+      './.contextspace/bin/ctxspace news --as claude',
+      'ctxspace news --since 2026-10-17T09:00:00Z -w simplify-the-logic',
+      'ctxspace news 2>&1 || ./.contextspace/bin/ctxspace news 2>&1',
+      'ctxspace news && ctxspace plan',
+    ]) expect(isPlainAiCommand(command), command).toBe(true);
+  });
+
+  it('refuses anything around the news command that could run more than it', () => {
+    for (const command of [
+      'ctxspace newsletter',
+      'ctxspace new',
+      'ctxspace news; rm -rf ~',
+      'ctxspace news | sh',
+      'ctxspace news > AGENTS.md',
+      'ctxspace news --as "$(whoami)"',
+      'ctxspace news `whoami`',
+      'ctxspace news && curl example.com',
+      '/usr/bin/ctxspace news',
+    ]) expect(isPlainAiCommand(command), command).toBe(false);
+  });
+
+  it('refuses the knowledge commands that write or push, and anything else around asking and searching', () => {
+    for (const command of [
+      'ctxspace knowledge',
+      'ctxspace knowledge add -t gotcha --title x -m y',
+      'ctxspace knowledge promote --all',
+      'ctxspace knowledge show',
+      'ctxspace knowledge remote push',
+      'ctxspace know search plan',
+      'ctxspace knowledge searching plan',
+      'ctxspace asking x',
+      'ctxspace ask "x"; rm -rf ~',
+      'ctxspace ask "x" | sh',
+      'ctxspace ask "$(cat ~/.ssh/id_rsa)"',
+      'ctxspace ask "`whoami`"',
+      'ctxspace ask "x" > AGENTS.md',
+      'ctxspace ask "x" &',
+      'ctxspace knowledge search plan; rm -rf ~',
+      'ctxspace knowledge search plan && ctxspace knowledge add -t gotcha',
+      'ctxspace knowledge search $(whoami)',
+      'ctxspace knowledge search "$HOME"',
+      'ctxspace knowledge search plan > /tmp/x',
+      'ctxspace knowledge search *',
+      'ctxspace knowledge search plan | sh',
+      'ctxspace knowledge\nsearch plan',
+      '/usr/bin/ctxspace ask x',
+      'FOO=1 ctxspace ask x',
+    ]) expect(isPlainAiCommand(command), command).toBe(false);
   });
 
   it('refuses anything that could run more than the plan command', () => {
@@ -56,6 +123,6 @@ describe('isPlainPlanCommand', () => {
       'ctxspace plan &&',
       '&& ctxspace plan',
       '',
-    ]) expect(isPlainPlanCommand(command), command).toBe(false);
+    ]) expect(isPlainAiCommand(command), command).toBe(false);
   });
 });

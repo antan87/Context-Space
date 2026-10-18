@@ -77,6 +77,68 @@ test('the chat resume buttons are there on a workspace page too', async ({ page 
   await expect(page.getByRole('region', { name: 'CLI Chat', exact: true })).toBeVisible();
 });
 
+test.describe('Advanced tools', () => {
+  const toggle = (page: import('@playwright/test').Page) => sidebar(page).getByRole('button', { name: 'Advanced tools' });
+  const item = (page: import('@playwright/test').Page, name: string) => sidebar(page).getByRole('link', { name });
+
+  test('is folded away by default, opens from the keyboard, and stays as it was left after a reload', async ({ page }) => {
+    await page.goto('/#/overview');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+    // Reusable setup stays in view; the two tools are tucked away.
+    await expect(item(page, 'Skills & agents')).toBeVisible();
+    await expect(item(page, 'Workrooms')).toHaveCount(0);
+    await expect(item(page, 'Strategies')).toHaveCount(0);
+
+    await toggle(page).focus();
+    await page.keyboard.press('Enter');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
+    await expect(item(page, 'Workrooms')).toBeVisible();
+    await expect(item(page, 'Strategies')).toBeVisible();
+
+    await page.reload();
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
+    await expect(item(page, 'Workrooms')).toBeVisible();
+
+    await toggle(page).focus();
+    await page.keyboard.press('Space');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+    await expect(item(page, 'Workrooms')).toHaveCount(0);
+    await page.reload();
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('opens by itself on a page of the section, and can still be folded away there', async ({ page }) => {
+    await page.goto('/#/workrooms');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
+    await expect(item(page, 'Workrooms')).toHaveAttribute('aria-current', 'page');
+
+    await toggle(page).click();
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+    await expect(item(page, 'Workrooms')).toHaveCount(0);
+  });
+
+  test('opens on Strategies too, without remembering that it did', async ({ page }) => {
+    await page.goto('/#/workflows');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
+    await expect(item(page, 'Strategies')).toBeVisible();
+
+    await page.goto('/#/overview');
+    await page.reload();
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('still works when the browser keeps no storage', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } });
+    });
+    await page.goto('/#/overview');
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
+    await toggle(page).click();
+    await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');
+    await expect(item(page, 'Workrooms')).toBeVisible();
+  });
+});
+
 test.describe('a repository that has to be prepared before it can be edited', () => {
   const repository = (name: string, reference: boolean) => ({
     name, path: `C:/${name}`, access: reference ? 'reference' : 'worktree', editable: !reference, branch: 'main', expectedBranch: reference ? null : 'main',

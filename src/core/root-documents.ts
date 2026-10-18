@@ -79,12 +79,15 @@ const isDataFile = (name: string) => dataExtensions.has(path.extname(name).toLow
 export interface ListRootDocumentsOptions {
   /** Workspace-relative folders (with `/`) that hold a repository; the data files inside them are not listed. */
   repoFolders?: readonly string[];
+  /** Workspace-relative folders (with `/`) that are not entered at all, so a listing that only wants the workspace's own documents skips a repository's files. */
+  leaveOut?: readonly string[];
 }
 
 /** Agent-created files are local files, not copies registered with a storage adapter. */
 export async function listRootDocuments(root: string, folder = '', recursive = false, options: ListRootDocumentsOptions = {}) {
   const repoFolders = (options.repoFolders ?? []).map((repoFolder) => repoFolder.replace(/^\/+|\/+$/g, '')).filter(Boolean);
   const inRepository = (rel: string) => repoFolders.some((repoFolder) => rel === repoFolder || rel.startsWith(`${repoFolder}/`));
+  const leftOut = new Set((options.leaveOut ?? []).map((skipped) => skipped.replace(/^\/+|\/+$/g, '')).filter(Boolean));
   const normalizedFolder = folder ? folder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') : '';
   const targetDir = folderPath(root, normalizedFolder);
   try {
@@ -114,7 +117,7 @@ export async function listRootDocuments(root: string, folder = '', recursive = f
         if (stat.isSymbolicLink()) continue;
         if (stat.isDirectory()) {
           folders.push(rel);
-          if (recursive) {
+          if (recursive && !leftOut.has(rel)) {
             await scan(full, rel, depth + 1);
           }
         } else if (stat.isFile() && format(entry.name)) {

@@ -11,7 +11,6 @@ test.use({ workspacesData: [feature], viewport: { width: 1365, height: 960 } });
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/terminals/bootstrap', route => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/ai-detect', route => route.fulfill({ json: [{ name: 'codex', displayName: 'Codex', detected: true }] }));
-  await page.route('**/api/adapters/status', route => route.fulfill({ json: [] }));
 });
 
 test('first-run history makes reported and missing usage distinct', async ({ page }) => {

@@ -8,10 +8,14 @@ import { planFile } from './planData';
  * Space or typing, and the focused control shows a visible indicator.
  */
 
+/** Tab presses made so far in the running test, for journeys that promise to be short. */
+let tabPresses = 0;
+
 async function tabTo(page: Page, target: Locator, max = 150) {
   for (let presses = 0; presses < max; presses += 1) {
     if (await target.evaluate((element) => element === document.activeElement).catch(() => false)) return;
     await page.keyboard.press('Tab');
+    tabPresses += 1;
   }
   throw new Error(`Not reachable with Tab within ${max} presses: ${target}`);
 }
@@ -54,12 +58,16 @@ test.describe('keyboard-only primary journey', () => {
     await page.goto('/#/new');
     await expect(page.getByRole('heading', { name: 'New workspace' })).toBeVisible();
 
+    // Everything in the main area is a few Tab presses away: the keyboard starts on the repositories, and
+    // More options (closed) is one stop, so nothing beyond the task has to be tabbed through.
+    tabPresses = 0;
     await activate(page, page.getByRole('checkbox', { name: 'api' }), 'Space');
-    await tabTo(page, page.getByLabel('Workspace name'));
-    await page.keyboard.type('Invoice speed-up');
     await tabTo(page, page.getByLabel('What do you want to do?'));
     await page.keyboard.type('Cache invoice lookups');
+    await tabTo(page, page.getByLabel('Workspace name'));
+    await page.keyboard.type('Invoice speed-up');
     await activate(page, page.getByRole('button', { name: 'Create workspace' }));
+    expect(tabPresses, 'Tab presses from the first stop to Create').toBeLessThanOrEqual(8);
 
     await expect.poll(() => payload?.name).toBe('Invoice speed-up');
     expect(payload).toMatchObject({ description: 'Cache invoice lookups' });

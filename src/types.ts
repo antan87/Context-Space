@@ -9,6 +9,7 @@ import type {
   QuotaWindow,
   CostConfidence,
 } from './harness/types.js';
+import type { KnowledgeLesson } from './core/knowledge.js';
 
 export type {
   NormalizedUsage,
@@ -402,6 +403,9 @@ export interface WorkspaceContext {
 
   /** Analysis results for each repo (keyed by repo path). */
   analysis?: Map<string, ProjectAnalysis>;
+
+  /** The knowledge entries listed in AGENTS.md: the workspace's own, then its repos' base knowledge. Read when generating if absent. */
+  lessons?: KnowledgeLesson[];
 
   /** Immutable repo snapshot captured before generated artifacts are rendered. */
   generation?: {

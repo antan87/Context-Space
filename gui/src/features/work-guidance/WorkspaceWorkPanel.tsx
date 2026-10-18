@@ -13,7 +13,10 @@ import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
+import { cn } from '../../lib/utils.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
+import { usePlanFile } from '../plan/planFile.js';
+import { planStatesGoal } from '../plan/planView.js';
 import type { WorkDocument, WorkGuidance, WorkspaceLifecycle } from '../../types.js';
 
 type WorkContext = {
@@ -40,7 +43,7 @@ const SIZES: Record<WorkGuidance['size'], string> = { small: 'Small task', stand
 function PlanCard({ title, meta, action, children }: { title: string; meta?: ReactNode; action?: ReactNode; children?: ReactNode }) {
   const id = useId();
   return <section aria-labelledby={id} className="rounded-xl border border-border/40 bg-card/60 backdrop-blur-xs px-4 py-3 shadow-2xs">
-    <header className="mb-2.5 flex min-h-7 items-center gap-2 border-b border-border/30 pb-2">
+    <header className={cn('flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1', children && 'mb-2.5 border-b border-border/30 pb-2')}>
       <h3 id={id} className="text-xs font-semibold text-foreground/80">{title}</h3>
       {meta}
       <span className="flex-1" />
@@ -50,18 +53,48 @@ function PlanCard({ title, meta, action, children }: { title: string; meta?: Rea
   </section>;
 }
 
+const CHIP = 'inline-flex items-center rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 text-xs font-medium text-muted-foreground';
+
+/** What kind of work this is, in words: the stage, the type, the size and, for one milestone, which. */
+function briefParts(guidance: WorkGuidance, scope?: string): string[] {
+  const stage = guidance.assignment.stage;
+  return [stage ? stage[0]!.toUpperCase() + stage.slice(1) : '', WORK_TYPES[guidance.workType], SIZES[guidance.size], scope ? `For ${scope}` : ''].filter(Boolean);
+}
+
 /**
- * The goal as a reader needs it: its opening, the rest on request. What it delivers and when it stops are
- * shown only until the plan has milestones: then each milestone says what it must deliver, and the
- * brief's own words would go stale beside them.
+ * What the work delivers and when it stops. Shown only until the plan has milestones: then each milestone says
+ * what it must deliver, and the brief's own words would go stale beside them.
  */
+function assignmentNotes(guidance: WorkGuidance, hasMilestones: boolean): ReactNode {
+  const delivers = hasMilestones ? undefined : guidance.assignment.expectedOutput?.trim();
+  const stops = hasMilestones ? undefined : guidance.assignment.stopCondition?.trim();
+  if (!delivers && !stops) return null;
+  return <div className="grid gap-3 pt-1 sm:grid-cols-2">
+    {delivers && (
+      <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
+        <div className="flex items-center gap-1.5">
+          <span className="size-1.5 rounded-full bg-state-done shrink-0" />
+          <h4 className="text-xs font-medium text-muted-foreground">Delivers</h4>
+        </div>
+        <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={delivers}><InlinePlanMarkdown content={delivers} /></p>
+      </div>
+    )}
+    {stops && (
+      <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
+        <div className="flex items-center gap-1.5">
+          <span className="size-1.5 rounded-full bg-state-needs shrink-0" />
+          <h4 className="text-xs font-medium text-muted-foreground">Stops when</h4>
+        </div>
+        <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={stops}><InlinePlanMarkdown content={stops} /></p>
+      </div>
+    )}
+  </div>;
+}
+
+/** The goal as a reader needs it: its opening, the rest on request. */
 function GoalSummary({ guidance, scope, hasMilestones }: { guidance: WorkGuidance; scope?: string; hasMilestones: boolean }) {
   const objective = guidance.assignment.objective?.trim() ?? '';
   const opening = headline(objective);
-  const delivers = hasMilestones ? undefined : guidance.assignment.expectedOutput?.trim();
-  const stops = hasMilestones ? undefined : guidance.assignment.stopCondition?.trim();
-  const stage = guidance.assignment.stage;
-  const metaText = [stage ? stage[0]!.toUpperCase() + stage.slice(1) : '', WORK_TYPES[guidance.workType], SIZES[guidance.size], scope ? `For ${scope}` : ''].filter(Boolean).join(' · ');
 
   return <div className="space-y-3">
     <div>
@@ -69,43 +102,24 @@ function GoalSummary({ guidance, scope, hasMilestones }: { guidance: WorkGuidanc
         {opening ? <InlinePlanMarkdown content={opening} /> : <span className="font-normal text-muted-foreground">No goal yet. Say what this work is for.</span>}
       </h2>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        <span className="inline-flex items-center rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 text-xs font-medium text-muted-foreground">
-          {metaText}
-        </span>
+        <span className={CHIP}>{briefParts(guidance, scope).join(' · ')}</span>
       </div>
     </div>
     {objective.length > opening.length && <details className="group rounded-lg border border-border/30 bg-muted/15 px-3 py-2 text-sm">
       <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">The whole goal</summary>
       <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/90 leading-relaxed">{objective}</p>
     </details>}
-    {(delivers || stops) && <div className="grid gap-3 pt-1 sm:grid-cols-2">
-      {delivers && (
-        <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
-          <div className="flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-state-done shrink-0" />
-            <h4 className="text-xs font-medium text-muted-foreground">Delivers</h4>
-          </div>
-          <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={delivers}><InlinePlanMarkdown content={delivers} /></p>
-        </div>
-      )}
-      {stops && (
-        <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5 space-y-1">
-          <div className="flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-state-needs shrink-0" />
-            <h4 className="text-xs font-medium text-muted-foreground">Stops when</h4>
-          </div>
-          <p className="text-xs text-foreground/90 leading-relaxed whitespace-pre-wrap line-clamp-4" title={stops}><InlinePlanMarkdown content={stops} /></p>
-        </div>
-      )}
-    </div>}
+    {assignmentNotes(guidance, hasMilestones)}
   </div>;
 }
 
 /**
- * The brief: the goal, then the plan (passed in), then the sources. Milestones, questions and decisions
- * live in the plan; the old milestone editor and the Notes & questions box are gone.
+ * The brief: the goal and the kind of work, then the sources. It sits under the plan, which holds the milestones,
+ * questions and decisions; the old milestone editor and the Notes & questions box are gone. When the plan document
+ * opens with the goal (PLAN.md's intro), the brief does not say it again: it is called Brief and shrinks to a line
+ * of chips with its edit action, then the sources. Without that text it is the Goal and shows the objective.
  */
-export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { workspaceId: string; /** Shown under the goal. */ plan?: ReactNode; /** Archived: show the record, change nothing. */ readOnly?: boolean }) {
+export function WorkspaceWorkPanel({ workspaceId, readOnly = false }: { workspaceId: string; /** Archived: show the record, change nothing. */ readOnly?: boolean }) {
   const [context, setContext] = useState<WorkContext | null>(null);
   const [draft, setDraft] = useState<WorkGuidance | null>(null);
   // Which part is being edited. None by default: the plan is read first, and edited one part at a time.
@@ -126,6 +140,9 @@ export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { wo
   const live = useRef<LiveDrafts>({});
   const base = `/api/workspace/${encodeURIComponent(workspaceId)}`;
   const queryClient = useQueryClient();
+  // The plan the page already reads (one query for both). Until it has answered, the brief shows the objective.
+  const goalInPlan = planStatesGoal(usePlanFile(workspaceId).data);
+  const noun = goalInPlan ? 'brief' : 'goal';
   const load = useCallback(async (signal?: AbortSignal) => {
     setError('');
     try {
@@ -250,6 +267,8 @@ export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { wo
   });
   const close = (what: string) => <Button size="xs" variant="ghost" aria-label={`Done with ${what}`} onClick={() => setPanel(null)}>Done</Button>;
   const edit = (label: string, target: NonNullable<typeof panel>) => <IconButton label={label} icon={<Pencil />} className="text-muted-foreground" onClick={() => setPanel(target)} />;
+  const hasMilestones = Boolean(context?.lifecycle?.steps.length);
+  const briefScope = draft ? context?.lifecycle?.steps.find((step) => step.id === draft.assignment.milestoneId)?.title : undefined;
   const previewBox = preview && <div className="rounded-lg border border-border p-3 space-y-2"><div className="flex justify-between gap-2"><h4 className="text-sm font-semibold">{preview.title}</h4><Button size="sm" variant="ghost" onClick={() => setPreview(null)}>Close document</Button></div>
     {preview.content !== undefined ? <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{preview.content}</pre> : <a className="text-sm text-primary underline" href={preview.location} target="_blank" rel="noopener noreferrer">Open source document</a>}
   </div>;
@@ -260,14 +279,17 @@ export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { wo
     {!context || !draft ? <p className="text-sm">{error ? 'The plan is unavailable.' : 'Loading the plan…'}</p> : <>
       {conflicts.assignment && <DraftConflictNotice noun="goal" differences={assignmentConflicts(conflicts.assignment, pickAssignment(context.guidance))} onKeep={keepAssignmentDraft} onUseSaved={useSavedAssignment} />}
 
-      <PlanCard title="Goal" action={
+      <PlanCard title={goalInPlan ? 'Brief' : 'Goal'} action={
         <div className="flex items-center gap-0.5">
-          <IconButton label="Copy the goal for an assistant" icon={<Copy className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy || !context || Boolean(assignmentDirty)} onClick={copyGoal} />
+          <IconButton label={`Copy the ${noun} for an assistant`} icon={<Copy className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy || !context || Boolean(assignmentDirty)} onClick={copyGoal} />
           <IconButton label="Reload the plan" icon={<RefreshCw className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy} onClick={() => void load()} />
-          {panel === 'assignment' ? close('the goal') : !readOnly && edit('Edit the goal', 'assignment')}
+          {panel === 'assignment' ? close(`the ${noun}`) : !readOnly && edit(`Edit the ${noun}`, 'assignment')}
         </div>
       }
-        meta={!readOnly && panel !== 'assignment' && assignmentState !== 'saved' ? <DraftStateLabel state={assignmentState} kept={!notKept.assignment} /> : null}>
+        meta={<>
+          {goalInPlan && panel !== 'assignment' && briefParts(draft, briefScope).map((part) => <span key={part} className={CHIP}>{part}</span>)}
+          {!readOnly && panel !== 'assignment' && assignmentState !== 'saved' ? <DraftStateLabel state={assignmentState} kept={!notKept.assignment} /> : null}
+        </>}>
         {panel === 'assignment' ? <div className="space-y-4">
           <fieldset disabled={readOnly || Boolean(conflicts.assignment)} className="m-0 min-w-0 border-0 p-0 space-y-4">
           <label className="block text-sm">Current objective<Textarea className="mt-1" value={draft.assignment.objective} onChange={(event) => patchAssignment({ objective: event.target.value })} placeholder="Investigate why invoice totals differ from line items." /></label>
@@ -294,10 +316,9 @@ export function WorkspaceWorkPanel({ workspaceId, plan, readOnly = false }: { wo
             {!readOnly && assignmentDirty && !conflicts.assignment && <Button variant="ghost" disabled={busy} onClick={() => { setDraft(context.guidance); setMessage('Unsaved goal edits discarded.'); }}>Discard unsaved goal changes</Button>}
             {!readOnly && <DraftStateLabel state={assignmentState} kept={!notKept.assignment} />}
           </div>
-        </div> : <GoalSummary guidance={draft} scope={context.lifecycle?.steps.find((step) => step.id === draft.assignment.milestoneId)?.title} hasMilestones={Boolean(context.lifecycle?.steps.length)} />}
+        </div> : goalInPlan ? assignmentNotes(draft, hasMilestones)
+          : <GoalSummary guidance={draft} scope={briefScope} hasMilestones={hasMilestones} />}
       </PlanCard>
-
-      {plan}
 
       <PlanCard title="Sources" action={panel === 'documents' ? close('the sources') : !readOnly && edit('Edit sources', 'documents')}
         meta={context.guidance.documents.length > 0 && <span className="text-xs text-muted-foreground">{context.guidance.documents.length}</span>}>

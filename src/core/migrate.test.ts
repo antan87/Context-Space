@@ -547,7 +547,7 @@ describe('core/migrate', () => {
 
       // Verify the knowledge entry was appended to contextspace-knowledge.md
       const updatedKnowledge = await fs.readFile(path.join(wsDir, 'contextspace-knowledge.md'), 'utf-8');
-      expect(updatedKnowledge).toContain('post-migration-durability');
+      expect(updatedKnowledge).toContain('Post-Migration Durability');
       expect(updatedKnowledge).toContain('Durable knowledge files remain fully trackable in Git after migration.');
 
       // Verify git working directory is clean

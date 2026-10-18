@@ -326,7 +326,7 @@ export async function migrateWorkspace(
   // 3. Update sentinels in durable markdown files
   // Note: Only generated sentinel comments and provenance lines are updated.
   // We NEVER replace prose, decisions, code snippets, git hashes, or commands in user files.
-  // Generated views (AGENTS.md, CLAUDE.md, WORKSPACE.md) are regenerated directly from source in step 5.
+  // Generated views (AGENTS.md, CLAUDE.md) are regenerated directly from source in step 5.
   const durableFiles = [
     BRAND_CONFIG.files.knowledge.primary,
     BRAND_CONFIG.files.plan.primary,

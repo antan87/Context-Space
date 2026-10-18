@@ -21,7 +21,6 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/ai-detect', route => route.fulfill({ json: [
     { name: 'codex', displayName: 'Codex', detected: true }, { name: 'antigravity', displayName: 'Antigravity', detected: true },
   ] }));
-  await page.route('**/api/adapters/status', route => route.fulfill({ json: [] }));
   await page.route('**/api/session-sources', route => route.fulfill({ json: { sources: [...harnesses, 'workspace'] } }));
   await page.route('**/api/workspace/feature-x/sessions*', route => route.fulfill({ json: { sessions: [...sessions, child] } }));
   await page.route('**/api/terminals/bootstrap', route => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
@@ -282,7 +281,7 @@ test('Sessions tab defaults to conversations and can reveal delegated tasks', as
 
 test('workspace creation shows harness choices without preselecting a provider', async ({ page }) => {
   await page.goto('/#/new');
-  await page.getByRole('button', { name: /Advanced setup/ }).click();
+  await page.getByRole('button', { name: /More options/ }).click();
   const choices = page.getByRole('region', { name: 'AI harnesses' });
   await expect(choices).toBeVisible();
   const checkboxes = choices.getByRole('checkbox');

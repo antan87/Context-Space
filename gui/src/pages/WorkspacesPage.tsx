@@ -111,6 +111,7 @@ import { WorkspaceChecks } from '../features/plan/WorkspaceChecks.js';
 import { RootDocumentsPanel } from '../features/work-guidance/RootDocumentsPanel.js';
 import { WorkspaceWorkPanel } from '../features/work-guidance/WorkspaceWorkPanel.js';
 import { HomePlan } from '../features/workspace-home/HomePlan.js';
+import { SinceYouLooked } from '../features/plan/SinceYouLooked.js';
 import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
@@ -1406,8 +1407,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                 {/* One key for the whole tab: siblings that share a key are never removed, so each switch left the
                     previous workspace's brief and plan on screen, still polling. */}
                 <div key={selected.branchName} className="min-w-0 space-y-6">
-                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived}
-                  plan={<HomePlan workspaceId={selected.branchName} workspacePath={selected.workspacePath} readOnly={archived} />} />
+                <SinceYouLooked workspaceId={selected.branchName} readOnly={archived} />
+                {/* The plan first: it opens with the goal and holds the checkpoints. The brief and the checks follow. */}
+                <HomePlan workspaceId={selected.branchName} workspacePath={selected.workspacePath} readOnly={archived} />
+                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived} />
                 <WorkspaceChecks workspaceId={selected.branchName} readOnly={archived} />
                 </div>
               </div>}
@@ -1417,7 +1420,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           </div>
           </div>
           )}
-          <WorkspaceRail workspaceId={selected.branchName} section={subTab} archived={archived} badges={{ changes: totalChangedFiles, skills: activeSkills.length }} />
+          <WorkspaceRail workspaceId={selected.branchName} section={subTab} archived={archived} badges={{ changes: totalChangedFiles }} />
         </div>
       </div>
     );

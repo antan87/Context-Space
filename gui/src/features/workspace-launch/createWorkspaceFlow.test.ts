@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  deriveWorkspaceName,
+  resolveWorkspaceName,
+  workspaceFormProblem,
+  summarizeOptionChanges,
+  workTypeLabel,
   suggestedBranchName,
   isWorkspaceFormValid,
   handleWorkspaceCreationCompletion,
@@ -97,6 +102,139 @@ describe('isWorkspaceFormValid', () => {
         selectedRepoCount: 1,
       }),
     ).toBe(false);
+  });
+});
+
+describe('deriveWorkspaceName', () => {
+  it('takes the first line of the description, tidied', () => {
+    expect(deriveWorkspaceName('Cache invoice lookups.')).toBe('Cache invoice lookups');
+    expect(deriveWorkspaceName('  Fix   the\ttotals!  \nThen check the tax rounding.')).toBe('Fix the totals');
+    expect(deriveWorkspaceName('\n\n  Skip the blank lines first')).toBe('Skip the blank lines first');
+  });
+
+  it('stops at the end of the first sentence, but not at an abbreviation', () => {
+    expect(deriveWorkspaceName('Cache invoice lookups. Then measure the totals.')).toBe('Cache invoice lookups');
+    expect(deriveWorkspaceName('Speed up the invoice list! It is slow')).toBe('Speed up the invoice list');
+    expect(deriveWorkspaceName('Use e.g. Redis for the cache. Measure first')).toBe('Use e.g. Redis for the cache');
+    expect(deriveWorkspaceName('Upgrade to v2.0 of the billing API')).toBe('Upgrade to v2.0 of the billing API');
+  });
+
+  it('is empty without a description', () => {
+    expect(deriveWorkspaceName('')).toBe('');
+    expect(deriveWorkspaceName('  \n \n')).toBe('');
+  });
+
+  it('cuts a long line at a word, never mid-word, and leaves no trailing punctuation', () => {
+    const name = deriveWorkspaceName('Simplify workspace setup and clarify the navigation, then speed up the plan');
+    expect(name).toBe('Simplify workspace setup and clarify the');
+    expect(name.length).toBeLessThanOrEqual(48);
+    expect(deriveWorkspaceName('Rework the invoice list so that totals, taxes, and discounts load, fast')).toBe(
+      'Rework the invoice list so that totals, taxes',
+    );
+  });
+
+  it('cuts a long unbroken string at the limit', () => {
+    expect(deriveWorkspaceName('x'.repeat(80))).toBe('x'.repeat(48));
+  });
+});
+
+describe('resolveWorkspaceName', () => {
+  it('keeps a typed name, trimmed', () => {
+    expect(resolveWorkspaceName('  Invoice speed-up ', 'Something else')).toBe('Invoice speed-up');
+  });
+
+  it('falls back to the description when the name is empty or blank', () => {
+    expect(resolveWorkspaceName('', 'Cache invoice lookups')).toBe('Cache invoice lookups');
+    expect(resolveWorkspaceName('   ', 'Cache invoice lookups')).toBe('Cache invoice lookups');
+    expect(resolveWorkspaceName('', '')).toBe('');
+  });
+});
+
+describe('workspaceFormProblem', () => {
+  const base = { workspaceName: '', description: '', mode: 'in-place' as const, selectedRepoCount: 1 };
+
+  it('asks for a repository first', () => {
+    expect(workspaceFormProblem({ ...base, workspaceName: 'Named', selectedRepoCount: 0 })).toBe('repository');
+    expect(workspaceFormProblem({ ...base, selectedRepoCount: 0 })).toBe('repository');
+  });
+
+  it('needs a name or a description, and either one is enough', () => {
+    expect(workspaceFormProblem(base)).toBe('task');
+    expect(workspaceFormProblem({ ...base, workspaceName: '   ', description: '  ' })).toBe('task');
+    expect(workspaceFormProblem({ ...base, workspaceName: 'Named' })).toBeNull();
+    expect(workspaceFormProblem({ ...base, description: 'Fix invoice rounding' })).toBeNull();
+  });
+
+  it('derives the worktree branch from the description when there is no name', () => {
+    expect(workspaceFormProblem({ ...base, mode: 'worktree', description: 'Fix invoice rounding' })).toBeNull();
+  });
+
+  it('reports a worktree that cannot get a branch, unless one is typed', () => {
+    expect(workspaceFormProblem({ ...base, mode: 'worktree', description: '###' })).toBe('branch');
+    expect(workspaceFormProblem({ ...base, mode: 'worktree', description: '###', branchName: 'fix/x' })).toBeNull();
+    expect(workspaceFormProblem({ ...base, mode: 'in-place', description: '###' })).toBeNull();
+  });
+
+  it('agrees with isWorkspaceFormValid', () => {
+    expect(isWorkspaceFormValid({ ...base, description: 'Fix invoice rounding' })).toBe(true);
+    expect(isWorkspaceFormValid(base)).toBe(false);
+  });
+});
+
+describe('summarizeOptionChanges', () => {
+  const defaults = {
+    mode: 'in-place' as const,
+    workType: 'feature',
+    existingBranches: 0,
+    autoUpdateBase: false,
+    skills: 0,
+    tags: 0,
+    startHarness: '',
+    extraAssistants: 0,
+    hasTeamworkInstructions: false,
+    agents: 0,
+  };
+
+  it('is empty when every option is at its default', () => {
+    expect(summarizeOptionChanges(defaults)).toEqual([]);
+  });
+
+  it('names each option that was changed, in the order the options appear', () => {
+    expect(
+      summarizeOptionChanges({
+        ...defaults,
+        mode: 'worktree',
+        existingBranches: 1,
+        workType: 'bug',
+        autoUpdateBase: true,
+        startHarness: 'Codex',
+        skills: 2,
+        tags: 1,
+        extraAssistants: 3,
+        hasTeamworkInstructions: true,
+        agents: 1,
+      }),
+    ).toEqual([
+      'New worktrees',
+      'Existing branches',
+      'Bug fix',
+      'Fast-forward first',
+      'Starts with Codex',
+      '2 skills',
+      '1 tag',
+      '3 more AI tools',
+      'Teamwork notes',
+      '1 agent',
+    ]);
+  });
+
+  it('ignores existing branches when no worktrees are created', () => {
+    expect(summarizeOptionChanges({ ...defaults, existingBranches: 2 })).toEqual([]);
+  });
+
+  it('labels work types the way the list does', () => {
+    expect(workTypeLabel('performance')).toBe('Performance');
+    expect(workTypeLabel('unknown')).toBe('unknown');
   });
 });
 

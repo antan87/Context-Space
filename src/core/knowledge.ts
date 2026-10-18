@@ -37,6 +37,8 @@ import { getActiveStorageProvider } from './adapters/registry.js';
 import { acquireLock } from './locks.js';
 import { runHoldingStoreLock } from './base-knowledge-store.js';
 import { PRIMARY_KNOWLEDGE_FILE, LEGACY_KNOWLEDGE_FILE, BRAND_NAME, CLI_NAME, resolveWorkspaceConfigDir } from './constants.js';
+import { refreshAgentsLessons } from './agents-lessons.js';
+import { debugLog } from '../utils/debug.js';
 
 async function getWorkspaceKnowledgeFilename(workspacePath: string, featureId: string): Promise<string> {
   if (await workspaceFileExists(workspacePath, featureId, PRIMARY_KNOWLEDGE_FILE)) {
@@ -210,15 +212,32 @@ function todayIso(): string {
 export const MAX_TITLE_CHARS = 60;
 export const MAX_EVIDENCE_CHARS = 200;
 
-export function knowledgeTitleSlug(title: string): string {
-  const normalized = (title ?? '').replace(/\s+/g, ' ').trim();
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
+/**
+ * The title as it is written in the entry's heading: the words as given, on one line, with whitespace collapsed and
+ * control characters removed, so "PLAN.md has its own lock" stays that and does not become a slug.
+ *
+ * @throws When there is no title, it runs over {@link MAX_TITLE_CHARS} (titles are rejected rather than truncated), it
+ *   spans lines or starts with `#` (it would not read as one heading), or it has no letter or digit.
+ */
+export function knowledgeTitle(title: string): string {
+  const raw = title ?? '';
+  if (/[\r\n\u2028\u2029]/.test(raw.trim())) throw new Error('Knowledge entry title must be one line.');
+  const normalized = raw.replace(CONTROL_CHARACTERS, '').replace(/\s+/g, ' ').trim();
   if (!normalized) throw new Error('Knowledge entry title is required.');
+  if (normalized.startsWith('#')) throw new Error('Knowledge entry title cannot start with #.');
   if (normalized.length > MAX_TITLE_CHARS) {
     throw new Error(`Knowledge entry title is ${normalized.length} characters; the limit is ${MAX_TITLE_CHARS}. Titles are rejected rather than truncated.`);
   }
-  const slug = slugify(normalized);
-  if (!slug) throw new Error('Knowledge entry title must contain at least one letter or number.');
-  return slug;
+  if (!/[\p{L}\p{N}]/u.test(normalized)) throw new Error('Knowledge entry title must contain at least one letter or number.');
+  return normalized;
+}
+
+/** The title as a slug, for what needs an identifier: a commit message, or telling two spellings of one title apart. */
+export function knowledgeTitleSlug(title: string): string {
+  return slugify(knowledgeTitle(title)) || 'entry';
 }
 
 function normaliseScope(scope?: string): string | undefined {
@@ -251,12 +270,12 @@ function normaliseEvidence(evidence?: string): string | undefined {
 export function formatEntry(entry: KnowledgeEntry, _target: 'workspace' | 'base'): string {
   const date = (entry.timestamp ?? new Date().toISOString()).slice(0, 10);
   const msg = entry.message.trim();
-  const slug = knowledgeTitleSlug(entry.title ?? '');
+  const title = knowledgeTitle(entry.title ?? '');
   const label = entry.type[0].toUpperCase() + entry.type.slice(1);
   const metadata: string[] = [];
   if (entry.scope) metadata.push(`**Scope:** \`${entry.scope}\``);
   if (entry.evidence) metadata.push(`**Evidence:** ${entry.evidence}`);
-  return [`### ${date} — ${slug}`, `**${label}:** ${msg}`, ...metadata].join('\n');
+  return [`### ${date} — ${title}`, `**${label}:** ${msg}`, ...metadata].join('\n');
 }
 
 /**
@@ -393,6 +412,90 @@ export function parseKnowledgeEntries(markdown: string): ParsedKnowledgeEntry[] 
   return entries;
 }
 
+/** The parts of one entry a person reads: its title in words, its date, and the text under the heading. */
+export interface KnowledgeEntryParts {
+  title: string;
+  date: string | null;
+  body: string;
+}
+
+/** `### <date> — <title>`; the date is optional so a heading written by hand still has a title. */
+const ENTRY_HEADING = /^###\s+(?:(\d{4}-\d{2}-\d{2})\s+[—–-]\s+)?(.+?)\s*$/;
+
+/** What `slugify` makes of a title: lower case letters and digits joined by hyphens. */
+const SLUG = /^[a-z0-9]+(?:[-_]+[a-z0-9]+)*$/;
+
+/**
+ * A title in words. One written as a slug ("plan-md-has-its-own-lock", as older versions stored every title) becomes
+ * words ("Plan md has its own lock"); anything else was written as words and is kept exactly as it is, capitals, dots
+ * and hyphens included.
+ */
+export function knowledgeTitleWords(title: string): string {
+  const trimmed = title.trim();
+  if (!SLUG.test(trimmed)) return trimmed;
+  const words = trimmed.replace(/[-_]+/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * The id a contract names an entry by: its date and its title as a slug, such as 2026-08-25-bff-error-encoding. It is
+ * the same whether the heading is written in words or as the slug, and null for text that is not a dated entry heading.
+ */
+export function knowledgeEntryId(entryText: string): string | null {
+  const heading = (entryText.split(/\r?\n/, 1)[0] ?? '').match(ENTRY_HEADING);
+  return heading?.[1] ? `${heading[1]}-${slugify(heading[2]!)}` : null;
+}
+
+/** Whether a knowledge file has the entry with this id (see {@link knowledgeEntryId}). */
+export function hasKnowledgeEntry(markdown: string, id: string): boolean {
+  return markdown.split(/\r?\n/).some((line) => knowledgeEntryId(line) === id);
+}
+
+/**
+ * Splits a parsed entry into title, date and body. A bullet has no heading, so the section it sits under stands in for
+ * its title.
+ */
+export function describeKnowledgeEntry(entry: ParsedKnowledgeEntry): KnowledgeEntryParts {
+  const [first = '', ...rest] = entry.text.split(/\r?\n/);
+  const heading = first.match(ENTRY_HEADING);
+  if (!heading) return { title: entry.section || 'Note', date: null, body: entry.text.replace(/^-\s+/, '').trim() };
+  return { title: knowledgeTitleWords(heading[2]!), date: heading[1] ?? null, body: rest.join('\n').trim() };
+}
+
+/** One entry as AGENTS.md lists it: enough to know it exists. Its text is one search away. */
+export interface KnowledgeLesson {
+  title: string;
+  type: KnowledgeEntryType;
+  /** The repo whose base knowledge holds the entry; none for the workspace's own. */
+  repo?: string;
+}
+
+interface DatedLesson {
+  lesson: KnowledgeLesson;
+  date: string;
+  index: number;
+}
+
+/** The titled entries of a knowledge file. Bullets, progress notes and entries outside the known sections have no title or are not lessons. */
+function datedLessons(markdown: string, repo?: string): DatedLesson[] {
+  return parseKnowledgeEntries(markdown)
+    .filter((entry) => entry.type !== null && entry.type !== 'progress' && /^###\s/.test(entry.text))
+    .map((entry, index) => {
+      const { title, date } = describeKnowledgeEntry(entry);
+      return { lesson: { title, type: entry.type!, ...(repo ? { repo } : {}) }, date: date ?? '', index };
+    });
+}
+
+/** Newest first by the date in the heading; of the same day, the one further down the file. */
+function newestFirst(entries: DatedLesson[]): KnowledgeLesson[] {
+  return [...entries].sort((a, b) => b.date.localeCompare(a.date) || b.index - a.index).map(({ lesson }) => lesson);
+}
+
+/** The titled entries of a knowledge file, newest first, each labelled with `repo` when given. */
+export function listKnowledgeLessons(markdown: string, repo?: string): KnowledgeLesson[] {
+  return newestFirst(datedLessons(markdown, repo));
+}
+
 // ─── Adapter-routed I/O ─────────────────────────────────────────────────────
 
 async function resolveFeatureId(workspacePath: string): Promise<string> {
@@ -452,15 +555,36 @@ function validateNewEntry(entry: KnowledgeEntry): KnowledgeEntry {
   return {
     ...entry,
     message: normaliseMessage(entry.message),
-    title: knowledgeTitleSlug(entry.title ?? ''),
+    title: knowledgeTitle(entry.title ?? ''),
     scope: normaliseScope(entry.scope),
     evidence: normaliseEvidence(entry.evidence),
   };
 }
 
-function assertNoHeadingConflict(content: string, entryMarkdown: string): void {
-  const heading = entryMarkdown.split(/\r?\n/, 1)[0] ?? '';
-  if (heading.startsWith('### ') && content.split(/\r?\n/).includes(heading) && !content.includes(entryMarkdown)) {
+/**
+ * Whether an entry is already in a knowledge file. The same text is a duplicate. An entry with the same date and title
+ * but other text is a conflict. "Same title" ignores how it is spelled, in words or as the slug older versions wrote,
+ * so a retry made across an upgrade is still the same entry. Anything that is not a titled entry is compared as text.
+ */
+function entryState(content: string, entryMarkdown: string): 'new' | 'duplicate' | 'conflict' {
+  if (content.includes(entryMarkdown)) return 'duplicate';
+  const [heading = '', ...body] = entryMarkdown.split(/\r?\n/);
+  const id = knowledgeEntryId(heading);
+  if (!id) return 'new';
+  const wanted = body.join('\n').trim();
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (knowledgeEntryId(lines[i]!) !== id) continue;
+    const end = lines.findIndex((line, index) => index > i && /^#{1,3}\s/.test(line));
+    const existing = lines.slice(i + 1, end < 0 ? lines.length : end).join('\n').trim();
+    return existing === wanted ? 'duplicate' : 'conflict';
+  }
+  return 'new';
+}
+
+function assertNoConflict(state: 'new' | 'duplicate' | 'conflict', entryMarkdown: string): void {
+  if (state === 'conflict') {
+    const heading = entryMarkdown.split(/\r?\n/, 1)[0] ?? '';
     throw new Error(`Knowledge heading "${heading.slice(4)}" already exists with different content. Choose a distinct title.`);
   }
 }
@@ -530,12 +654,55 @@ export async function readBaseKnowledge(
   return readBaseFile(workspacePath, configuredRepo, filename);
 }
 
+/**
+ * The titled entries of the base knowledge of every repo in the workspace, newest first across the repos. A repo whose
+ * base knowledge cannot be read is left out: that must not stop a workspace from being generated.
+ */
+async function readRepoLessons(workspacePath: string): Promise<KnowledgeLesson[]> {
+  const feature = await loadFeatureConfig(workspacePath).catch(() => null);
+  const entries: DatedLesson[] = [];
+  for (const repo of new Set((feature?.repos ?? []).map((repoPath) => path.basename(repoPath)))) {
+    const markdown = await readBaseKnowledge(workspacePath, repo).catch(() => null);
+    // One running index across the repos, so of the same day the repo further down the list comes first.
+    if (markdown) entries.push(...datedLessons(markdown, repo).map((entry) => ({ ...entry, index: entries.length + entry.index })));
+  }
+  return newestFirst(entries);
+}
+
+/**
+ * The entries AGENTS.md lists, so a new session starts knowing them: the workspace's own, newest first, then those in
+ * the base knowledge of its repos, newest first, labelled with the repo. That is where finishing a workspace promotes
+ * what it learned, and so how a lesson reaches the next workspace on the repo. An entry promoted by copy stays in both
+ * files and is listed once, as the workspace's own. None when there is no knowledge.
+ */
+export async function readKnowledgeLessons(workspacePath: string): Promise<KnowledgeLesson[]> {
+  const own = listKnowledgeLessons((await readWorkspaceKnowledge(workspacePath)) ?? '');
+  const key = (lesson: KnowledgeLesson) => `${lesson.type}:${lesson.title}`;
+  const listed = new Set(own.map(key));
+  return [...own, ...(await readRepoLessons(workspacePath)).filter((lesson) => !listed.has(key(lesson)))];
+}
+
+/**
+ * Brings the lessons listed in AGENTS.md up to date after workspace knowledge changed, so a new session sees them
+ * without waiting for a refresh. It never fails the write that caused it: a refresh puts the list right later.
+ */
+async function refreshLessonsQuietly(workspacePath: string): Promise<void> {
+  try {
+    await refreshAgentsLessons(workspacePath, () => readKnowledgeLessons(workspacePath));
+  } catch (error) {
+    debugLog('knowledge', 'Could not update the lessons in AGENTS.md; the next refresh will.', error);
+  }
+}
+
 /** Appends a formatted entry to the workspace knowledge file (creating it if missing). */
 export async function addWorkspaceKnowledge(
   workspacePath: string,
   entry: KnowledgeEntry,
 ): Promise<KnowledgeWriteResult> {
-  return withKnowledgeLock(workspacePath, () => addWorkspaceKnowledgeUnlocked(workspacePath, entry));
+  const result = await withKnowledgeLock(workspacePath, () => addWorkspaceKnowledgeUnlocked(workspacePath, entry));
+  // Outside the knowledge lock: the list waits for a refresh in progress, and other entries need not wait with it.
+  if (!result.duplicate) await refreshLessonsQuietly(workspacePath);
+  return result;
 }
 
 async function addWorkspaceKnowledgeUnlocked(
@@ -552,15 +719,16 @@ async function addWorkspaceKnowledgeUnlocked(
 
   const aliases = SECTION_ALIASES[checked.type].workspace;
   const entryMarkdown = formatEntry(checked, 'workspace');
-  assertNoHeadingConflict(content, entryMarkdown);
-  const duplicate = content.includes(entryMarkdown);
+  const state = entryState(content, entryMarkdown);
+  assertNoConflict(state, entryMarkdown);
+  const duplicate = state === 'duplicate';
   if (!duplicate) {
     const updated = insertUnderHeading(content, aliases, entryMarkdown);
     await writeWorkspaceFile(workspacePath, featureId, filename, updated);
   }
   const commit = await commitKnowledgeArtifact(
     workspacePath,
-    `docs(knowledge): remember ${checked.title}`,
+    `docs(knowledge): remember ${knowledgeTitleSlug(checked.title ?? '')}`,
     filename,
   );
 
@@ -626,8 +794,9 @@ async function insertIntoBaseUnlocked(
     ? await readBaseFile(workspacePath, repoName, filename)
     : buildBaseKnowledgeContent(repoName);
 
-  assertNoHeadingConflict(content, entryMarkdown);
-  const duplicate = content.includes(entryMarkdown);
+  const state = entryState(content, entryMarkdown);
+  assertNoConflict(state, entryMarkdown);
+  const duplicate = state === 'duplicate';
   if (!duplicate) {
     const updated = insertUnderHeading(content, aliases, entryMarkdown);
     await writeBaseFile(workspacePath, repoName, filename, updated);
@@ -654,10 +823,13 @@ export async function addBaseKnowledge(
   entry: KnowledgeEntry,
 ): Promise<KnowledgeWriteResult> {
   const configuredRepo = await requireConfiguredRepoName(workspacePath, repoName);
-  return withKnowledgeLock(workspacePath, async () => {
+  const result = await withKnowledgeLock(workspacePath, async () => {
     const checked = validateNewEntry(entry);
     return insertIntoBase(workspacePath, configuredRepo, checked.type, formatEntry(checked, 'base'));
   });
+  // The repo's lessons are listed in AGENTS.md too.
+  if (!result.duplicate) await refreshLessonsQuietly(workspacePath);
+  return result;
 }
 
 /**
@@ -671,10 +843,13 @@ export async function promoteKnowledge(
   options: PromoteOptions,
 ): Promise<PromoteResult> {
   const repoName = await requireConfiguredRepoName(workspacePath, options.repoName);
-  return withKnowledgeLock(workspacePath, () => promoteKnowledgeUnlocked(
+  const result = await withKnowledgeLock(workspacePath, () => promoteKnowledgeUnlocked(
     workspacePath,
     { ...options, repoName },
   ));
+  // The entries are now in the repo's base knowledge, and moving takes them out of the workspace file.
+  if (result.promotedCount > 0) await refreshLessonsQuietly(workspacePath);
+  return result;
 }
 
 async function promoteKnowledgeUnlocked(

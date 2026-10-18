@@ -28,7 +28,7 @@ import { useWorkspaceLaunchTargets, useLaunchTerminal, useAiDetect } from '../..
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
-import { formatCompact, formatHeaderQuota } from '../chat/AgentChat.js';
+import { formatCompact, formatHeaderQuota } from './usageFormat.js';
 
 export type SessionSortOption =
   | 'created-desc'

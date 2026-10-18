@@ -5,6 +5,14 @@
 
 const sentenceCase = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
+/**
+ * Whether the plan document already opens with the workspace's goal: PLAN.md's intro has words. The brief beside it
+ * then does not say the goal again. Nothing known yet, no PLAN.md and a blank intro all mean it does not.
+ */
+export function planStatesGoal(plan: { intro?: string | null } | null | undefined): boolean {
+  return Boolean(plan?.intro?.trim());
+}
+
 /** The answers an AI suggested with its question, kept in the question's detail as "Suggested answers: A · B". */
 export function suggestedAnswers(detail: string | undefined): string[] {
   const line = detail?.split('\n').find((candidate) => candidate.startsWith('Suggested answers: '));
