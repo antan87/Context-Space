@@ -2,7 +2,7 @@ import { beforeEach, afterEach, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { listRootDocuments, readRootDocument } from './root-documents.js';
+import { createRootFolder, listRootDocuments, moveRootDocument, readRootDocument, writeRootDocument } from './root-documents.js';
 
 let root: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'root-docs-')); });
@@ -212,4 +212,86 @@ it('does not enter the folders it is told to leave out, though it still names th
   expect(listing.folders).toContain('api');
   expect(listing.folders).not.toContain('api/docs');
   expect((await listRootDocuments(root, '', true)).documents).toHaveLength(6);
+});
+
+it('writes, edits and updates root documents safely, rejecting unsupported formats and oversized content', async () => {
+  const result = await writeRootDocument(root, 'notes.md', '# Initial content');
+  expect(result).toMatchObject({ name: 'notes.md', kind: 'markdown', content: '# Initial content' });
+  expect(await fs.readFile(path.join(root, 'notes.md'), 'utf-8')).toBe('# Initial content');
+
+  // Updating existing file
+  const updated = await writeRootDocument(root, 'notes.md', '# Modified content');
+  expect(updated.content).toBe('# Modified content');
+  expect(await fs.readFile(path.join(root, 'notes.md'), 'utf-8')).toBe('# Modified content');
+
+  // Writing HTML document
+  const htmlDoc = await writeRootDocument(root, 'page.html', '<!doctype html><h1>Hi</h1>');
+  expect(htmlDoc).toMatchObject({ name: 'page.html', kind: 'html', content: '<!doctype html><h1>Hi</h1>' });
+
+  // Writing into a nested folder that does not exist yet (auto-creates parents)
+  const nested = await writeRootDocument(root, 'docs/reports/q1.html', '<p>Report</p>');
+  expect(nested).toMatchObject({ name: 'docs/reports/q1.html', kind: 'html' });
+  expect(await fs.readFile(path.join(root, 'docs', 'reports', 'q1.html'), 'utf-8')).toBe('<p>Report</p>');
+
+  // Rejects unsupported extensions (e.g. binaries, exe, zip, no extension)
+  await expect(writeRootDocument(root, 'app.exe', 'binary')).rejects.toThrow(".exe files can't be saved here. Open it from the workspace folder instead.");
+  await expect(writeRootDocument(root, 'archive.zip', 'zip')).rejects.toThrow(".zip files can't be saved here. Open it from the workspace folder instead.");
+  await expect(writeRootDocument(root, 'noextension', 'text')).rejects.toThrow("This files can't be saved here. Open it from the workspace folder instead.");
+  // Rejects non-text document types (e.g. pdf)
+  await expect(writeRootDocument(root, 'doc.pdf', 'pdf bytes')).rejects.toThrow('Only text, markdown, and HTML');
+
+  // Rejects oversized content (> 1MB)
+  await expect(writeRootDocument(root, 'huge.md', 'x'.repeat(1024 * 1024 + 1))).rejects.toThrow('preview limit');
+
+  // Rejects path traversal and hidden files
+  await expect(writeRootDocument(root, '../escape.md', 'bad')).rejects.toThrow('Choose a document inside this workspace');
+  await expect(writeRootDocument(root, '.hidden.md', 'bad')).rejects.toThrow('Hidden files and folders');
+});
+
+it('creates root folders and moves documents into subfolders', async () => {
+  // Creating folder
+  const folderResult = await createRootFolder(root, 'docs/nested');
+  expect(folderResult).toEqual({ folder: 'docs/nested' });
+  expect((await fs.stat(path.join(root, 'docs', 'nested'))).isDirectory()).toBe(true);
+
+  // Moving document
+  await writeRootDocument(root, 'spec.md', '# Spec');
+  const moveResult = await moveRootDocument(root, 'spec.md', 'docs/nested/spec.md');
+  expect(moveResult).toEqual({ from: 'spec.md', to: 'docs/nested/spec.md' });
+
+  // Original file removed, destination exists
+  await expect(fs.access(path.join(root, 'spec.md'))).rejects.toThrow();
+  expect(await fs.readFile(path.join(root, 'docs', 'nested', 'spec.md'), 'utf-8')).toBe('# Spec');
+
+  // Rejects empty or invalid folders
+  await expect(createRootFolder(root, '')).rejects.toThrow('Choose a folder inside this workspace');
+  await expect(createRootFolder(root, '../escape')).rejects.toThrow('Choose a folder inside this workspace');
+  await expect(createRootFolder(root, '.git')).rejects.toThrow('Hidden files and folders');
+
+  // Rejects creating folder over existing file
+  await expect(createRootFolder(root, 'docs/nested/spec.md')).rejects.toThrow('existing file');
+
+  // Moving same path returns directly
+  expect(await moveRootDocument(root, 'docs/nested/spec.md', 'docs/nested/spec.md')).toEqual({
+    from: 'docs/nested/spec.md',
+    to: 'docs/nested/spec.md',
+  });
+
+  // Rejects moving nonexistent source
+  await expect(moveRootDocument(root, 'nonexistent.md', 'dest.md')).rejects.toThrow('Document not found');
+
+  // Rejects overwriting existing destination
+  await writeRootDocument(root, 'dest.md', 'existing');
+  await expect(moveRootDocument(root, 'docs/nested/spec.md', 'dest.md')).rejects.toThrow('already exists');
+
+  // Rejects writing over existing directory
+  await fs.mkdir(path.join(root, 'docs', 'dir.md'), { recursive: true });
+  await expect(writeRootDocument(root, 'docs/dir.md', 'bad')).rejects.toThrow('is a directory');
+
+  // Verifies readRootDocument returns size and modifiedAt metadata
+  const metaDoc = await readRootDocument(root, 'dest.md');
+  expect(typeof metaDoc.size).toBe('number');
+  expect(metaDoc.size).toBeGreaterThan(0);
+  expect(typeof metaDoc.modifiedAt).toBe('string');
+  expect(new Date(metaDoc.modifiedAt!).toISOString()).toBe(metaDoc.modifiedAt);
 });

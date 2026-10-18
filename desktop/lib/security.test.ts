@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exactLocalOrigin, externalLinkTarget, isAppShellNavigation, isExactLocalOrigin, isTrustedIpcEvent } from './security.js';
+import { exactLocalOrigin, externalLinkTarget, isAppShellNavigation, isDocumentBrowserOpenUrl, isExactLocalOrigin, isTrustedIpcEvent } from './security.js';
 
 describe('desktop renderer security helpers', () => {
   it('accepts only the exact localhost origin and assigned port', () => {
@@ -55,5 +55,28 @@ describe('desktop navigation guard', () => {
     ]) {
       expect(externalLinkTarget(url)).toBeNull();
     }
+  });
+
+  it('allows local document preview URLs with open=1 when assignedPort matches', () => {
+    const validUrl = 'http://localhost:43123/api/workspace/demo-ws/documents/file?name=report.html&open=1';
+    expect(isDocumentBrowserOpenUrl(validUrl, 43123)).toBe(true);
+    expect(externalLinkTarget(validUrl, 43123)).toBe(validUrl);
+
+    // Rejects if port does not match
+    expect(isDocumentBrowserOpenUrl(validUrl, 43124)).toBe(false);
+    expect(externalLinkTarget(validUrl, 43124)).toBeNull();
+
+    // Rejects if open=1 query parameter is missing
+    const withoutOpen = 'http://localhost:43123/api/workspace/demo-ws/documents/file?name=report.html';
+    expect(isDocumentBrowserOpenUrl(withoutOpen, 43123)).toBe(false);
+    expect(externalLinkTarget(withoutOpen, 43123)).toBeNull();
+
+    // Rejects if route is not documents/file
+    const configUrl = 'http://localhost:43123/api/workspace/demo-ws/config?open=1';
+    expect(isDocumentBrowserOpenUrl(configUrl, 43123)).toBe(false);
+    expect(externalLinkTarget(configUrl, 43123)).toBeNull();
+
+    // Rejects other localhost paths even if open=1
+    expect(externalLinkTarget('http://localhost:43123/api/config?open=1', 43123)).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ export interface TreeNode<T extends TreeFile = TreeFile> {
   path: string;
   directories: TreeNode<T>[];
   files: T[];
+  compactedPaths?: string[];
 }
 
 interface MutableTreeNode<T> {
@@ -52,11 +53,16 @@ function compactTreeNode<T extends TreeFile>(
 
   if (node.files.length === 0 && node.directories.length === 1) {
     const child = node.directories[0]!;
+    const compactedPaths = [
+      ...(node.compactedPaths ?? (node.path ? [node.path] : [])),
+      ...(child.compactedPaths ?? (child.path ? [child.path] : [])),
+    ];
     return {
       name: `${node.name}/${child.name}`,
       path: child.path,
       directories: child.directories,
       files: child.files,
+      compactedPaths,
     };
   }
 
@@ -169,6 +175,14 @@ export function getAncestorPaths<T extends TreeFile>(
       ancestors.add(node.path);
       containsTarget = true;
     }
+    if (node.compactedPaths) {
+      for (const p of node.compactedPaths) {
+        if (normalized === p || normalized.startsWith(`${p}/`)) {
+          ancestors.add(node.path);
+          containsTarget = true;
+        }
+      }
+    }
 
     // Check files in this directory
     for (const file of node.files) {
@@ -251,6 +265,7 @@ export interface VisibleTreeRow<T extends TreeFile = TreeFile> {
   setsize: number;
   /** The file a file row stands for. */
   file?: T;
+  compactedPaths?: string[];
 }
 
 /**
@@ -267,9 +282,20 @@ export function getVisibleTreeRows<T extends TreeFile>(
     const setsize = node.directories.length + node.files.length;
     let posinset = 0;
     for (const dir of node.directories) {
-      const isExpanded = expandedPaths.has(dir.path);
+      const isExpanded = expandedPaths.has(dir.path) || (dir.compactedPaths?.some((p) => expandedPaths.has(p)) ?? false);
       posinset += 1;
-      result.push({ type: 'folder', id: `dir:${dir.path}`, path: dir.path, name: dir.name, parentPath, isExpanded, level, posinset, setsize });
+      result.push({
+        type: 'folder',
+        id: `dir:${dir.path}`,
+        path: dir.path,
+        name: dir.name,
+        parentPath,
+        isExpanded,
+        level,
+        posinset,
+        setsize,
+        compactedPaths: dir.compactedPaths,
+      });
       if (isExpanded) walk(dir, dir.path, level + 1);
     }
     for (const file of node.files) {
@@ -435,10 +461,15 @@ export function FileTree<T extends TreeFile>({
     onExpandedPathsChange?.(next);
   }, [controlledExpandedPaths, onExpandedPathsChange]);
 
-  const toggle = (path: string) => {
+  const toggle = (path: string, compactedPaths?: string[]) => {
     const next = new Set(expandedPaths);
-    if (next.has(path)) next.delete(path);
-    else next.add(path);
+    const allPaths = compactedPaths && compactedPaths.length > 0 ? [path, ...compactedPaths] : [path];
+    const anyExpanded = allPaths.some((p) => next.has(p));
+    if (anyExpanded) {
+      for (const p of allPaths) next.delete(p);
+    } else {
+      for (const p of allPaths) next.add(p);
+    }
     setExpandedPaths(next);
   };
 
@@ -480,7 +511,7 @@ export function FileTree<T extends TreeFile>({
   };
 
   const activate = (row: VisibleTreeRow<T>) => {
-    if (row.type === 'folder') toggle(row.path);
+    if (row.type === 'folder') toggle(row.path, row.compactedPaths);
     else if (row.file) onActivateFile?.(row.file);
   };
 
@@ -512,8 +543,10 @@ export function FileTree<T extends TreeFile>({
     if (action.type === 'none') return;
     event.preventDefault();
     if (action.type === 'focus') focusRow(action.targetRow as VisibleTreeRow<T>);
-    else if (action.type === 'toggle') toggle(action.path);
-    else activate(current);
+    else if (action.type === 'toggle') {
+      const targetRow = rows.find((r) => r.path === action.path);
+      toggle(action.path, targetRow?.compactedPaths);
+    } else activate(current);
   };
 
   return (

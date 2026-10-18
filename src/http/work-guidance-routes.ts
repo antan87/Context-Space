@@ -5,7 +5,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { addWorkDocument, getWorkContext, readWorkDocument, updateWorkDocument, updateWorkGuidance } from '../core/work-guidance.js';
 import { loadWorkspaceLifecycle, updateLifecyclePlan } from '../core/lifecycle.js';
-import { listRootDocuments, readRootDocument } from '../core/root-documents.js';
+import { createRootFolder, listRootDocuments, moveRootDocument, readRootDocument, writeRootDocument } from '../core/root-documents.js';
 import { refreshPlanningContext } from '../core/planning-refresh.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
@@ -47,6 +47,27 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
   app.get('/api/workspace/:id/documents/preview', handle(async (root, c) => {
     const { bytes: _bytes, ...document } = await readRootDocument(root, c.req.query('name') ?? '');
     return document;
+  }));
+  const documentBodyLimit = bodyLimit({ maxSize: 2_000_000 });
+  app.put('/api/workspace/:id/documents', documentBodyLimit, handle(async (root, c) => {
+    const input = z.object({
+      name: z.string().min(1),
+      content: z.string(),
+    }).parse(await c.req.json());
+    return writeRootDocument(root, input.name, input.content);
+  }));
+  app.post('/api/workspace/:id/documents/folders', bounded, handle(async (root, c) => {
+    const input = z.object({
+      folder: z.string().min(1),
+    }).parse(await c.req.json());
+    return createRootFolder(root, input.folder);
+  }));
+  app.post('/api/workspace/:id/documents/move', bounded, handle(async (root, c) => {
+    const input = z.object({
+      from: z.string().min(1),
+      to: z.string().min(1),
+    }).parse(await c.req.json());
+    return moveRootDocument(root, input.from, input.to);
   }));
   app.get('/api/workspace/:id/documents/file', async (c) => {
     try {

@@ -940,6 +940,31 @@ describe('getVisibleTreeRows', () => {
     expect(visible[2]!.file).toBe(sampleFiles[1]);
   });
 
+  it('expands compacted folder when any intermediate compacted path is in expandedPaths', () => {
+    const compactedFiles: TreeFile[] = [
+      { file: 'docs/reports/q1/summary.md' },
+    ];
+    const root = buildCompactedTree(compactedFiles, { compact: true });
+    expect(root.directories[0]?.name).toBe('docs/reports/q1');
+    expect(root.directories[0]?.path).toBe('docs/reports/q1');
+    expect(root.directories[0]?.compactedPaths).toEqual(['docs', 'docs/reports', 'docs/reports/q1']);
+
+    // Expanded using the original prefix 'docs'
+    const visibleWithDocs = getVisibleTreeRows(root, new Set(['docs']));
+    expect(visibleWithDocs[0]?.isExpanded).toBe(true);
+    expect(visibleWithDocs[1]?.path).toBe('docs/reports/q1/summary.md');
+
+    // Expanded using the intermediate path 'docs/reports'
+    const visibleWithIntermediate = getVisibleTreeRows(root, new Set(['docs/reports']));
+    expect(visibleWithIntermediate[0]?.isExpanded).toBe(true);
+    expect(visibleWithIntermediate[1]?.path).toBe('docs/reports/q1/summary.md');
+
+    // Expanded using the full compacted path 'docs/reports/q1'
+    const visibleWithFull = getVisibleTreeRows(root, new Set(['docs/reports/q1']));
+    expect(visibleWithFull[0]?.isExpanded).toBe(true);
+    expect(visibleWithFull[1]?.path).toBe('docs/reports/q1/summary.md');
+  });
+
   it('handles empty trees gracefully', () => {
     const root = buildCompactedTree([]);
     const visible = getVisibleTreeRows(root, new Set());
