@@ -14,7 +14,13 @@ export function InlinePlanMarkdown({ content }: { content?: string | null }) {
         strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
         a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2 hover:opacity-80">
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+            onClick={(e) => e.stopPropagation()}
+          >
             {children}
           </a>
         ),

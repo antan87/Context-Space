@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileDiff, FolderGit2, Plus, RefreshCw } from 'lucide-react';
+import { ChevronRight, FileDiff, FolderGit2, Plus, RefreshCw } from 'lucide-react';
 import type { Feature, WorkspaceStatus } from '../types.js';
 import { Button } from '../components/ui/button.js';
 import { Spinner } from '../components/ui/spinner.js';
@@ -110,14 +110,24 @@ export function DashboardPage({
             {recent.map((ws) => {
               const title = titleOf(ws);
               return (
-                <article key={ws.id} aria-label={title} className="flex min-w-0 flex-col rounded-xl border border-border bg-card p-3 shadow-xs">
-                  <button type="button" onClick={() => onOpenWorkspace(ws.branchName)} className="min-w-0 rounded text-left focus-visible:outline-2 focus-visible:outline-ring">
-                    <h3 className="truncate text-sm font-semibold text-foreground hover:underline" title={title}>{title}</h3>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground" title={ws.repos.map(repoName).join(', ')}>
-                      <span className="font-mono">{ws.branchName}</span> · {ws.repos.map(repoName).join(', ')}
-                    </p>
+                <article key={ws.id} aria-label={title} className="flex min-w-0 flex-col rounded-xl border border-border bg-card shadow-xs overflow-hidden transition-colors hover:border-border/80">
+                  {/* Zone 1: Full-width header button with focus-visible ring and chevron */}
+                  <button
+                    type="button"
+                    onClick={() => onOpenWorkspace(ws.branchName)}
+                    className="group flex w-full items-center justify-between p-3.5 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer"
+                  >
+                    <div className="min-w-0 flex-1 pr-2">
+                      <h3 className="truncate text-sm font-semibold text-foreground group-hover:text-primary transition-colors" title={title}>{title}</h3>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground" title={ws.repos.map(repoName).join(', ')}>
+                        <span className="font-mono">{ws.branchName}</span> · {ws.repos.map(repoName).join(', ')}
+                      </p>
+                    </div>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" aria-hidden="true" />
                   </button>
-                  <div className="mt-2 min-w-0 border-t border-border pt-2">
+
+                  {/* Zone 2: Subordinate sessions panel with isolated hit targets */}
+                  <div className="min-w-0 border-t border-border/70 bg-accent/25 dark:bg-accent/40 p-3">
                     <WorkspaceChatResume workspace={ws.branchName} />
                   </div>
                 </article>

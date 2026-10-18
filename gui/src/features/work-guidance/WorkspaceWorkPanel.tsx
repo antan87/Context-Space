@@ -5,7 +5,7 @@ import {
   assignmentConflicts, clearDraft, emptyDocumentForm, mergeAssignmentDraft, pickAssignment, readDraft, reconcileAssignment, reconcileDocumentForm,
   sameAssignment, sameDocumentForm, writeDraft, type AssignmentDraft, type BriefKind, type DocumentFormDraft, type StoredDraft,
 } from './briefDrafts.js';
-import { Copy, Eye, FileText, Pencil, RefreshCw } from 'lucide-react';
+import { Check, Copy, Eye, FileText, Pencil, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { headline } from '../progress/progressView.js';
@@ -15,6 +15,7 @@ import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
+import { handleDelegatedRowClick, handleDelegatedRowKeyDown } from '../../lib/delegatedRowClick.js';
 import { usePlanFile } from '../plan/planFile.js';
 import { planStatesGoal } from '../plan/planView.js';
 import type { WorkDocument, WorkGuidance, WorkspaceLifecycle } from '../../types.js';
@@ -136,6 +137,14 @@ export function WorkspaceWorkPanel({ workspaceId, readOnly = false }: { workspac
   const [conflicts, setConflicts] = useState<DraftConflicts>({});
   const [notKept, setNotKept] = useState<Record<KeptByThisPanel, boolean>>({ assignment: false, document: false });
   const [saving, setSaving] = useState<BriefKind | null>(null);
+  const [goalCopied, setGoalCopied] = useState(false);
+  const goalCopiedTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (goalCopiedTimeoutRef.current) clearTimeout(goalCopiedTimeoutRef.current);
+    };
+  }, []);
   // The latest unsaved edits, so a reload still finds them when this device cannot store drafts.
   const live = useRef<LiveDrafts>({});
   const base = `/api/workspace/${encodeURIComponent(workspaceId)}`;
@@ -259,6 +268,9 @@ export function WorkspaceWorkPanel({ workspaceId, readOnly = false }: { workspac
   const copyGoal = () => void perform(async () => {
     if (!context) return;
     if (!await safeCopyToClipboard(context.assignment)) throw new Error('Could not copy the goal. Check browser clipboard permissions.');
+    setGoalCopied(true);
+    if (goalCopiedTimeoutRef.current) clearTimeout(goalCopiedTimeoutRef.current);
+    goalCopiedTimeoutRef.current = window.setTimeout(() => setGoalCopied(false), 1500);
     setMessage('Goal copied, with the plan, ready to paste to an assistant.');
   });
   const readDocument = (id: string) => void perform(async () => {
@@ -281,7 +293,7 @@ export function WorkspaceWorkPanel({ workspaceId, readOnly = false }: { workspac
 
       <PlanCard title={goalInPlan ? 'Brief' : 'Goal'} action={
         <div className="flex items-center gap-0.5">
-          <IconButton label={`Copy the ${noun} for an assistant`} icon={<Copy className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy || !context || Boolean(assignmentDirty)} onClick={copyGoal} />
+          <IconButton label={goalCopied ? 'Goal copied' : `Copy the ${noun} for an assistant`} icon={goalCopied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy || !context || Boolean(assignmentDirty)} onClick={copyGoal} />
           <IconButton label="Reload the plan" icon={<RefreshCw className="size-3.5" />} className="text-muted-foreground hover:text-foreground" disabled={busy} onClick={() => void load()} />
           {panel === 'assignment' ? close(`the ${noun}`) : !readOnly && edit(`Edit the ${noun}`, 'assignment')}
         </div>
@@ -384,10 +396,21 @@ export function WorkspaceWorkPanel({ workspaceId, readOnly = false }: { workspac
         </div>}
       </div> : <div className="space-y-2">
           {context.guidance.documents.length || context.sharedDocuments?.length ? <ul className="space-y-1">
-            {[...context.guidance.documents, ...(context.sharedDocuments ?? [])].map((doc) => <li key={doc.id} className="flex items-center gap-2 text-sm">
-              <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            {[...context.guidance.documents, ...(context.sharedDocuments ?? [])].map((doc) => <li
+              key={doc.id}
+              role="button"
+              tabIndex={busy ? -1 : 0}
+              aria-disabled={busy}
+              onClick={(e) => !busy && handleDelegatedRowClick(e, () => readDocument(doc.id))}
+              onKeyDown={(e) => !busy && handleDelegatedRowKeyDown(e, () => readDocument(doc.id))}
+              className={cn(
+                'group flex items-center gap-2 text-sm rounded-lg px-2.5 py-1.5 -mx-1 transition-colors select-text',
+                busy ? 'opacity-60 cursor-not-allowed' : 'hover:bg-accent/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1'
+              )}
+            >
+              <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground group-hover:text-primary transition-colors" />
               <span className="min-w-0 flex-1 truncate">{doc.title}<span className="ml-2 text-xs text-muted-foreground">{doc.role} · {doc.status}</span></span>
-              <IconButton label={`Read ${doc.title}`} icon={<Eye />} className="text-muted-foreground" disabled={busy} onClick={() => readDocument(doc.id)} />
+              <IconButton label={`Read ${doc.title}`} icon={<Eye />} className="text-muted-foreground hover:text-foreground" disabled={busy} onClick={() => readDocument(doc.id)} />
             </li>)}
           </ul> : <p className="text-sm text-muted-foreground">None yet. Add the requirements, designs or evidence the assistant should follow.</p>}
           {previewBox}
