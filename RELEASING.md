@@ -69,7 +69,7 @@ It never approves a deployment, cancels a run, force-pushes, or edits repository
 ### Nightly release
 
 [`nightly-release.yml`](./.github/workflows/nightly-release.yml) runs the same command every night at
-03:00 UTC. It releases whatever is unreleased on `main`, with no approval step. A night with nothing
+03:23 UTC. It releases whatever is unreleased on `main`, with no approval step. A night with nothing
 unreleased exits quietly. It needs the repository secret `RELEASE_TOKEN` (a personal access token with
 contents, pull requests and Actions access), and it still stops for the same reasons as a manual release:
 the brake, a failing required check, or a release PR that is not a plain version bump.
