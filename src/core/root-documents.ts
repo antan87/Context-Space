@@ -40,14 +40,14 @@ function format(name: string) {
  * segment may be `..`, empty, hidden (`.git`; only `.claude`, `.agents` and `.github` are open),
  * or carry Windows drive/stream syntax. Links on disk are rejected by the callers' safety checks.
  */
-function documentPath(root: string, name: string) {
+function documentPath(root: string, name: string, operation: 'open' | 'save' = 'open') {
   const normalized = name.replace(/\\/g, '/').replace(/^\/+/, '');
   const segments = normalized.split('/');
   if (!normalized || path.isAbsolute(normalized) || /[:\x00-\x1f\x7f]/.test(normalized) || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
     throw new Error('Choose a document inside this workspace.');
   }
   if (segments.some(isClosedSegment)) throw new Error(`Choose a document inside this workspace. ${HIDDEN_REASON}`);
-  if (!format(normalized)) throw new Error(`${path.extname(normalized) || 'This'} files can't be opened here. Open it from the workspace folder instead.`);
+  if (operation === 'open' && !format(normalized)) throw new Error(`${path.extname(normalized) || 'This'} files can't be opened here. Open it from the workspace folder instead.`);
   return path.join(root, ...segments);
 }
 
@@ -155,8 +155,101 @@ export async function readRootDocument(root: string, name: string, download = fa
     await assertNoLinkedPathComponents(root, target);
     await assertFileHandleMatchesPath(handle, target);
     if (bytes.length > limit) throw new Error('The document grew beyond the size limit.');
-    return { name: normalizedName, ...details, bytes, content: isText && !download ? new TextDecoder('utf-8', { fatal: true }).decode(bytes) : undefined };
+    return {
+      name: normalizedName,
+      ...details,
+      size: Number(stat.size),
+      modifiedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+      bytes,
+      content: isText && !download ? new TextDecoder('utf-8', { fatal: true }).decode(bytes) : undefined,
+    };
   } finally {
     await handle.close();
   }
+}
+
+export async function writeRootDocument(root: string, name: string, content: string) {
+  const normalizedName = name.replace(/\\/g, '/').replace(/^\/+/, '');
+  const target = documentPath(root, normalizedName, 'save');
+  await assertNoLinkedPathComponents(root, target);
+  try {
+    const stat = await fs.lstat(target);
+    if (stat.isDirectory()) {
+      throw new Error(`Cannot save document: "${normalizedName}" is a directory.`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const details = format(normalizedName);
+  if (!details) {
+    throw new Error(`${path.extname(normalizedName) || 'This'} files can't be saved here. Open it from the workspace folder instead.`);
+  }
+  const isText = details.kind === 'markdown' || details.kind === 'text' || details.kind === 'html';
+  if (!isText) {
+    throw new Error('Only text, markdown, and HTML documents can be edited directly.');
+  }
+  const bytes = Buffer.from(content, 'utf-8');
+  if (bytes.length > MAX_TEXT_BYTES) {
+    throw new Error(`This document exceeds the ${MAX_TEXT_BYTES / 1024 / 1024} MB preview limit.`);
+  }
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, bytes);
+  const stat = await fs.stat(target);
+  return {
+    name: normalizedName,
+    ...details,
+    size: stat.size,
+    modifiedAt: stat.mtime.toISOString(),
+    content,
+  };
+}
+
+export async function createRootFolder(root: string, folder: string) {
+  const normalized = folder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!normalized) throw new Error('Choose a folder inside this workspace.');
+  const target = folderPath(root, normalized);
+  await assertNoLinkedPathComponents(root, target);
+  try {
+    const stat = await fs.lstat(target);
+    if (!stat.isDirectory()) {
+      throw new Error(`Cannot create folder: "${normalized}" is an existing file.`);
+    }
+    return { folder: normalized };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  await fs.mkdir(target, { recursive: true });
+  return { folder: normalized };
+}
+
+export async function moveRootDocument(root: string, from: string, to: string) {
+  const fromNormalized = from.replace(/\\/g, '/').replace(/^\/+/, '');
+  const toNormalized = to.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (fromNormalized === toNormalized) {
+    return { from: fromNormalized, to: toNormalized };
+  }
+  const fromTarget = documentPath(root, fromNormalized);
+  const toTarget = documentPath(root, toNormalized);
+  await assertNoLinkedPathComponents(root, fromTarget);
+  await assertNoLinkedPathComponents(root, toTarget);
+  try {
+    const stat = await fs.lstat(fromTarget);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Document not found: "${fromNormalized}".`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Document not found: "${fromNormalized}".`);
+    }
+    throw error;
+  }
+  try {
+    await fs.lstat(toTarget);
+    throw new Error(`A file or folder already exists at "${toNormalized}".`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  await fs.mkdir(path.dirname(toTarget), { recursive: true });
+  await fs.rename(fromTarget, toTarget);
+  return { from: fromNormalized, to: toNormalized };
 }

@@ -146,3 +146,45 @@ it('reads the brief without the branch fleet, which runs git in every repository
   expect((await app.request('/api/workspace/test/work')).status).toBe(200);
   expect(vi.mocked(loadWorkspaceLifecycle)).toHaveBeenLastCalledWith(root, { includeFleet: false });
 });
+
+it('saves documents, creates document folders, and moves documents via endpoints', async () => {
+  // Save new document
+  const saveRes = await app.request('/api/workspace/test/documents', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'guide.md', content: '# Guide content' }),
+  });
+  expect(saveRes.status).toBe(200);
+  const savedDoc = await saveRes.json();
+  expect(savedDoc).toMatchObject({ name: 'guide.md', kind: 'markdown', content: '# Guide content' });
+  expect(await fs.readFile(path.join(root, 'guide.md'), 'utf-8')).toBe('# Guide content');
+
+  // Create folder
+  const folderRes = await app.request('/api/workspace/test/documents/folders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder: 'archive/2026' }),
+  });
+  expect(folderRes.status).toBe(200);
+  expect(await folderRes.json()).toEqual({ folder: 'archive/2026' });
+  expect((await fs.stat(path.join(root, 'archive', '2026'))).isDirectory()).toBe(true);
+
+  // Move document
+  const moveRes = await app.request('/api/workspace/test/documents/move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: 'guide.md', to: 'archive/2026/guide.md' }),
+  });
+  expect(moveRes.status).toBe(200);
+  expect(await moveRes.json()).toEqual({ from: 'guide.md', to: 'archive/2026/guide.md' });
+  expect(await fs.readFile(path.join(root, 'archive', '2026', 'guide.md'), 'utf-8')).toBe('# Guide content');
+  await expect(fs.access(path.join(root, 'guide.md'))).rejects.toThrow();
+
+  // Rejects invalid input
+  const badRes = await app.request('/api/workspace/test/documents', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'bad.exe', content: 'x' }),
+  });
+  expect(badRes.status).toBe(400);
+});

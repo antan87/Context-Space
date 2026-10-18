@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowLeft, Bot, ChevronLeft, ChevronRight, FileCode, FileImage, FileText, FolderTree, Globe, Lightbulb, ListChecks,
+  ArrowLeft, Bot, ChevronLeft, ChevronRight, FileCode, FileImage, FilePlus, FileText, FolderPlus, FolderTree, Globe, Lightbulb, ListChecks,
   Loader2, Map as MapIcon, Maximize2, Minimize2, RefreshCw, Search, X, type LucideIcon,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
+import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../../components/ui/dialog.js';
+import { Input } from '../../components/ui/input.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { API_BASE } from '../../lib/apiBase.js';
 import { useElementWidth } from '../../lib/useElementWidth.js';
@@ -88,6 +90,18 @@ export function RootDocumentsPanel({ workspaceId, workspacePath, panelActions }:
   const [section, setSection] = useState<HTMLElement | null>(null);
   const width = useElementWidth(section);
   const narrow = width > 0 && width < NARROW_PX;
+  const [watching, setWatching] = useState(false);
+  const [newDocOpen, setNewDocOpen] = useState(false);
+  const [newDocName, setNewDocName] = useState('');
+  const [newDocContent, setNewDocContent] = useState('');
+  const [newDocError, setNewDocError] = useState('');
+  const [creatingDoc, setCreatingDoc] = useState(false);
+
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderError, setNewFolderError] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+
   const knowledgeOverlayRef = useRef<HTMLDivElement>(null);
   const knowledgeOverlayToggle = useRef<HTMLButtonElement>(null);
   const knowledgeInlineToggle = useRef<HTMLButtonElement>(null);
@@ -200,16 +214,149 @@ export function RootDocumentsPanel({ workspaceId, workspacePath, panelActions }:
     reveal(name);
   }, [reveal]);
 
+  const previousSelected = useRef<string | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    setPreview(null); setPreviewError(''); setRaw(false);
-    if (!selected) { setOpening(false); return () => controller.abort(); }
-    setOpening(true);
-    void apiFetch<DocumentPreviewData>(`${base}/preview?name=${encodeURIComponent(selected)}`, { signal: controller.signal }).then(setPreview).catch((error) => {
-      if (!controller.signal.aborted) setPreviewError(error instanceof Error ? error.message : 'Unable to open document.');
-    }).finally(() => { if (!controller.signal.aborted) setOpening(false); });
+    const isNewDoc = previousSelected.current !== selected;
+    previousSelected.current = selected;
+
+    if (isNewDoc) {
+      setPreview(null);
+      setPreviewError('');
+      setRaw(false);
+      setWatching(false);
+    }
+
+    if (!selected) {
+      setOpening(false);
+      return () => controller.abort();
+    }
+
+    if (isNewDoc) {
+      setOpening(true);
+    }
+
+    void apiFetch<DocumentPreviewData>(`${base}/preview?name=${encodeURIComponent(selected)}`, { signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted) setPreview(data);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted && isNewDoc) {
+          setPreviewError(error instanceof Error ? error.message : 'Unable to open document.');
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && isNewDoc) setOpening(false);
+      });
+
     return () => controller.abort();
   }, [base, selected, revision]);
+
+  // Live reload polling when watching is active
+  const previewRef = useRef<DocumentPreviewData | null>(preview);
+  previewRef.current = preview;
+
+  useEffect(() => {
+    if (!watching || !selected) return;
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      try {
+        const updated = await apiFetch<DocumentPreviewData>(`${base}/preview?name=${encodeURIComponent(selected)}`);
+        if (cancelled) return;
+        const current = previewRef.current;
+        if (!current) {
+          previewRef.current = updated;
+          setPreview(updated);
+          return;
+        }
+        if (
+          current.content !== updated.content ||
+          current.kind !== updated.kind ||
+          current.size !== updated.size ||
+          current.modifiedAt !== updated.modifiedAt
+        ) {
+          previewRef.current = updated;
+          setPreview(updated);
+          if (updated.kind === 'image' || updated.kind === 'pdf') {
+            setRevision((rev) => rev + 1);
+          }
+        }
+      } catch {
+        // Silently ignore background polling errors
+      }
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [watching, selected, base]);
+
+  const handleSave = useCallback(async (content: string) => {
+    if (!selected) return;
+    await apiFetch(base, {
+      method: 'PUT',
+      body: JSON.stringify({ name: selected, content }),
+    });
+    setPreview((current) => current ? { ...current, content } : null);
+    setRevision((value) => value + 1);
+  }, [base, selected]);
+
+  const handleMove = useCallback(async (to: string) => {
+    if (!selected) return;
+    await apiFetch(`${base}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ from: selected, to }),
+    });
+    setRevision((value) => value + 1);
+    open(to);
+  }, [base, selected, open]);
+
+  const handleCreateDoc = async () => {
+    const trimmedName = newDocName.trim();
+    if (!trimmedName || creatingDoc) return;
+    setCreatingDoc(true);
+    setNewDocError('');
+    try {
+      await apiFetch(base, {
+        method: 'PUT',
+        body: JSON.stringify({ name: trimmedName, content: newDocContent }),
+      });
+      setNewDocOpen(false);
+      setNewDocName('');
+      setNewDocContent('');
+      setRevision((value) => value + 1);
+      open(trimmedName);
+    } catch (err) {
+      setNewDocError(err instanceof Error ? err.message : 'Failed to create document');
+    } finally {
+      setCreatingDoc(false);
+    }
+  };
+
+  const handleCreateFolder = async () => {
+    const trimmedFolder = newFolderName.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!trimmedFolder || creatingFolder) return;
+    setCreatingFolder(true);
+    setNewFolderError('');
+    try {
+      await apiFetch(`${base}/folders`, {
+        method: 'POST',
+        body: JSON.stringify({ folder: trimmedFolder }),
+      });
+      setNewFolderOpen(false);
+      setNewFolderName('');
+      setRevision((value) => value + 1);
+      const allFolders = [...foldersAbove(trimmedFolder), trimmedFolder];
+      setExpanded((previous) => new Set([...previous, ...allFolders]));
+      for (const folder of allFolders) {
+        void loadFolder(folder);
+      }
+    } catch (err) {
+      setNewFolderError(err instanceof Error ? err.message : 'Failed to create folder');
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
 
   // A document named in the chat (a path the CLI printed) opens here.
   const documentRequest = useDocumentRequest(workspaceId);
@@ -399,6 +546,12 @@ export function RootDocumentsPanel({ workspaceId, workspacePath, panelActions }:
           <FolderTree className="size-3.5" />
         </Button>
         <h2 className="min-w-0 flex-1 truncate px-1 text-xs font-semibold">Documents</h2>
+        <Button size="xs" variant="ghost" className={iconButton} aria-label="New document" title="New document" onClick={() => { setNewDocError(''); setNewDocOpen(true); }}>
+          <FilePlus className="size-3.5" />
+        </Button>
+        <Button size="xs" variant="ghost" className={iconButton} aria-label="New folder" title="New folder" onClick={() => { setNewFolderError(''); setNewFolderOpen(true); }}>
+          <FolderPlus className="size-3.5" />
+        </Button>
         <Button size="xs" variant="ghost" className={iconButton} aria-label="Refresh documents" title="Refresh documents" disabled={loadingFolders.size > 0 || opening}
           onClick={() => setRevision((value) => value + 1)}>
           <RefreshCw className={cn('size-3.5', loadingFolders.size > 0 && 'animate-spin')} />
@@ -461,6 +614,11 @@ export function RootDocumentsPanel({ workspaceId, workspacePath, panelActions }:
                 onClose={() => setSelected(null)}
                 fileUrl={`${fileUrl}&revision=${revision}`}
                 links={links}
+                watching={watching}
+                onToggleWatch={() => setWatching((value) => !value)}
+                editable={Boolean(selected)}
+                onSave={handleSave}
+                onMove={handleMove}
                 status={<>
                   {opening && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
                   {previewError && <p role="alert" className="text-sm text-destructive">{previewError} <Button size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>Retry preview</Button></p>}
@@ -470,6 +628,95 @@ export function RootDocumentsPanel({ workspaceId, workspacePath, panelActions }:
           </article>
         )}
       </div>
+
+      {newDocOpen && (
+        <Dialog open={newDocOpen} onOpenChange={(next) => !next && setNewDocOpen(false)}>
+          <DialogPopup className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>New document</DialogTitle>
+              <DialogDescription>
+                Create a new document in the workspace. Use slashes to place it inside folders (e.g. docs/guide.md).
+              </DialogDescription>
+            </DialogHeader>
+            <DialogPanel className="space-y-3">
+              <label className="block text-xs text-muted-foreground">
+                Document path
+                <Input
+                  value={newDocName}
+                  onChange={(e) => setNewDocName(e.target.value)}
+                  placeholder="notes.md or docs/architecture.html"
+                  autoFocus
+                  className="mt-1 font-mono text-xs"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newDocName.trim() && !creatingDoc) {
+                      e.preventDefault();
+                      void handleCreateDoc();
+                    }
+                  }}
+                />
+              </label>
+              <label className="block text-xs text-muted-foreground">
+                Initial content (optional)
+                <textarea
+                  value={newDocContent}
+                  onChange={(e) => setNewDocContent(e.target.value)}
+                  placeholder="# Document title&#10;&#10;Content..."
+                  className="mt-1 w-full h-24 rounded border border-border bg-background p-2 font-mono text-xs resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </label>
+              {newDocError && <p role="alert" className="text-xs text-destructive">{newDocError}</p>}
+            </DialogPanel>
+            <DialogFooter>
+              <Button variant="outline" size="sm" onClick={() => setNewDocOpen(false)} disabled={creatingDoc}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleCreateDoc} disabled={!newDocName.trim() || creatingDoc}>
+                {creatingDoc ? 'Creating…' : 'Create document'}
+              </Button>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
+      )}
+
+      {newFolderOpen && (
+        <Dialog open={newFolderOpen} onOpenChange={(next) => !next && setNewFolderOpen(false)}>
+          <DialogPopup className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>New folder</DialogTitle>
+              <DialogDescription>
+                Create a new folder in the workspace.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogPanel className="space-y-3">
+              <label className="block text-xs text-muted-foreground">
+                Folder name or path
+                <Input
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  placeholder="docs or reports/2026"
+                  autoFocus
+                  className="mt-1 font-mono text-xs"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newFolderName.trim() && !creatingFolder) {
+                      e.preventDefault();
+                      void handleCreateFolder();
+                    }
+                  }}
+                />
+              </label>
+              {newFolderError && <p role="alert" className="text-xs text-destructive">{newFolderError}</p>}
+            </DialogPanel>
+            <DialogFooter>
+              <Button variant="outline" size="sm" onClick={() => setNewFolderOpen(false)} disabled={creatingFolder}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleCreateFolder} disabled={!newFolderName.trim() || creatingFolder}>
+                {creatingFolder ? 'Creating…' : 'Create folder'}
+              </Button>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
+      )}
     </section>
   );
 }

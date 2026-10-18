@@ -3,7 +3,7 @@
  * Interactive CLI prompts for NexusFlow using @inquirer/prompts.
  */
 
-import { input, checkbox, confirm, select, search, editor } from '@inquirer/prompts';
+import { input, checkbox, confirm, select, search, editor, Separator } from '@inquirer/prompts';
 import chalk from 'chalk';
 
 import type { AIAssistant, DetectedAI, DetectedEditor, RepoInfo, SkillItem } from '../types.js';
@@ -416,16 +416,44 @@ export async function promptNewStrategy(): Promise<{ name: string; content: stri
 
 /**
  * Prompts the user to select Agent Skills to deploy to the workspace.
+ * Skills are grouped into ContextSpace catalog skills and Global harness skills.
  */
 export async function promptSelectSkills(skills: SkillItem[]): Promise<string[]> {
   if (skills.length === 0) return [];
+
+  const catalogSkills = skills.filter((s) => !s.source);
+  const harnessSkills = skills.filter((s) => Boolean(s.source));
+
+  const choices: Array<{ name: string; value: string; checked?: boolean } | Separator> = [];
+
+  if (catalogSkills.length > 0) {
+    choices.push(new Separator(chalk.bold('--- ContextSpace Catalog Skills ---')));
+    for (const s of catalogSkills) {
+      const desc = s.description ? ` ${chalk.dim(`(${s.description.slice(0, 60)}...)`)}` : '';
+      choices.push({
+        name: `${s.title || s.name}${desc}`,
+        value: s.id,
+        checked: false,
+      });
+    }
+  }
+
+  if (harnessSkills.length > 0) {
+    choices.push(new Separator(chalk.bold('--- Global Harness Skills ---')));
+    for (const s of harnessSkills) {
+      const sourceLabel = s.source?.label || s.source?.harness || 'Global';
+      const desc = s.description ? ` ${chalk.dim(`(${s.description.slice(0, 60)}...)`)}` : '';
+      choices.push({
+        name: `${s.title || s.name} ${chalk.cyan(`[${sourceLabel}]`)}${desc}`,
+        value: s.id,
+        checked: false,
+      });
+    }
+  }
+
   const selected = await checkbox({
     message: 'Select Agent Skills to deploy to this workspace (optional):',
-    choices: skills.map((s) => ({
-      name: `${s.title || s.name} ${chalk.dim(`(${s.description.slice(0, 60)}...)`)}`,
-      value: s.id,
-      checked: false,
-    })),
+    choices,
   });
   return selected;
 }

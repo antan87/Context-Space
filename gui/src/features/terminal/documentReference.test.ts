@@ -120,6 +120,11 @@ describe('workspaceDocumentName with repositories under the workspace root', () 
   it('ignores repositories outside the workspace root', () => {
     expect(workspaceDocumentName({ path: 'api/readme.md' }, root, repos)).toBe('api/readme.md');
   });
+
+  it('allows HTML files located inside repo folders to be recognized as workspace documents', () => {
+    expect(workspaceDocumentName({ path: 'NexusFlow/docs/report.html' }, root, repos)).toBe('NexusFlow/docs/report.html');
+    expect(workspaceDocumentName({ path: `${root}\\NexusFlow\\coverage\\index.htm` }, root, repos)).toBe('NexusFlow/coverage/index.htm');
+  });
 });
 
 describe('isUnreadableDocument', () => {
