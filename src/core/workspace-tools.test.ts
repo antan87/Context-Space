@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 import { parse, stringify } from 'smol-toml';
 import { BRAND_CONFIG } from './constants.js';
-import { generateWorkspaceTools, workspaceToolsNeedRepair, CLI_LAUNCHER, CLI_ALIAS_LAUNCHER, CLAUDE_PLAN_PERMISSIONS } from './workspace-tools.js';
+import { generateWorkspaceTools, workspaceToolsNeedRepair, CLI_LAUNCHER, CLI_ALIAS_LAUNCHER, CLAUDE_CLI_PERMISSIONS } from './workspace-tools.js';
 let root: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-tools-')); });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
@@ -64,7 +64,7 @@ it('removes only the legacy generated Cursor entry when Cursor is unselected', a
   await expect(fs.stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('lets Claude Code run ctxspace plan without asking, keeping the settings already there', async () => {
+it('lets Claude Code run ctxspace plan, ask, knowledge search and news without asking, keeping the settings already there', async () => {
   const settings = path.join(root, '.claude/settings.local.json');
   await fs.mkdir(path.dirname(settings));
   await fs.writeFile(settings, JSON.stringify({ model: 'opus', permissions: { allow: ['Bash(npm test:*)'], deny: ['Bash(rm:*)'] } }));
@@ -73,13 +73,31 @@ it('lets Claude Code run ctxspace plan without asking, keeping the settings alre
   expect(await generateWorkspaceTools(root, ['claude'], runtime)).not.toContain('.claude/settings.local.json');
   expect(JSON.parse(await fs.readFile(settings, 'utf8'))).toEqual({
     model: 'opus',
-    permissions: { allow: ['Bash(npm test:*)', ...CLAUDE_PLAN_PERMISSIONS], deny: ['Bash(rm:*)'] },
+    permissions: { allow: ['Bash(npm test:*)', ...CLAUDE_CLI_PERMISSIONS], deny: ['Bash(rm:*)'] },
   });
-  expect(CLAUDE_PLAN_PERMISSIONS).toEqual(['Bash(ctxspace plan:*)', 'Bash(./.contextspace/bin/ctxspace plan:*)']);
+  expect(CLAUDE_CLI_PERMISSIONS).toEqual([
+    'Bash(ctxspace plan:*)', 'Bash(./.contextspace/bin/ctxspace plan:*)',
+    'Bash(ctxspace knowledge search:*)', 'Bash(./.contextspace/bin/ctxspace knowledge search:*)',
+    'Bash(ctxspace ask:*)', 'Bash(./.contextspace/bin/ctxspace ask:*)',
+    'Bash(ctxspace news:*)', 'Bash(./.contextspace/bin/ctxspace news:*)',
+  ]);
+  // Nothing broad enough to let `knowledge add`, `promote` or `remote` through.
+  expect(CLAUDE_CLI_PERMISSIONS.filter((rule) => /ctxspace (:|knowledge:)/.test(rule))).toEqual([]);
 
   await fs.writeFile(settings, JSON.stringify({ permissions: { allow: 'everything' } }));
   await expect(generateWorkspaceTools(root, ['claude'], runtime)).rejects.toThrow('Invalid Claude settings');
   expect(JSON.parse(await fs.readFile(settings, 'utf8'))).toEqual({ permissions: { allow: 'everything' } });
+});
+
+it('adds the newer rules to a workspace that only had the plan rules, once', async () => {
+  const settings = path.join(root, '.claude/settings.local.json');
+  await fs.mkdir(path.dirname(settings));
+  await fs.writeFile(settings, JSON.stringify({ permissions: { allow: ['Bash(ctxspace plan:*)', 'Bash(./.contextspace/bin/ctxspace plan:*)'] } }));
+
+  await generateWorkspaceTools(root, ['claude'], runtime);
+  await generateWorkspaceTools(root, ['claude'], runtime);
+
+  expect(JSON.parse(await fs.readFile(settings, 'utf8')).permissions.allow).toEqual(CLAUDE_CLI_PERMISSIONS);
 });
 
 it('writes no Claude settings when Claude is not selected', async () => {

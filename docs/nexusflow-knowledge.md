@@ -78,6 +78,8 @@ The scripted cross-engine smoke suite (`scripts/smoke-chat-engines.ts` / `src/ag
 ### Decision: Embedded Harness Chat General Availability
 The mounted **AI & Sessions** chat surface is generally available as of merge `c4e0384`. Promotion evidence includes protected cross-platform CI, fixed-SHA independent review, a live Codex SDK turn with `gpt-5.6-luna`, and provider-boundary rejection copy. A Claude live smoke remains a non-blocking follow-up for the next authenticated Claude session because aliases are vendor-owned and failures remain closed and actionable.
 
+_Superseded: the built-in chat surface was removed. The CLI chat in the terminal sessions is the product's chat._
+
 ### Gotcha: Inter-Agent Context Injection & Trust Domain Boundary
 In pipeline mode, upstream phase output is threaded verbatim into downstream prompts (`## Context from Prior Phases:`). In today's architecture, all pipeline agents operate within a single trusted workspace domain. However, if teamwork workflows are extended across different trust profiles or accept untrusted inputs, unvalidated upstream text acts as an inter-agent prompt-injection channel and must be strictly sanitized or distilled.
 

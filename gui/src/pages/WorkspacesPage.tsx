@@ -111,6 +111,7 @@ import { WorkspaceChecks } from '../features/plan/WorkspaceChecks.js';
 import { RootDocumentsPanel } from '../features/work-guidance/RootDocumentsPanel.js';
 import { WorkspaceWorkPanel } from '../features/work-guidance/WorkspaceWorkPanel.js';
 import { HomePlan } from '../features/workspace-home/HomePlan.js';
+import { SinceYouLooked } from '../features/plan/SinceYouLooked.js';
 import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
@@ -151,7 +152,6 @@ interface WorkspacesPageProps {
   changesProps: Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast'> & { gitChanges: { repoName: string; files?: unknown[] }[] };
   knowledgeProps: Omit<ComponentProps<typeof KnowledgeBase>, 'ws'>;
   /** The generated plan summary, which the overview reads, and how to reload it after a plan change. */
-  planProps: { planContent: string; planLoading: boolean; planError: string | null; handleRetryPlan: (wsId: string) => Promise<void> };
 }
 
 export function WorkspacesPage(props: WorkspacesPageProps) {
@@ -173,7 +173,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     sessionProps,
     changesProps,
     knowledgeProps,
-    planProps,
   } = props;
 
   const selected = workspaces.find((w) => w.branchName === selectedId) ?? null;
@@ -239,7 +238,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       selected,
       lifecycleData?.lifecycle ?? null,
       st,
-      planProps?.planContent,
+      undefined,
       lifecycleData?.report ?? null,
       liveRepositories,
     );
@@ -251,7 +250,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       worktrees: cockpitData.worktrees,
       gateStatus: cockpitData.gateStatus,
     });
-  }, [selected, workspaceStatuses, lifecycleData, liveRepositories, planProps?.planContent]);
+  }, [selected, workspaceStatuses, lifecycleData, liveRepositories]);
 
   useEffect(() => {
     if (!selected?.branchName) {
@@ -1408,11 +1407,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                 {/* One key for the whole tab: siblings that share a key are never removed, so each switch left the
                     previous workspace's brief and plan on screen, still polling. */}
                 <div key={selected.branchName} className="min-w-0 space-y-6">
-                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived}
-                  plan={<HomePlan workspaceId={selected.branchName} readOnly={archived} onChanged={() => {
-                    // The plan summary follows the plan.
-                    void planProps.handleRetryPlan(selected.branchName);
-                  }} />} />
+                <SinceYouLooked workspaceId={selected.branchName} readOnly={archived} />
+                {/* The plan first: it opens with the goal and holds the checkpoints. The brief and the checks follow. */}
+                <HomePlan workspaceId={selected.branchName} workspacePath={selected.workspacePath} readOnly={archived} />
+                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived} />
                 <WorkspaceChecks workspaceId={selected.branchName} readOnly={archived} />
                 </div>
               </div>}
@@ -1422,7 +1420,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           </div>
           </div>
           )}
-          <WorkspaceRail workspaceId={selected.branchName} section={subTab} archived={archived} badges={{ changes: totalChangedFiles, skills: activeSkills.length }} />
+          <WorkspaceRail workspaceId={selected.branchName} section={subTab} archived={archived} badges={{ changes: totalChangedFiles }} />
         </div>
       </div>
     );

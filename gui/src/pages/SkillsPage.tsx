@@ -162,6 +162,7 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
   const assignSkillsMutation = useAssignWorkspaceSkills();
 
   const isWorkspaceView = selectedWorkspace !== 'global';
+  const scopedWorkspace = isWorkspaceView ? workspaces.find((candidate) => candidate.id === selectedWorkspace) : undefined;
   // The choice on screen is this workspace's unsaved one, else what is saved. A refetch never replaces an unsaved
   // choice, and another workspace's choice never shows here.
   const draft = isWorkspaceView ? drafts[selectedWorkspace] : undefined;
@@ -541,6 +542,13 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
               </span>
               <Button size="sm" variant="outline" onClick={discardDraft}>Discard</Button>
             </>
+          )}
+          {/* The workspace's own skills view (agents, deploy) has no place on the workspace rail: it opens from here. An
+              archived workspace has no such view. */}
+          {scopedWorkspace && !scopedWorkspace.archivedAt && (
+            <Button render={<Link to={`/workspaces/${encodeURIComponent(scopedWorkspace.branchName)}/skills`} />} variant="outline" size="sm">
+              This workspace's skills
+            </Button>
           )}
           {isWorkspaceView && (
             <Button

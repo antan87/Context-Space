@@ -1,4 +1,3 @@
-import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 
 const feature = {
@@ -10,16 +9,6 @@ const feature = {
   workspacePath: 'C:/ws/feature-x',
   createdAt: '2026-08-10T00:00:00.000Z',
 };
-
-async function mockProviderStatus(page: Page, providers: unknown[]) {
-  await page.route('**/api/adapters/status', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(providers),
-    });
-  });
-}
 
 test.describe('Multi-Harness Sessions and Launcher', () => {
   test.use({
@@ -45,10 +34,6 @@ test.describe('Multi-Harness Sessions and Launcher', () => {
         pendingValidation: false,
       },
     },
-  });
-
-  test.beforeEach(async ({ page }) => {
-    await mockProviderStatus(page, []);
   });
 
   test('displays sessions list and allows switching between AI harnesses', async ({ page }) => {

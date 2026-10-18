@@ -18,6 +18,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { acquireLock, createMutationQueue } from './locks.js';
+import { staleQuestions } from './plan-freshness.js';
 import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
@@ -346,13 +347,7 @@ export async function mutatePlan<T>(
   mutation: (plan: PlanDocument, context: { exists: boolean }) => T,
   options: { keepRevision?: boolean; alwaysWrite?: boolean } = {},
 ): Promise<{ plan: PlanDocument; result: T; changed: boolean }> {
-  const outcome = await savePlanMutation(workspacePath, mutation, options);
-  if (outcome.changed) {
-    // contextspace-plan.md follows the plan. Imported here: the summary module reads the plan.
-    const { writePlanSummary } = await import('./plan-summary.js');
-    await writePlanSummary(workspacePath).catch(() => undefined);
-  }
-  return outcome;
+  return savePlanMutation(workspacePath, mutation, options);
 }
 
 async function savePlanMutation<T>(
@@ -412,7 +407,14 @@ export async function changePlan(
         throw new PlanError(`${itemLabel(item)} changed since it was read. Read the plan again and retry.`, 'conflict');
       }
     }
-    return applyPlanChange(current, change, options.actor);
+    const before = change.type === 'add' ? undefined : findItem(current, change.id)?.status;
+    const result = applyPlanChange(current, change, options.actor);
+    // Closing an item can leave a question that held up only closed items: nobody needs its answer any more.
+    const changed = current.items.find((candidate) => candidate.id === result.itemId);
+    if (!changed || (before !== undefined && isSettledStatus(before)) || !isSettledStatus(changed.status)) return result;
+    const withdrawn = withdrawStaleQuestions(current, { holding: changed.id });
+    return withdrawn.length === 0 ? result
+      : { ...result, message: [result.message, ...withdrawn.map((question) => `Withdrew ${itemLabel(question)}: ${question.resolution}`)].join(' ') };
   });
   const item = plan.items.find((candidate) => candidate.id === result.itemId)!;
   return { plan, item, outcome: result.outcome, message: result.message };
@@ -870,4 +872,28 @@ export function heldUpBy(plan: PlanDocument, id: string): PlanItem[] {
   const item = findItem(plan, id);
   const targetId = item ? item.id : id;
   return plan.items.filter((candidate) => candidate.waitsFor.includes(targetId));
+}
+
+/**
+ * Closes the questions nobody needs answered any more (core/plan-freshness) as ContextSpace, with the reason, and
+ * returns them. With `holding`, only the questions that item waits for.
+ */
+export function withdrawStaleQuestions(plan: PlanDocument, options: { holding?: string; now?: string } = {}): PlanItem[] {
+  const now = options.now ?? new Date().toISOString();
+  return staleQuestions(plan, options).map(({ item, reason }) => {
+    item.status = 'dropped';
+    item.resolution = reason;
+    item.closedAt = now;
+    clearOpenNotes(item);
+    item.history.push({ at: now, by: 'contextspace', action: 'dropped', note: reason });
+    if (item.history.length > PLAN_HISTORY_LIMIT) item.history.splice(0, item.history.length - PLAN_HISTORY_LIMIT);
+    item.updatedAt = now;
+    return item;
+  });
+}
+
+/** Withdraws every stale question in a workspace's plan; the store is written only when there was one. */
+export async function freshenPlan(workspacePath: string): Promise<PlanItem[]> {
+  if (!(await planStoreExists(workspacePath))) return [];
+  return (await mutatePlan(workspacePath, (plan) => withdrawStaleQuestions(plan))).result;
 }

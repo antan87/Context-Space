@@ -1,54 +1,44 @@
 /**
- * Plan payloads for the Plan tab, as GET /api/workspace/:id/plan/items sends them. The words are the
- * real ones from the backend, so a spec fails when the tab and `ctxspace plan` drift apart.
+ * Plan payloads for the app, as GET /api/workspace/:id/plan sends them (core/plan-file-app): PLAN.md's free text and
+ * its checkpoints, steps and decisions.
  */
-import { CHANGE_WORDS, KIND_WORDS, NAMES_FIRST, NEEDS_YOU, PLAN_RULES, PLAN_SECTIONS, STATUS_WORDS } from '../../src/core/plan-words.ts';
-import type { PlanItemView, PlanView } from '../src/features/plan/planTypes.ts';
+import type { PlanFileCheckpoint, PlanFileDecision, PlanFileStep, PlanFileView } from '../src/features/plan/planFile.ts';
+import type { WhatsNewView } from '../src/features/plan/whatsNew.ts';
 
-export const PLAN_WORDS: PlanView['words'] = {
-  statuses: STATUS_WORDS, kinds: KIND_WORDS, needsYou: NEEDS_YOU, sections: [...PLAN_SECTIONS],
-  rules: [...PLAN_RULES], namesFirst: NAMES_FIRST, changes: CHANGE_WORDS,
-};
+const keyOf = (words: string) => words.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
-const AT = '2026-10-10T10:00:00.000Z';
-export function planItem(fields: Partial<PlanItemView> & Pick<PlanItemView, 'id' | 'title'>): PlanItemView {
-  return { label: `${fields.id} ${fields.title}`, kind: 'milestone', status: 'todo', waitsFor: [], holdsUp: [], updatedAt: AT, createdAt: AT, history: [], ...fields };
+export function step(text: string, done = false): PlanFileStep {
+  return { key: keyOf(text), text, done };
 }
 
-/** What is current and next, by the rule of core/plan.ts `planFocus`. */
-export function planFocus(items: PlanItemView[]): PlanView['focus'] {
-  const ref = (item: PlanItemView) => ({ id: item.id, label: item.label, title: item.title });
-  const settled = (id: string) => ['done', 'dropped'].includes(items.find((item) => item.id === id)?.status ?? 'done');
-  const milestones = items.filter((item) => item.kind === 'milestone');
-  const current = milestones.find((item) => item.status === 'in_progress');
-  const upcoming = milestones.filter((item) => item !== current && (item.status === 'todo' || item.status === 'blocked'));
-  const ready = upcoming.find((item) => item.status === 'todo' && item.waitsFor.every((wait) => settled(wait.id)));
-  const next = ready ?? upcoming[0];
-  const waits = next && !ready ? next.waitsFor.filter((wait) => !settled(wait.id)).map((wait) => items.find((item) => item.id === wait.id)!).map(ref) : [];
+export function decision(question: string, fields: Partial<PlanFileDecision> = {}): PlanFileDecision {
+  return { key: keyOf(question), question, done: false, suggested: [], ...fields };
+}
+
+export function checkpoint(title: string, fields: Partial<PlanFileCheckpoint> = {}): PlanFileCheckpoint {
+  const decisions = (fields.decisions ?? []).map((entry) => ({ ...entry, checkpoint: keyOf(title) }));
+  return { key: keyOf(title), title, done: false, steps: [], ...fields, decisions };
+}
+
+/** A plan as the app reads it; the decisions that wait are worked out the way core/plan-file does. */
+export function planFile(fields: Partial<PlanFileView> = {}): PlanFileView {
+  const checkpoints = fields.checkpoints ?? [];
+  const decisions = fields.decisions ?? [];
+  const waiting = [...checkpoints.filter((entry) => !entry.done).flatMap((entry) => entry.decisions), ...decisions].filter((entry) => !entry.done).map((entry) => entry.key);
   return {
-    ...(current ? { current: ref(current) } : {}),
-    ...(next ? { next: { ...ref(next), waitsFor: waits, ...(next.status === 'blocked' && next.blockedReason ? { blockedReason: next.blockedReason } : {}) } } : {}),
+    file: 'PLAN.md', source: fields.source ?? (checkpoints.length || decisions.length || fields.steps?.length || fields.intro ? 'file' : 'none'),
+    title: 'Plan', intro: '', sections: [], steps: [], changes: [], ...fields, checkpoints, decisions, waiting: fields.waiting ?? waiting,
   };
 }
 
-/** A plan from its items, sorted into the tab's sections the way core/plan.ts does. */
-export function planView(items: PlanItemView[], extra: Partial<PlanView> = {}): PlanView {
-  const needsUser = (item: PlanItemView) => Boolean(item.proposal) || (item.kind === 'question' && item.status === 'todo' && item.owner === 'user');
-  const count = (status: PlanItemView['status']) => items.filter((item) => item.status === status).length;
-  const open = (item: PlanItemView) => ['todo', 'in_progress', 'blocked', 'later'].includes(item.status);
-  return {
-    revision: 3,
-    counts: { needsYou: items.filter(needsUser).length, inProgress: count('in_progress'), todo: count('todo'), blocked: count('blocked'), later: count('later'), done: count('done'), dropped: count('dropped') },
-    needsYou: [...items.filter((item) => item.proposal), ...items.filter((item) => !item.proposal && needsUser(item))],
-    milestones: items.filter((item) => item.kind === 'milestone'),
-    otherOpen: items.filter((item) => item.kind !== 'milestone' && !needsUser(item) && open(item)),
-    closed: items.filter((item) => item.status === 'done' || item.status === 'dropped'),
-    ready: [],
-    focus: planFocus(items),
-    changes: [],
-    evidence: {},
-    finish: { blocks: [], warns: [], handled: { done: count('done'), dropped: count('dropped'), later: count('later') } },
-    words: PLAN_WORDS,
-    ...extra,
+/** What changed since the user last looked, as GET /api/workspace/:id/news sends it; nothing changed by default. */
+export function whatsNew(fields: Partial<WhatsNewView> = {}): WhatsNewView {
+  const now = Date.now();
+  const empty = { items: [], more: 0 };
+  const report: WhatsNewView = {
+    reader: 'user', at: new Date(now).toISOString(), from: new Date(now - 2 * 3_600_000).toISOString(), basis: 'last-look',
+    plan: empty, documents: empty, knowledge: empty, commits: [], problems: [], empty: true, ...fields,
   };
+  const nothing = [report.plan, report.documents, report.knowledge].every((section) => section.items.length === 0) && report.commits.every((repo) => repo.commits.length === 0);
+  return { ...report, empty: fields.empty ?? nothing };
 }

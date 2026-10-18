@@ -77,11 +77,14 @@ export function parseKnowledge(markdown: string): KnowledgeDocument {
   return { goal: goal.join('\n'), entries: ordered, sections };
 }
 
-/** "chat-first-workspace-layout" reads as "Chat first workspace layout"; a title that is already words is kept. */
+/**
+ * "chat-first-workspace-layout" (a slug, as older versions stored every title) reads as "Chat first workspace layout".
+ * A title written as words is kept exactly as it is, capitals, dots and hyphens included.
+ */
 export function readableTitle(title: string): string {
-  if (/\s/.test(title)) return title;
+  if (!/^[a-z0-9]+(?:[-_]+[a-z0-9]+)*$/.test(title.trim())) return title;
   const words = title.replace(/[-_]+/g, ' ').trim();
-  return words ? words[0]!.toUpperCase() + words.slice(1) : title;
+  return words[0]!.toUpperCase() + words.slice(1);
 }
 
 /** Whether an entry matches a search: its title, text, scope or evidence, ignoring case. */

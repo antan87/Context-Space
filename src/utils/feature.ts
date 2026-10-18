@@ -84,7 +84,7 @@ export function isRepoIsolated(feature: Feature, repoNameOrPath: string): boolea
 /**
  * The directory an agent session should run in for a feature: always the
  * workspace dir. The generated context files (CLAUDE.md, AGENTS.md,
- * WORKSPACE.md, knowledge) live there and are invisible from anywhere else —
+ * knowledge) live there and are invisible from anywhere else —
  * for in-place features those files direct the agent to the source repos'
  * absolute paths. Kept as the single authority so every launcher (CLI, GUI,
  * resume endpoint) agrees and session discovery stays consistent.

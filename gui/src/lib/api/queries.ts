@@ -8,7 +8,7 @@ import { floatingChatStore } from '../../features/chat/floatingChatStore.js';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { apiFetch } from './client.js';
-import type { PlanChangeInput, PlanView } from '../../features/plan/planTypes.js';
+import { planFileKey } from '../../features/plan/planFile.js';
 import { workingIn } from '../../features/chat/liveSessions.js';
 import { RUNNING_TERMINALS_KEY } from '../../features/chat/useRunningTerminals.js';
 import type { RunningTerminal } from '../../features/terminal/client.js';
@@ -893,7 +893,7 @@ export function useAcknowledgeQuestions(wsId: string) {
       void queryClient.invalidateQueries({ queryKey: progressFactsKey(wsId) });
       void queryClient.invalidateQueries({ queryKey: ['input-requests'] });
       // The same questions in the plan were answered too.
-      void queryClient.invalidateQueries({ queryKey: planKey(wsId) });
+      void queryClient.invalidateQueries({ queryKey: planFileKey(wsId) });
     },
   });
 }
@@ -957,54 +957,3 @@ export function invalidateDeliveryState(queryClient: QueryClient, wsId: string):
   ]);
 }
 
-export const planKey = (wsId: string | null) => ['workspace-plan', wsId] as const;
-
-/** The plan as the Plan tab shows it: sections, history, each milestone's check, and what blocks finishing. */
-export function usePlan(wsId: string | null) {
-  return useQuery({
-    queryKey: planKey(wsId),
-    queryFn: ({ signal }) => apiFetch<PlanView>(`/api/workspace/${encodeURIComponent(wsId!)}/plan/items`, { signal }),
-    enabled: Boolean(wsId),
-    staleTime: 5000,
-    refetchInterval: 15_000,
-  });
-}
-
-/** What a plan change touches besides the plan: the strip, the brief's milestone list, finishing. */
-function invalidatePlanState(queryClient: QueryClient, wsId: string) {
-  void queryClient.invalidateQueries({ queryKey: progressFactsKey(wsId) });
-  void queryClient.invalidateQueries({ queryKey: ['workspace-work', wsId] });
-  void invalidateDeliveryState(queryClient, wsId);
-}
-
-/** Changes one item, as the user. A milestone closes only when its check passes, so that can take a while. */
-export function useChangePlan(wsId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { change: PlanChangeInput; ifRevision?: number }) => apiFetch<{ message: string; plan: PlanView }>(
-      `/api/workspace/${encodeURIComponent(wsId)}/plan/items`,
-      { method: 'POST', body: JSON.stringify(input) },
-    ),
-    onSuccess: (result) => {
-      queryClient.setQueryData(planKey(wsId), result.plan);
-      invalidatePlanState(queryClient, wsId);
-    },
-    // A plan that moved on is reloaded, so the next try starts from what is there now.
-    onError: () => { void queryClient.invalidateQueries({ queryKey: planKey(wsId) }); },
-  });
-}
-
-/** Runs a milestone's check without closing it. */
-export function useRunMilestoneCheck(wsId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (stepId: string) => apiFetch<{ lifecycle: WorkspaceLifecycle }>(
-      `/api/workspace/${encodeURIComponent(wsId)}/lifecycle/step`,
-      { method: 'POST', body: JSON.stringify({ stepId, action: 'verify' }) },
-    ),
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: planKey(wsId) });
-      invalidatePlanState(queryClient, wsId);
-    },
-  });
-}

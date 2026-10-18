@@ -4,8 +4,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { buildContextContent } from './base.js';
-import { renderPlanInstructions } from '../core/plan-text.js';
-import { PLAN_RULES, WHO_ACTS } from '../core/plan-words.js';
+import { renderPlanFileInstructions } from '../core/plan-file-text.js';
+import { LESSONS_MAX, renderLessonsSection } from './lessons.js';
+import type { KnowledgeLesson } from '../core/knowledge.js';
 import type { Feature, ProjectAnalysis, WorkspaceContext } from '../types.js';
 
 /** Minimal ProjectAnalysis with the fields the context builder reads. */
@@ -191,7 +192,8 @@ describe('buildContextContent', () => {
       const content = await buildContextContent(ctxFor({}));
 
       expect(content).toContain('contextspace-knowledge.md');
-      expect(content).toContain('contextspace-plan.md');
+      expect(content).toContain('`PLAN.md`');
+      expect(content).not.toContain('contextspace-plan.md');
     });
 
     it('does not send the agent to read derived facts it could grep', async () => {
@@ -214,23 +216,30 @@ describe('buildContextContent', () => {
       expect(content).toContain('not the whole file');
     });
 
-    it('documents direct file append fallback when the CLI is not on PATH', async () => {
+    it('searches the knowledge with the command first, so it works without MCP, and offers MCP as the other way', async () => {
       const content = await buildContextContent(ctxFor({}));
+      const line = content.split('\n').find((l) => l.includes('contextspace-knowledge.md'))!;
 
-      expect(content).toContain('append a `### <YYYY-MM-DD> — <Title>` heading directly');
+      expect(line).toContain('`ctxspace knowledge search <words>`');
+      expect(line).toContain('`ctxspace knowledge add');
+      expect(line.indexOf('knowledge search')).toBeLessThan(line.indexOf('search_knowledge'));
     });
 
-    it('provides file-based fallback when MCP server is not connected', async () => {
+    it('tells every session to run the news command when it starts and after its context is compacted, in one line', async () => {
       const content = await buildContextContent(ctxFor({}));
+      const lines = content.split('\n').filter((l) => l.includes('`ctxspace news`'));
 
-      expect(content).toContain('if the MCP server is not connected');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('start');
+      expect(lines[0]).toContain('compacted');
+      expect(lines[0]).toContain('who made it');
+      expect(content.indexOf('## Where to look')).toBeLessThan(content.indexOf('`ctxspace news`'));
     });
 
     it('steers knowledge capture toward facts not recoverable from code', async () => {
       const content = await buildContextContent(ctxFor({}));
 
       expect(content).toContain('cannot be recovered from the code or git history');
-      expect(content).toContain('Avoid restating structure the code already shows');
     });
 
     it('names repos that carry their own instructions, which override these', async () => {
@@ -288,13 +297,14 @@ describe('buildContextContent', () => {
       expect(content).not.toContain('post_workroom_handoff');
     });
 
-    it('points agents at request_user_input in one line, with a fallback when MCP is absent', async () => {
+    it('points agents at ctxspace ask in one line, with the MCP tool as the other way', async () => {
       const content = await buildContextContent(ctxFor({}));
 
       const mentions = content.split('\n').filter((line) => line.includes('request_user_input'));
       expect(mentions).toHaveLength(1);
+      expect(mentions[0]).toContain('`ctxspace ask "<question>" --option "<answer>" ...`');
+      expect(mentions[0]!.indexOf('ctxspace ask')).toBeLessThan(mentions[0]!.indexOf('request_user_input'));
       expect(mentions[0]).toContain('end your turn');
-      expect(mentions[0]).toContain('No MCP');
     });
 
     it('points agents at the screen tools in one line, saying they only show things, with a fallback when MCP is absent', async () => {
@@ -307,16 +317,18 @@ describe('buildContextContent', () => {
       expect(mentions[0]).toContain('No MCP');
     });
 
-    it('tells every AI tool to work with the plan through ctxspace plan, with the routine, the rules and who acts', async () => {
+    it('tells every AI tool the plan is PLAN.md, edited directly, in a few lines', async () => {
       const content = await buildContextContent(ctxFor({}));
+      const section = renderPlanFileInstructions();
 
-      expect(content).toContain(renderPlanInstructions());
+      expect(content).toContain(section);
       expect(content.indexOf('## Plan')).toBeLessThan(content.indexOf('## Where to look'));
-      expect(content).toContain('1. Start by running `ctxspace plan`.');
-      expect(content).toContain('   - stuck: `ctxspace plan block <code> --reason "<what you wait for>"`');
-      PLAN_RULES.forEach((rule, index) => expect(content).toContain(`${index + 1}. ${rule}`));
-      expect(content).toContain(WHO_ACTS.slice(0, 2).join(' '));
-      expect(content).toContain('./.contextspace/bin/ctxspace plan');
+      expect(section).toContain('`- [ ] Decide: <question>`');
+      expect(section).toContain('Never answer it yourself.');
+      expect(section).toContain('`ctxspace plan done "<checkpoint>"`');
+      // The plan instructions every session loads stay short: they were over 3 KB of rules and commands.
+      expect(section.length).toBeLessThan(1400);
+      expect(content).toContain('./.contextspace/bin/ctxspace');
       // The plan has no MCP tools: AIs are never sent to the old planning tools.
       for (const tool of ['update_milestone_plan', 'set_milestone', 'get_planning_notes', 'save_planning_notes']) expect(content).not.toContain(tool);
     });
@@ -332,22 +344,91 @@ describe('buildContextContent', () => {
     });
   });
 
+  describe('lessons from earlier sessions', () => {
+    const lesson = (title: string, type: KnowledgeLesson['type'] = 'gotcha'): KnowledgeLesson => ({ title, type });
+
+    it('lists the recorded titles, each with its type, between the plan and where to look', async () => {
+      const ctx = ctxFor({});
+      ctx.lessons = [lesson('Plan md has its own lock'), lesson('The plan is plan md', 'decision')];
+
+      const content = await buildContextContent(ctx);
+
+      expect(content).toContain('## Lessons from earlier sessions');
+      expect(content).toContain('- gotcha: Plan md has its own lock\n- decision: The plan is plan md\n');
+      expect(content).toContain('`ctxspace knowledge search <words>`');
+      expect(content.indexOf('## Plan')).toBeLessThan(content.indexOf('## Lessons from earlier sessions'));
+      expect(content.indexOf('## Lessons from earlier sessions')).toBeLessThan(content.indexOf('## Where to look'));
+    });
+
+    it('has no section at all when nothing is recorded', async () => {
+      const none = await buildContextContent(ctxFor({}));
+      const empty = ctxFor({});
+      empty.lessons = [];
+
+      expect(none).not.toContain('Lessons');
+      expect(await buildContextContent(empty)).toBe(none);
+    });
+
+    it('lists the newest titles only and says how many older ones there are', async () => {
+      const ctx = ctxFor({});
+      ctx.lessons = Array.from({ length: LESSONS_MAX + 3 }, (_, i) => lesson(`Entry ${i + 1}`));
+
+      const content = await buildContextContent(ctx);
+
+      expect(content).toContain(`- gotcha: Entry ${LESSONS_MAX}\n`);
+      expect(content).not.toContain(`Entry ${LESSONS_MAX + 1}\n`);
+      expect(content).toContain('- …and 3 older ones.');
+    });
+
+    it('cuts a title written by hand that is longer than a title can be', () => {
+      const section = renderLessonsSection([lesson('x'.repeat(200))]);
+
+      expect(section).toContain(`- gotcha: ${'x'.repeat(59)}…\n`);
+    });
+
+    it('labels a lesson from a repo with the repo, and says the workspace\'s own come first', async () => {
+      const ctx = ctxFor({});
+      ctx.lessons = [lesson('Own entry'), { title: 'Port clash', type: 'gotcha', repo: 'api' }];
+
+      const content = await buildContextContent(ctx);
+
+      expect(content).toContain('Newest first, the workspace\'s own before the repos\'.');
+      expect(content).toContain('- gotcha: Own entry\n- gotcha (api): Port clash\n');
+    });
+
+    it('keeps its own cap: the longest titles of the longest type, with a repo label, still fit', () => {
+      // A title is at most 60 characters (core/knowledge MAX_TITLE_CHARS) and a repo name is cut at 20, so this is the
+      // largest the section can be. Without repo labels it is under 2100.
+      const longest = (repo?: string): KnowledgeLesson => ({ title: 'x'.repeat(60), type: 'assumption', ...(repo ? { repo } : {}) });
+      const own = renderLessonsSection(Array.from({ length: LESSONS_MAX + 10 }, () => longest()));
+      const labelled = renderLessonsSection(Array.from({ length: LESSONS_MAX + 10 }, () => longest('r'.repeat(40))));
+
+      expect(own.length).toBeLessThan(2100);
+      expect(labelled.length).toBeLessThan(2700);
+      expect(labelled.split('\n').length).toBeLessThan(35);
+    });
+  });
+
   describe('size', () => {
     it('stays small enough not to crowd the context window', async () => {
       // The docs advise under 200 lines because longer files reduce adherence,
       // not merely cost tokens. Two repos should be nowhere near that.
-      const content = await buildContextContent(relatedCtx());
+      const ctx = relatedCtx();
+      // The lessons are the worst case here: a full list of the longest titles. They have a cap of their own (above).
+      ctx.lessons = Array.from({ length: LESSONS_MAX }, () => ({ title: 'x'.repeat(60), type: 'assumption' as const, repo: 'r'.repeat(20) }));
+      const content = await buildContextContent(ctx);
 
-      // The Plan section is allowed on top of the caps below: in the agy and Haiku test, its work
-      // routine cut agy's tool calls from 166 to 58. It has a cap of its own.
-      const plan = renderPlanInstructions();
-      expect(content.split('\n').length - plan.split('\n').length).toBeLessThan(40);
+      // The Plan section has a cap of its own: a short routine told weaker AIs how to work (in the agy and Haiku
+      // test, a routine cut agy's tool calls from 166 to 58), and the plan file keeps it short.
+      const plan = renderPlanFileInstructions();
+      const lessons = renderLessonsSection(ctx.lessons);
+      expect(content.split('\n').length - plan.split('\n').length - lessons.split('\n').length + 1).toBeLessThan(40);
       // 1600 until the request_user_input pointer was added, then 1800 until the
       // screen-tool pointer. Agents that load MCP tools on demand need a line like
       // each to know the tools exist; these are the two lines allowed past the old cap.
-      expect(content.length - plan.length).toBeLessThan(2000);
-      expect(plan.split('\n').length).toBeLessThan(25);
-      expect(plan.length).toBeLessThan(2600);
+      expect(content.length - plan.length - lessons.length).toBeLessThan(2000);
+      expect(plan.split('\n').length).toBeLessThan(10);
+      expect(plan.length).toBeLessThan(1400);
     });
   });
 

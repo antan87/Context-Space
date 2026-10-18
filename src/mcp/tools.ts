@@ -1,5 +1,4 @@
-import { readPlanningNotes } from '../core/planning-notes.js';
-import { planningTools, useThePlanCommand } from './planning-tools.js';
+import { planningTools } from './planning-tools.js';
 import { screenTools } from './screen-tools.js';
 /**
  * @module mcp/tools
@@ -21,7 +20,6 @@ import {
   listWorkspaces,
   createWorkspace,
   resolveRepoInfos,
-  findWorkspaceRoot,
 } from '../core/workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
 import { syncWorkspace } from '../core/sync.js';
@@ -34,7 +32,7 @@ import { finishWorkspace } from '../core/finish.js';
 import { planRepoIsolation } from '../core/isolate.js';
 import { archiveWorkspace, planArchive, unarchiveWorkspace } from '../core/archive.js';
 import { getWorkContext, readWorkDocument } from '../core/work-guidance.js';
-import { addChatQuestionToPlan } from '../core/plan-questions.js';
+import { AskUserError, askUser } from '../core/ask-user.js';
 import { verifyWorkspace } from '../core/verify.js';
 import { getAllSkills, saveSkill } from '../utils/skills-catalog.js';
 import {
@@ -47,12 +45,8 @@ import {
 import { loadPinnedWorkroomClientForWorkspace } from '../workrooms/manager.js';
 import {
   INPUT_REQUEST_DISPLAY_LIMIT,
-  INPUT_REQUEST_HARNESS_LIMIT,
   INPUT_REQUEST_OPTIONS_MAX,
   INPUT_REQUEST_OPTION_LIMIT,
-  cleanInputOptions,
-  cleanInputRequestText,
-  latestInputRequest,
 } from '../core/attention.js';
 import {
   BRAND_NAME,
@@ -153,25 +147,6 @@ async function archiveTargetRefusal(ctx: ToolContext): Promise<string | null> {
 
 /** Longest `request_user_input` message. It becomes an alert; the detail belongs in the chat. */
 export const INPUT_REQUEST_MAX_LENGTH = INPUT_REQUEST_DISPLAY_LIMIT;
-/**
- * An identical request from the same harness inside this window is one alert, not
- * two. It exists for a retried or doubled call. It is short because an agent that
- * asks the same generic question ("Proceed?") again after the user has answered
- * must still be able to raise a new alert, and the tool cannot see the reply.
- */
-const INPUT_REQUEST_REPEAT_WINDOW_MS = 30_000;
-
-let inputRequestQueue: Promise<unknown> = Promise.resolve();
-
-/**
- * Runs input requests one at a time in this process, so the repeat check and the
- * append cannot interleave when an agent issues parallel calls.
- */
-function serializeInputRequests<T>(task: () => Promise<T>): Promise<T> {
-  const run = inputRequestQueue.then(task, task);
-  inputRequestQueue = run.catch(() => undefined);
-  return run;
-}
 
 async function requireWorkspace(ctx: ToolContext): Promise<void> {
   const feature = await loadFeatureConfig(ctx.workspacePath);
@@ -188,18 +163,8 @@ export const tools: NexusFlowTool[] = [
   ...planningTools,
   ...screenTools,
   {
-    name: 'get_planning_notes',
-    description: `${useThePlanCommand('get_planning_notes')} Read the older authored notes in contextspace-milestones.md: delivery order, questions, existing work and deferred decisions.`,
-    annotations: { readOnlyHint: true },
-    inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
-    handler: async (_args, ctx) => {
-      try { return json({ deprecated: useThePlanCommand('get_planning_notes'), ...(await readPlanningNotes(ctx.workspacePath)) }); }
-      catch (error) { return errorResult(error instanceof Error ? error.message : String(error)); }
-    },
-  },
-  {
     name: 'get_work_context',
-    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is the text `ctxspace plan` prints, `lifecycle` holds the milestones. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan with `ctxspace plan` in your shell.',
+    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is where PLAN.md stands (as `ctxspace plan` prints it) followed by its text. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan by editing PLAN.md.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
     handler: async (_args, ctx) => {
@@ -397,7 +362,7 @@ export const tools: NexusFlowTool[] = [
       properties: {
         type: { type: 'string', enum: ['decision', 'gotcha', 'assumption', 'question'], description: 'The kind of learning.' },
         message: { type: 'string', description: 'The learning to record.' },
-        title: { type: 'string', description: 'Required short title used to create the searchable heading slug.' },
+        title: { type: 'string', description: 'Required short title, kept as written in the entry\'s heading: one line, at most 60 characters.' },
         scope: { type: 'string', description: 'Optional applicability: repo:<name>, path:<repo/path>, or seam:<name>.' },
         evidence: { type: 'string', description: 'Optional short evidence pointer such as a commit SHA or repro document.' },
         repo: { type: 'string', description: "Write to this repo's persistent base knowledge instead of the workspace file (decision/gotcha/assumption only)." },
@@ -438,7 +403,7 @@ export const tools: NexusFlowTool[] = [
         repo: { type: 'string', description: 'Target repository (by directory name).' },
         type: { type: 'string', enum: ['decision', 'gotcha', 'assumption'], description: 'The kind of learning to promote.' },
         text: { type: 'string', description: 'The learning text to store in base knowledge.' },
-        title: { type: 'string', description: 'Required short title used to create the searchable heading slug.' },
+        title: { type: 'string', description: 'Required short title, kept as written in the entry\'s heading: one line, at most 60 characters.' },
         move: { type: 'boolean', description: 'Reserved; base promotion is additive. Default false.' },
         ...workspaceIdProp,
       },
@@ -1224,72 +1189,10 @@ export const tools: NexusFlowTool[] = [
     handler: async (args, ctx) => {
       try {
         await requireWorkspace(ctx);
-        const feature = await loadFeatureConfig(ctx.workspacePath);
-        if (!feature) return errorResult('Workspace not found.');
-        // Stored exactly as it will be shown, so what is recorded and what is compared agree.
-        const message = cleanInputRequestText(args.message);
-        if (!message) return errorResult('The request message cannot be empty.');
-        if (message.length > INPUT_REQUEST_MAX_LENGTH) {
-          return errorResult(
-            `The request message is ${message.length} characters; keep it to ${INPUT_REQUEST_MAX_LENGTH} or fewer and put the detail in the chat.`,
-          );
-        }
-        const harness = cleanInputRequestText(args.harness).slice(0, INPUT_REQUEST_HARNESS_LIMIT) || 'agent';
-        if (args.options !== undefined && !Array.isArray(args.options)) return errorResult('options must be a list of short answers.');
-        const options = cleanInputOptions(args.options);
-
-        // This server can be started below the workspace root; the ledger lives at the root.
-        const root = (await findWorkspaceRoot(ctx.workspacePath)) ?? ctx.workspacePath;
-        const waitNote = 'The user has been alerted. Write your full question in the chat and end your turn; they will reply there. Do not continue the task or call this tool again for the same question.';
-
-        return await serializeInputRequests(async () => {
-          const now = Date.now();
-          // Reads the end of the ledger only, so a long-lived workspace does not pay for its history.
-          const latest = await latestInputRequest(root, now);
-          const repeat = latest
-            && latest.harness === harness
-            && latest.message === message
-            && JSON.stringify(latest.options ?? []) === JSON.stringify(options ?? [])
-            && now - Date.parse(latest.timestamp) < INPUT_REQUEST_REPEAT_WINDOW_MS
-            ? latest
-            : null;
-          if (repeat) {
-            return json({
-              status: 'already_requested',
-              workspaceId: feature.id,
-              harness,
-              timestamp: repeat.timestamp,
-              message: waitNote,
-            });
-          }
-
-          const ledger = await resolveWorkspaceChatLedger(root);
-          await fs.mkdir(ledger.chatDir, { recursive: true });
-          const entry = {
-            id: randomUUID(),
-            timestamp: new Date(now).toISOString(),
-            harness,
-            author: 'agent',
-            kind: 'input_request',
-            message,
-            ...(options ? { options } : {}),
-          };
-          await fs.appendFile(ledger.chatPath, JSON.stringify(entry) + '\n', 'utf8');
-          // The same question in the plan, so the user answers it once and the plan says what it holds up.
-          // A plan that cannot be changed must not stop the alert.
-          const inPlan = await addChatQuestionToPlan(root, { message, options, harness }).catch(() => undefined);
-          return json({
-            status: 'requested',
-            workspaceId: feature.id,
-            harness,
-            timestamp: entry.timestamp,
-            ...(inPlan ? { planQuestion: inPlan.label } : {}),
-            message: inPlan
-              ? `${waitNote} It is in the plan as ${inPlan.label}; when the user answers, record their words: ctxspace plan answer ${inPlan.id} "<their answer>".`
-              : waitNote,
-          });
-        });
+        return json(await askUser(ctx.workspacePath, { message: args.message, options: args.options, harness: args.harness }));
       } catch (error: any) {
+        // A request the AI got wrong is told how to put it right, as it is.
+        if (error instanceof AskUserError) return errorResult(error.message);
         return errorResult(`Error requesting user input: ${error.message}`);
       }
     },
@@ -1474,7 +1377,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   review: [
     'search_workspace',
@@ -1492,7 +1394,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   ci: [
     'search_workspace',
@@ -1509,7 +1410,6 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
-    'get_planning_notes',
   ],
   developer: ['*'],
   interactive: ['*'],

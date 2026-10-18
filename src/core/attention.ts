@@ -2,7 +2,8 @@
  * @module core/attention
  * Finds the "agent needs the user" requests in a workspace's chat ledger,
  * so the app can flag the CLI chat that is waiting. Written by the MCP
- * `request_user_input` tool as a `kind: 'input_request'` ledger entry. The app
+ * `request_user_input` tool and by `ctxspace ask` (both through `core/ask-user`)
+ * as a `kind: 'input_request'` ledger entry. The app
  * answers with a `kind: 'input_ack'` entry, because replies typed into the chat
  * terminal never reach the ledger.
  */

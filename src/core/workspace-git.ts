@@ -12,10 +12,12 @@ const CORE_ARTIFACTS = [
   '.gitignore',
   'AGENTS.md',
   'CLAUDE.md',
+  // No longer generated; listed so a refresh's removal of an old one is committed.
   'WORKSPACE.md',
   'contextspace.json',
   'contextspace.lock',
   'contextspace-knowledge.md',
+  'PLAN.md',
   'contextspace-plan.md',
   'contextspace-plan.json',
   'contextspace-milestones.md',
@@ -55,13 +57,13 @@ export async function ensureWorkspaceGitRepository(workspacePath: string): Promi
   }
 }
 
-/** Planning files moved into the plan are kept here for one release (core/plan-import), and committed. */
+/** Older planning files, and the plan store PLAN.md replaced, are kept here (core/plan-import, core/plan-file-store), and committed. */
 const ARCHIVE_DIR = '.contextspace/archive';
 
 async function archivedFiles(workspacePath: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(path.join(workspacePath, ARCHIVE_DIR), { withFileTypes: true });
-    return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md')).map((entry) => `${ARCHIVE_DIR}/${entry.name}`);
+    return entries.filter((entry) => entry.isFile() && (entry.name.endsWith('.md') || /^contextspace-plan-.*\.json$/.test(entry.name))).map((entry) => `${ARCHIVE_DIR}/${entry.name}`);
   } catch {
     return [];
   }

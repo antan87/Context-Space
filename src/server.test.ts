@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { execa } from 'execa';
-import { AgentTurnGate, app, archiveRefusedAction, canOfferClaudeDesktopTransfer, dispatchAgentInput } from './server.js';
+import { app, archiveRefusedAction, canOfferClaudeDesktopTransfer } from './server.js';
 import * as archive from './core/archive.js';
 import * as workspace from './core/workspace.js';
 import * as config from './core/config.js';
@@ -25,7 +25,6 @@ import * as newRepo from './core/new-repo.js';
 import * as orchestration from './orchestration/index.js';
 import * as sessionFinder from './utils/session-finder.js';
 import { ProviderRegistry } from './agent/ProviderRegistry.js';
-import type { AgentHarness, ProviderAdapter } from './agent/ProviderRegistry.js';
 import { workroomManager } from './workrooms/manager.js';
 import { clearEditorDetectionCache } from './utils/detect-editors.js';
 
@@ -127,166 +126,6 @@ describe('Server API Endpoints Unit Tests', () => {
     const response = await app.request('/api/session/codex/53/transcript');
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: 'Invalid session UUID format.' });
-  });
-
-  describe('embedded turn admission', () => {
-    it('rejects overlapping input until the active turn settles', () => {
-      const gate = new AgentTurnGate();
-
-      expect(gate.tryBegin()).toBe(true);
-      expect(gate.isActive()).toBe(true);
-      expect(gate.tryBegin()).toBe(false);
-
-      gate.settle();
-
-      expect(gate.isActive()).toBe(false);
-      expect(gate.tryBegin()).toBe(true);
-    });
-  });
-
-  describe('CLI adapter status probes', () => {
-    it('keeps the legacy GET endpoint side-effect-free', async () => {
-      const status = vi.spyOn(ProviderRegistry, 'getAllStatus').mockReturnValue([]);
-
-      const response = await app.request('/api/adapters/status', {
-        headers: { Origin: 'https://evil.example' },
-      });
-
-      expect(response.status).toBe(405);
-      expect(status).not.toHaveBeenCalled();
-      status.mockRestore();
-    });
-
-    it('rejects a hostile initial status POST before running CLI detectors', async () => {
-      const status = vi.spyOn(ProviderRegistry, 'getAllStatus').mockReturnValue([]);
-
-      const response = await app.request('/api/adapters/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
-        body: '{}',
-      });
-
-      expect(response.status).toBe(403);
-      expect(status).not.toHaveBeenCalled();
-      status.mockRestore();
-    });
-
-    it('allows a local-origin initial status POST', async () => {
-      const status = vi.spyOn(ProviderRegistry, 'getAllStatus').mockReturnValue([]);
-
-      const response = await app.request('/api/adapters/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:4173' },
-        body: '{}',
-      });
-
-      expect(response.status).toBe(200);
-      expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:4173');
-      expect(status).toHaveBeenCalledWith();
-      status.mockRestore();
-    });
-
-    it('rejects a hostile browser origin before refreshing a CLI detector', async () => {
-      const status = vi.spyOn(ProviderRegistry, 'getAllStatus').mockReturnValue([]);
-
-      const response = await app.request('/api/adapters/status/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
-        body: JSON.stringify({ providerId: 'claude-cli' }),
-      });
-
-      expect(response.status).toBe(403);
-      expect(status).not.toHaveBeenCalled();
-      status.mockRestore();
-    });
-
-    it('refreshes an allowlisted harness provider for a same-origin request', async () => {
-      const status = vi.spyOn(ProviderRegistry, 'getAllStatus').mockReturnValue([]);
-
-      const response = await app.request('/api/adapters/status/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:4173' },
-        body: JSON.stringify({ providerId: 'codex-cli' }),
-      });
-
-      expect(response.status).toBe(200);
-      expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:4173');
-      expect(status).toHaveBeenCalledWith({ refreshProviderId: 'codex-cli' });
-      status.mockRestore();
-    });
-
-    it('refreshes an allowlisted first-party SDK status', async () => {
-      const status = vi.spyOn(ProviderRegistry, 'getAllStatus').mockReturnValue([]);
-
-      const response = await app.request('/api/adapters/status/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:4173' },
-        body: JSON.stringify({ providerId: 'codex-sdk' }),
-      });
-
-      expect(response.status).toBe(200);
-      expect(status).toHaveBeenCalledWith({ refreshProviderId: 'codex-sdk' });
-      status.mockRestore();
-    });
-
-    it('rejects attempts to refresh other providers', async () => {
-      const status = vi.spyOn(ProviderRegistry, 'getAllStatus').mockReturnValue([]);
-
-      const response = await app.request('/api/adapters/status/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:4173' },
-        body: JSON.stringify({ providerId: 'copilot-cli' }),
-      });
-
-      expect(response.status).toBe(400);
-      expect(status).not.toHaveBeenCalled();
-      status.mockRestore();
-    });
-  });
-
-  describe('embedded turn execution profiles', () => {
-    const provider = {
-      id: 'profiled-test',
-      name: 'Profiled test',
-      capabilities: { transport: 'cli-print', sessionIdentity: 'none', workspaceAccess: 'harness-managed' },
-      executionProfiles: [
-        { id: 'review', label: 'Review only', description: 'Read-only.' },
-        { id: 'workspace-write', label: 'Edit workspace', description: 'May edit.' },
-      ],
-      defaultExecutionProfile: 'review',
-      isConfigured: () => true,
-      getStatusMessage: () => undefined,
-      createInstance: () => harness(),
-    } satisfies ProviderAdapter;
-
-    function harness() {
-      return {
-        start: vi.fn(),
-        send: vi.fn().mockResolvedValue(undefined),
-        stop: vi.fn(),
-        on: vi.fn().mockReturnThis(),
-        off: vi.fn().mockReturnThis(),
-      } as unknown as AgentHarness;
-    }
-
-    it.each([undefined, 'danger-full-access', false])(
-      'rejects a missing or unsupported profile %j before harness send',
-      (executionProfile) => {
-        const agent = harness();
-        expect(dispatchAgentInput(agent, provider, { input: 'Do work', executionProfile }))
-          .toMatch(/supported execution profile/i);
-        expect(agent.send).not.toHaveBeenCalled();
-      },
-    );
-
-    it('passes a validated profile to the harness', () => {
-      const agent = harness();
-      expect(dispatchAgentInput(agent, provider, {
-        input: 'Inspect only',
-        executionProfile: 'review',
-      })).toBeNull();
-      expect(agent.send).toHaveBeenCalledWith('Inspect only', 'review');
-    });
   });
 
   describe('POST /api/open-editor', () => {
@@ -1483,53 +1322,6 @@ describe('Server API Endpoints Unit Tests', () => {
 
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Invalid repository name/) });
-    });
-  });
-
-  describe('GET /api/workspace/:id/plan', () => {
-    it('should get workspace plan content', async () => {
-      vi.spyOn(config, 'loadConfig').mockResolvedValue({
-        workspacesDir: '/mock/workspaces'
-      } as any);
-      // Only the Markdown plan exists: no state file and no plan store yet.
-      const missing = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
-      vi.spyOn(fs, 'readFile').mockImplementation((async (file: unknown) => {
-        if (String(file).endsWith('.md')) return '# Mock Plan content';
-        throw missing();
-      }) as any);
-      vi.spyOn(fs, 'realpath').mockImplementation((async (candidate: unknown) => String(candidate)) as any);
-      vi.spyOn(fs, 'lstat').mockImplementation((async () => { throw missing(); }) as any);
-
-      const response = await app.request('/api/workspace/test-ws/plan');
-      expect(response.status).toBe(200);
-      const data = await response.json();
-      expect(data.content).toBe('# Mock Plan content');
-    });
-
-    it('should return placeholder content when plan file does not exist (ENOENT)', async () => {
-      vi.spyOn(config, 'loadConfig').mockResolvedValue({
-        workspacesDir: '/mock/workspaces',
-      } as any);
-      const enoentErr = Object.assign(new Error('File not found'), { code: 'ENOENT' });
-      vi.spyOn(fs, 'readFile').mockRejectedValue(enoentErr);
-
-      const response = await app.request('/api/workspace/test-ws/plan');
-      expect(response.status).toBe(200);
-      const data = await response.json();
-      expect(data.content).toContain('No implementation plan file yet.');
-    });
-
-    it('should return 500 error when reading plan fails with permission or IO error', async () => {
-      vi.spyOn(config, 'loadConfig').mockResolvedValue({
-        workspacesDir: '/mock/workspaces',
-      } as any);
-      const eaccesErr = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
-      vi.spyOn(fs, 'readFile').mockRejectedValue(eaccesErr);
-
-      const response = await app.request('/api/workspace/test-ws/plan');
-      expect(response.status).toBe(500);
-      const data = await response.json();
-      expect(data.error).toBeDefined();
     });
   });
 
@@ -3695,52 +3487,6 @@ describe('Server API Endpoints Unit Tests', () => {
       expect(data.error).toContain('Warning: Rollback could not fully restore state');
       expect(data.error).toContain('Failed to restore mode on file1.ts');
       expect(data.error).not.toContain('Any modified files were rolled back.');
-    });
-  });
-
-  describe('/api/chat/thread endpoints (SQLite persistence)', () => {
-    it('saves, retrieves, and clears chat thread in SQLite', async () => {
-      const threadData = {
-        providerId: 'claude-cli',
-        sessions: { 'claude-cli': { id: 'test-sess', started: true } },
-        profilesByProvider: { 'claude-cli': 'workspace-write' },
-        modelsByProvider: { 'claude-cli': 'claude-3-7-sonnet' },
-        effortsByProvider: {},
-        messages: [
-          { role: 'user', content: 'Hello SQLite' },
-          { role: 'assistant', content: 'Hi there!' },
-        ],
-      };
-
-      const postRes = await app.request('/api/chat/thread/test-branch', {
-        method: 'POST',
-        headers: {
-          'Origin': 'http://localhost:3000',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(threadData),
-      });
-      const postBody = await postRes.text();
-      expect(postBody).toBe('{"success":true}');
-      expect(postRes.status).toBe(200);
-
-      const getRes = await app.request('/api/chat/thread/test-branch');
-      expect(getRes.status).toBe(200);
-      const getBody = await getRes.json();
-      expect(getBody.thread).not.toBeNull();
-      expect(getBody.thread.workspaceId).toBe('test-branch');
-      expect(getBody.thread.providerId).toBe('claude-cli');
-      expect(getBody.thread.messages).toHaveLength(2);
-
-      const delRes = await app.request('/api/chat/thread/test-branch', {
-        method: 'DELETE',
-        headers: { 'Origin': 'http://localhost:3000' },
-      });
-      expect(delRes.status).toBe(200);
-
-      const getAfterDel = await app.request('/api/chat/thread/test-branch');
-      const emptyBody = await getAfterDel.json();
-      expect(emptyBody.thread).toBeNull();
     });
   });
 });

@@ -9,6 +9,7 @@ import type {
   QuotaWindow,
   CostConfidence,
 } from './harness/types.js';
+import type { KnowledgeLesson } from './core/knowledge.js';
 
 export type {
   NormalizedUsage,
@@ -402,6 +403,9 @@ export interface WorkspaceContext {
 
   /** Analysis results for each repo (keyed by repo path). */
   analysis?: Map<string, ProjectAnalysis>;
+
+  /** The knowledge entries listed in AGENTS.md: the workspace's own, then its repos' base knowledge. Read when generating if absent. */
+  lessons?: KnowledgeLesson[];
 
   /** Immutable repo snapshot captured before generated artifacts are rendered. */
   generation?: {
@@ -862,8 +866,10 @@ export interface WorkspaceState {
   lastVerification?: WorkspaceVerificationReport;
   /** Active structured lifecycle state machine. */
   lifecycle?: WorkspaceLifecycle;
-  /** The latest check of each milestone, keyed by its plan code. */
+  /** The latest check of each milestone, keyed by its plan code, from before the plan moved to PLAN.md. */
   planEvidence?: Record<string, PlanEvidence>;
+  /** The latest check of each PLAN.md checkpoint, keyed by its key (core/plan-file). */
+  planChecks?: Record<string, PlanEvidence>;
   /** Recent explicit verification overrides, newest last (bounded). */
   verificationOverrides?: VerificationOverrideRecord[];
   /** Durable record of the latest finish run, so it can be resumed after a restart. */

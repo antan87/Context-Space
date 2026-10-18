@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { planItem, planView } from './planData';
+import { checkpoint, planFile, step } from './planData';
 
 /**
  * A workspace opens on its plan, with the sessions one click away: start a tool on a ready item from its row, see what
@@ -16,17 +16,14 @@ type Terminal = { id: string; workspace: string; target: string; label: string; 
 const terminal = (id: string, target: string): Terminal => ({ id, workspace: 'feature-x', target, label: target, cwd: '/tmp/feature-x', state: 'running', startedAt: '2026-10-10T10:00:00.000Z' });
 const TARGETS = ['claude', 'codex', 'antigravity', 'pi', 'copilot', 'shell'].map((id) => ({ id, name: id, available: true, reason: null }));
 
-function plan(startedBy?: string) {
-  return planView([
-    planItem({ id: 'M1', title: 'Database query for report rows', status: 'done', resolution: 'Passed its check' }),
-    planItem({ id: 'M2', title: 'CSV export endpoint', ...(startedBy ? { status: 'in_progress', history: [{ at: '2026-10-10T10:00:00.000Z', by: startedBy, action: 'started' }] } : {}) }),
-    planItem({ id: 'M3', title: 'Export button in the UI', waitsFor: [{ id: 'M2', label: 'M2 CSV export endpoint', status: startedBy ? 'in_progress' : 'todo' }] }),
-  ], { ready: startedBy ? [] : ['M2 CSV export endpoint'] });
-}
 
 async function mockServer(page: Page, { running = [] as Terminal[], saved = false, startedBy = undefined as string | undefined } = {}) {
   const server = { terminals: [...running], created: [] as Array<Record<string, unknown>>, attached: [] as string[] };
-  await page.route('**/api/workspace/feature-x/plan/items', (route) => route.fulfill({ json: plan(startedBy) }));
+  await page.route('**/api/workspace/feature-x/plan', (route) => route.fulfill({ json: planFile({ checkpoints: [
+    checkpoint('Database query for report rows', { done: true }),
+    checkpoint('CSV export endpoint', { steps: [step('Write the CSV writer', Boolean(startedBy))] }),
+    checkpoint('Export button in the UI'),
+  ] }) }));
   await page.route('**/api/terminals/feature-x/status', (route) => route.fulfill({ json: { available: true, sessions: server.terminals, targets: TARGETS } }));
   await page.route('**/api/terminals/running', (route) => route.fulfill({ json: { sessions: server.terminals.map((entry) => ({ ...entry, attached: false, lastOutputAt: new Date().toISOString() })) } }));
   await page.route('**/api/terminals/feature-x/create', async (route) => {
@@ -52,7 +49,6 @@ async function mockServer(page: Page, { running = [] as Terminal[], saved = fals
   return server;
 }
 
-const FIRST_MESSAGE = 'Work on M2 CSV export endpoint. Read the plan with `ctxspace plan` first. If it is not started yet, start it with `ctxspace plan start M2`.';
 
 test('opens on the plan, with no second place to start a session: that is the chat', async ({ page }) => {
   await mockServer(page, { saved: true });
@@ -65,18 +61,11 @@ test('opens on the plan, with no second place to start a session: that is the ch
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/home-no-session.png` });
 });
 
-test('starts the last-used tool on a ready item from its row, with a first message that names it', async ({ page }) => {
-  const server = await mockServer(page);
-  await page.goto('/#/workspaces/feature-x');
-  await page.getByRole('button', { name: 'Start a session on M2 CSV export endpoint' }).click();
-  await expect.poll(() => server.created).toEqual([expect.objectContaining({ target: 'claude', prompt: FIRST_MESSAGE })]);
-});
-
-test('shows the running sessions beside the plan, named after what they work on, and brings one on screen', async ({ page }) => {
+test('shows the running sessions beside the plan, named after their tool, and brings one on screen', async ({ page }) => {
   const server = await mockServer(page, { running: [terminal('t-claude', 'claude')], startedBy: 'claude' });
   await page.goto('/#/workspaces/feature-x');
   const tabs = page.getByLabel('Plan and sessions');
-  const session = tabs.getByRole('button', { name: /Show CSV export endpoint in Claude Code/ });
+  const session = tabs.getByRole('button', { name: /^Show Claude Code, / });
   await expect(session).toBeVisible();
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/home-running.png` });
   await session.click();

@@ -1,9 +1,9 @@
 import { listRepositoryChangesWithFingerprint, parseGitStatus } from './core/repository-changes.js';
 import { resolveFileReference } from './core/file-reference-resolve.js';
-import { decodeImageAttachment, InvalidImageAttachment } from './services/image-attachment.js';
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
-import { registerPlanRoutes } from './http/plan-routes.js';
+import { registerPlanFileRoutes } from './http/plan-file-routes.js';
+import { registerNewsRoutes } from './http/news-routes.js';
 import { registerNeedsYouRoute } from './http/needs-you-routes.js';
 import { extractAstSymbols } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
@@ -16,7 +16,6 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { cors } from 'hono/cors';
-import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
 import { createNodeWebSocket } from '@hono/node-ws';
@@ -31,7 +30,6 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { loadConfig, saveConfig, getConfigDir, getDefaultConfig } from './core/config.js';
 import { checkConfigPaths, expandHome } from './core/config-paths.js';
-import { saveChatThread, loadChatThread, clearChatThread } from './storage/db.js';
 import { dataRoutes } from './diagnostics/routes.js';
 import {
   PRIMARY_LOGS_DIR,
@@ -100,8 +98,7 @@ import {
   SESSION_SOURCES,
 } from './utils/session-finder.js';
 import { ProviderRegistry } from './agent/adapters.js';
-import { isValidSessionId, isValidSessionUuid, type AgentSession } from './agent/session.js';
-import { defaultTurnSessionManager, AgentTurnGate, dispatchAgentInput } from './agent/TurnSessionManager.js';
+import { isValidSessionId, isValidSessionUuid } from './agent/session.js';
 import { getRepoStatus } from './utils/multi-git.js';
 import { syncWorkspace } from './core/sync.js';
 import { commitWorkspace, pushWorkspace } from './core/commit.js';
@@ -216,167 +213,6 @@ function hasTrustedLocalOrigin(origin: string | undefined): boolean {
     return false;
   }
 }
-
-export { dispatchAgentInput, AgentTurnGate };
-
-app.get('/ws', async (c, next) => {
-  // Prevent Cross-Site WebSocket Hijacking (CSWSH)
-  const origin = c.req.header('origin');
-  if (origin) {
-    try {
-      const { hostname } = new URL(origin);
-      const isLocal = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname);
-      if (!isLocal) return c.text('Forbidden', 403);
-    } catch {
-      return c.text('Forbidden', 403);
-    }
-  }
-  
-  // Chat protocol:
-  //   client -> server: {type:'start', command, cwd, sessionId?, resume?}
-  //                    | {type:'input', input, turnId?, executionProfile?} | {type:'stop'} | 'ping'
-  //   server -> client: {type:'stream', text} | {type:'session', id} | {type:'status', state:'busy'|'idle'} | {type:'system', message}
-  //                     | {type:'accepted', turnId?} | {type:'error', message}
-  //                     | {type:'rejected', reason:'busy', message, turnId?}
-  //                     | {type:'close', code} | {type:'pong'}
-  return upgradeWebSocket((c) => {
-    let currentCwd: string | null = null;
-    let currentWs: { send: (data: string) => void } | null = null;
-
-    return {
-      async onMessage(event, ws) {
-        currentWs = ws;
-        if (typeof event.data === 'string') {
-          if (event.data === 'ping') {
-            ws.send(JSON.stringify({ type: 'pong' }));
-            return;
-          }
-
-          try {
-            const payload = JSON.parse(event.data);
-            if (payload.type === 'ping') {
-              ws.send(JSON.stringify({ type: 'pong' }));
-            } else if (payload.type === 'start') {
-              const command = payload.command;
-              const cwd = payload.cwd;
-              if (typeof cwd !== 'string' || !cwd.trim()) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Workspace directory cwd is required.' }));
-                return;
-              }
-              const provider = ProviderRegistry.getProvider(command);
-              if (!provider) {
-                ws.send(JSON.stringify({ type: 'error', message: `No provider found for ${command}. Please create a dedicated adapter.` }));
-                return;
-              }
-
-              const config = await loadConfig();
-              const safeCwd = await resolveExactLaunchWorkspace(config.workspacesDir, cwd);
-              if (!safeCwd) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Invalid or uncontained workspace directory.' }));
-                return;
-              }
-              currentCwd = safeCwd;
-
-              let session: AgentSession | undefined;
-              const model = ProviderRegistry.resolveModel(provider, payload.model);
-              if (model === null) {
-                ws.send(JSON.stringify({
-                  type: 'error',
-                  message: `The selected model is not available for ${provider.name}. Choose a model advertised by this provider or use Automatic.`,
-                }));
-                return;
-              }
-              const effort = typeof payload.effort === 'string' && payload.effort.trim() ? payload.effort.trim() : undefined;
-              if (payload.sessionId !== undefined && payload.sessionId !== null) {
-                if (!isValidSessionUuid(payload.sessionId)) {
-                  ws.send(JSON.stringify({ type: 'error', message: 'Invalid session id.' }));
-                  return;
-                }
-                session = { id: payload.sessionId, resume: Boolean(payload.resume), model, effort };
-              } else if (model || effort) {
-                session = { id: crypto.randomUUID(), resume: false, model, effort };
-              }
-
-              await defaultTurnSessionManager.startSession({
-                workspaceCwd: safeCwd,
-                command,
-                client: ws,
-                provider,
-                session,
-              });
-            } else if (payload.type === 'input') {
-              const cwd = typeof payload.cwd === 'string' ? payload.cwd : currentCwd;
-              if (!cwd) {
-                ws.send(JSON.stringify({
-                  type: 'error',
-                  message: 'No active agent session. Please start or reconnect the agent.',
-                }));
-                return;
-              }
-              const config = await loadConfig();
-              const safeCwd = await resolveExactLaunchWorkspace(config.workspacesDir, cwd);
-              if (!safeCwd) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Invalid workspace directory.' }));
-                return;
-              }
-              currentCwd = safeCwd;
-
-              const existingSession = defaultTurnSessionManager.getSession(safeCwd);
-              if (!existingSession) {
-                const command = typeof payload.command === 'string' ? payload.command : 'antigravity-cli';
-                const provider = ProviderRegistry.getProvider(command);
-                if (!provider) {
-                  ws.send(JSON.stringify({ type: 'error', message: `No provider found for ${command}.` }));
-                  return;
-                }
-                await defaultTurnSessionManager.startSession({
-                  workspaceCwd: safeCwd,
-                  command,
-                  client: ws,
-                  provider,
-                });
-              }
-
-              const result = defaultTurnSessionManager.dispatchInput(safeCwd, payload);
-              if (result.error) {
-                ws.send(JSON.stringify({ type: 'error', message: result.error }));
-              } else if (result.rejected) {
-                const turnId = isValidSessionUuid(payload.turnId) ? payload.turnId : undefined;
-                ws.send(JSON.stringify({
-                  type: 'rejected',
-                  reason: 'busy',
-                  message: 'The agent is still processing the current turn.',
-                  ...(turnId ? { turnId } : {}),
-                }));
-              }
-            } else if (payload.type === 'approval_response') {
-              if (currentCwd) {
-                const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
-                const decision = payload.decision === 'allow' ? 'allow' : 'deny';
-                const message = typeof payload.message === 'string' ? payload.message : undefined;
-                defaultTurnSessionManager.respondToApproval(currentCwd, requestId, decision, message);
-              }
-            } else if (payload.type === 'stop') {
-              if (currentCwd) {
-                defaultTurnSessionManager.stopSession(currentCwd);
-              }
-            }
-          } catch (err) {
-            console.error('Error handling WebSocket message:', err);
-          }
-        }
-      },
-      onOpen(_event, ws) {
-        currentWs = ws;
-      },
-      onClose(_event, ws) {
-        if (currentCwd && ws) {
-          defaultTurnSessionManager.unregisterClient(currentCwd, ws);
-        }
-      },
-    };
-  })(c, next);
-});
 
 // Allowed editor binaries/scripts to prevent command injection
 const ALLOWED_EDITORS = new Set(['code', 'code-insiders', 'cursor', 'antigravity', 'agy', 'idea', 'charm', 'webstorm', 'subl', 'nano', 'vim', 'nvim', 'emacs', 'windsurf', 'zed']);
@@ -721,143 +557,6 @@ function operationLabel(action: string): string {
 }
 
 // ─── API Endpoints ────────────────────────────────────────────────────────
-
-// Status checks may execute a trusted local CLI from PATH. Keep that work
-// behind a non-simple, same-machine POST so a remote page cannot trigger it
-// with an image, link, or cross-origin fetch. These routes intentionally sit
-// after the API CORS middleware so the separate Vite dev origin can read them.
-app.get('/api/adapters/status', (c) => {
-  return c.json({ error: 'Use the same-origin POST status endpoint.' }, 405);
-});
-
-app.post('/api/adapters/status', (c) => {
-  if (!hasTrustedLocalOrigin(c.req.header('origin'))) {
-    return c.json({ error: 'A local browser origin is required.' }, 403);
-  }
-  return c.json(ProviderRegistry.getAllStatus());
-});
-
-app.post('/api/adapters/status/refresh', async (c) => {
-  if (!hasTrustedLocalOrigin(c.req.header('origin'))) {
-    return c.json({ error: 'A local browser origin is required.' }, 403);
-  }
-
-  const body = await c.req.json().catch(() => null) as { providerId?: unknown } | null;
-  const providerId = typeof body?.providerId === 'string' ? body.providerId : '';
-  if (!['claude-cli', 'codex-cli', 'claude-sdk', 'codex-sdk'].includes(providerId)) {
-    return c.json({ error: 'Only Claude Code and Codex status can be refreshed.' }, 400);
-  }
-  return c.json(ProviderRegistry.getAllStatus({ refreshProviderId: providerId }));
-});
-
-app.post('/api/chat/upload-attachment', bodyLimit({ maxSize: 28 * 1024 * 1024, onError: c => c.json({ error: 'Image attachment exceeds the 20MB limit.' }, 413) }), async (c) => {
-  if (!hasTrustedLocalOrigin(c.req.header('origin'))) {
-    return c.json({ error: 'A local browser origin is required.' }, 403);
-  }
-
-  try {
-    const body = await c.req.json().catch(() => null) as {
-      dataUrl?: unknown;
-      filename?: unknown;
-      workspacePath?: unknown;
-    } | null;
-
-    if (!body || typeof body.dataUrl !== 'string') {
-      return c.json({ error: 'A valid image dataUrl is required.' }, 400);
-    }
-    const { buffer, extension } = decodeImageAttachment(body.dataUrl);
-    const imageId = crypto.randomUUID();
-    const config = await loadConfig();
-    const workspaceDir = typeof body.workspacePath === 'string'
-      ? await resolveExactLaunchWorkspace(config.workspacesDir, body.workspacePath)
-      : null;
-
-    const targetDir = workspaceDir
-      ? path.join(workspaceDir, '.nexusflow', 'attachments')
-      : path.join(getConfigDir(), 'attachments');
-
-    await fs.mkdir(targetDir, { recursive: true });
-    const targetFile = path.join(targetDir, `${imageId}.${extension}`);
-    await fs.writeFile(targetFile, buffer);
-
-    return c.json({
-      id: imageId,
-      filename: typeof body.filename === 'string' ? body.filename : `image-${imageId}.${extension}`,
-      path: targetFile,
-      size: buffer.length,
-    });
-  } catch (error) {
-    if (error instanceof InvalidImageAttachment) return c.json({ error: error.message }, error.status === 413 ? 413 : 400);
-    return errorResponse(c, error);
-  }
-});
-
-app.get('/api/chat/thread/:workspaceId', async (c) => {
-  const workspaceId = c.req.param('workspaceId');
-  if (!workspaceId) {
-    return c.json({ error: 'workspaceId is required' }, 400);
-  }
-  try {
-    const thread = loadChatThread(workspaceId);
-    const config = await loadConfig().catch(() => null);
-    let isBusy = false;
-    if (config) {
-      try {
-        const workspacePath = resolveWorkspacePath(config.workspacesDir, workspaceId);
-        isBusy = defaultTurnSessionManager.hasActiveTurn(workspacePath);
-      } catch {
-        // Workspace not found on disk or invalid
-      }
-    }
-    return c.json({ thread, isBusy });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.post('/api/chat/thread/:workspaceId', async (c) => {
-  if (!hasTrustedLocalOrigin(c.req.header('origin'))) {
-    return c.json({ error: 'A local browser origin is required.' }, 403);
-  }
-  const workspaceId = c.req.param('workspaceId');
-  if (!workspaceId) {
-    return c.json({ error: 'workspaceId is required' }, 400);
-  }
-  try {
-    const body = await c.req.json().catch(() => null) as any;
-    if (!body || typeof body !== 'object') {
-      return c.json({ error: 'Valid chat thread payload is required.' }, 400);
-    }
-    saveChatThread({
-      workspaceId,
-      providerId: typeof body.providerId === 'string' ? body.providerId : null,
-      sessions: typeof body.sessions === 'object' && body.sessions !== null ? body.sessions : {},
-      profilesByProvider: typeof body.profilesByProvider === 'object' && body.profilesByProvider !== null ? body.profilesByProvider : {},
-      modelsByProvider: typeof body.modelsByProvider === 'object' && body.modelsByProvider !== null ? body.modelsByProvider : {},
-      effortsByProvider: typeof body.effortsByProvider === 'object' && body.effortsByProvider !== null ? body.effortsByProvider : {},
-      messages: Array.isArray(body.messages) ? body.messages : [],
-    });
-    return c.json({ success: true });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
-app.delete('/api/chat/thread/:workspaceId', async (c) => {
-  if (!hasTrustedLocalOrigin(c.req.header('origin'))) {
-    return c.json({ error: 'A local browser origin is required.' }, 403);
-  }
-  const workspaceId = c.req.param('workspaceId');
-  if (!workspaceId) {
-    return c.json({ error: 'workspaceId is required' }, 400);
-  }
-  try {
-    clearChatThread(workspaceId);
-    return c.json({ success: true });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
 
 app.route('/api', dataRoutes(async (id) => {
   const config = await loadConfig();
@@ -2907,52 +2606,15 @@ app.post('/api/workspace/:id/knowledge/entry', async (c) => {
   }
 });
 
-// 13c. Get workspace plan (contextspace-plan.md / nexusflow-plan.md)
-app.get('/api/workspace/:id/plan', async (c) => {
-  try {
-    const id = c.req.param('id');
-    const config = await loadConfig();
-    const workspacePath = resolveWorkspacePath(config.workspacesDir, id);
-    const { resolveWorkspaceFilePath } = await import('./core/brand-config.js');
-    const resolved = await resolveWorkspaceFilePath(workspacePath, 'plan');
-
-    let content = '';
-    try {
-      content = await fs.readFile(resolved.path, 'utf-8');
-    } catch (err: any) {
-      if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
-        content = '# Workspace Plan\n\nNo implementation plan file yet.';
-      } else {
-        throw err;
-      }
-    }
-
-    const state = await loadWorkspaceState(workspacePath);
-    const { planStoreExists } = await import('./core/plan.js');
-    if (state.lifecycle || await planStoreExists(workspacePath)) {
-      const marker = /<!-- CONTEXTSPACE:MILESTONES:START -->[\s\S]*?<!-- CONTEXTSPACE:MILESTONES:END -->/;
-      if (marker.test(content)) {
-        // A file from before the plan summary: its milestone block is replaced with the live one.
-        const { renderLifecyclePlan, loadWorkspaceLifecycle } = await import('./core/lifecycle.js');
-        const milestones = renderLifecyclePlan(await loadWorkspaceLifecycle(workspacePath, { includeFleet: false }));
-        content = content.replace(marker, () => milestones);
-      } else {
-        // The summary as it reads now, keeping the build order the last refresh wrote.
-        const { buildPlanSummary, buildOrderOf } = await import('./core/plan-summary.js');
-        content = await buildPlanSummary(workspacePath, { buildOrder: buildOrderOf(content) ?? '' });
-      }
-    }
-    return c.json({ content });
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
-
 registerWorkGuidanceRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
-registerPlanRoutes(app, async (id) => {
+registerPlanFileRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerNewsRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

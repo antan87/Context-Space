@@ -333,7 +333,7 @@ function getWorkspaceDetails(): any {
                     || path.resolve(rootPath, repo)
             })),
             contextFiles: [
-                ['AGENTS.md', 'WORKSPACE.md'],
+                ['AGENTS.md'],
                 ['contextspace-knowledge.md', 'nexusflow-knowledge.md'],
                 ['contextspace-plan.md', 'nexusflow-plan.md'],
             ].flatMap((names) => {

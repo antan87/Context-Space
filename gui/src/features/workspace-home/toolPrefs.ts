@@ -40,8 +40,3 @@ export function defaultTool(available: string[], use: ToolUse): string | undefin
   return use.last && ranked.includes(use.last) ? use.last : ranked[0];
 }
 
-/** The first message of a session started on a plan item: what to work on, and to read the plan first. */
-export function firstMessageFor(item: { id: string; label: string; status: string }): string {
-  const start = item.status === 'in_progress' ? '' : ` If it is not started yet, start it with \`ctxspace plan start ${item.id}\`.`;
-  return `Work on ${item.label}. Read the plan with \`ctxspace plan\` first.${start}`;
-}

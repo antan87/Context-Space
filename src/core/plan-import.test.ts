@@ -155,14 +155,11 @@ describe('applyPlanningNotes', () => {
     expect(JSON.stringify(plan)).toBe(once);
   });
 
-  it('keeps leftover text as a question for the user, pointing to the kept file, cut to fit', () => {
+  it('leaves leftover text in the archived notes file instead of asking the user about it', () => {
     const plan = emptyPlan();
     applyPlanningNotes(plan, parsePlanningNotes(notes({}, `\n## Notes\n\n${'Long text. '.repeat(600)}\n`)), AT, '.contextspace/archive/notes.md');
-    const [question] = plan.items;
-    expect(question).toMatchObject({ id: 'Q1', kind: 'question', title: IMPORTED_NOTES_TITLE, owner: 'user', status: 'todo' });
-    expect(question!.detail!.length).toBeLessThanOrEqual(4000);
-    expect(question!.detail).toMatch(/^## Notes\nLong text\./);
-    expect(question!.detail!.endsWith('The whole file is kept in .contextspace/archive/notes.md.')).toBe(true);
+    expect(plan.items.some((item) => item.title === IMPORTED_NOTES_TITLE)).toBe(false);
+    expect(plan.items).toEqual([]);
   });
 });
 
@@ -197,8 +194,8 @@ describe('importPlanningNotes', () => {
     expect(await exists(PLANNING_NOTES_FILE)).toBe(false);
     const plan = await readPlan(root);
     expect(plan.imports).toEqual([expect.objectContaining({ file: PLANNING_NOTES_FILE, at: AT, archivedAs: archived, items: ['Q1'] })]);
-    // The summary follows the plan.
-    expect(await fs.readFile(path.join(root, 'contextspace-plan.md'), 'utf8')).toContain('Q1 Max rows?');
+    // No generated summary follows it any more: PLAN.md is the plan people read.
+    expect(await exists('contextspace-plan.md')).toBe(false);
 
     expect(await importPlanningNotes(root)).toMatchObject({ status: 'none' });
     expect((await readPlan(root)).items).toHaveLength(1);

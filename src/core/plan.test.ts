@@ -12,6 +12,7 @@ import {
   changePlan,
   emptyPlan,
   findItem,
+  freshenPlan,
   heldUpBy,
   mutatePlan,
   planFocus,
@@ -22,7 +23,7 @@ import {
   type PlanChange,
   type PlanDocument,
 } from './plan.js';
-import { ANSWERED_IN_CHAT, PLAN_RULES, PLAN_SECTIONS, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
+import { ANSWERED_IN_CHAT, PLAN_STATUSES, STATUS_WORDS, itemLabel } from './plan-words.js';
 
 const user: PlanActor = { by: 'user' };
 const claude: PlanActor = { by: 'agent', harness: 'claude' };
@@ -52,11 +53,9 @@ afterEach(async () => {
 });
 
 describe('the words', () => {
-  it('has a word and a meaning for every status, six sections and six rules', () => {
+  it('has a word and a meaning for every status', () => {
     for (const status of PLAN_STATUSES) expect(STATUS_WORDS[status].label).toMatch(/^[A-Z]/);
     expect(PLAN_STATUSES).toHaveLength(6);
-    expect(PLAN_SECTIONS.map((section) => section.label)).toEqual(['Goal', 'Needs you', 'Milestones', 'Other open work', 'Done and dropped', 'What changed']);
-    expect(PLAN_RULES).toHaveLength(6);
   });
 
   it('names an item by its code and its name, never the code alone', () => {
@@ -267,6 +266,50 @@ describe('waiting and starting', () => {
     const { item } = await change({ type: 'start', id: 'T1' });
     expect(item.status).toBe('in_progress');
     expect(item).not.toHaveProperty('blockedReason');
+  });
+});
+
+describe('questions nobody needs answered any more', () => {
+  it('withdraws a question for the user once everything it holds up is closed, and says so', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user', before: ['M1'] }, codex);
+    const dropped = await change({ type: 'drop', id: 'M1', reason: 'Export moved to the reporting service' }, claude);
+    expect(dropped.message).toMatch(/Withdrew Q1 Which time zone\?: Nothing waits for it any more: "CSV export endpoint" is closed\./);
+    const question = findItem(await readPlan(root), 'Q1')!;
+    expect(question).toMatchObject({ status: 'dropped', resolution: 'Nothing waits for it any more: "CSV export endpoint" is closed.' });
+    expect(question.history.at(-1)).toMatchObject({ by: 'contextspace', action: 'dropped' });
+  });
+
+  it('keeps a question while something it holds up is still open, and one that holds nothing up', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await change({ type: 'add', kind: 'milestone', title: 'Export button' });
+    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user', before: ['M1', 'M2'] });
+    await change({ type: 'add', kind: 'question', title: 'Dark mode later?', owner: 'user' });
+    await change({ type: 'drop', id: 'M1', reason: 'Moved' });
+    const plan = await readPlan(root);
+    expect(findItem(plan, 'Q1')!.status).toBe('todo');
+    expect(findItem(plan, 'Q2')!.status).toBe('todo');
+  });
+
+  it('leaves questions for an AI alone', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await change({ type: 'add', kind: 'question', title: 'Is the queue idempotent?', owner: 'claude', before: ['M1'] });
+    await change({ type: 'drop', id: 'M1', reason: 'Moved' });
+    expect(findItem(await readPlan(root), 'Q1')!.status).toBe('todo');
+  });
+
+  it('withdraws stale questions in a whole plan, writing only when it found one', async () => {
+    await change({ type: 'add', kind: 'milestone', title: 'CSV export endpoint' });
+    await change({ type: 'add', kind: 'question', title: 'Which time zone?', owner: 'user', before: ['M1'] });
+    await mutatePlan(root, (plan) => {
+      // Closed by an older tool that did not withdraw the question.
+      Object.assign(findItem(plan, 'M1')!, { status: 'done', resolution: 'Shipped' });
+    });
+    const revision = (await readPlan(root)).revision;
+    expect((await freshenPlan(root)).map((item) => item.id)).toEqual(['Q1']);
+    expect((await readPlan(root)).revision).toBe(revision + 1);
+    expect(await freshenPlan(root)).toEqual([]);
+    expect((await readPlan(root)).revision).toBe(revision + 1);
   });
 });
 

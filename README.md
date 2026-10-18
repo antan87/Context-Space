@@ -201,7 +201,10 @@ Open this folder in your editor → your AI assistant picks up the context and s
 | `ctxspace start` | Start the services a workspace's `Procfile.dev`/`Procfile` declares; offers guessed services only after asking, and reports why any did not start |
 | `ctxspace stop` | Stop all running services |
 | `ctxspace status` | Show live repo SHA/branch/dirty/push state, generated-context freshness, and service status |
-| `ctxspace plan` | Read the plan (Goal, Needs you, Milestones, Other open work, Done and dropped, What changed) and change it one item at a time: `add`, `start`, `done`, `answer`, `block`, `later`, `drop`, `reopen`, `edit`, `log`, `check`; `--json` on all. The AI's closes of the user's items and of milestones become proposals the user accepts |
+| `ctxspace plan` | Where the plan (`PLAN.md`) stands: checkpoints with their steps and proof, and what waits for you. `done` ticks a step or checkpoint (a checkpoint's check runs first), `check`, `answer`, `add`, `decide`, `log`; `--json` on all. Most changes need no command: edit `PLAN.md` |
+| `ctxspace news` | What changed in the workspace since you last looked, and who made each change: plan changes, documents and images, knowledge and commits. Every reader (you, or an AI tool by name) has their own record of when they last looked; `--peek` looks without marking it, `--since <time>`, `--as <name>` and `--json` change what is read. AI tools run it when they start and after their context is compacted |
+| `ctxspace ask` | An AI tool asks the user a question and flags its chat as waiting for the answer, the same alert as the MCP tool `request_user_input`: `ctxspace ask "Which branch?" --option main --option release`. For AI tools that cannot use MCP; `--harness` names the tool |
+| `ctxspace knowledge search` | Find knowledge entries by words and print each one in full (`--type`, `--scope`, `--repo`, `--limit`, `--json`). The same search as the MCP tool `search_knowledge` |
 | `ctxspace flow` | Visualize active lifecycle steps, milestone gates, and multi-branch sister fleet (`--step`, `--action`, `--assignment`) |
 | `ctxspace verify` | Execute mechanical verification gates and record cryptographic proof in workspace state (`--repo`, `--tag`, `--filter`, `--timeout`, `--allow-dirty`) |
 | `ctxspace progress` | Derive implementation progress from live branch, push, and available PR state |
@@ -252,9 +255,10 @@ ContextSpace is built around a single loop:
    ```bash
    ctxspace knowledge add -t decision --title "worktree isolation" -m "Chose worktrees over submodules for isolation"
    ctxspace knowledge add -t gotcha --title "windows ebusy" --scope "path:src/core/workspace.ts" -m "fs.rm needs maxRetries on Windows (EBUSY)"
+   ctxspace knowledge search "windows"    # prints the matching entries in full
    ctxspace progress
    ```
-   Entries land under searchable dated slug headings in `contextspace-knowledge.md`. Identical retries are idempotent. If the storage write succeeds but Git auto-commit fails, ContextSpace reports "recorded but not committed" instead of inviting a duplicate retry. Git auto-commit applies to local workspace storage; custom adapters retain their own durability contract. The 300-character body cap remains enforced; implementation progress is never authored and is derived live instead.
+   Entries land under dated headings in `contextspace-knowledge.md`, titled as you wrote them (older versions stored the title as a slug; those headings still work). `AGENTS.md` lists up to 25 titles under "Lessons from earlier sessions" — the workspace's own, newest first, then those in the base knowledge of its repos (what `finish` promotes), labelled with the repo — so every session starts knowing what was learned, including in a new workspace on the same repo; recording an entry updates that list right away, without a refresh. Identical retries are idempotent. If the storage write succeeds but Git auto-commit fails, ContextSpace reports "recorded but not committed" instead of inviting a duplicate retry. Git auto-commit applies to local workspace storage; custom adapters retain their own durability contract. The 300-character body cap remains enforced; implementation progress is never authored and is derived live instead.
 3. **`ctxspace finish`** — close it out:
    - Shows a preflight status table (branch, dirty files, unpushed commits) per repo, and the verification evidence for each editable repo.
    - Refuses to finish while verification is missing, failed, timed out or stale for the current content — the same decision in the CLI, the app and MCP. Verify again, or pass `--override-verification "<reason>"`; the reason is recorded and returned. `--yes` never bypasses it.
@@ -368,22 +372,18 @@ An ad-hoc `nexusflow mcp run` with no `--role` fails closed to the `readonly` to
 | `archive_workspace` | Archive another workspace (never the one the server serves or runs inside); `park`, `keepBranches`, `dryRun`; never deletes remote branches |
 | `unarchive_workspace` | Restore an archived workspace as active; nothing is removed or checked out |
 | `get_service_logs` | Tail a running service's logs |
-| `get_work_context` | Read the assignment, document IDs, the plan as `ctxspace plan` prints it, the milestones, and edit revisions |
-| `update_milestone_plan` | Deprecated: use `ctxspace plan`. Still edits milestones for one release |
+| `get_work_context` | Read the assignment, document IDs, where `PLAN.md` stands and its text, and edit revisions |
 | `request_user_input` | Flag the CLI chat of an agent that is blocked on the user, so a user with many chats open can see which one is waiting. The agent still asks its full question in the chat and ends its turn; the user replies there. Optional `options` become answer buttons that fill the prompt; the user still presses Enter |
 | `show_in_reader` | Open a document, a file at a line, or a diff in the reader beside the user's chat. Show-only: the file must exist inside the workspace, nothing is edited, and a repeat within a minute is ignored |
 | `annotate_document` | Leave a question, risk or to-do note on one line of a file, shown in the reader as a margin note labelled as the AI's |
 | `suggest_next` | Offer the user one next move with its reason, shown as a Next button in the progress strip |
-| `set_milestone` | Deprecated: use `ctxspace plan start|block|done`. Still works for one release |
 | `get_screen_context` | Ask what the user is looking at. Answers only when the user has switched sharing on in the app; it is off by default and switching it off deletes what was stored |
 | `update_work_assignment` | Set work type, size, stage, objective, expected output, stopping point, and scope |
 | `add_work_document` | Attach original text or a document link with role, status, and scope |
 | `update_work_document` | Edit source labels and scope while preserving original content |
 | `read_work_document` | Read an attached source by its document ID |
-| `get_planning_notes` | Deprecated: use `ctxspace plan`. Reads the older notes file for one release |
-| `save_planning_notes` | Deprecated: use `ctxspace plan add`. What it saves moves into the plan at the next refresh |
 
-AIs change the plan with `ctxspace plan`, which works in every AI tool without MCP; there are no MCP plan tools.
+AIs change the plan by editing `PLAN.md`, which works in every AI tool without MCP; there are no MCP plan tools.
 Assignment and source writes are available to `interactive`, `developer`, and `full` roles.
 Read the current revision before editing; see [planning through MCP](docs/work-guidance.md#planning-through-mcp).
 After upgrading a running MCP server, reconnect it in the assistant to discover the new tools.
@@ -407,7 +407,7 @@ Session data is read directly from each assistant's local storage:
 | OpenAI Codex | `~/.codex/sessions/` |
 | GitHub Copilot | `~/.copilot/` |
 
-Access sessions via the Web Dashboard's **Sessions** tab or through the API:
+Open **Session history** from the toolbar of a workspace's chat in the Web Dashboard, or use the API:
 
 ```
 GET /api/workspace/:id/sessions
@@ -774,7 +774,7 @@ npm run test:watch
 
 1. Create a new file in `src/analyzers/` following the existing patterns
 2. Export the analyzer function and register it in [analyzers/index.ts](src/analyzers/index.ts)
-3. The analyzer output is fed into the context generators and the `WORKSPACE.md` file
+3. The analyzer output is fed into the context generators
 
 ### Pull Request Guidelines
 

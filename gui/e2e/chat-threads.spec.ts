@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { planFile } from './planData';
 
 /**
  * Every open chat says what it is working on without being opened: its row in the sidebar shows the goal, or the question
@@ -80,7 +81,7 @@ test.beforeEach(async ({ page }) => {
     return route.fulfill({ json: { available: true, sessions: [{ id: `term-${id}`, workspace: id, target: 'shell', label: 'bash', cwd: `/tmp/${id}`, state: 'running' }], targets: [{ id: 'shell', name: 'Shell', available: true, reason: null }] } });
   });
   await page.route('**/api/workspace/*/sessions', (route) => route.fulfill({ json: { sessions: [] } }));
-  await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: { content: '# Plan' } }));
+  await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planFile() }));
   await page.routeWebSocket('**/ws/terminal', (socket) => {
     socket.onMessage((message) => {
       const parsed = JSON.parse(String(message));

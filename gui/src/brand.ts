@@ -73,10 +73,6 @@ export const BRAND_CONFIG = {
     themeKey: 'contextspace-theme',
     colorThemeKey: 'contextspace-color-theme',
     legacyThemeKey: 'nexusflow-theme',
-    chatPrefix: 'contextspace_chat_',
-    legacyChatPrefix: 'nexusflow_chat_',
-    chatLaunchConsumedKey: 'contextspace.chatLaunch.consumed',
-    legacyChatLaunchConsumedKey: 'nexusflow.chatLaunch.consumed',
     floatingChatKey: 'contextspace_floating_chat_state_v1',
     legacyFloatingChatKey: 'nexusflow_floating_chat_state_v1',
     chatAttentionKey: 'contextspace_chat_attention_v1',
@@ -123,10 +119,6 @@ export const WORKROOM_LEGACY_INVITE_PROTOCOL = BRAND_CONFIG.workrooms.legacyInvi
 export const THEME_STORAGE_KEY = BRAND_CONFIG.storage.themeKey;
 export const COLOR_THEME_STORAGE_KEY = BRAND_CONFIG.storage.colorThemeKey;
 export const LEGACY_THEME_STORAGE_KEY = BRAND_CONFIG.storage.legacyThemeKey;
-export const CHAT_STORAGE_PREFIX = BRAND_CONFIG.storage.chatPrefix;
-export const LEGACY_CHAT_STORAGE_PREFIX = BRAND_CONFIG.storage.legacyChatPrefix;
-export const CHAT_LAUNCH_CONSUMED_KEY = BRAND_CONFIG.storage.chatLaunchConsumedKey;
-export const LEGACY_CHAT_LAUNCH_CONSUMED_KEY = BRAND_CONFIG.storage.legacyChatLaunchConsumedKey;
 export const FLOATING_CHAT_STORAGE_KEY = BRAND_CONFIG.storage.floatingChatKey;
 export const LEGACY_FLOATING_CHAT_STORAGE_KEY = BRAND_CONFIG.storage.legacyFloatingChatKey;
 export const CHAT_ATTENTION_STORAGE_KEY = BRAND_CONFIG.storage.chatAttentionKey;

@@ -11,11 +11,11 @@ import { whenText } from './planView.js';
 type Status = WorkspaceVerificationReport['overallStatus'];
 
 /** What a run means for the developer, and what to do next. */
-function resultText(report: WorkspaceVerificationReport, milestoneCheckActive: boolean): string {
+function resultText(report: WorkspaceVerificationReport): string {
   const seconds = report.durationMs !== undefined ? ` in ${(report.durationMs / 1000).toFixed(1)} s` : '';
   const repos = `${report.repos.length} ${report.repos.length === 1 ? 'repository' : 'repositories'}`;
   const messages: Record<Status, string> = {
-    pass: `Tests passed${seconds} (${repos}).${milestoneCheckActive ? ' Finish the milestone in progress from the plan.' : ''}`,
+    pass: `Tests passed${seconds} (${repos}).`,
     pass_dirty: report.canProgress
       ? 'Tests passed with uncommitted changes. Review the changes before continuing.'
       : 'Tests passed with uncommitted changes. Commit them and run the checks again before continuing.',
@@ -53,7 +53,7 @@ function OtherBranches({ fleet }: { fleet: BranchFleetMember[] }) {
 }
 
 /**
- * The workspace's checks: run the tests of every repository and read why they failed. Milestones and
+ * The workspace's checks: run the tests of every repository and read why they failed. Checkpoints and
  * their own checks are in the plan above, so they are not listed again here.
  */
 export function WorkspaceChecks({ workspaceId, readOnly = false }: { workspaceId: string; /** Archived: show the last result, run nothing. */ readOnly?: boolean }) {
@@ -92,8 +92,7 @@ export function WorkspaceChecks({ workspaceId, readOnly = false }: { workspaceId
     try {
       const data = await apiFetch<{ report: WorkspaceVerificationReport }>(`${base}/verify`, { method: 'POST', body: JSON.stringify({}) });
       setReport(data.report);
-      const milestoneCheckActive = Boolean(lifecycle?.steps.some((step) => step.id === lifecycle.currentStepId && step.requiresVerification));
-      setMessage({ status: data.report.overallStatus, text: resultText(data.report, milestoneCheckActive) });
+      setMessage({ status: data.report.overallStatus, text: resultText(data.report) });
       await load();
     } catch (error) {
       setMessage({ status: 'fail', text: `Verification failed: ${error instanceof Error ? error.message : String(error)}` });
@@ -109,7 +108,7 @@ export function WorkspaceChecks({ workspaceId, readOnly = false }: { workspaceId
     <header className="flex flex-wrap items-center gap-2">
       <ShieldCheck aria-hidden="true" className="size-4 text-muted-foreground" />
       <h3 id={`${workspaceId}-checks`} className="text-xs font-semibold text-foreground/80">Checks</h3>
-      <span className="text-xs text-muted-foreground">the tests of every repository; a milestone's own check is in the plan</span>
+      <span className="text-xs text-muted-foreground">the tests of every repository; a checkpoint's own check is in the plan</span>
       <span className="flex-1" />
       {!readOnly && <Button size="xs" variant="outline" onClick={() => void run()} disabled={running}>
         <ShieldCheck className={running ? 'animate-spin' : ''} />{running ? 'Running the checks…' : 'Run verification'}
