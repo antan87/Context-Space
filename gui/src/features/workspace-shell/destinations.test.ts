@@ -32,13 +32,16 @@ describe('workspace sections', () => {
 });
 
 describe('railSectionsFor', () => {
-  it('offers what can open beside the chat, and no place for the chat, the overview or knowledge', () => {
-    expect(railSectionsFor(false)).toEqual(['plan', 'sessions', 'changes', 'documents', 'skills', 'services']);
-    for (const gone of ['chat', 'overview', 'knowledge'] as const) expect(railSectionsFor(false)).not.toContain(gone);
+  it('offers the parts a developer works in, and no place for the chat, the overview, knowledge, sessions or skills', () => {
+    expect(railSectionsFor(false)).toEqual(['plan', 'changes', 'documents', 'services']);
+    for (const gone of ['chat', 'overview', 'knowledge', 'sessions', 'skills'] as const) expect(railSectionsFor(false)).not.toContain(gone);
   });
 
-  it('keeps old addresses working: every section still parses to itself', () => {
-    for (const section of ['overview', 'sessions', 'services', 'plan'] as const) expect(parseSection(section)).toBe(section);
+  it('keeps old addresses working: every section still parses to itself, on the rail or not', () => {
+    for (const section of ['overview', 'sessions', 'skills', 'knowledge', 'services', 'plan'] as const) expect(parseSection(section)).toBe(section);
+    // Not on the rail does not mean hidden: an active workspace still shows them.
+    expect(visibleSection('sessions', false)).toBe('sessions');
+    expect(visibleSection('skills', false)).toBe('skills');
   });
 
   it('shows an archived workspace its record, its plan and its documents, and nothing to act on', () => {

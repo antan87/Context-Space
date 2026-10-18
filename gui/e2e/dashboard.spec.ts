@@ -212,10 +212,10 @@ test.describe('Narrow-screen navigation', () => {
     expect(main?.width).toBe(390);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     // Every destination and section stays reachable by keyboard without growing the page.
-    const skills = page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Skills/ });
-    await skills.focus();
+    const services = page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Services/ });
+    await services.focus();
     await page.keyboard.press('Enter');
-    await expect(skills).toHaveAttribute('aria-current', 'page');
+    await expect(services).toHaveAttribute('aria-current', 'page');
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 });

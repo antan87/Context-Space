@@ -486,7 +486,7 @@ test('opens Code and Docs by keyboard from the terminal and steps files with Alt
   const changed = { repoName: 'repo', repoPath: 'C:/repo', files };
   await page.route('**/api/workspace/feature-x/changes', route => route.fulfill({ json: { changes: [changed] } }));
   await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'x\n' } }));
-  await page.route('**/api/workspace/feature-x/documents', route => route.fulfill({ json: { documents: [{ name: 'AGENTS.md', kind: 'markdown', modifiedAt: '', size: 1 }, { name: 'WORKSPACE.md', kind: 'markdown', modifiedAt: '', size: 1 }] } }));
+  await page.route('**/api/workspace/feature-x/documents', route => route.fulfill({ json: { documents: [{ name: 'AGENTS.md', kind: 'markdown', modifiedAt: '', size: 1 }, { name: 'NOTES.md', kind: 'markdown', modifiedAt: '', size: 1 }] } }));
   await chatBesidePanels(page);
   await page.goto('/#/workspaces/feature-x/sessions');
   await page.getByRole('button', { name: 'Open CLI Chat', exact: true }).click();

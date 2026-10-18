@@ -1408,8 +1408,9 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     previous workspace's brief and plan on screen, still polling. */}
                 <div key={selected.branchName} className="min-w-0 space-y-6">
                 <SinceYouLooked workspaceId={selected.branchName} readOnly={archived} />
-                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived}
-                  plan={<HomePlan workspaceId={selected.branchName} workspacePath={selected.workspacePath} readOnly={archived} />} />
+                {/* The plan first: it opens with the goal and holds the checkpoints. The brief and the checks follow. */}
+                <HomePlan workspaceId={selected.branchName} workspacePath={selected.workspacePath} readOnly={archived} />
+                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived} />
                 <WorkspaceChecks workspaceId={selected.branchName} readOnly={archived} />
                 </div>
               </div>}
@@ -1419,7 +1420,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           </div>
           </div>
           )}
-          <WorkspaceRail workspaceId={selected.branchName} section={subTab} archived={archived} badges={{ changes: totalChangedFiles, skills: activeSkills.length }} />
+          <WorkspaceRail workspaceId={selected.branchName} section={subTab} archived={archived} badges={{ changes: totalChangedFiles }} />
         </div>
       </div>
     );

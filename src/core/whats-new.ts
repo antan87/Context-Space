@@ -270,7 +270,7 @@ async function repoHead(repo: { name: string; path: string }): Promise<RepoHead>
   return found.code === 1 && found.quiet ? repo : { ...repo, problem: found.reason };
 }
 
-/** Generated for the AI tools or kept by ContextSpace itself: the plan, the knowledge and the commits cover what matters. */
+/** Generated for the AI tools or kept by ContextSpace itself: the plan, the knowledge and the commits cover what matters. (workspace.md: an older version's index, until a refresh removes it.) */
 function isOwnFile(name: string): boolean {
   const lower = name.toLowerCase();
   if (!lower.includes('/')) return ['agents.md', 'claude.md', 'workspace.md', PLAN_FILE.toLowerCase()].includes(lower) || /^(contextspace|nexusflow)[-.]/.test(lower);

@@ -407,7 +407,7 @@ Session data is read directly from each assistant's local storage:
 | OpenAI Codex | `~/.codex/sessions/` |
 | GitHub Copilot | `~/.copilot/` |
 
-Access sessions via the Web Dashboard's **Sessions** tab or through the API:
+Open **Session history** from the toolbar of a workspace's chat in the Web Dashboard, or use the API:
 
 ```
 GET /api/workspace/:id/sessions
@@ -774,7 +774,7 @@ npm run test:watch
 
 1. Create a new file in `src/analyzers/` following the existing patterns
 2. Export the analyzer function and register it in [analyzers/index.ts](src/analyzers/index.ts)
-3. The analyzer output is fed into the context generators and the `WORKSPACE.md` file
+3. The analyzer output is fed into the context generators
 
 ### Pull Request Guidelines
 

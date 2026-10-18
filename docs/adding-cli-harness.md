@@ -28,10 +28,9 @@ that component. Add a fallback icon only when the harness has no distinct
 asset. GUI tests should cover progressive loading and direct resume; backend
 tests should cover workspace matching, malformed history, and launch args.
 
-Workspace setup assistants, resource adapters, and embedded chat providers
-are separate capabilities. A CLI harness need not implement them. Extend
-`AIAssistant`, detection, resources, or `gui/src/features/chat/chatLaunch.ts`
-only when that integration is actually supported.
+Workspace setup assistants and resource adapters are separate capabilities. A
+CLI harness need not implement them. Extend `AIAssistant`, detection, or
+resources only when that integration is actually supported.
 
 | Capability | Owning code |
 | --- | --- |
@@ -39,8 +38,7 @@ only when that integration is actually supported.
 | Saved history, activity, and transcripts | Provider reader + `session-readers.ts` |
 | GUI name and icon | `HarnessIcon.tsx` |
 | Workspace context and resource generation | `AIAssistant`, detection, resource adapters |
-| Embedded chat protocol | `src/agent/adapters.ts` and `gui/src/features/chat/` |
 
 Keep these capabilities independent. A new CLI tool should appear in terminal
-selection as soon as its executable is supported; saved history and embedded
-chat can be added later without changing the terminal contract.
+selection as soon as its executable is supported; saved history can be added
+later without changing the terminal contract.

@@ -9,6 +9,7 @@ import { execa } from 'execa';
 import {
   captureGenerationSnapshot,
   checkGenerationLock,
+  hashGeneratedContent,
   readGenerationLock,
   renderFreshnessBanner,
   updateGeneratedViews,
@@ -221,6 +222,40 @@ describe('generation lock', () => {
     await fs.appendFile(path.join(workspacePath, 'AGENTS.md'), 'manual edit\n');
     const result = await checkGenerationLock(workspacePath);
     expect(result.drift).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'output', name: 'AGENTS.md' })]));
+  });
+
+  it('does not read an output that is no longer generated as drift, whether its file is still there, edited or gone', async () => {
+    await createLock();
+    const lockPath = path.join(workspacePath, PRIMARY_LOCK_FILE);
+    // As a version that still wrote WORKSPACE.md recorded it.
+    await fs.writeFile(path.join(workspacePath, 'WORKSPACE.md'), '<!-- AUTO-GENERATED from AGENTS.md — do not edit -->\n\n# Workspace: lock-test\n');
+    const lock = JSON.parse(await fs.readFile(lockPath, 'utf-8')) as { outputs: Record<string, unknown> };
+    lock.outputs['WORKSPACE.md'] = { hash: 'recorded-by-the-older-version', source: 'AGENTS.md', location: 'workspace' };
+    await fs.writeFile(lockPath, JSON.stringify(lock, null, 2) + '\n');
+
+    await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+    await fs.rm(path.join(workspacePath, 'WORKSPACE.md'));
+    await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+
+    // A real view that goes missing is still drift.
+    await fs.rm(path.join(workspacePath, 'AGENTS.md'));
+    const result = await checkGenerationLock(workspacePath);
+    expect(result.drift.map((item) => item.name)).toEqual(['AGENTS.md']);
+  });
+
+  it('leaves a retired output alone when the views are updated or marked stale', async () => {
+    await createLock();
+    const lockPath = path.join(workspacePath, PRIMARY_LOCK_FILE);
+    const old = '<!-- AUTO-GENERATED from AGENTS.md — do not edit -->\n\n# Workspace: lock-test\n';
+    await fs.writeFile(path.join(workspacePath, 'WORKSPACE.md'), old);
+    const lock = JSON.parse(await fs.readFile(lockPath, 'utf-8')) as { outputs: Record<string, unknown> };
+    lock.outputs['WORKSPACE.md'] = { hash: hashGeneratedContent(old), source: 'AGENTS.md', location: 'workspace' };
+    await fs.writeFile(lockPath, JSON.stringify(lock, null, 2) + '\n');
+
+    const changed = await updateGeneratedViews(workspacePath, 'AGENTS.md', (content) => `${content}\nmore\n`);
+
+    expect(changed).toEqual(['AGENTS.md']);
+    expect(await fs.readFile(path.join(workspacePath, 'WORKSPACE.md'), 'utf-8')).toBe(old);
   });
 
   it('marks context stale when the generator version changes', async () => {

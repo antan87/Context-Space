@@ -289,7 +289,6 @@ export async function runDoctor(workspacePath: string): Promise<DoctorReport> {
     // silently — so a doctor run that did not check it reported a clean bill of
     // health on a workspace that could tell an assistant nothing.
     { name: 'AGENTS.md', exists: () => workspaceFileExists(workspacePath, featureId, 'AGENTS.md') },
-    { name: 'WORKSPACE.md', exists: () => workspaceFileExists(workspacePath, featureId, 'WORKSPACE.md') },
     { name: 'contextspace-knowledge.md', exists: () => workspaceFileExists(workspacePath, featureId, 'contextspace-knowledge.md') },
     {
       name: 'contextspace.lock',

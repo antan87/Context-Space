@@ -286,7 +286,7 @@ test.describe('constrained windows', () => {
     const main = await page.getByRole('main').boundingBox();
     expect(main!.width).toBeGreaterThanOrEqual(800);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(900);
-    for (const name of ['Plan', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']) {
+    for (const name of ['Plan', 'Code', 'Docs', 'Services']) {
       await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInViewport();
     }
     // The rail still expands on request, by keyboard.

@@ -49,8 +49,8 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(page.getByRole('button', { name: 'Diff Review' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Process DAG' })).toHaveCount(0);
 
-  // The rail beside the panel: what can open beside the chat, with the changed files counted.
-  await expect(workspaceNav(page).getByRole('link')).toHaveText([/^Plan$/, /^Sessions$/, /^Code3$/, /^Docs$/, /^Skills/, /^Services$/]);
+  // The rail beside the panel: what can open beside the chat, with the changed files counted. Sessions and Skills are not on it.
+  await expect(workspaceNav(page).getByRole('link')).toHaveText([/^Plan$/, /^Code3$/, /^Docs$/, /^Services$/]);
   await status.getByRole('link', { name: /Changes/ }).click();
   await expect(page).toHaveURL(/#\/workspaces\/demo\/changes$/);
   await expect(workspaceNav(page).getByRole('link', { name: /^Code/ })).toHaveAttribute('aria-current', 'page');
@@ -58,12 +58,12 @@ test('one header shows where the task stands and links to where to act', async (
 
 test('old section links still open, each marked on the rail when it has a place there, and back navigation works', async ({ page }) => {
   await mockWorkspace(page);
-  for (const [section, item] of [['documents', 'Docs'], ['services', 'Services'], ['plan', 'Plan'], ['sessions', 'Sessions']] as const) {
+  for (const [section, item] of [['documents', 'Docs'], ['services', 'Services'], ['plan', 'Plan'], ['changes', 'Code']] as const) {
     await page.goto(`/#/workspaces/demo/${section}`);
-    await expect(workspaceNav(page).getByRole('link', { name: item })).toHaveAttribute('aria-current', 'page');
+    await expect(workspaceNav(page).getByRole('link', { name: new RegExp(`^${item}`) })).toHaveAttribute('aria-current', 'page');
   }
-  // The overview and knowledge keep their addresses, with nothing marked on the rail.
-  for (const [section, region] of [['overview', 'Overview'], ['knowledge', 'Knowledge']] as const) {
+  // The overview, knowledge and the session history keep their addresses, with nothing marked on the rail.
+  for (const [section, region] of [['overview', 'Overview'], ['knowledge', 'Knowledge'], ['sessions', 'Session history']] as const) {
     await page.goto(`/#/workspaces/demo/${section}`);
     await expect(page.getByRole('region', { name: region, exact: true })).toBeVisible();
     await expect(workspaceNav(page).locator('[aria-current="page"]')).toHaveCount(0);
