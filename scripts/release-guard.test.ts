@@ -377,6 +377,7 @@ describe('nightly-release workflow wiring', () => {
   it('uses a dedicated concurrency group that does not clash with release.yml', () => {
     expect(nightly.concurrency.group).not.toBe(release.concurrency.group);
     expect(nightly.concurrency.group).toBe('nightly-release');
+    expect(nightly.concurrency['cancel-in-progress']).toBe(false);
   });
 
   it('configures git committer identity so release-ship can commit version bumps', () => {
@@ -385,12 +386,23 @@ describe('nightly-release workflow wiring', () => {
     expect(configStep).toBeDefined();
     expect(configStep.run).toContain('git config --global user.name');
     expect(configStep.run).toContain('git config --global user.email');
+
+    const shipStep = steps.find((s) => String(s.run ?? '').includes('release-ship.mjs'));
+    expect(shipStep).toBeDefined();
+    expect(shipStep.env.GIT_AUTHOR_NAME).toBe('github-actions[bot]');
+    expect(shipStep.env.GIT_AUTHOR_EMAIL).toBe('github-actions[bot]@users.noreply.github.com');
+    expect(shipStep.env.GIT_COMMITTER_NAME).toBe('github-actions[bot]');
+    expect(shipStep.env.GIT_COMMITTER_EMAIL).toBe('github-actions[bot]@users.noreply.github.com');
+    expect(shipStep.env.GH_TOKEN).toBe('${{ secrets.RELEASE_TOKEN }}');
   });
 
   it('uses a non-zero minute schedule to avoid top-of-the-hour queue latency', () => {
     const cron = nightly.on.schedule[0].cron;
     const [minute] = cron.split(' ');
-    expect(Number(minute)).toBeGreaterThan(0);
+    const minuteNum = Number(minute);
+    expect(Number.isInteger(minuteNum)).toBe(true);
+    expect(minuteNum).toBeGreaterThanOrEqual(1);
+    expect(minuteNum).toBeLessThanOrEqual(59);
   });
 });
 
