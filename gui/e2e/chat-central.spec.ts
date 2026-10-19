@@ -187,14 +187,16 @@ test.describe('the chat can be hidden for a while, and given more or less room',
     await expect(divider).toHaveAttribute('aria-valuenow', '62');
     // A terminal takes focus once it has attached, so let it, then move to the divider.
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+    const initialWidth = (await boxOf(chatOf(page))).width;
     await divider.focus();
     await page.keyboard.press('ArrowLeft');
     await expect(divider).toHaveAttribute('aria-valuenow', '59');
+    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeLessThan(initialWidth);
     const narrower = await boxOf(chatOf(page));
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowRight');
     await expect(divider).toHaveAttribute('aria-valuenow', '65');
-    expect((await boxOf(chatOf(page))).width).toBeGreaterThan(narrower.width);
+    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeGreaterThan(narrower.width);
     for (let i = 0; i < 10; i += 1) await page.keyboard.press('ArrowRight');
     await expect(divider).toHaveAttribute('aria-valuenow', '80');
     await page.reload();

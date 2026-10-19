@@ -36,7 +36,7 @@ test('one real shell survives window changes and reload, then stops explicitly',
   const code = page.getByRole('region', { name: 'Workspace code' });
   const documents = page.getByRole('region', { name: 'Workspace documents' });
   const toggleInspector = async (name: 'Code' | 'Docs') => {
-    if (name === 'Code') await chat.getByRole('button', { name, exact: true }).click();
+    if (name === 'Code') await pane.getByRole('button', { name, exact: true }).click();
     else { await pane.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+D'); }
   };
   await expect(pane.getByRole('button', { name: 'Reconnect', exact: true })).toHaveCount(0);
@@ -96,7 +96,7 @@ test('one real shell survives window changes and reload, then stops explicitly',
   await sidebar.locator('[data-sidebar-session="terminal-test"]').click();
   await expect(page).toHaveURL(/\/workspaces\/terminal-test\/changes$/);
   await expect(code).toBeVisible();
-  await expect(pane).toBeVisible();
+  await expect(pane.getByTestId('terminal-state')).toHaveText('Running', SHELL_STATE);
   await toggleInspector('Code');
   await page.reload();
   await expect(pane.getByTestId('terminal-state')).toHaveText('Running', SHELL_STATE);
