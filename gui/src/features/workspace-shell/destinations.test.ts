@@ -32,9 +32,18 @@ describe('workspace sections', () => {
 });
 
 describe('railSectionsFor', () => {
-  it('offers the parts a developer works in, and no place for the chat, the overview, knowledge, sessions or skills', () => {
-    expect(railSectionsFor(false)).toEqual(['plan', 'changes', 'documents', 'services']);
-    for (const gone of ['chat', 'overview', 'knowledge', 'sessions', 'skills'] as const) expect(railSectionsFor(false)).not.toContain(gone);
+  it('offers the parts a developer works in, including overview, plan, sessions, code, docs, knowledge, skills and services', () => {
+    expect(railSectionsFor(false)).toEqual([
+      'overview',
+      'plan',
+      'sessions',
+      'changes',
+      'documents',
+      'knowledge',
+      'skills',
+      'services',
+    ]);
+    expect(railSectionsFor(false)).not.toContain('chat');
   });
 
   it('keeps old addresses working: every section still parses to itself, on the rail or not', () => {

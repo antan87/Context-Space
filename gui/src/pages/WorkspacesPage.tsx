@@ -22,6 +22,7 @@ import {
   Edit3,
   Check,
   Plus,
+  Boxes,
   SlidersHorizontal,
   RotateCcw,
   X,
@@ -614,7 +615,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     const showPanel = subTab !== 'chat';
     // The plan is the workspace's home. A running session shows beside it when there is room; with none running, the
     // plan has the sessions beside it instead, so starting one is a click.
-    const sessionRunning = (runningTerminals.data ?? []).some((terminal) => terminal.workspace === selected.branchName && terminal.state === 'running');
+    const runningCount = (runningTerminals.data ?? []).filter((terminal) => terminal.workspace === selected.branchName && terminal.state === 'running').length;
+    const sessionRunning = runningCount > 0;
     const showChat = !archived && (subTab === 'chat' || (roomBeside && !layout.hidden && (subTab !== 'plan' || sessionRunning)));
     const sessionsOnPlan = !archived && subTab === 'plan' && !showChat;
 
@@ -952,58 +954,72 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                               Mapped Repositories ({selected.repos.length})
                             </h3>
                           </div>
-                          {availableRepos.length > 0 && (
-                            <AddRepoPicker
-                              repos={availableRepos}
-                              disabled={addRepoLoading}
-                              onAdd={(repoPath: string) => {
-                                if (
-                                  window.confirm(
-                                    `Add repository "${repoName(repoPath)}" to this workspace?\nThis creates a new git worktree and re-runs analysis.`,
-                                  )
-                                ) {
-                                  void handleAddRepo(selected.branchName, repoPath);
-                                }
-                              }}
-                            />
-                          )}
+                          <AddRepoPicker
+                            repos={availableRepos}
+                            disabled={addRepoLoading}
+                            onAdd={(repoPath: string) => {
+                              if (
+                                window.confirm(
+                                  `Add repository "${repoName(repoPath)}" to this workspace?\nThis creates a new git worktree and re-runs analysis.`,
+                                )
+                              ) {
+                                void handleAddRepo(selected.branchName, repoPath);
+                              }
+                            }}
+                          />
                         </div>
 
                         <div className="divide-y divide-border/60">
-                          {repoRows.map((r) => (
-                            <div key={r.name} className="flex items-center justify-between p-3.5 hover:bg-accent/40 transition-colors text-xs">
-                              <div className="flex items-center gap-3 min-w-0">
-                                <span
-                                  className={cn(
-                                    'size-2.5 rounded-full shrink-0 shadow-xs',
-                                    r.changedCount === null ? 'bg-muted-foreground' : r.changedCount > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400',
-                                  )}
-                                  title={r.changedCount === null ? 'Status unknown' : r.changedCount > 0 ? `${r.changedCount} uncommitted changes` : 'Clean'}
-                                />
-                                <div className="min-w-0">
-                                  <div className="font-mono font-bold text-foreground text-xs sm:text-sm truncate">
-                                    {r.name}
-                                  </div>
-                                  <div className="font-mono text-[10px] text-muted-foreground truncate max-w-xs">
-                                    {r.path}
+                          {repoRows.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-muted-foreground">
+                              No repositories mapped to this workspace yet. Click "Add repository" above to attach one.
+                            </div>
+                          ) : (
+                            repoRows.map((r) => (
+                              <div key={r.name} className="flex items-center justify-between p-3.5 hover:bg-accent/40 transition-colors text-xs">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span
+                                    className={cn(
+                                      'size-2.5 rounded-full shrink-0 shadow-xs',
+                                      r.changedCount === null ? 'bg-muted-foreground' : r.changedCount > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400',
+                                    )}
+                                    title={r.changedCount === null ? 'Status unknown' : r.changedCount > 0 ? `${r.changedCount} uncommitted changes` : 'Clean'}
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="font-mono font-bold text-foreground text-xs sm:text-sm truncate">
+                                      {r.name}
+                                    </div>
+                                    <div className="font-mono text-[10px] text-muted-foreground truncate max-w-xs">
+                                      {r.path}
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
 
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className={cn(
-                                  'font-mono text-[10px] font-semibold px-2 py-0.5 rounded-md border',
-                                  r.changedCount === null
-                                    ? 'border-border bg-muted/60 text-muted-foreground'
-                                    : r.changedCount > 0
-                                    ? 'border-amber-500/30 bg-amber-500/10 text-warning-foreground'
-                                    : 'border-emerald-500/30 bg-emerald-500/10 text-success-foreground'
-                                )}>
-                                  {r.changedCount === null ? '—' : r.changedCount > 0 ? `${r.changedCount} mod` : 'Clean'}
-                                </span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={() => onSelectTab(selected.branchName, 'skills')}
+                                    className="h-6 text-[10px] px-2 gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
+                                    title={`Watch and manage skills active for ${r.name}`}
+                                  >
+                                    <Boxes size={11} />
+                                    <span>Skills</span>
+                                  </Button>
+                                  <span className={cn(
+                                    'font-mono text-[10px] font-semibold px-2 py-0.5 rounded-md border',
+                                    r.changedCount === null
+                                      ? 'border-border bg-muted/60 text-muted-foreground'
+                                      : r.changedCount > 0
+                                      ? 'border-amber-500/30 bg-amber-500/10 text-warning-foreground'
+                                      : 'border-emerald-500/30 bg-emerald-500/10 text-success-foreground'
+                                  )}>
+                                    {r.changedCount === null ? '—' : r.changedCount > 0 ? `${r.changedCount} mod` : 'Clean'}
+                                  </span>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))
+                          )}
                         </div>
                       </Card>
 
@@ -1420,7 +1436,16 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           </div>
           </div>
           )}
-          <WorkspaceRail workspaceId={selected.branchName} section={subTab} archived={archived} badges={{ changes: totalChangedFiles }} />
+          <WorkspaceRail
+            workspaceId={selected.branchName}
+            section={subTab}
+            archived={archived}
+            badges={{
+              changes: totalChangedFiles,
+              sessions: runningCount > 0 ? runningCount : undefined,
+              skills: activeSkills.length > 0 ? activeSkills.length : undefined,
+            }}
+          />
         </div>
       </div>
     );

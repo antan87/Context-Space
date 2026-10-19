@@ -36,19 +36,26 @@ export function parseSection(segment: string | undefined | null): WorkspaceSecti
 export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan', 'documents', 'knowledge'];
 
 /**
- * What can open beside the chat, in the rail's order: the parts a developer works in. Overview, Knowledge, Sessions
- * and Skills keep their addresses, so old links still work, but have no place on the rail: the progress strip above
- * the chat says where the work stands, knowledge is read in Docs, the session history opens from the chat's own
- * toolbar, and the assistant's skills are reached from the Skill Library.
+ * What can open beside the chat, in the rail's order:
+ * Overview (workspace summary and mapped repositories), Plan, Sessions (CLI sessions and history),
+ * Code (changes), Docs, Knowledge, Skills, and Services.
  */
-export const RAIL_SECTIONS: readonly WorkspaceSection[] = ['plan', 'changes', 'documents', 'services'];
+export const RAIL_SECTIONS: readonly WorkspaceSection[] = [
+  'overview',
+  'plan',
+  'sessions',
+  'changes',
+  'documents',
+  'knowledge',
+  'skills',
+  'services',
+];
 
 /** The rail of an archived workspace is its record, its plan and its documents. */
 const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'plan', 'documents'];
 
 /**
- * What the rail offers. Knowledge is read in Docs, with the other files ContextSpace keeps, so its own address still
- * opens but it has no item of its own; the same goes for Sessions and Skills.
+ * What the rail offers for active and archived workspaces.
  */
 export function railSectionsFor(archived: boolean): readonly WorkspaceSection[] {
   return archived ? ARCHIVED_RAIL : RAIL_SECTIONS;
