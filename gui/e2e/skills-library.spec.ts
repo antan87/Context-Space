@@ -134,7 +134,7 @@ test.describe('Skill Library', () => {
 });
 
 test.describe('Skills of one workspace', () => {
-  test('are reached from the Skill Library, since the workspace rail has no Skills item', async ({ page }) => {
+  test('are reached from the Skill Library and highlighted on the workspace rail', async ({ page }) => {
     await mockSkills(page);
     await page.route('**/api/agents', (route) => route.fulfill({ json: { agents: [] } }));
     await page.goto('/#/skills');
@@ -149,10 +149,10 @@ test.describe('Skills of one workspace', () => {
     await link.click();
     await expect(page).toHaveURL(/#\/workspaces\/example\/skills$/);
     await expect(page.getByRole('heading', { name: 'Workspace Skills & Agents' })).toBeVisible();
-    // Skills are not on the rail, so nothing there is marked.
+    // Skills are on the rail, so the Skills item is marked.
     const rail = page.getByRole('navigation', { name: 'Workspace' });
-    await expect(rail.getByRole('link')).toHaveText(['Plan', 'Code', 'Docs', 'Services']);
-    await expect(rail.locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(rail.getByRole('link')).toHaveText(['Overview', 'Plan', 'Sessions', 'Code', 'Docs', 'Knowledge', 'Skills', 'Services']);
+    await expect(rail.getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
   });
 
   test('still open at the old workspace address', async ({ page }) => {

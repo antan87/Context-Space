@@ -560,7 +560,13 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       })
     : [];
 
-  const availableRepos = selected ? repos.filter((r) => !selected.repos.includes(r.path)) : [];
+  const availableRepos = selected
+    ? repos.filter((r) => {
+        const selectedNames = new Set(selected.repos.map((rp) => repoName(rp)));
+        const selectedPaths = new Set([...selected.repos, ...(selected.originalRepos ?? [])]);
+        return !selectedPaths.has(r.path) && !selectedNames.has(r.name);
+      })
+    : [];
 
   const launchTargets = useWorkspaceLaunchTargets();
   const config = useConfig().data?.config;
@@ -893,7 +899,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                       <span className="text-[10px] font-mono text-muted-foreground capitalize">{selectedMode}</span>
                     </div>
 
-                    {/* Stat 3: AI Assistant */}
+                    {/* Stat 3: AI Sessions & Assistant */}
                     <div
                       onClick={() => onSelectTab(selected.branchName, 'sessions')}
                       className="px-4 py-3 rounded-xl border border-border/80 bg-card/70 hover:bg-card hover:border-primary/40 transition-all cursor-pointer shadow-xs flex items-center justify-between"
@@ -903,13 +909,16 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                           <MessagesSquare size={14} />
                         </span>
                         <div className="min-w-0">
-                          <div className="text-[10px] font-medium text-muted-foreground">AI Assistant</div>
-                          <div className="text-sm font-extrabold text-foreground capitalize truncate">
-                            {selected.assistants[0] || 'None chosen'}
+                          <div className="text-[10px] font-medium text-muted-foreground">AI Sessions</div>
+                          <div className="text-sm font-extrabold text-foreground capitalize truncate flex items-center gap-1.5">
+                            {runningCount > 0 && <span className="size-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />}
+                            <span>{runningCount > 0 ? `${runningCount} Running` : (selected.assistants[0] || 'CLI Sessions')}</span>
                           </div>
                         </div>
                       </div>
-                      <span className="text-[10px] font-mono text-muted-foreground">Sessions</span>
+                      <span className="text-[10px] font-mono text-muted-foreground">
+                        {runningCount > 0 ? <span className="text-success-foreground font-semibold">{runningCount} active</span> : 'History'}
+                      </span>
                     </div>
 
                     {/* Stat 4: Attached Skills */}
@@ -958,11 +967,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                             repos={availableRepos}
                             disabled={addRepoLoading}
                             onAdd={(repoPath: string) => {
-                              if (
-                                window.confirm(
-                                  `Add repository "${repoName(repoPath)}" to this workspace?\nThis creates a new git worktree and re-runs analysis.`,
-                                )
-                              ) {
+                              const promptMsg = selectedMode === 'in-place'
+                                ? `Add repository "${repoName(repoPath)}" to this workspace?\nThis maps the repository and updates analysis.`
+                                : `Add repository "${repoName(repoPath)}" to this workspace?\nThis creates a new git worktree and re-runs analysis.`;
+                              if (window.confirm(promptMsg)) {
                                 void handleAddRepo(selected.branchName, repoPath);
                               }
                             }}

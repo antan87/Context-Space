@@ -237,7 +237,7 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     expect(rail.x + rail.width).toBeGreaterThan(1440 - 2);
     expect(rail.width).toBeLessThanOrEqual(RAIL + 1);
     // What can open beside the chat: Overview, Plan, Sessions, Code, Docs, Knowledge, Skills, Services.
-    await expect(destinations(page).getByRole('link')).toHaveText(['Overview', 'Plan', 'Sessions', 'Code', 'Docs', 'Knowledge', 'Skills', 'Services']);
+    await expect(destinations(page).getByRole('link')).toHaveText(['Overview', 'Plan', /^Sessions/, 'Code', 'Docs', 'Knowledge', 'Skills', 'Services']);
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/workspace-chat.png` });
   });
@@ -245,8 +245,8 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
   test('has items for sessions and skills on the rail so they are directly accessible', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
     await expect(destinations(page).getByRole('link')).toHaveCount(8);
-    await expect(destinations(page).getByRole('link', { name: 'Sessions' })).toBeVisible();
-    await expect(destinations(page).getByRole('link', { name: 'Skills' })).toBeVisible();
+    await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toBeVisible();
+    await expect(destinations(page).getByRole('link', { name: /^Skills/ })).toBeVisible();
     // The way in is also in the chat's own toolbar, named for what it opens.
     await expect(chatOf(page).getByRole('button', { name: 'Session history' })).toBeVisible();
   });
@@ -266,8 +266,8 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     await expect(history).toHaveAttribute('aria-pressed', 'true');
     await expect(history).toBeFocused();
-    // It is not a part of the rail, so nothing there is marked.
-    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
+    // Sessions is on the rail, so its link is marked.
+    await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toHaveAttribute('aria-current', 'page');
 
     await history.click();
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
@@ -293,7 +293,7 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(page.getByRole('heading', { name: 'AI Sessions & History' })).toBeVisible();
     await expect(chatOf(page)).toBeVisible();
     await expect(chatOf(page).getByRole('button', { name: 'Session history' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toHaveAttribute('aria-current', 'page');
   });
 
   test('marks the part that is open, names it above the panel, and closes it when chosen again', async ({ page }) => {
@@ -310,9 +310,9 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(destinations(page).getByRole('link', { name: 'Docs' })).not.toHaveAttribute('aria-current', 'page');
   });
 
-  test('still opens an old address that has no place on the rail', async ({ page }) => {
+  test('opens the overview section with its rail destination marked', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/overview');
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible();
-    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(destinations(page).getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
   });
 });
