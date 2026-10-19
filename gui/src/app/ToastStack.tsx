@@ -33,8 +33,10 @@ export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
             <span className="whitespace-pre-line text-left leading-relaxed">{toast.message}</span>
           </div>
           <button
+            type="button"
             onClick={() => onDismiss(toast.id)}
-            className="mt-0.5 shrink-0 cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="Dismiss notification"
+            className="mt-0.5 shrink-0 cursor-pointer rounded-sm p-1 -m-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
           >
             <X size={14} />
           </button>

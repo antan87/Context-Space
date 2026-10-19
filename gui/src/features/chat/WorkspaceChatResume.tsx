@@ -47,7 +47,7 @@ export function WorkspaceChatResume({ workspace }: { workspace: string }) {
       {preview.map(session => {
         const label = `Open ${session.title} with ${harnessName(session.assistant)} in CLI chat`;
         return <button key={`${session.assistant}:${session.id}`} type="button" onClick={() => openTerminal(workspace, session.assistant, session.id, session.workspacePath)}
-          aria-label={label} title={label} className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-foreground hover:bg-muted/70 focus-visible:outline-2 focus-visible:outline-primary">
+          aria-label={label} title={label} className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-foreground hover:bg-accent/60 dark:hover:bg-accent/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer">
           <HarnessIcon harness={session.assistant} className="size-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate font-medium">{session.title}</span>
           <span className="shrink-0 text-[10px] text-muted-foreground">{harnessName(session.assistant)}</span>

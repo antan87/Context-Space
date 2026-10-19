@@ -637,7 +637,7 @@ function SidebarContents({
                                   </span>
                                 )}
                               </div>
-                              <span className={cn('flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground', isSelected && 'pr-20')}>
+                              <span className="flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground pr-20">
                                 {question ? (
                                   <span className="truncate font-medium text-[var(--state-needs)]" title={question}>
                                     <span className="sr-only">Waiting for you: </span>{question}

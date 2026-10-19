@@ -1,8 +1,9 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy, ExternalLink } from 'lucide-react';
 import { safeCopyToClipboard } from '../lib/clipboard.js';
+import { cn } from '../lib/utils.js';
 import { classifyMarkdownLink, headingSlug, type MarkdownLinkContext } from './markdownLinks.js';
 
 const remarkPlugins = [remarkGfm];
@@ -27,6 +28,45 @@ function nodeText(node: React.ReactNode): string {
   if (Array.isArray(node)) return node.map(nodeText).join('');
   if (React.isValidElement<{ children?: React.ReactNode }>(node)) return nodeText(node.props.children);
   return '';
+}
+
+function CodeBlock({ children, ...props }: React.ComponentProps<'pre'> & { node?: unknown }) {
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+  const text = nodeText(children).replace(/\r?\n$/, '');
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
+
+  return (
+    <div className="group/code relative my-3">
+      <pre {...props} className={cn('m-0 overflow-x-auto rounded-lg border border-border/80 bg-muted/60 p-3.5 pr-9 text-xs font-mono text-foreground', props.className)}>
+        {children}
+      </pre>
+      {text && (
+        <button
+          type="button"
+          aria-label={copied ? 'Code copied' : 'Copy code block'}
+          title={copied ? 'Copied' : 'Copy code'}
+          className="absolute right-2 top-2 flex size-6 cursor-pointer items-center justify-center rounded border border-border/70 bg-background/80 text-muted-foreground opacity-0 backdrop-blur-xs transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/code:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => {
+            void safeCopyToClipboard(text).then((ok) => {
+              setCopied(ok);
+              if (ok) {
+                if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+                copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
+              }
+            });
+          }}
+        >
+          {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function LocalPath({ label, children }: { label: string; children: React.ReactNode }) {
@@ -90,6 +130,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links }) =>
         if (target.kind === 'workspace-file' && links) return <img {...props} src={links.fileUrl(target.path)} alt={alt ?? ''} />;
         return <LocalPath label={target.kind === 'inert' ? target.label : ''}>{`[image${alt ? `: ${alt}` : ''}]`}</LocalPath>;
       },
+      pre: CodeBlock,
     };
   }, [links]);
 

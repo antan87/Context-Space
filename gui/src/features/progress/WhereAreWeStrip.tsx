@@ -118,7 +118,7 @@ export function AnswerBar({ question, context, earlier, acknowledging, onFill, o
             {options.length > 0 ? 'Pick one and press Enter, or type your own answer in the chat.' : 'Type your answer in the chat and press Enter.'}
           </span>
           {earlier > 0 && (
-            <button type="button" onClick={onShowAll} className="cursor-pointer text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground">
+            <button type="button" onClick={onShowAll} className="cursor-pointer text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded">
               {earlier === 1 ? '1 earlier question' : `${earlier} earlier questions`}
             </button>
           )}
