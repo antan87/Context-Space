@@ -56,7 +56,6 @@ test('one header shows where the task stands and links to where to act', async (
     'Sessions',
     /^Code3$/,
     'Docs',
-    'Knowledge',
     'Skills',
     'Services',
   ]);
@@ -73,12 +72,15 @@ test('old section links still open, each marked on the rail when it has a place 
     ['plan', 'Plan'],
     ['changes', 'Code'],
     ['overview', 'Overview'],
-    ['knowledge', 'Knowledge'],
     ['skills', 'Skills'],
   ] as const) {
     await page.goto(`/#/workspaces/demo/${section}`);
     await expect(workspaceNav(page).getByRole('link', { name: new RegExp(`^${item}`) })).toHaveAttribute('aria-current', 'page');
   }
+  // Knowledge keeps its address and opens, but has no link on the rail.
+  await page.goto('/#/workspaces/demo/knowledge');
+  await expect(page.getByRole('region', { name: 'Knowledge', exact: true })).toBeVisible();
+  await expect(workspaceNav(page).locator('[aria-current="page"]')).toHaveCount(0);
   await page.goto('/#/workspaces/demo/sessions');
   await expect(page.getByRole('region', { name: 'Session history', exact: true })).toBeVisible();
   await expect(workspaceNav(page).getByRole('link', { name: /^Sessions/ })).toHaveAttribute('aria-current', 'page');

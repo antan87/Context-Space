@@ -151,7 +151,7 @@ test.describe('Skills of one workspace', () => {
     await expect(page.getByRole('heading', { name: 'Workspace Skills & Agents' })).toBeVisible();
     // Skills are on the rail, so the Skills item is marked.
     const rail = page.getByRole('navigation', { name: 'Workspace' });
-    await expect(rail.getByRole('link')).toHaveText(['Overview', 'Plan', 'Sessions', 'Code', 'Docs', 'Knowledge', 'Skills', 'Services']);
+    await expect(rail.getByRole('link')).toHaveText(['Overview', 'Plan', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']);
     await expect(rail.getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
   });
 

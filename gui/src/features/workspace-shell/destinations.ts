@@ -38,7 +38,8 @@ export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan
 /**
  * What can open beside the chat, in the rail's order:
  * Overview (workspace summary and mapped repositories), Plan, Sessions (CLI sessions and history),
- * Code (changes), Docs, Knowledge, Skills, and Services.
+ * Code (changes), Docs, Skills, and Services.
+ * Knowledge keeps its address and is read in Docs or directly via URL, but has no place on the rail.
  */
 export const RAIL_SECTIONS: readonly WorkspaceSection[] = [
   'overview',
@@ -46,7 +47,6 @@ export const RAIL_SECTIONS: readonly WorkspaceSection[] = [
   'sessions',
   'changes',
   'documents',
-  'knowledge',
   'skills',
   'services',
 ];
