@@ -26,6 +26,7 @@ import {
   Edit2,
   Code2,
   BookOpen,
+  FolderGit2,
 } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
@@ -56,6 +57,7 @@ import {
   useSaveSkill,
 } from '../../lib/api/queries.js';
 import { CONFIG_DIR } from '../../brand.js';
+import { repoName } from '../../lib/status.js';
 import type { Feature, SkillCategory, SkillItem } from '../../types.js';
 import { SkillDiagnosticsPanel } from './SkillDiagnosticsPanel.js';
 
@@ -484,6 +486,17 @@ export function WorkspaceSkillsTab({ ws, showToast }: WorkspaceSkillsTabProps) {
             <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
               Select skills to deploy to this workspace. Authored .agents/skills files remain discoverable by assistants even when deselected.
             </p>
+            {ws.repos && ws.repos.length > 0 && (
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="font-medium text-foreground">Target repositories:</span>
+                {ws.repos.map((rp) => (
+                  <span key={rp} className="inline-flex items-center gap-1 font-mono text-[10px] bg-muted/60 px-1.5 py-0.5 rounded border border-border/50 text-foreground">
+                    <FolderGit2 className="size-3 text-primary" />
+                    {repoName(rp)}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Archive, FileCode, FileText, Lightbulb, ListChecks, Server, type LucideIcon } from 'lucide-react';
+import { Archive, Boxes, FileCode, FileText, LayoutDashboard, Lightbulb, ListChecks, Server, Terminal, type LucideIcon } from 'lucide-react';
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -7,14 +7,21 @@ import { railSectionsFor, type WorkspaceSection } from './destinations.js';
 
 interface RailItem { label: string; purpose: string; icon: LucideIcon }
 
-/** Short names that fit under an icon, and what each part is for, said in the tooltip. Only the parts on the rail have one. */
+/** Short names that fit under an icon, and what each part is for, said in the tooltip. */
 const ITEMS: Partial<Record<WorkspaceSection, RailItem>> = {
-  overview: { label: 'Record', purpose: 'What this archived workspace did and where its work went', icon: Archive },
+  overview: { label: 'Overview', purpose: 'Workspace summary, mapped repositories, and telemetry', icon: LayoutDashboard },
   plan: { label: 'Plan', purpose: 'The plan and its checkpoints, the brief the assistant works from, and the checks', icon: ListChecks },
+  sessions: { label: 'Sessions', purpose: 'CLI sessions, conversation history, and usage logs', icon: Terminal },
   changes: { label: 'Code', purpose: 'The code and its changes: read files, review, commit and finish the work', icon: FileCode },
   documents: { label: 'Docs', purpose: 'Documents in the workspace', icon: FileText },
   knowledge: { label: 'Knowledge', purpose: 'What the assistant has learned in this workspace', icon: Lightbulb },
+  skills: { label: 'Skills', purpose: 'Assistant skills, tools, and playbooks configured for this workspace', icon: Boxes },
   services: { label: 'Services', purpose: "Your app's own processes, such as a dev server, and their logs", icon: Server },
+};
+
+const ARCHIVED_ITEMS: Partial<Record<WorkspaceSection, RailItem>> = {
+  ...ITEMS,
+  overview: { label: 'Record', purpose: 'What this archived workspace did and where its work went', icon: Archive },
 };
 
 interface WorkspaceRailProps {
@@ -38,7 +45,7 @@ export function WorkspaceRail({ workspaceId, section, archived = false, badges =
     >
       <ul className="flex w-full flex-row justify-around gap-0.5 px-1 py-1 md:flex-col md:justify-start md:px-0.5 md:py-0">
         {railSectionsFor(archived).map((candidate) => {
-          const item = ITEMS[candidate];
+          const item = (archived ? ARCHIVED_ITEMS[candidate] : ITEMS[candidate]) ?? ITEMS[candidate];
           if (!item) return null;
           const Icon = item.icon;
           const active = candidate === section;
