@@ -952,7 +952,8 @@ describe('Skills owned by a harness', () => {
       expect(imported.sourcePath).toBe(libraryCopy('pdf'));
       expect(await fs.readFile(libraryCopy('pdf', 'SKILL.md'), 'utf-8')).toBe(await fs.readFile(path.join(dir, 'SKILL.md'), 'utf-8'));
       expect(await fs.readFile(libraryCopy('pdf', 'references', 'forms.md'), 'utf-8')).toBe('# Forms');
-      expect((await fs.stat(libraryCopy('pdf', 'scripts', 'fill.sh'))).mode & 0o111).not.toBe(0);
+      // Windows has no executable bit to keep.
+      if (process.platform !== 'win32') expect((await fs.stat(libraryCopy('pdf', 'scripts', 'fill.sh'))).mode & 0o111).not.toBe(0);
       expect(await fse.pathExists(libraryCopy('pdf', 'LICENSE.txt'))).toBe(false);
       // The harness keeps its own copy, and the library now wins the id.
       expect(await fse.pathExists(path.join(dir, 'SKILL.md'))).toBe(true);
