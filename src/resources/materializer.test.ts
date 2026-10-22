@@ -71,7 +71,7 @@ describe('workspace resource materializer', () => {
     expect(preview).toContainEqual({ kind: 'codex-agent', resourceId: 'code_reviewer', path: '.codex/agents/code_reviewer.toml' });
   });
 
-  it.each([[[]], [['claude']], [['codex']], [['antigravity', 'cursor']]] as Array<[AIAssistant[]]>)(
+  it.each([[[]], [['claude']], [['codex']], [['antigravity', 'cursor']], [['pi']]] as Array<[AIAssistant[]]>)(
     'copies a skill to both skill folders whichever assistants are chosen (%j)',
     async (assistants) => {
       const expected = ['.agents/skills/portable-skill/SKILL.md', '.claude/skills/portable-skill/SKILL.md'];

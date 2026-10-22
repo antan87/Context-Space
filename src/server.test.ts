@@ -20,6 +20,7 @@ import * as agentsCatalog from './resources/agents-catalog.js';
 import * as resourceService from './resources/service.js';
 import * as detectAi from './utils/detect-ai.js';
 import { clearCustomDomainRegistrations, registerSampleDomainPacks } from './core/domain-packs.js';
+import { HARNESSES } from './harnesses/registry.js';
 
 import * as newRepo from './core/new-repo.js';
 import * as orchestration from './orchestration/index.js';
@@ -1167,6 +1168,25 @@ describe('Server API Endpoints Unit Tests', () => {
       const names = data.adapters.map((a: any) => a.name);
       expect(names).toContain('local');
       expect(names).not.toContain('central-vault');
+    });
+  });
+
+  describe('GET /api/harnesses', () => {
+    it('describes every harness in the registry for the GUI, without launch details', async () => {
+      const response = await app.request('/api/harnesses');
+      expect(response.status).toBe(200);
+      const { harnesses } = await response.json() as { harnesses: Array<Record<string, unknown>> };
+      expect(harnesses.map((h) => h.id)).toEqual(Object.keys(HARNESSES));
+      expect(harnesses.find((h) => h.id === 'pi')).toEqual({
+        id: 'pi',
+        name: 'Pi',
+        workspaceSkillFolder: '.agents/skills',
+        globalSkillRoots: ['~/.pi/agent/skills', '~/.agents/skills'],
+        history: true,
+        instructionsFile: null,
+      });
+      expect(harnesses.find((h) => h.id === 'claude')).toMatchObject({ workspaceSkillFolder: '.claude/skills', instructionsFile: 'CLAUDE.md' });
+      for (const harness of harnesses) expect(Object.keys(harness).sort()).toEqual(['globalSkillRoots', 'history', 'id', 'instructionsFile', 'name', 'workspaceSkillFolder']);
     });
   });
 
@@ -2797,6 +2817,19 @@ describe('Server API Endpoints Unit Tests', () => {
 
       expect(response.status).toBe(200);
       expect(resourceService.previewResourceSelections).toHaveBeenCalledWith(['standup'], [], ['claude'], ['pull-requests'], []);
+    });
+
+    it('POST /api/resources/preview treats Pi as an assistant and drops names that are not harnesses', async () => {
+      vi.mocked(resourceService.previewResourceSelections).mockResolvedValueOnce([]);
+
+      const response = await app.request('/api/resources/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: [], assistants: ['pi', 'cursor', 'toString'] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(resourceService.previewResourceSelections).toHaveBeenCalledWith([], [], ['pi', 'cursor'], [], []);
     });
 
     it('POST /api/resources/preview works without categories', async () => {

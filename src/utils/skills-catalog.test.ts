@@ -890,6 +890,28 @@ describe('Skills owned by a harness', () => {
     ]);
   });
 
+  it('lists ~/.agents/skills as built into Pi, and config/skills as built into Antigravity, not as My library', async () => {
+    await writeSkill('.agents/skills/shared-agent-skill');
+    await writeSkill('.pi/agent/skills/pi-own');
+    await writeSkill('.gemini/config/skills/agy-config');
+    process.env.HOME = harnessHome;
+    process.env.USERPROFILE = harnessHome;
+    delete process.env.NEXUSFLOW_HOME;
+    delete process.env.CONTEXTSPACE_HOME;
+
+    const skills = await getAllSkills();
+
+    expect(skills.find((s) => s.id === 'shared-agent-skill')).toMatchObject({
+      custom: false,
+      scope: 'global',
+      source: { harness: 'pi', label: 'Pi', root: path.join(harnessHome, '.agents', 'skills') },
+    });
+    expect(skills.find((s) => s.id === 'pi-own')?.source?.harness).toBe('pi');
+    expect(skills.find((s) => s.id === 'agy-config')?.source).toMatchObject({ harness: 'antigravity', label: 'Antigravity (agy)' });
+    // Nothing in ~/.agents/skills is a library skill any more, so nothing there can be edited or deleted as one.
+    expect(skills.filter((s) => s.custom && ['shared-agent-skill', 'pi-own', 'agy-config'].includes(s.id))).toEqual([]);
+  });
+
   it('skips them in an isolated home, and finds them in the real home', async () => {
     await writeSkill('.claude/skills/pdf');
     process.env.HOME = harnessHome;

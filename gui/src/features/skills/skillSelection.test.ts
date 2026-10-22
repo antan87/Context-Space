@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  builtInGroups, categoryGroups, choiceFromConfig, installChanges, matchesSkillSearch, onSkillIds, pickAll, sameChoice, sameIds,
+  builtInGroups, categoryGroups, choiceFromConfig, folderReaders, installChanges, matchesSkillSearch, onSkillIds, pickAll, sameChoice, sameIds,
   selectionState, setCategory, skillOrigin, skillStatus, subscribedCategories, toggleSkill,
   type SkillChoice,
 } from './skillSelection.js';
-import type { SkillItem } from '../../types.js';
+import type { HarnessInfo, SkillItem } from '../../types.js';
 
 const skill = (id: string, category: string, extra: Partial<SkillItem> = {}): SkillItem => ({
   id, name: id, category, description: `Use ${id}`, content: '', custom: true, ...extra,
@@ -249,5 +249,35 @@ describe('the skill search', () => {
     expect(matchesSkillSearch(found, '   ')).toBe(true);
     expect(matchesSkillSearch(found, 'kubernetes')).toBe(false);
     expect(matchesSkillSearch({ name: 'bare', description: '' }, 'x')).toBe(false);
+  });
+});
+
+describe('which tools read which workspace skill folder', () => {
+  const harness = (id: string, name: string, workspaceSkillFolder: string): HarnessInfo => ({
+    id, name, workspaceSkillFolder, globalSkillRoots: [], history: true, instructionsFile: null,
+  });
+  const registry = [
+    harness('claude', 'Claude Code', '.claude/skills'),
+    harness('antigravity', 'Antigravity (agy)', '.agents/skills'),
+    harness('codex', 'Codex', '.agents/skills'),
+    harness('pi', 'Pi', '.agents/skills'),
+  ];
+
+  it('groups the tools by folder, folders and tools in registry order, with the short names the app uses', () => {
+    expect(folderReaders(registry)).toEqual([
+      { folder: '.claude/skills', tools: ['Claude Code'] },
+      { folder: '.agents/skills', tools: ['Antigravity', 'Codex', 'Pi'] },
+    ]);
+  });
+
+  it('names a tool the app has not heard of from the registry, and gives it a folder of its own', () => {
+    expect(folderReaders([...registry, harness('acme', 'Acme Agent (acme)', '.acme/skills')]).at(-1)).toEqual({
+      folder: '.acme/skills',
+      tools: ['Acme Agent'],
+    });
+  });
+
+  it('has nothing to say without tools', () => {
+    expect(folderReaders([])).toEqual([]);
   });
 });

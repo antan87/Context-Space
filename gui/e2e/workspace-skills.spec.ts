@@ -219,8 +219,9 @@ test.describe('Skills of one workspace', () => {
 
     const who = page.getByRole('region', { name: 'Who sees what' });
     await expect(who).toContainText('Every tool sees the 1 skill in this workspace.');
-    await expect(who).toContainText('.claude/skills/');
-    await expect(who).toContainText('.agents/skills/');
+    // The folder lines come from the harness registry, grouped by the folder each tool reads.
+    await expect(who).toContainText('Claude Code reads .claude/skills/');
+    await expect(who).toContainText('Antigravity, Codex, GitHub Copilot, Cursor Agent, Pi read .agents/skills/');
     // Saved but not applied: the screen says what will change.
     await expect(who).toContainText('Saved, but not applied yet. Save and apply will add Commit helper.');
     await expect(who).toContainText('Claude Code 1');

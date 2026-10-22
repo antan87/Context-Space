@@ -24,6 +24,7 @@ import {
   useSkills,
   useSkillDiagnostics,
   useAgents,
+  useHarnesses,
   useWorkspaceSkills,
   useAssignWorkspaceSkills,
   useRefreshWorkspace,
@@ -65,6 +66,7 @@ export function WorkspaceSkillsTab({ ws, showToast }: WorkspaceSkillsTabProps) {
 
   const { data: categories = [], isLoading: loadingCategories } = useSkillCategories();
   const { data: skills = [], isLoading: loadingSkills } = useSkills(ws.branchName);
+  const { data: harnesses } = useHarnesses();
   const { data: agents = [], isLoading: loadingAgents } = useAgents();
   const {
     data: workspaceSkills,
@@ -346,6 +348,7 @@ export function WorkspaceSkillsTab({ ws, showToast }: WorkspaceSkillsTabProps) {
           added={changes.added.map(titleOf)}
           removed={changes.removed.map(titleOf)}
           builtIn={builtInCounts}
+          harnesses={harnesses}
         />
 
         {/* Custom Codex Agents Section */}

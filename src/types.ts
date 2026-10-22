@@ -10,6 +10,7 @@ import type {
   CostConfidence,
 } from './harness/types.js';
 import type { KnowledgeLesson } from './core/knowledge.js';
+import type { HarnessId } from './harnesses/registry.js';
 
 export type {
   NormalizedUsage,
@@ -18,10 +19,10 @@ export type {
   CostConfidence,
 };
 
-/** Supported AI assistant identifiers. */
-export type AIAssistant = 'claude' | 'antigravity' | 'codex' | 'copilot' | 'cursor';
-/** CLI histories may come from tools that do not generate workspace resources. */
-export type SessionAssistant = AIAssistant | 'pi';
+/** Supported AI assistant identifiers: the keys of the harness registry. */
+export type AIAssistant = HarnessId;
+/** Kept for callers that predate Pi becoming a full assistant. */
+export type SessionAssistant = AIAssistant;
 
 /** Top-level NexusFlow configuration stored in ~/.nexusflow/config.json. */
 export interface NexusFlowConfig {

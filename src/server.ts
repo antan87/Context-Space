@@ -79,6 +79,7 @@ import {
 } from './core/domain-packs.js';
 
 import { detectAIAssistants } from './utils/detect-ai.js';
+import { harnessSummaries, isHarnessId } from './harnesses/registry.js';
 import { detectEditors } from './utils/detect-editors.js';
 import {
   buildWorkspaceLaunchPrompt,
@@ -181,7 +182,7 @@ import {
   withResourceAdministrationLock,
 } from './resources/service.js';
 
-import type { AIAssistant, Feature, RepoInfo, RepoSelection, WorkspaceContext, SyncStatus, RepoSyncState, WorkspaceStatus, OrganizationConventions, DomainPack } from './types.js';
+import type { Feature, RepoInfo, RepoSelection, WorkspaceContext, SyncStatus, RepoSyncState, WorkspaceStatus, OrganizationConventions, DomainPack } from './types.js';
 import { suggestWorkflow } from './utils/workflow-advisor.js';
 import {
   WorkroomAuthorizationError,
@@ -1040,6 +1041,9 @@ app.get('/api/ai-detect', async (c) => {
     return errorResponse(c, error);
   }
 });
+
+// What the app knows about each harness, for the screens that name them or their folders.
+app.get('/api/harnesses', (c) => c.json({ harnesses: harnessSummaries() }));
 
 // 6. Detect available editors
 app.get('/api/editor-detect', async (c) => {
@@ -3627,15 +3631,14 @@ const resourcePreviewInput = z.object({
   categories: z.array(z.string().max(200)).max(200).default([]),
   disabledSkills: z.array(z.string().max(200)).max(200).default([]),
 });
-const RESOURCE_ASSISTANTS = new Set(['claude', 'antigravity', 'codex', 'copilot', 'cursor']);
 
 // What a new workspace would receive for the chosen skills, categories and agents.
 app.post('/api/resources/preview', async (c) => {
   const parsed = resourcePreviewInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: 'Invalid resource selection' }, 400);
   try {
-    // Assistants without resource support (e.g. a CLI-only tool) simply get no files.
-    const assistants = parsed.data.assistants.filter((name) => RESOURCE_ASSISTANTS.has(name)) as AIAssistant[];
+    // Names that are not harnesses simply get no files.
+    const assistants = parsed.data.assistants.filter(isHarnessId);
     return c.json({ resources: await previewResourceSelections(parsed.data.skills, parsed.data.agents, assistants, parsed.data.categories, parsed.data.disabledSkills) });
   } catch (error) {
     if (error instanceof ResourceSelectionError) return c.json({ error: error.message }, 400);

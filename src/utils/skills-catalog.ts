@@ -13,6 +13,7 @@ import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 
 import { slugify } from './slug.js';
 import { findHarnessSkillDirs } from './harness-skill-sources.js';
+import { LOCAL_SKILLS_FOLDER, SKILL_FOLDER_ADAPTERS, workspaceSkillFolders } from '../harnesses/registry.js';
 import { acquireLock, createMutationQueue } from '../core/locks.js';
 import {
   resolveBrandHomeDir,
@@ -583,7 +584,6 @@ export async function getAllSkills(
     : [
         path.join(os.homedir(), LEGACY_CONFIG_DIR_NAME, 'skills'),
         path.join(os.homedir(), PRIMARY_CONFIG_DIR_NAME, 'skills'),
-        path.join(os.homedir(), '.agents', 'skills'),
       ];
   const activeSkillsDir = getUserSkillsDir();
   if (!candidateDirs.includes(activeSkillsDir)) {
@@ -629,7 +629,7 @@ export async function getAllSkills(
   if (workspacePath) {
     try {
       const canonicalWorkspace = await fs.realpath(workspacePath).catch(() => path.resolve(workspacePath));
-      const workspaceSkillsDir = path.join(canonicalWorkspace, '.agents', 'skills');
+      const workspaceSkillsDir = path.join(canonicalWorkspace, ...LOCAL_SKILLS_FOLDER.split('/'));
       if (await fse.pathExists(workspaceSkillsDir)) {
         await assertPathIsNotLink(workspaceSkillsDir);
 
@@ -653,7 +653,7 @@ export async function getAllSkills(
             for (const out of outputs) {
               if (out && out.kind === 'skill') {
                 const outPath = typeof out.path === 'string' ? out.path.replaceAll('\\', '/') : '';
-                if (out.adapter === 'agent-skill-v1' || outPath.startsWith('.agents/skills/')) {
+                if (out.adapter === SKILL_FOLDER_ADAPTERS[LOCAL_SKILLS_FOLDER] || outPath.startsWith(`${LOCAL_SKILLS_FOLDER}/`)) {
                   if (typeof out.resourceId === 'string') {
                     materializedGlobalSkillIds.add(out.resourceId);
                   }
@@ -921,7 +921,7 @@ export async function saveSkill(
 
   if (scope === 'workspace') {
     const canonicalWorkspace = await fs.realpath(options.workspacePath!).catch(() => path.resolve(options.workspacePath!));
-    const workspaceSkillsDir = path.join(canonicalWorkspace, '.agents', 'skills');
+    const workspaceSkillsDir = path.join(canonicalWorkspace, ...LOCAL_SKILLS_FOLDER.split('/'));
     return runWorkspaceConfigMutation(async () => {
       await assertNoLinkedPathComponents(canonicalWorkspace, workspaceSkillsDir);
       return executeSave(workspaceSkillsDir);
@@ -950,7 +950,7 @@ export async function deleteSkill(
     }
     const wsPath = options.workspacePath;
     const canonicalWorkspace = await fs.realpath(wsPath).catch(() => path.resolve(wsPath));
-    const workspaceSkillsDir = path.join(canonicalWorkspace, '.agents', 'skills');
+    const workspaceSkillsDir = path.join(canonicalWorkspace, ...LOCAL_SKILLS_FOLDER.split('/'));
     await runWorkspaceConfigMutation(async () => {
       const targetDir = assertPathWithin(canonicalWorkspace, path.join(workspaceSkillsDir, id));
       await assertNoLinkedPathComponents(canonicalWorkspace, targetDir);
@@ -1091,13 +1091,13 @@ export async function getWorkspaceSkillsConfig(workspacePath: string): Promise<W
 }
 
 /**
- * Ids that have a SKILL.md in the workspace's `.agents/skills/<id>` or `.claude/skills/<id>` right now,
- * whoever put it there.
+ * Ids that have a SKILL.md in any folder a harness reads skills from in a workspace (`.agents/skills/<id>`,
+ * `.claude/skills/<id>`) right now, whoever put it there.
  */
 export async function listInstalledSkillIds(workspacePath: string): Promise<string[]> {
   const installed = new Set<string>();
-  for (const folder of ['.agents', '.claude']) {
-    const skillsDir = path.join(workspacePath, folder, 'skills');
+  for (const folder of workspaceSkillFolders()) {
+    const skillsDir = path.join(workspacePath, ...folder.split('/'));
     const entries = await fs.readdir(skillsDir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue;

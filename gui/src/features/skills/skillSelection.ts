@@ -1,4 +1,5 @@
-import type { SkillCategory, SkillItem, WorkspaceSkillsConfig } from '../../types.js';
+import { harnessName } from '../../components/icons/harnessNames.js';
+import type { HarnessInfo, SkillCategory, SkillItem, WorkspaceSkillsConfig } from '../../types.js';
 
 /**
  * Which skills a workspace gets. One rule, the same one the server applies when it writes the workspace:
@@ -224,6 +225,15 @@ export function installChanges(
 export function skillOrigin(skill: Pick<SkillItem, 'source' | 'scope'>): string {
   if (skill.source) return `Built into ${skill.source.label || skill.source.harness}`;
   return skill.scope === 'workspace' ? 'This workspace only' : 'My library';
+}
+
+/** Which tools read which workspace skill folder, in the order the folders first appear in the registry. */
+export function folderReaders(harnesses: readonly Pick<HarnessInfo, 'id' | 'name' | 'workspaceSkillFolder'>[]): Array<{ folder: string; tools: string[] }> {
+  const groups = new Map<string, string[]>();
+  for (const harness of harnesses) {
+    groups.set(harness.workspaceSkillFolder, [...(groups.get(harness.workspaceSkillFolder) ?? []), harnessName(harness.id, harnesses)]);
+  }
+  return [...groups].map(([folder, tools]) => ({ folder, tools }));
 }
 
 /** The skills a tool ships, grouped per tool, in the order tools first appear. */

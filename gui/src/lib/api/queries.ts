@@ -16,6 +16,7 @@ import type {
   AISession,
   DetectedAI,
   DetectedEditor,
+  HarnessInfo,
   Feature,
   ContextSpaceConfig,
   DomainPack,
@@ -317,6 +318,16 @@ export function useAiDetect({ enabled = true }: { enabled?: boolean } = {}) {
     queryFn: ({ signal }) => apiFetch<DetectedAI[]>('/api/ai-detect', { signal }),
     enabled,
     staleTime: 60_000,
+  });
+}
+
+/** The harnesses the app knows, from the server's registry. It only changes with a new app version. */
+export function useHarnesses() {
+  return useQuery({
+    queryKey: ['harnesses'],
+    queryFn: ({ signal }) => apiFetch<{ harnesses: HarnessInfo[] }>('/api/harnesses', { signal }),
+    select: (data) => data.harnesses,
+    staleTime: Infinity,
   });
 }
 

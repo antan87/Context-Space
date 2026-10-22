@@ -235,15 +235,18 @@ Open this folder in your editor → your AI assistant picks up the context and s
 
 ## 🤖 Supported AI Assistants
 
-ContextSpace auto-detects which assistants are available on your machine and generates the right context files and skills for each:
+ContextSpace auto-detects which assistants are available on your machine and generates the right context files for each. Every workspace skill is written to both `.agents/skills/` and `.claude/skills/`, so any assistant opened in the workspace finds it:
 
-| Assistant | Config File & Skills Target | How It's Detected |
-|:---|:---|:---|
-| **Google Antigravity** | `AGENTS.md` & `.agents/skills/` | `antigravity` in PATH |
-| **Claude Code** | `CLAUDE.md` & `.claude/skills/` | `claude` in PATH |
-| **OpenAI Codex** | `AGENTS.md`, `.agents/skills/` & `.codex/agents/` | `codex` in PATH |
-| **GitHub Copilot** | `.github/copilot-instructions.md` & `.agents/skills/` | Always available |
-| **Cursor** | `.cursor/rules/contextspace.mdc` & `.agents/skills/` | `cursor` in PATH |
+| Assistant | Instructions | Reads skills from | How It's Detected |
+|:---|:---|:---|:---|
+| **Claude Code** | `CLAUDE.md` | `.claude/skills/` | `claude` in PATH |
+| **Google Antigravity** | `AGENTS.md` | `.agents/skills/` | `agy` in PATH |
+| **OpenAI Codex** | `AGENTS.md` (+ `.codex/agents/`) | `.agents/skills/` | `codex` in PATH |
+| **GitHub Copilot** | `.github/copilot-instructions.md` | `.agents/skills/` | `copilot` in PATH |
+| **Cursor** | `.cursor/rules/contextspace.mdc` | `.agents/skills/` | `cursor` in PATH |
+| **Pi** | `AGENTS.md` | `.agents/skills/` | `pi` in PATH |
+
+Each assistant is one entry in `src/harnesses/registry.ts`; see [docs/adding-a-harness.md](docs/adding-a-harness.md) to add another.
 
 
 ## 🔁 The Feature Loop: create → work → learn → finish

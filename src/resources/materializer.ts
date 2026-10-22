@@ -22,6 +22,13 @@ import {
   assertPathWithin,
   atomicWriteJson,
 } from './fs-safety.js';
+import {
+  LOCAL_SKILLS_FOLDER,
+  SKILL_FOLDER_ADAPTERS,
+  skillFolderOfAdapter,
+  workspaceSkillFolders,
+  type WorkspaceSkillFolder,
+} from '../harnesses/registry.js';
 import { BRAND_NAME, RESOURCE_OWNERSHIP_NAME, PRIMARY_CONFIG_DIR_NAME, LEGACY_CONFIG_DIR_NAME, resolveWorkspaceConfigDir } from '../core/constants.js';
 
 const PRIMARY_LOCK_FILE = path.join(PRIMARY_CONFIG_DIR_NAME, 'resources.lock.json');
@@ -183,7 +190,7 @@ export function isWorkspaceLocalSkill(skill: SkillItem, workspacePath?: string):
   if (skill.scope === 'workspace') return true;
   if (workspacePath && skill.sourcePath) {
     const canonicalWs = path.resolve(workspacePath);
-    const localSkillsDir = path.resolve(canonicalWs, '.agents', 'skills');
+    const localSkillsDir = path.resolve(canonicalWs, ...LOCAL_SKILLS_FOLDER.split('/'));
     const skillSource = path.resolve(skill.sourcePath);
     return skillSource === path.join(localSkillsDir, skill.id) || skillSource.startsWith(localSkillsDir + path.sep);
   }
@@ -209,11 +216,13 @@ async function buildDesiredFiles(
     }
     const sourceFiles = await walkSkillFiles(skill);
     const isLocal = isWorkspaceLocalSkill(skill, workspacePath);
-    // Every skill goes where both kinds of assistant look, whichever the workspace chose: one can be opened
-    // later, and nothing else says which. A workspace-only skill already lives in `.agents/skills`.
-    const roots = new Map<string, 'agent-skill-v1' | 'claude-skill-v1'>();
-    if (!isLocal) roots.set(path.join('.agents', 'skills', skill.id), 'agent-skill-v1');
-    roots.set(path.join('.claude', 'skills', skill.id), 'claude-skill-v1');
+    // Every skill goes to every folder a harness reads, whichever assistants the workspace chose: one can be
+    // opened later, and nothing else says which. A workspace-only skill already lives in its own folder.
+    const roots = new Map<string, (typeof SKILL_FOLDER_ADAPTERS)[WorkspaceSkillFolder]>();
+    for (const folder of workspaceSkillFolders()) {
+      if (isLocal && folder === LOCAL_SKILLS_FOLDER) continue;
+      roots.set(path.join(...folder.split('/'), skill.id), SKILL_FOLDER_ADAPTERS[folder]);
+    }
 
     for (const [root, adapter] of roots) {
       for (const sourceFile of sourceFiles) {
@@ -300,12 +309,8 @@ async function loadLock(workspacePath: string): Promise<ResourceLock> {
 }
 
 function managedResourceRoot(output: ManagedOutput): string {
-  if (output.kind === 'skill' && output.adapter === 'agent-skill-v1') {
-    return `.agents/skills/${output.resourceId}`;
-  }
-  if (output.kind === 'skill' && output.adapter === 'claude-skill-v1') {
-    return `.claude/skills/${output.resourceId}`;
-  }
+  const folder = output.kind === 'skill' ? skillFolderOfAdapter(output.adapter) : undefined;
+  if (folder) return `${folder}/${output.resourceId}`;
   // Legacy skill adapters preserved for backward compatibility and clean unmounting/pruning
   if (output.kind === 'skill' && output.adapter === 'codex-skill-v1') {
     return `.codex/skills/${output.resourceId}`;
@@ -465,7 +470,7 @@ export async function reconcileWorkspaceResources(
       const workspaceLocalRoots = new Set(
         skills
           .filter((s) => isWorkspaceLocalSkill(s, canonicalWorkspace))
-          .map((s) => `.agents/skills/${s.id}`),
+          .map((s) => `${LOCAL_SKILLS_FOLDER}/${s.id}`),
       );
       await preflight(canonicalWorkspace, oldLock, desiredFiles, workspaceLocalRoots);
 

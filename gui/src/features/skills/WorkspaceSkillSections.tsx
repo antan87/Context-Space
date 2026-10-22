@@ -9,9 +9,9 @@ import { Button } from '../../components/ui/button.js';
 import { Checkbox } from '../../components/ui/checkbox.js';
 import { Switch } from '../../components/ui/switch.js';
 import { cn } from '../../lib/utils.js';
-import type { SkillItem } from '../../types.js';
+import type { HarnessInfo, SkillItem } from '../../types.js';
 import {
-  coveredByCategory, matchesSkillSearch, setCategory, skillStatus, toggleSkill,
+  coveredByCategory, folderReaders, matchesSkillSearch, setCategory, skillStatus, toggleSkill,
   type CategoryGroup, type SkillChoice, type SkillStatus,
 } from './skillSelection.js';
 
@@ -320,6 +320,7 @@ export function WhoSeesWhat({
   added,
   removed,
   builtIn,
+  harnesses,
 }: {
   installedCount: number;
   /** Whether the choice on screen is saved, waiting to be saved, or based on a selection that has since changed. */
@@ -327,6 +328,8 @@ export function WhoSeesWhat({
   added: readonly string[];
   removed: readonly string[];
   builtIn: ReadonlyArray<{ label: string; count: number }>;
+  /** The registry from `/api/harnesses`; the folder lines wait for it. */
+  harnesses?: readonly HarnessInfo[];
 }) {
   const changes = [
     added.length > 0 ? `add ${joinNames(added)}` : null,
@@ -341,7 +344,18 @@ export function WhoSeesWhat({
           {installedCount === 0
             ? 'No skills are installed in this workspace yet.'
             : <>Every tool sees the <strong className="text-foreground">{installedCount}</strong> {installedCount === 1 ? 'skill' : 'skills'} in this workspace.</>}
-          {' '}Claude reads <code className="font-mono text-foreground">.claude/skills/</code>; the other tools read <code className="font-mono text-foreground">.agents/skills/</code>. Every skill is written to both.
+          {harnesses && harnesses.length > 0 && (
+            <>
+              {' '}
+              {folderReaders(harnesses).map(({ folder, tools }, index) => (
+                <span key={folder}>
+                  {index > 0 && ' · '}
+                  <strong className="text-foreground">{tools.join(', ')}</strong> {tools.length === 1 ? 'reads' : 'read'} <code className="font-mono text-foreground">{folder}/</code>
+                </span>
+              ))}
+              . Every skill is written to each folder.
+            </>
+          )}
         </li>
         <li>
           {changes
