@@ -70,8 +70,8 @@ const workspaceNav = (page: Page) => page.getByRole('navigation', { name: 'Works
 test('archive previews what happens, parks unmerged work on request, and restores the workspace', async ({ page }) => {
   const calls = await mockArchiveBackend(page);
   await page.goto('/#/workspaces/demo');
-  // Overview, Plan, Sessions, Code, Docs, Skills and Services.
-  await expect(workspaceNav(page).getByRole('link')).toHaveCount(7);
+  // Overview, Plan, Board, Sessions, Code, Docs, Skills and Services.
+  await expect(workspaceNav(page).getByRole('link')).toHaveCount(8);
 
   await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Archive workspace…' }));
   await page.getByRole('menuitem', { name: 'Archive workspace…' }).click();
@@ -136,8 +136,8 @@ test('archive previews what happens, parks unmerged work on request, and restore
 
   await page.getByRole('button', { name: 'Restore workspace' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Archived on' })).toHaveCount(0);
-  // Overview, Plan, Sessions, Code, Docs, Skills and Services.
-  await expect(workspaceNav(page).getByRole('link')).toHaveCount(7);
+  // Overview, Plan, Board, Sessions, Code, Docs, Skills and Services.
+  await expect(workspaceNav(page).getByRole('link')).toHaveCount(8);
   await page.getByRole('button', { name: 'Edit the goal' }).click();
   await expect(page.getByLabel('Current objective')).toBeEnabled();
   expect(calls.at(-1)?.path).toBe('unarchive');

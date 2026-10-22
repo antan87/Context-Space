@@ -3,11 +3,11 @@ import { SECTION_LABELS, parseSection, railSectionsFor, visibleSection } from '.
 
 describe('workspace sections', () => {
   it('name every section once', () => {
-    expect(Object.keys(SECTION_LABELS).sort()).toEqual(['changes', 'chat', 'documents', 'knowledge', 'overview', 'plan', 'services', 'sessions', 'skills']);
+    expect(Object.keys(SECTION_LABELS).sort()).toEqual(['board', 'changes', 'chat', 'documents', 'knowledge', 'overview', 'plan', 'services', 'sessions', 'skills']);
   });
 
   it('keep old tab URLs working', () => {
-    for (const legacy of ['overview', 'plan', 'documents', 'changes', 'services', 'sessions', 'knowledge', 'skills']) {
+    for (const legacy of ['overview', 'plan', 'board', 'documents', 'changes', 'services', 'sessions', 'knowledge', 'skills']) {
       expect(parseSection(legacy)).toBe(legacy);
     }
     // An unknown segment lands on the overview. No segment at all opens the plan, the workspace's home.
@@ -32,10 +32,11 @@ describe('workspace sections', () => {
 });
 
 describe('railSectionsFor', () => {
-  it('offers the parts a developer works in, including overview, plan, sessions, code, docs, skills and services', () => {
+  it('offers the parts a developer works in, including overview, plan, board, sessions, code, docs, skills and services', () => {
     expect(railSectionsFor(false)).toEqual([
       'overview',
       'plan',
+      'board',
       'sessions',
       'changes',
       'documents',
@@ -46,8 +47,18 @@ describe('railSectionsFor', () => {
     expect(railSectionsFor(false)).not.toContain('knowledge');
   });
 
+  it('puts the board right after the plan, and gives an archived workspace none', () => {
+    const rail = railSectionsFor(false);
+    expect(rail.indexOf('board')).toBe(rail.indexOf('plan') + 1);
+    expect(SECTION_LABELS.board).toBe('Board');
+    expect(railSectionsFor(true)).not.toContain('board');
+    // A link to the board of an archived workspace lands on its record.
+    expect(visibleSection('board', true)).toBe('overview');
+    expect(visibleSection('board', false)).toBe('board');
+  });
+
   it('keeps old addresses working: every section still parses to itself, on the rail or not', () => {
-    for (const section of ['overview', 'sessions', 'skills', 'knowledge', 'services', 'plan'] as const) expect(parseSection(section)).toBe(section);
+    for (const section of ['overview', 'sessions', 'skills', 'knowledge', 'services', 'plan', 'board'] as const) expect(parseSection(section)).toBe(section);
     // Not on the rail does not mean hidden: an active workspace still shows them.
     expect(visibleSection('sessions', false)).toBe('sessions');
     expect(visibleSection('skills', false)).toBe('skills');

@@ -648,3 +648,38 @@
 
 /* A plan code in chat, shown with its name (ChatMarkdown). */
 .plan-code { display: inline-block; border-radius: 0.3rem; padding: 0 0.3rem; font-size: 0.85em; font-weight: 500; line-height: 1.5; background: var(--muted); color: var(--foreground); white-space: nowrap; }
+
+/* The Board (features/board): React Flow's own colours replaced by the app's theme tokens, so the canvas follows the
+   light and dark themes. Scoped to .board-flow; the library's stylesheet loads with the board, so every rule here either
+   sets a variable the library reads or is more specific than the library's own. */
+.board-flow {
+  --xy-background-color: var(--background);
+  --xy-background-pattern-dots-color: var(--border);
+  --xy-attribution-background-color: color-mix(in srgb, var(--card) 80%, transparent);
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--secondary);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--background) 65%, transparent);
+  --xy-minimap-mask-stroke-color: var(--primary);
+  --xy-minimap-node-background-color: var(--border);
+}
+
+.board-flow .react-flow__attribution a { color: var(--muted-foreground); }
+.board-flow .react-flow__minimap { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.board-flow .react-flow__controls { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: none; }
+.board-flow .react-flow__controls-button:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+
+/* A map of the board: lanes faint, cards firmer, checkpoints by whether they are done. */
+.board-flow .react-flow__minimap-node.board-mini-lane { fill: var(--secondary); }
+.board-flow .react-flow__minimap-node.board-mini-document,
+.board-flow .react-flow__minimap-node.board-mini-commit { fill: var(--muted-foreground); fill-opacity: 0.55; }
+.board-flow .react-flow__minimap-node.board-mini-checkpoint { fill: var(--primary); fill-opacity: 0.6; }
+.board-flow .react-flow__minimap-node.board-mini-checkpoint.board-mini-done { fill: var(--success); }
+
+/* A plain grab cursor: nothing on the board can be dragged, only the board itself. */
+.board-flow .react-flow__pane { cursor: grab; }
+.board-flow .react-flow__pane.dragging { cursor: grabbing; }
+.board-flow:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Archive, Boxes, FileCode, FileText, LayoutDashboard, Lightbulb, ListChecks, Server, Terminal, type LucideIcon } from 'lucide-react';
+import { Archive, Boxes, FileCode, FileText, Kanban, LayoutDashboard, Lightbulb, ListChecks, Server, Terminal, type LucideIcon } from 'lucide-react';
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -11,6 +11,7 @@ interface RailItem { label: string; purpose: string; icon: LucideIcon }
 const ITEMS: Partial<Record<WorkspaceSection, RailItem>> = {
   overview: { label: 'Overview', purpose: 'Workspace summary, mapped repositories, and telemetry', icon: LayoutDashboard },
   plan: { label: 'Plan', purpose: 'The plan and its checkpoints, the brief the assistant works from, and the checks', icon: ListChecks },
+  board: { label: 'Board', purpose: 'The plan, documents and the commits new since you last looked, laid out on a canvas you can pan and zoom', icon: Kanban },
   sessions: { label: 'Sessions', purpose: 'CLI sessions, conversation history, and usage logs', icon: Terminal },
   changes: { label: 'Code', purpose: 'The code and its changes: read files, review, commit and finish the work', icon: FileCode },
   documents: { label: 'Docs', purpose: 'Documents in the workspace', icon: FileText },

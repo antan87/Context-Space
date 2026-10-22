@@ -160,7 +160,7 @@ test.describe('Skills of one workspace', () => {
     await rail.getByRole('link', { name: 'Skills' }).click();
     await expect(page).toHaveURL(/#\/workspaces\/example\/skills$/);
     await expect(page.getByRole('heading', { name: 'Workspace Skills & Agents' })).toBeVisible();
-    await expect(rail.getByRole('link')).toHaveText(['Overview', 'Plan', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']);
+    await expect(rail.getByRole('link')).toHaveText(['Overview', 'Plan', 'Board', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']);
     await expect(rail.getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
   });
 

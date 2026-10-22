@@ -53,6 +53,7 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(workspaceNav(page).getByRole('link')).toHaveText([
     'Overview',
     'Plan',
+    'Board',
     'Sessions',
     /^Code3$/,
     'Docs',
@@ -70,6 +71,7 @@ test('old section links still open, each marked on the rail when it has a place 
     ['documents', 'Docs'],
     ['services', 'Services'],
     ['plan', 'Plan'],
+    ['board', 'Board'],
     ['changes', 'Code'],
     ['overview', 'Overview'],
     ['skills', 'Skills'],

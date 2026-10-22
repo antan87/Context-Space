@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ComponentProps } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, type ComponentProps } from 'react';
 import {
   MoreVertical,
   Archive,
@@ -119,6 +119,9 @@ import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
 import { ChatMarkdown } from '../components/ChatMarkdown.js';
 
 type SubTab = WorkspaceSection;
+
+// React Flow is only needed once the Board is opened, so it loads then, in a chunk of its own.
+const BoardSection = lazy(() => import('../features/board/BoardSection.js').then((module) => ({ default: module.BoardSection })));
 
 // Per workspace, the sections already opened. Module scope keeps them across route changes in a session.
 const visitedByWorkspace = new Map<string, Set<WorkspaceSection>>();
@@ -829,7 +832,16 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               <RootDocumentsPanel key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} panelActions={panelActions} />
             </div>
           )}
-          <div hidden={subTab === 'changes' || subTab === 'documents'} className="min-h-0 flex-1 overflow-y-auto">
+          {/* The board fills the panel too: its canvas pans and zooms on its own, so it is not inside the page's scroll. It
+              stays mounted once opened, so coming back keeps where the canvas was looking. */}
+          {visitedSections.has('board') && !archived && (
+            <div role="region" aria-label={SECTION_LABELS.board} hidden={subTab !== 'board'} className="min-h-0 flex-1">
+              <Suspense fallback={<div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board</div>}>
+                <BoardSection key={selected.branchName} workspaceId={selected.branchName} />
+              </Suspense>
+            </div>
+          )}
+          <div hidden={subTab === 'changes' || subTab === 'documents' || subTab === 'board'} className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-6 pb-12 pt-5">
           {/* Legacy Migration Alert Banner */}
           {isLegacy && (
