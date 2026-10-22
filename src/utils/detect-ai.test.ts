@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { execa } from 'execa';
 import { detectAIAssistants } from './detect-ai.js';
+import { HARNESSES, HARNESS_IDS } from '../harnesses/registry.js';
 
 vi.mock('execa');
 
@@ -42,6 +43,24 @@ describe('detectAIAssistants', () => {
       { name: 'cursor', displayName: 'Cursor', detected: false },
       { name: 'pi', displayName: 'Pi', detected: false },
     ]);
+  });
+
+  it('reports one result per registry harness, in registry order, named by its setup name', async () => {
+    vi.mocked(execa).mockResolvedValue({ exitCode: 1 } as any);
+
+    const result = await detectAIAssistants();
+
+    expect(result.map((r) => r.name)).toEqual([...HARNESS_IDS]);
+    expect(result.map((r) => r.displayName)).toEqual(HARNESS_IDS.map((id) => HARNESSES[id].setupName));
+  });
+
+  it('probes each harness binary, and the separate detection binary Cursor declares', async () => {
+    vi.mocked(execa).mockResolvedValue({ exitCode: 1 } as any);
+
+    await detectAIAssistants();
+
+    const probed = vi.mocked(execa).mock.calls.map(([command]) => command).sort();
+    expect(probed).toEqual(['agy', 'claude', 'codex', 'copilot', 'cursor', 'cursor-agent', 'pi']);
   });
 
   it('gives copilot a launch command only when the copilot CLI is present', async () => {

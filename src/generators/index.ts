@@ -3,10 +3,9 @@ import { generateWorkspaceTools } from '../core/workspace-tools.js';
 import chalk from 'chalk';
 import path from 'node:path';
 import fse from 'fs-extra';
-import type { AIAssistant, SessionAssistant, WorkspaceContext } from '../types.js';
+import type { WorkspaceContext } from '../types.js';
+import { HARNESSES, isHarnessId, type InstructionHarnessId } from '../harnesses/registry.js';
 import { generateClaudeConfig } from './claude.js';
-import { generateAntigravityConfig } from './antigravity.js';
-import { generateCodexConfig } from './codex.js';
 import { generateCopilotConfig } from './copilot.js';
 import { generateCursorConfig } from './cursor.js';
 import { buildContextContent } from './base.js';
@@ -24,25 +23,17 @@ import { commitWorkspaceArtifacts } from '../core/workspace-git.js';
 import { getActiveStorageProvider } from '../core/adapters/registry.js';
 import { readKnowledgeLessons, type KnowledgeLesson } from '../core/knowledge.js';
 
-import {
-  PRIMARY_KNOWLEDGE_FILE,
-  PRIMARY_CURSOR_RULE_FILE,
-  CLI_NAME,
-} from '../core/constants.js';
+import { PRIMARY_KNOWLEDGE_FILE, CLI_NAME } from '../core/constants.js';
 
-/** Maps each assistant to its generator function and the file it produces. */
-const GENERATORS: Record<
-  AIAssistant,
-  {
-    generate: (ctx: WorkspaceContext, workspacePath: string) => Promise<void>;
-    outputFile: string;
-  }
-> = {
-  claude: { generate: generateClaudeConfig, outputFile: 'CLAUDE.md' },
-  antigravity: { generate: generateAntigravityConfig, outputFile: 'AGENTS.md' },
-  codex: { generate: generateCodexConfig, outputFile: 'AGENTS.md' },
-  copilot: { generate: generateCopilotConfig, outputFile: '.github/copilot-instructions.md' },
-  cursor: { generate: generateCursorConfig, outputFile: PRIMARY_CURSOR_RULE_FILE },
+/**
+ * The generator of each harness that needs its own instruction file (`instructions` in the registry);
+ * the file it writes is `HARNESSES[id].instructions.outputFile`. The others read the canonical AGENTS.md.
+ * A harness with an instruction file and no generator here, or the reverse, does not compile.
+ */
+const GENERATORS: Record<InstructionHarnessId, (ctx: WorkspaceContext, workspacePath: string) => Promise<void>> = {
+  claude: generateClaudeConfig,
+  copilot: generateCopilotConfig,
+  cursor: generateCursorConfig,
 };
 
 function buildKnowledgeContent(ctx: WorkspaceContext): string {
@@ -151,7 +142,7 @@ async function readLessonsQuietly(workspacePath: string): Promise<KnowledgeLesso
  */
 export async function generateContextFiles(
   ctx: WorkspaceContext,
-  assistants: (SessionAssistant | string)[],
+  assistants: string[],
   workspacePath: string,
 ): Promise<void> {
   const generation = await captureGenerationSnapshot(ctx.repos);
@@ -163,7 +154,7 @@ export async function generateContextFiles(
     location: 'workspace' | 'local';
   }> = [];
 
-  const resourceAssistants = assistants.filter((a): a is AIAssistant => a !== 'pi');
+  const resourceAssistants = assistants.filter(isHarnessId);
   for (const output of await generateWorkspaceTools(workspacePath, resourceAssistants)) {
     generatedOutputs.push({ path: output, source: 'workspace tool access', location: 'local' });
   }
@@ -202,22 +193,21 @@ export async function generateContextFiles(
 
   // Generate configuration for each selected assistant
   for (const assistant of assistants) {
-    if (assistant === 'codex' || assistant === 'antigravity' || assistant === 'pi') continue;
-    const entry = GENERATORS[assistant as AIAssistant];
-    if (!entry) continue;
+    if (!Object.hasOwn(GENERATORS, assistant)) continue;
+    const { outputFile } = HARNESSES[assistant as InstructionHarnessId].instructions;
 
     try {
-      await entry.generate(renderCtx, workspacePath);
-      generatedOutputs.push({ path: entry.outputFile, source: 'AGENTS.md', location: 'workspace' });
+      await GENERATORS[assistant as InstructionHarnessId](renderCtx, workspacePath);
+      generatedOutputs.push({ path: outputFile, source: 'AGENTS.md', location: 'workspace' });
       console.log(
         chalk.green('  ✔'),
-        `Generated ${chalk.bold(entry.outputFile)} for ${assistant}`,
+        `Generated ${chalk.bold(outputFile)} for ${assistant}`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(
         chalk.red('  ✖'),
-        `Failed to generate ${entry.outputFile} for ${assistant}: ${message}`,
+        `Failed to generate ${outputFile} for ${assistant}: ${message}`,
       );
       throw error;
     }

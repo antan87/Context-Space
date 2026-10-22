@@ -12,6 +12,7 @@ export type MockDataOptions = {
   projectsData: any;
   reposData: { data: any[] };
   aiDetectData: any;
+  harnessesData: any;
   workflowsTemplatesData: any;
   servicesData: any;
 };
@@ -64,6 +65,17 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
   projectsData: [{ data: [] }, { option: true }],
   reposData: [{ data: [] }, { option: true }],
   aiDetectData: [[], { option: true }],
+  // What GET /api/harnesses returns: the registry in src/harnesses/registry.ts, in its order.
+  harnessesData: [{
+    harnesses: [
+      { id: 'claude', name: 'Claude Code', workspaceSkillFolder: '.claude/skills', globalSkillRoots: ['~/.claude/skills'], history: true, instructionsFile: 'CLAUDE.md' },
+      { id: 'antigravity', name: 'Antigravity (agy)', workspaceSkillFolder: '.agents/skills', globalSkillRoots: ['~/.gemini/config/skills'], history: true, instructionsFile: null },
+      { id: 'codex', name: 'Codex', workspaceSkillFolder: '.agents/skills', globalSkillRoots: ['~/.codex/skills'], history: true, instructionsFile: null },
+      { id: 'copilot', name: 'GitHub Copilot', workspaceSkillFolder: '.agents/skills', globalSkillRoots: [], history: true, instructionsFile: '.github/copilot-instructions.md' },
+      { id: 'cursor', name: 'Cursor Agent', workspaceSkillFolder: '.agents/skills', globalSkillRoots: [], history: false, instructionsFile: '.cursor/rules/contextspace.mdc' },
+      { id: 'pi', name: 'Pi', workspaceSkillFolder: '.agents/skills', globalSkillRoots: ['~/.pi/agent/skills', '~/.agents/skills'], history: true, instructionsFile: null },
+    ],
+  }, { option: true }],
   workflowsTemplatesData: [{ templates: [] }, { option: true }],
   servicesData: [{ services: [], orchestrationTools: [], runningState: [], runningOrchestrators: [] }, { option: true }],
 
@@ -79,6 +91,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     projectsData,
     reposData,
     aiDetectData,
+    harnessesData,
     workflowsTemplatesData,
     servicesData,
   }, use) => {
@@ -116,6 +129,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/projects', json(projectsData?.data ?? projectsData));
     await page.route('**/api/repos', json(reposData?.data ?? reposData));
     await page.route('**/api/ai-detect', json(aiDetectData));
+    await page.route('**/api/harnesses', json(harnessesData));
     await page.route('**/api/workflows/templates', json(workflowsTemplatesData));
     await page.route('**/api/workspace/*/sessions?*', json({ sessions: [] }));
 

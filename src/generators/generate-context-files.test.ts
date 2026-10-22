@@ -7,6 +7,7 @@ import fse from 'fs-extra';
 import { generateContextFiles } from './index.js';
 import { checkGenerationLock, GENERATED_VIEW_HEADER, hashGeneratedContent } from '../core/generation-lock.js';
 import { commitWorkspaceArtifacts } from '../core/workspace-git.js';
+import { HARNESSES, HARNESS_IDS } from '../harnesses/registry.js';
 import type { WorkspaceContext } from '../types.js';
 
 describe('generateContextFiles with Pi harness', () => {
@@ -104,6 +105,52 @@ describe('generateContextFiles with Pi harness', () => {
 
     expect(await fse.pathExists(path.join(tempWorkspace, 'CLAUDE.md'))).toBe(true);
     expect(await fse.pathExists(path.join(tempWorkspace, 'AGENTS.md'))).toBe(true);
+  });
+});
+
+describe('generateContextFiles writes the instruction file each harness declares', () => {
+  let workspace: string;
+  const ownFiles = HARNESS_IDS.flatMap((id) => HARNESSES[id].instructions?.outputFile ?? []);
+  const run = async (assistants: string[]) => {
+    const ctx: WorkspaceContext = {
+      feature: { id: 'instructions', branchName: 'instructions', description: 'Instruction files', repos: [], assistants: assistants as any, workspacePath: workspace, createdAt: new Date().toISOString() },
+      repos: [],
+    };
+    await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify(ctx.feature));
+    await generateContextFiles(ctx, assistants, workspace);
+  };
+  const exists = (file: string) => fse.pathExists(path.join(workspace, file));
+
+  beforeEach(async () => {
+    workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-instructions-test-'));
+    await execa('git', ['init'], { cwd: workspace });
+    await execa('git', ['config', 'user.name', 'Test Runner'], { cwd: workspace });
+    await execa('git', ['config', 'user.email', 'test@local'], { cwd: workspace });
+  });
+
+  afterEach(async () => {
+    await fse.remove(workspace);
+  });
+
+  it('writes every declared file when all harnesses are chosen', async () => {
+    await run([...HARNESS_IDS]);
+
+    expect(ownFiles.sort()).toEqual(['.cursor/rules/contextspace.mdc', '.github/copilot-instructions.md', 'CLAUDE.md']);
+    for (const file of ownFiles) expect(await exists(file)).toBe(true);
+    expect(await exists('AGENTS.md')).toBe(true);
+  });
+
+  it('writes none for the harnesses that read AGENTS.md, Pi among them', async () => {
+    await run(['pi', 'codex', 'antigravity']);
+
+    for (const file of ownFiles) expect(await exists(file)).toBe(false);
+    expect(await exists('AGENTS.md')).toBe(true);
+  });
+
+  it('ignores a name that is not a harness', async () => {
+    await run(['not-a-harness']);
+
+    for (const file of ownFiles) expect(await exists(file)).toBe(false);
   });
 });
 

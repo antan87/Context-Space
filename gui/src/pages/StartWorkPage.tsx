@@ -1,6 +1,6 @@
 import { HarnessIcon, harnessName } from '../components/icons/HarnessIcon.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ResourcePreview } from '../features/workspace-launch/ResourcePreview.js';
 import { Check, CircleAlert, FolderGit2, GitBranch, Sparkles, Zap, Boxes, Bot, RefreshCw, Tag } from 'lucide-react';
 
@@ -41,6 +41,7 @@ import {
   useRepos,
   useWorkflowTemplates,
   useSkills,
+  useSkillCategories,
   useAgents,
   useReposFreshness,
   usePullRepos,
@@ -67,6 +68,8 @@ import {
 import { HarnessPicker } from '../features/workspace-launch/HarnessPicker.js';
 import { MoreOptions, OptionGroup } from '../features/workspace-launch/MoreOptions.js';
 import { SelectedRepos } from '../features/workspace-launch/SelectedRepos.js';
+import { SkillPicker } from '../features/workspace-launch/SkillPicker.js';
+import { isLibrarySkill, onSkillIds, skillStatus, toggleSkill, type SkillChoice } from '../features/skills/skillSelection.js';
 
 /** Sentinel select value for ad-hoc repo picking. */
 const AD_HOC = '__ad-hoc__';
@@ -168,6 +171,7 @@ export function StartWorkPage() {
   const aiDetect = useAiDetect();
   const templates = useWorkflowTemplates();
   const skillsQuery = useSkills();
+  const categoriesQuery = useSkillCategories();
   const agentsQuery = useAgents();
   const domainPacksQuery = useDomainPacks();
   const createWorkspace = useCreateWorkspace();
@@ -213,7 +217,12 @@ export function StartWorkPage() {
       onNavigate: (url) => navigate(url),
     });
   }, [progress.status, progress.workspaceId, navigate, isDirectReplay, startHarness]);
-  const [enabledSkills, setEnabledSkills] = useState<string[]>([]);
+  // Which of My library the workspace starts with: whole categories and single skills.
+  const [skillChoice, setSkillChoice] = useState<SkillChoice>({ categories: [], picks: [], exceptions: [] });
+  const enabledSkills = skillChoice.picks;
+  const enabledCategories = skillChoice.categories;
+  const librarySkills = useMemo(() => (skillsQuery.data ?? []).filter(isLibrarySkill), [skillsQuery.data]);
+  const selectedSkillCount = onSkillIds(librarySkills, skillChoice).length;
   const [enabledAgents, setEnabledAgents] = useState<string[]>([]);
   const [strategyId, setStrategyId] = useState<string>('');
   /** Editable teamwork instructions; prefilled by strategy pick or AI suggestion. */
@@ -289,8 +298,8 @@ export function StartWorkPage() {
     }
 
     // Match skills
-    for (const skill of skillsQuery.data ?? []) {
-      if (enabledSkills.includes(skill.id)) continue;
+    for (const skill of librarySkills) {
+      if (skillStatus(skill, skillChoice).on) continue;
       const terms = [skill.id, skill.name, skill.title, ...(skill.tags ?? [])];
       if (terms.some((term) => term && term.length > 2 && text.includes(term.toLowerCase()))) {
         suggestions.push({ id: skill.id, title: skill.title || skill.name, type: 'skill' });
@@ -298,7 +307,7 @@ export function StartWorkPage() {
     }
 
     return suggestions.slice(0, 6);
-  }, [description, workspaceName, domainPacksQuery.data, skillsQuery.data, selectedTags, enabledSkills]);
+  }, [description, workspaceName, domainPacksQuery.data, librarySkills, selectedTags, skillChoice]);
 
   useEffect(() => {
     if (creationJobId) {
@@ -425,7 +434,8 @@ export function StartWorkPage() {
     workType,
     existingBranches: selectedRepos.filter((repo) => branchOverrides[repo.path]?.trim()).length,
     autoUpdateBase,
-    skills: enabledSkills.length,
+    categories: enabledCategories.length,
+    skills: selectedSkillCount,
     tags: selectedTags.length,
     startHarness: startHarness ? harnessName(startHarness) : '',
     extraAssistants: instructionTargets.length - (startHarness ? 1 : 0),
@@ -496,6 +506,8 @@ export function StartWorkPage() {
       })),
       assistants: instructionTargets,
       enabledSkills: enabledSkills.length > 0 ? enabledSkills : undefined,
+      enabledCategories: enabledCategories.length > 0 ? enabledCategories : undefined,
+      disabledSkills: skillChoice.exceptions.length > 0 ? skillChoice.exceptions : undefined,
       enabledAgents: enabledAgents.length > 0 ? enabledAgents : undefined,
       domainPacks: selectedTags.length > 0 ? selectedTags : undefined,
       teamworkInstructions: customInstructions.trim() || undefined,
@@ -747,7 +759,8 @@ export function StartWorkPage() {
                     if (item.type === 'tag') {
                       setSelectedTags((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
                     } else {
-                      setEnabledSkills((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
+                      const skill = librarySkills.find((candidate) => candidate.id === item.id);
+                      if (skill) setSkillChoice((prev) => (skillStatus(skill, prev).on ? prev : toggleSkill(prev, skill)));
                     }
                   }}
                   className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-card px-2 py-0.5 font-mono text-[11px] text-foreground transition-colors hover:bg-primary/10"
@@ -918,182 +931,13 @@ export function StartWorkPage() {
           )}
           </OptionGroup>
 
-          <OptionGroup
-            aria-label="Skills"
-            icon={<Boxes className="size-4 text-primary" />}
-            title={<>
-              Skills
-              {enabledSkills.length > 0 && (
-                <span className="text-xs font-normal text-muted-foreground">({enabledSkills.length} selected)</span>
-              )}
-            </>}
-            hint="Guides your AI tools can follow. None are needed."
-            action={
-              <div className="flex shrink-0 items-center gap-2">
-                {(skillsQuery.data ?? []).length > 0 && (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => {
-                      const all = (skillsQuery.data ?? []).map((s) => s.id);
-                      setEnabledSkills(enabledSkills.length === all.length ? [] : all);
-                    }}
-                    className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    {enabledSkills.length === (skillsQuery.data ?? []).length && (skillsQuery.data ?? []).length > 0
-                      ? 'Deselect All'
-                      : 'Select All'}
-                  </Button>
-                )}
-                <Link
-                  to="/skills"
-                  className="flex items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  Skill Library →
-                </Link>
-              </div>
-            }
-          >
-            {skillsQuery.isLoading ? (
-              <div className="flex items-center justify-center p-3 gap-2 text-xs text-muted-foreground rounded-lg border border-border">
-                <Spinner className="size-3" />
-                Loading skills...
-              </div>
-            ) : (skillsQuery.data ?? []).length === 0 ? (
-              <div className="p-3 border border-dashed border-border rounded-lg bg-card/20 text-center">
-                <p className="text-xs text-muted-foreground">
-                  No skills yet. Add them in the{' '}
-                  <Link to="/skills" className="text-primary underline">
-                    Skill Library
-                  </Link>.
-                </p>
-              </div>
-            ) : (() => {
-              const allSkills = skillsQuery.data ?? [];
-              const catalogSkills = allSkills.filter((s) => !s.source);
-              const harnessSkills = allSkills.filter((s) => Boolean(s.source));
-
-              const renderSkillCard = (skill: (typeof allSkills)[number], isHarness = false) => {
-                const isChecked = enabledSkills.includes(skill.id);
-                return (
-                  <label
-                    key={skill.id}
-                    className={cn(
-                      'flex items-center justify-between gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors select-none text-left',
-                      isChecked
-                        ? 'border-primary/60 bg-primary/5 ring-1 ring-primary/40 text-foreground'
-                        : 'border-border bg-card hover:border-foreground/20 text-muted-foreground',
-                    )}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Checkbox
-                        checked={isChecked}
-                        onCheckedChange={() =>
-                          setEnabledSkills((prev) =>
-                            prev.includes(skill.id) ? prev.filter((id) => id !== skill.id) : [...prev, skill.id],
-                          )
-                        }
-                        aria-label={`Select ${skill.title || skill.name}`}
-                      />
-                      <div className="min-w-0">
-                        <p className="font-mono text-xs font-medium truncate text-foreground">
-                          {skill.title || skill.name}
-                        </p>
-                        {skill.description && (
-                          <p className="text-[11px] text-muted-foreground line-clamp-1">
-                            {skill.description}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {isHarness && skill.source && (
-                        <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0 font-mono text-cyan-600 dark:text-cyan-400 border-cyan-500/30">
-                          {skill.source.label || skill.source.harness}
-                        </Badge>
-                      )}
-                      {skill.category && (
-                        <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0 capitalize">
-                          {skill.category}
-                        </Badge>
-                      )}
-                    </div>
-                  </label>
-                );
-              };
-
-              return (
-                <div className="space-y-4">
-                  {catalogSkills.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between pb-1 border-b border-border/40">
-                        <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                          ContextSpace Catalog Skills
-                          <span className="text-[11px] font-normal text-muted-foreground">({catalogSkills.length})</span>
-                        </h4>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => {
-                            const catalogIds = catalogSkills.map((s) => s.id);
-                            const allCatalogSelected = catalogIds.every((id) => enabledSkills.includes(id));
-                            setEnabledSkills((prev) =>
-                              allCatalogSelected
-                                ? prev.filter((id) => !catalogIds.includes(id))
-                                : Array.from(new Set([...prev, ...catalogIds])),
-                            );
-                          }}
-                          className="h-5 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-                        >
-                          {catalogSkills.map((s) => s.id).every((id) => enabledSkills.includes(id))
-                            ? 'Deselect catalog'
-                            : 'Select catalog'}
-                        </Button>
-                      </div>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {catalogSkills.map((skill) => renderSkillCard(skill, false))}
-                      </div>
-                    </div>
-                  )}
-
-                  {harnessSkills.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between pb-1 border-b border-border/40">
-                        <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                          Global Harness Skills
-                          <span className="text-[11px] font-normal text-muted-foreground">({harnessSkills.length})</span>
-                        </h4>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => {
-                            const harnessIds = harnessSkills.map((s) => s.id);
-                            const allHarnessSelected = harnessIds.every((id) => enabledSkills.includes(id));
-                            setEnabledSkills((prev) =>
-                              allHarnessSelected
-                                ? prev.filter((id) => !harnessIds.includes(id))
-                                : Array.from(new Set([...prev, ...harnessIds])),
-                            );
-                          }}
-                          className="h-5 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-                        >
-                          {harnessSkills.map((s) => s.id).every((id) => enabledSkills.includes(id))
-                            ? 'Deselect harness'
-                            : 'Select harness'}
-                        </Button>
-                      </div>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {harnessSkills.map((skill) => renderSkillCard(skill, true))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </OptionGroup>
+          <SkillPicker
+            skills={skillsQuery.data ?? []}
+            categories={categoriesQuery.data ?? []}
+            loading={skillsQuery.isLoading}
+            choice={skillChoice}
+            onChange={setSkillChoice}
+          />
 
           <OptionGroup
             icon={<Tag className="size-4 text-primary" />}
@@ -1311,7 +1155,7 @@ export function StartWorkPage() {
           )}
 
           <div className="px-4 py-4">
-            <ResourcePreview skills={enabledSkills} agents={enabledAgents} assistants={instructionTargets} tagCount={selectedTags.length} />
+            <ResourcePreview skills={enabledSkills} categories={enabledCategories} exceptions={skillChoice.exceptions} agents={enabledAgents} assistants={instructionTargets} tagCount={selectedTags.length} />
           </div>
         </MoreOptions>
 
