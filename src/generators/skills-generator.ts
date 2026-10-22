@@ -15,6 +15,13 @@ import { reconcileWorkspaceResources } from '../resources/materializer.js';
 import { resolveActiveDomainRules } from '../core/domain-packs.js';
 
 /**
+ * Stand-in for a workspace saved with no assistant. Any harness can still open it later, and AGENTS.md points
+ * at both `.agents/skills/` and `.claude/skills/`, so skills go to both. Codex is left out on purpose: it would
+ * also write agent files into `.codex/agents/`, and that belongs to a workspace that chose Codex.
+ */
+const NO_ASSISTANT_SKILL_TARGETS: AIAssistant[] = ['claude', 'antigravity'];
+
+/**
  * Checks if the workspace has cross-repo package dependencies.
  */
 function hasCrossRepoDependencies(analysis: Map<string, ProjectAnalysis>): boolean {
@@ -191,7 +198,7 @@ function getVerifierSkill(ctx: WorkspaceContext): string {
  * Generates custom skills/rules for each selected AI assistant.
  *
  * @param ctx           - The workspace context.
- * @param assistants    - The active AI assistant harnesses.
+ * @param assistants    - The active AI assistant harnesses. When empty, skills are copied for both folders.
  * @param workspacePath - The workspace root directory.
  */
 export async function generateSkills(
@@ -324,5 +331,6 @@ export async function generateSkills(
   }
   const agentsToDeploy = [...enabledAgentIds].map((id) => agentMap.get(id)!);
 
-  await reconcileWorkspaceResources(workspacePath, assistants, skillsToDeploy, agentsToDeploy);
+  const targets = assistants.length > 0 ? assistants : NO_ASSISTANT_SKILL_TARGETS;
+  await reconcileWorkspaceResources(workspacePath, targets, skillsToDeploy, agentsToDeploy);
 }

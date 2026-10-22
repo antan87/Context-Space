@@ -16,6 +16,7 @@ import { getGeneratorVersion, getRepoFingerprint } from './analysis-cache.js';
 import { loadFeatureConfig, resolveRepoInfos } from './workspace.js';
 import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
+import { getWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
 import type { RepoInfo } from '../types.js';
 
 import {
@@ -69,7 +70,7 @@ export interface GenerationLock extends GenerationSnapshot {
 }
 
 export interface GenerationDrift {
-  kind: 'missing-lock' | 'tool' | 'repo' | 'output' | 'unverified';
+  kind: 'missing-lock' | 'tool' | 'repo' | 'output' | 'unverified' | 'skill';
   name: string;
   generated?: string;
   current?: string;
@@ -304,6 +305,37 @@ async function currentWorkspaceRepos(workspacePath: string): Promise<RepoInfo[]>
   return resolveRepoInfos(feature.repos.map((repo) => resolveFeatureRepoPath(feature, workspacePath, repo)));
 }
 
+/** The folders the assistants are told to read skills from. A skill needs a copy in either one. */
+const SKILL_FOLDERS = ['.agents/skills', '.claude/skills'] as const;
+
+/**
+ * Skills the workspace has switched on that no assistant can find, because no folder holds a copy. Nothing about
+ * them is recorded in the lock when a refresh wrote none, so they would otherwise go unnoticed. A skills file that
+ * cannot be read is not a reason to fail the check, so it reports nothing.
+ */
+async function missingSkillDrift(workspacePath: string): Promise<GenerationDrift[]> {
+  let config: Awaited<ReturnType<typeof getWorkspaceSkillsConfig>>;
+  try {
+    config = await getWorkspaceSkillsConfig(workspacePath);
+  } catch {
+    return [];
+  }
+  const disabled = new Set(config.disabledSkills ?? []);
+  const enabled = [...new Set(config.enabledSkills)].filter((id) => !disabled.has(id));
+  const drift = await Promise.all(enabled.map(async (id): Promise<GenerationDrift | null> => {
+    for (const folder of SKILL_FOLDERS) {
+      const copy = await fs.stat(path.join(workspacePath, folder, id, 'SKILL.md')).then(() => true, () => false);
+      if (copy) return null;
+    }
+    return {
+      kind: 'skill',
+      name: id,
+      message: `Enabled skill ${id} has no copy in .agents/skills/ or .claude/skills/, so the assistant cannot use it. Run \`${CLI_NAME} refresh\`.`,
+    };
+  }));
+  return drift.filter((item): item is GenerationDrift => item !== null);
+}
+
 export async function checkGenerationLock(
   workspacePath: string,
   options: { markDocuments?: boolean } = {},
@@ -376,6 +408,7 @@ export async function checkGenerationLock(
     return null;
   }));
   drift.push(...outputDrift.filter((item): item is GenerationDrift => item !== null));
+  drift.push(...await missingSkillDrift(workspacePath));
 
   if (options.markDocuments && drift.some((item) => item.kind === 'repo' || item.kind === 'tool' || item.kind === 'unverified')) {
     await markFreshnessBanners(workspacePath, lock, drift);

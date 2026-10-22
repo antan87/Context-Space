@@ -17,8 +17,9 @@ import {
 } from './generation-lock.js';
 import { getStorageProvider, setActiveStorageProvider } from './adapters/registry.js';
 import type { StoragePort } from './ports/storage.js';
+import { saveWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
 
-import { PRIMARY_MANIFEST_FILE, PRIMARY_LOCK_FILE, BRAND_NAME } from './constants.js';
+import { PRIMARY_MANIFEST_FILE, PRIMARY_LOCK_FILE, PRIMARY_CONFIG_DIR_NAME, BRAND_NAME } from './constants.js';
 
 describe('generation lock', () => {
   let workspacePath: string;
@@ -222,6 +223,77 @@ describe('generation lock', () => {
     await fs.appendFile(path.join(workspacePath, 'AGENTS.md'), 'manual edit\n');
     const result = await checkGenerationLock(workspacePath);
     expect(result.drift).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'output', name: 'AGENTS.md' })]));
+  });
+
+  describe('enabled skills', () => {
+    async function writeSkillCopy(folder: string, id: string): Promise<void> {
+      const dir = path.join(workspacePath, folder, id);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, 'SKILL.md'), `---\nname: ${id}\ndescription: test\n---\n# ${id}\n`);
+    }
+
+    it('reports an enabled skill that has no copy in either skill folder', async () => {
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['pr-review-toolkit'] });
+
+      const result = await checkGenerationLock(workspacePath);
+
+      expect(result.fresh).toBe(false);
+      expect(result.drift).toEqual([expect.objectContaining({ kind: 'skill', name: 'pr-review-toolkit' })]);
+      const message = result.drift[0]!.message;
+      expect(message).toContain('pr-review-toolkit');
+      expect(message).toContain('.agents/skills/ or .claude/skills/');
+      expect(message).toContain('`ctxspace refresh`');
+    });
+
+    it('does not turn the generated views into a stale-context banner for a missing skill', async () => {
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['pr-review-toolkit'] });
+
+      const result = await checkGenerationLock(workspacePath, { markDocuments: true });
+
+      expect(result.fresh).toBe(false);
+      expect(await fs.readFile(path.join(workspacePath, 'AGENTS.md'), 'utf-8')).not.toContain('STALE');
+    });
+
+    it.each(['.claude/skills', '.agents/skills'])('is fresh once the skill has a copy in %s', async (folder) => {
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['pr-review-toolkit'] });
+      await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: false });
+
+      await writeSkillCopy(folder, 'pr-review-toolkit');
+
+      await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+    });
+
+    it('names only the enabled skills that are still missing', async () => {
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['present-skill', 'absent-skill'] });
+      await writeSkillCopy('.claude/skills', 'present-skill');
+
+      const result = await checkGenerationLock(workspacePath);
+
+      expect(result.drift.map((item) => [item.kind, item.name])).toEqual([['skill', 'absent-skill']]);
+    });
+
+    it('does not report a skill that is disabled', async () => {
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, {
+        enabledSkills: ['pr-review-toolkit'],
+        disabledSkills: ['pr-review-toolkit'],
+      });
+
+      await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+    });
+
+    it('does not fail the check when the skills file cannot be read', async () => {
+      await createLock();
+      const configDir = path.join(workspacePath, PRIMARY_CONFIG_DIR_NAME);
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(path.join(configDir, 'skills.json'), '{ not json');
+
+      await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+    });
   });
 
   it('does not read an output that is no longer generated as drift, whether its file is still there, edited or gone', async () => {

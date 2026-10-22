@@ -12,6 +12,7 @@ import {
 } from '../utils/skills-catalog.js';
 import type { WorkspaceContext, ProjectAnalysis, AIAssistant } from '../types.js';
 import { PRIMARY_CONFIG_DIR_NAME } from '../core/constants.js';
+import { resolveResourceLockPath } from '../resources/materializer.js';
 
 describe('skills-generator', () => {
   let tempWorkspace: string;
@@ -279,6 +280,48 @@ describe('skills-generator', () => {
         path.join(tempWorkspace, '.agents', 'skills', 'pr-review-toolkit', 'SKILL.md'),
       ),
     ).toBe(true);
+  });
+
+  it('copies enabled skills to both skill folders when the workspace has no assistant', async () => {
+    await saveSkill({
+      name: 'pr-review-toolkit',
+      title: 'Pull Request Review Toolkit',
+      category: 'pull-requests',
+      description: 'Reviews pull requests',
+      content: '# PR Review',
+    });
+    await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: ['pr-review-toolkit'] });
+
+    const ctx: WorkspaceContext = {
+      feature: {
+        id: 'no-assistant',
+        branchName: 'feature-test',
+        description: 'Workspace created without choosing an assistant',
+        repos: [],
+        assistants: [],
+        workspacePath: tempWorkspace,
+        createdAt: new Date().toISOString(),
+      },
+      repos: [],
+    };
+
+    await generateSkills(ctx, [], tempWorkspace);
+
+    expect(await fse.pathExists(path.join(tempWorkspace, '.agents', 'skills', 'pr-review-toolkit', 'SKILL.md'))).toBe(true);
+    expect(await fse.pathExists(path.join(tempWorkspace, '.claude', 'skills', 'pr-review-toolkit', 'SKILL.md'))).toBe(true);
+    // No harness was chosen, so nothing Codex-only is written.
+    expect(await fse.pathExists(path.join(tempWorkspace, '.codex', 'agents'))).toBe(false);
+
+    const lock = (await fse.readJson(await resolveResourceLockPath(tempWorkspace))) as {
+      outputs: Array<{ path: string; resourceId: string }>;
+    };
+    const owned = lock.outputs.filter((output) => output.resourceId === 'pr-review-toolkit').map((output) => output.path);
+    expect(owned).toEqual(
+      expect.arrayContaining([
+        '.agents/skills/pr-review-toolkit/SKILL.md',
+        '.claude/skills/pr-review-toolkit/SKILL.md',
+      ]),
+    );
   });
 });
 
