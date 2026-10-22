@@ -1063,17 +1063,17 @@ export interface CodexAgentItem {
 
 /** Workspace skill assignments state. */
 export interface WorkspaceSkillsConfig {
-  /** Persisted contract version. */
-  schemaVersion?: 1;
+  /** Persisted contract version. From 2 on, `enabledCategories` holds the categories the workspace subscribes to. */
+  schemaVersion?: 1 | 2;
   /** Optimistic concurrency token for assignment edits. */
   revision?: number;
   /** Active enabled skill IDs. */
   enabledSkills: string[];
-  /** Explicitly disabled skill IDs (persisted opt-out). */
+  /** Skills switched off on purpose, for example one skill inside a subscribed category (persisted opt-out). */
   disabledSkills?: string[];
   /** Active Codex custom-agent IDs. */
   enabledAgents?: string[];
-  /** Active enabled category IDs. */
+  /** Categories the workspace subscribes to: every skill in one is on, including skills added to it later. */
   enabledCategories?: string[];
 }
 

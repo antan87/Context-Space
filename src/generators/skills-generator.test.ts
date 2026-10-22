@@ -6,6 +6,7 @@ import fse from 'fs-extra';
 
 import { generateSkills } from './skills-generator.js';
 import {
+  getAllSkills,
   saveWorkspaceSkillsConfig,
   saveSkill,
   saveSkillCategory,
@@ -238,7 +239,7 @@ describe('skills-generator', () => {
     expect(await fse.pathExists(path.join(tempWorkspace, '.agents', 'skills', 'nexusflow-local-package-loop'))).toBe(false);
   });
 
-  it('auto-deploys skills bundled in active category tags', async () => {
+  it('auto-deploys the skills of a subscribed category', async () => {
     await saveSkillCategory({
       id: 'pull-requests',
       name: 'Pull Requests & Review',
@@ -253,7 +254,7 @@ describe('skills-generator', () => {
       content: '# PR Review',
     });
 
-    // Workspace with 'pull-requests' category enabled in wsConfig
+    // Workspace subscribed to the 'pull-requests' category
     await saveWorkspaceSkillsConfig(tempWorkspace, {
       enabledSkills: [],
       enabledCategories: ['pull-requests'],
@@ -274,7 +275,7 @@ describe('skills-generator', () => {
 
     await generateSkills(ctx, ['antigravity'], tempWorkspace);
 
-    // pr-review-toolkit from pull-requests category should be auto-deployed
+    // pr-review-toolkit names the pull-requests category, so it is deployed
     expect(
       await fse.pathExists(
         path.join(tempWorkspace, '.agents', 'skills', 'pr-review-toolkit', 'SKILL.md'),
@@ -323,5 +324,150 @@ describe('skills-generator', () => {
       ]),
     );
   });
-});
+  describe('skills chosen by category', () => {
+    const feature = (assistants: AIAssistant[]): WorkspaceContext => ({
+      feature: {
+        id: 'by-category',
+        branchName: 'feature-category',
+        description: 'Skills by category',
+        repos: [],
+        assistants,
+        workspacePath: tempWorkspace,
+        createdAt: new Date().toISOString(),
+      },
+      repos: [],
+    });
+    const addSkill = (name: string, category: string) =>
+      saveSkill({ name, title: name, category, description: `About ${name}`, content: `# ${name}` });
+    const installed = (folder: string, id: string) =>
+      fse.pathExists(path.join(tempWorkspace, folder, 'skills', id, 'SKILL.md'));
 
+    it('picks up a skill added to the category after the workspace subscribed', async () => {
+      await addSkill('review-pr', 'pull-requests');
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: [], enabledCategories: ['pull-requests'] });
+      await generateSkills(feature(['claude']), ['claude'], tempWorkspace);
+      expect(await installed('.claude', 'review-pr')).toBe(true);
+
+      await addSkill('merge-helper', 'pull-requests');
+      await generateSkills(feature(['claude']), ['claude'], tempWorkspace);
+
+      expect(await installed('.claude', 'merge-helper')).toBe(true);
+      expect(await installed('.agents', 'merge-helper')).toBe(true);
+    });
+
+    it('leaves out a skill switched off inside a subscribed category and removes its copies', async () => {
+      await addSkill('review-pr', 'pull-requests');
+      await addSkill('write-description', 'pull-requests');
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: [], enabledCategories: ['pull-requests'] });
+      await generateSkills(feature(['claude']), ['claude'], tempWorkspace);
+      expect(await installed('.claude', 'write-description')).toBe(true);
+
+      await saveWorkspaceSkillsConfig(tempWorkspace, {
+        enabledSkills: [],
+        enabledCategories: ['pull-requests'],
+        disabledSkills: ['write-description'],
+      });
+      await generateSkills(feature(['claude']), ['claude'], tempWorkspace);
+
+      expect(await installed('.claude', 'review-pr')).toBe(true);
+      expect(await installed('.claude', 'write-description')).toBe(false);
+      expect(await installed('.agents', 'write-description')).toBe(false);
+    });
+
+    it('adds a single pick from outside the subscribed categories', async () => {
+      await addSkill('review-pr', 'pull-requests');
+      await addSkill('standup', 'notes');
+      await saveWorkspaceSkillsConfig(tempWorkspace, {
+        enabledSkills: ['standup'],
+        enabledCategories: ['pull-requests'],
+      });
+
+      await generateSkills(feature(['codex']), ['codex'], tempWorkspace);
+
+      expect(await installed('.agents', 'review-pr')).toBe(true);
+      expect(await installed('.agents', 'standup')).toBe(true);
+    });
+
+    it('does not let the skills list in a category file switch skills on', async () => {
+      await saveSkillCategory({ id: 'pull-requests', name: 'Pull Requests', skills: ['standup'] });
+      await addSkill('review-pr', 'pull-requests');
+      await addSkill('standup', 'notes');
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: [], enabledCategories: ['pull-requests'] });
+
+      await generateSkills(feature(['claude']), ['claude'], tempWorkspace);
+
+      expect(await installed('.claude', 'review-pr')).toBe(true);
+      expect(await installed('.claude', 'standup')).toBe(false);
+    });
+
+    it('ignores the categories a version 1 skills file lists', async () => {
+      await addSkill('review-pr', 'pull-requests');
+      const configDir = path.join(tempWorkspace, PRIMARY_CONFIG_DIR_NAME);
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, 'skills.json'),
+        JSON.stringify({ schemaVersion: 1, revision: 2, enabledSkills: [], enabledAgents: [], enabledCategories: ['pull-requests'] }),
+      );
+
+      await generateSkills(feature(['claude']), ['claude'], tempWorkspace);
+
+      expect(await installed('.claude', 'review-pr')).toBe(false);
+    });
+
+    it.each([[['claude']], [['codex']], [['cursor', 'copilot']]] as Array<[AIAssistant[]]>)(
+      'copies a skill to both skill folders whichever assistants are chosen (%j)',
+      async (assistants) => {
+        await addSkill('review-pr', 'pull-requests');
+        await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: ['review-pr'] });
+
+        await generateSkills(feature(assistants), assistants, tempWorkspace);
+
+        expect(await installed('.agents', 'review-pr')).toBe(true);
+        expect(await installed('.claude', 'review-pr')).toBe(true);
+      },
+    );
+
+    it('never copies a skill a harness ships, even when an old config picks it or its category is subscribed', async () => {
+      const savedEnv = { nexusflow: process.env.NEXUSFLOW_HOME, home: process.env.HOME, userProfile: process.env.USERPROFILE };
+      // Harness folders are only read in a real home, so stand one up.
+      const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-gen-skills-real-home-')));
+      try {
+        await fs.mkdir(path.join(home, '.claude', 'skills', 'pdf'), { recursive: true });
+        await fs.writeFile(
+          path.join(home, '.claude', 'skills', 'pdf', 'SKILL.md'),
+          '---\nname: pdf\ndescription: From Claude\ncategory: documents\n---\n# PDF\n',
+        );
+        delete process.env.NEXUSFLOW_HOME;
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        await addSkill('review-pr', 'documents');
+        expect((await getAllSkills()).find((skill) => skill.id === 'pdf')?.source?.harness).toBe('claude');
+        await saveWorkspaceSkillsConfig(tempWorkspace, {
+          enabledSkills: ['pdf'],
+          enabledCategories: ['documents'],
+        });
+
+        await generateSkills(feature(['claude']), ['claude'], tempWorkspace);
+
+        expect(await installed('.claude', 'review-pr')).toBe(true);
+        expect(await installed('.claude', 'pdf')).toBe(false);
+        expect(await installed('.agents', 'pdf')).toBe(false);
+      } finally {
+        if (savedEnv.nexusflow === undefined) delete process.env.NEXUSFLOW_HOME;
+        else process.env.NEXUSFLOW_HOME = savedEnv.nexusflow;
+        if (savedEnv.home === undefined) delete process.env.HOME;
+        else process.env.HOME = savedEnv.home;
+        if (savedEnv.userProfile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = savedEnv.userProfile;
+        await fse.remove(home);
+      }
+    });
+
+    it('still refuses a picked skill that has left the library', async () => {
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: ['deleted-skill'] });
+      await expect(generateSkills(feature(['claude']), ['claude'], tempWorkspace)).rejects.toThrow(
+        'Selected skills are no longer available: deleted-skill',
+      );
+    });
+  });
+});

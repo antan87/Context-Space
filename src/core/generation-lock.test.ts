@@ -17,7 +17,7 @@ import {
 } from './generation-lock.js';
 import { getStorageProvider, setActiveStorageProvider } from './adapters/registry.js';
 import type { StoragePort } from './ports/storage.js';
-import { saveWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
+import { saveSkill, saveWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
 
 import { PRIMARY_MANIFEST_FILE, PRIMARY_LOCK_FILE, PRIMARY_CONFIG_DIR_NAME, BRAND_NAME } from './constants.js';
 
@@ -226,13 +226,43 @@ describe('generation lock', () => {
   });
 
   describe('enabled skills', () => {
+    let libraryHome: string;
+    const savedEnv = {
+      nexusflow: process.env.NEXUSFLOW_HOME,
+      contextspace: process.env.CONTEXTSPACE_HOME,
+      home: process.env.HOME,
+      userProfile: process.env.USERPROFILE,
+    };
+    const restoreEnv = (key: string, value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+
+    beforeEach(async () => {
+      // The check reads the skill library, so keep it away from the real one.
+      libraryHome = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-lock-library-'));
+      process.env.NEXUSFLOW_HOME = libraryHome;
+      delete process.env.CONTEXTSPACE_HOME;
+    });
+
+    afterEach(async () => {
+      restoreEnv('NEXUSFLOW_HOME', savedEnv.nexusflow);
+      restoreEnv('CONTEXTSPACE_HOME', savedEnv.contextspace);
+      restoreEnv('HOME', savedEnv.home);
+      restoreEnv('USERPROFILE', savedEnv.userProfile);
+      await fse.remove(libraryHome);
+    });
+
     async function writeSkillCopy(folder: string, id: string): Promise<void> {
       const dir = path.join(workspacePath, folder, id);
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(path.join(dir, 'SKILL.md'), `---\nname: ${id}\ndescription: test\n---\n# ${id}\n`);
     }
+    const addToLibrary = (id: string, category = 'general') =>
+      saveSkill({ name: id, category, description: `About ${id}`, content: `# ${id}` });
 
     it('reports an enabled skill that has no copy in either skill folder', async () => {
+      await addToLibrary('pr-review-toolkit');
       await createLock();
       await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['pr-review-toolkit'] });
 
@@ -244,9 +274,11 @@ describe('generation lock', () => {
       expect(message).toContain('pr-review-toolkit');
       expect(message).toContain('.agents/skills/ or .claude/skills/');
       expect(message).toContain('`ctxspace refresh`');
+      expect(message).not.toContain('no longer in your library');
     });
 
     it('does not turn the generated views into a stale-context banner for a missing skill', async () => {
+      await addToLibrary('pr-review-toolkit');
       await createLock();
       await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['pr-review-toolkit'] });
 
@@ -257,6 +289,7 @@ describe('generation lock', () => {
     });
 
     it.each(['.claude/skills', '.agents/skills'])('is fresh once the skill has a copy in %s', async (folder) => {
+      await addToLibrary('pr-review-toolkit');
       await createLock();
       await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['pr-review-toolkit'] });
       await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: false });
@@ -267,6 +300,8 @@ describe('generation lock', () => {
     });
 
     it('names only the enabled skills that are still missing', async () => {
+      await addToLibrary('present-skill');
+      await addToLibrary('absent-skill');
       await createLock();
       await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['present-skill', 'absent-skill'] });
       await writeSkillCopy('.claude/skills', 'present-skill');
@@ -277,11 +312,68 @@ describe('generation lock', () => {
     });
 
     it('does not report a skill that is disabled', async () => {
+      await addToLibrary('pr-review-toolkit');
       await createLock();
       await saveWorkspaceSkillsConfig(workspacePath, {
         enabledSkills: ['pr-review-toolkit'],
         disabledSkills: ['pr-review-toolkit'],
       });
+
+      await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+    });
+
+    it('reports a skill that a subscribed category brings in and has no copy, but not one switched off in it', async () => {
+      await addToLibrary('review-pr', 'pull-requests');
+      await addToLibrary('write-description', 'pull-requests');
+      await addToLibrary('standup', 'notes');
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, {
+        enabledSkills: [],
+        enabledCategories: ['pull-requests'],
+        disabledSkills: ['write-description'],
+      });
+
+      const result = await checkGenerationLock(workspacePath);
+
+      expect(result.drift.map((item) => [item.kind, item.name])).toEqual([['skill', 'review-pr']]);
+
+      await writeSkillCopy('.agents/skills', 'review-pr');
+      await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+    });
+
+    it('does not ask for a copy of a skill a harness ships', async () => {
+      const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-lock-home-')));
+      try {
+        await fs.mkdir(path.join(home, '.claude', 'skills', 'pdf'), { recursive: true });
+        await fs.writeFile(path.join(home, '.claude', 'skills', 'pdf', 'SKILL.md'), '---\nname: pdf\ndescription: From Claude\n---\n# PDF\n');
+        // Harness folders are only read in a real home.
+        delete process.env.NEXUSFLOW_HOME;
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        await createLock();
+        await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['pdf'], enabledCategories: ['general'] });
+
+        await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
+      } finally {
+        await fse.remove(home);
+      }
+    });
+
+    it('says so when an enabled skill is no longer in the library and nothing of it is left', async () => {
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['deleted-skill'] });
+
+      const result = await checkGenerationLock(workspacePath);
+
+      expect(result.drift).toEqual([expect.objectContaining({ kind: 'skill', name: 'deleted-skill' })]);
+      expect(result.drift[0]!.message).toContain('Enabled skill deleted-skill is no longer in your library');
+      expect(result.drift[0]!.message).toContain('turn it off for this workspace');
+    });
+
+    it('does not report an enabled skill with a copy that the library does not hold, such as one built from the analysis', async () => {
+      await createLock();
+      await saveWorkspaceSkillsConfig(workspacePath, { enabledSkills: ['verifier-workspace'] });
+      await writeSkillCopy('.agents/skills', 'verifier-workspace');
 
       await expect(checkGenerationLock(workspacePath)).resolves.toMatchObject({ fresh: true, drift: [] });
     });

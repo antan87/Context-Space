@@ -155,6 +155,8 @@ export function summarizeOptionChanges(options: {
   /** How many repositories ride an existing branch (worktrees only). */
   existingBranches: number;
   autoUpdateBase: boolean;
+  /** Categories of My library turned on. */
+  categories?: number;
   skills: number;
   tags: number;
   /** Display name of the tool chosen to start with, or '' for none. */
@@ -170,6 +172,7 @@ export function summarizeOptionChanges(options: {
   if (options.workType !== 'feature') phrases.push(workTypeLabel(options.workType));
   if (options.autoUpdateBase) phrases.push('Fast-forward first');
   if (options.startHarness) phrases.push(`Starts with ${options.startHarness}`);
+  if (options.categories) phrases.push(`${options.categories} ${options.categories === 1 ? 'category' : 'categories'}`);
   if (options.skills > 0) phrases.push(count(options.skills, 'skill'));
   if (options.tags > 0) phrases.push(count(options.tags, 'tag'));
   if (options.extraAssistants > 0) phrases.push(count(options.extraAssistants, 'more AI tool'));

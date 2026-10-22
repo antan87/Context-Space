@@ -16,7 +16,8 @@ import { getGeneratorVersion, getRepoFingerprint } from './analysis-cache.js';
 import { loadFeatureConfig, resolveRepoInfos } from './workspace.js';
 import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
-import { getWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
+import { getAllSkills, getWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
+import { resolveWorkspaceSkills } from '../resources/selection.js';
 import type { RepoInfo } from '../types.js';
 
 import {
@@ -309,28 +310,38 @@ async function currentWorkspaceRepos(workspacePath: string): Promise<RepoInfo[]>
 const SKILL_FOLDERS = ['.agents/skills', '.claude/skills'] as const;
 
 /**
- * Skills the workspace has switched on that no assistant can find, because no folder holds a copy. Nothing about
- * them is recorded in the lock when a refresh wrote none, so they would otherwise go unnoticed. A skills file that
- * cannot be read is not a reason to fail the check, so it reports nothing.
+ * Skills the workspace has switched on, by category or one by one, that no assistant can find because no folder
+ * holds a copy. Nothing about them is recorded in the lock when a refresh wrote none, so they would otherwise go
+ * unnoticed. A skill a harness ships is not the workspace's to copy, and one switched off does not count. A
+ * skill that left the library is reported once nothing is left of it. A skills file or catalog that cannot be
+ * read is not a reason to fail the check, so it reports nothing.
  */
 async function missingSkillDrift(workspacePath: string): Promise<GenerationDrift[]> {
-  let config: Awaited<ReturnType<typeof getWorkspaceSkillsConfig>>;
+  let wanted: { ids: string[]; missing: string[] };
   try {
-    config = await getWorkspaceSkillsConfig(workspacePath);
+    const config = await getWorkspaceSkillsConfig(workspacePath);
+    // Nothing is picked or subscribed to, so there is nothing to look for: skip reading the catalog.
+    if (!config.enabledSkills.length && !config.enabledCategories?.length) return [];
+    const resolved = resolveWorkspaceSkills(config, await getAllSkills(workspacePath));
+    wanted = { ids: resolved.skills.map((skill) => skill.id), missing: resolved.missing };
   } catch {
     return [];
   }
-  const disabled = new Set(config.disabledSkills ?? []);
-  const enabled = [...new Set(config.enabledSkills)].filter((id) => !disabled.has(id));
-  const drift = await Promise.all(enabled.map(async (id): Promise<GenerationDrift | null> => {
+  const hasCopy = async (id: string): Promise<boolean> => {
     for (const folder of SKILL_FOLDERS) {
       const copy = await fs.stat(path.join(workspacePath, folder, id, 'SKILL.md')).then(() => true, () => false);
-      if (copy) return null;
+      if (copy) return true;
     }
+    return false;
+  };
+  const drift = await Promise.all([...wanted.ids, ...wanted.missing].map(async (id): Promise<GenerationDrift | null> => {
+    if (await hasCopy(id)) return null;
     return {
       kind: 'skill',
       name: id,
-      message: `Enabled skill ${id} has no copy in .agents/skills/ or .claude/skills/, so the assistant cannot use it. Run \`${CLI_NAME} refresh\`.`,
+      message: wanted.missing.includes(id)
+        ? `Enabled skill ${id} is no longer in your library, so it has no copy in .agents/skills/ or .claude/skills/. Add it back to your library or turn it off for this workspace, then run \`${CLI_NAME} refresh\`.`
+        : `Enabled skill ${id} has no copy in .agents/skills/ or .claude/skills/, so the assistant cannot use it. Run \`${CLI_NAME} refresh\`.`,
     };
   }));
   return drift.filter((item): item is GenerationDrift => item !== null);

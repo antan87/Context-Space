@@ -971,6 +971,86 @@ export async function deleteSkill(
   });
 }
 
+// ─── Skills Harnesses Ship ────────────────────────────────────────────────
+
+/** Why a harness skill could not be added to My library. */
+export class SkillImportError extends Error {
+  constructor(
+    public readonly code: 'not-found' | 'exists',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SkillImportError';
+  }
+}
+
+/**
+ * Copies SKILL.md and the support folders a managed skill may hold. Anything else in a harness's folder (a
+ * LICENSE, say) stays behind: a workspace copy rejects it. Links are never followed.
+ */
+async function copyPortableSkill(sourceDir: string, targetDir: string): Promise<void> {
+  await fse.ensureDir(targetDir);
+  for (const entry of await fs.readdir(sourceDir, { withFileTypes: true })) {
+    const isSupportDirectory = PORTABLE_SKILL_SUPPORT_DIRECTORIES.has(entry.name);
+    if (entry.name !== 'SKILL.md' && !isSupportDirectory) continue;
+    if (entry.isSymbolicLink()) throw new Error(`Linked skill files are not allowed: ${entry.name}`);
+    const source = path.join(sourceDir, entry.name);
+    const target = path.join(targetDir, entry.name);
+    if (entry.isFile() && entry.name === 'SKILL.md') await fs.copyFile(source, target);
+    else if (entry.isDirectory() && isSupportDirectory) await copySkillSupportTree(source, target);
+  }
+}
+
+/**
+ * Adds a copy of a skill a harness ships to My library, so it can be turned on in a workspace for every tool.
+ * The harness keeps its own copy, which it loads whatever the library holds.
+ *
+ * @throws SkillImportError `exists` when the library already has a skill with this id, `not-found` when the harness has none.
+ */
+export async function importHarnessSkill(
+  harness: string,
+  id: string,
+  options: { harnessHomeDir?: string } = {},
+): Promise<SkillItem> {
+  return withCatalogLock(async () => {
+    const skills = await getAllSkills(undefined, undefined, options);
+    if (skills.some((skill) => skill.id === id && !skill.source)) {
+      throw new SkillImportError('exists', `My library already has a skill named "${id}".`);
+    }
+    const found = skills.find((skill) => skill.id === id && skill.source?.harness === harness);
+    if (!found?.sourcePath) {
+      throw new SkillImportError('not-found', `No skill named "${id}" is built into ${harness}.`);
+    }
+
+    const skillsBaseDir = path.resolve(getUserSkillsDir());
+    await fse.ensureDir(skillsBaseDir);
+    await assertPathIsNotLink(skillsBaseDir);
+    const targetDir = assertPathWithin(skillsBaseDir, path.join(skillsBaseDir, found.id));
+    // A folder that is there but does not load is not in the list above; still do not write over it.
+    if (await fse.pathExists(targetDir)) {
+      throw new SkillImportError('exists', `My library already has a skill named "${id}".`);
+    }
+
+    const stagingDir = await fs.mkdtemp(path.join(skillsBaseDir, `.staging-${found.id}-`));
+    try {
+      await copyPortableSkill(found.sourcePath, stagingDir);
+      await fs.rename(stagingDir, targetDir);
+    } catch (error) {
+      await fse.remove(stagingDir).catch(() => {});
+      throw error;
+    }
+    try {
+      const loaded = await loadSkillFromDir(targetDir, true, skillsBaseDir);
+      if (!loaded) throw new Error('Imported skill could not be loaded.');
+      loaded.scope = 'global';
+      return loaded;
+    } catch (error) {
+      await fse.remove(targetDir).catch(() => {});
+      throw error;
+    }
+  });
+}
+
 // ─── Workspace Skills Assignment Config ────────────────────────────────────
 
 /**
@@ -996,17 +1076,36 @@ export async function getWorkspaceSkillsConfig(workspacePath: string): Promise<W
     if (!result.success) {
       throw new Error(`Invalid workspace resource configuration: ${formatValidationError(result.error)}`);
     }
-    return result.data;
+    // A version 1 file lists every category the old app registered, not categories anyone subscribed to.
+    return result.data.schemaVersion === 1 ? { ...result.data, enabledCategories: [] } : result.data;
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     enabledSkills: [],
     disabledSkills: [],
     enabledAgents: [],
     enabledCategories: [],
   };
+}
+
+/**
+ * Ids that have a SKILL.md in the workspace's `.agents/skills/<id>` or `.claude/skills/<id>` right now,
+ * whoever put it there.
+ */
+export async function listInstalledSkillIds(workspacePath: string): Promise<string[]> {
+  const installed = new Set<string>();
+  for (const folder of ['.agents', '.claude']) {
+    const skillsDir = path.join(workspacePath, folder, 'skills');
+    const entries = await fs.readdir(skillsDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const hasSkillFile = await fs.stat(path.join(skillsDir, entry.name, 'SKILL.md')).then((stat) => stat.isFile(), () => false);
+      if (hasSkillFile) installed.add(entry.name);
+    }
+  }
+  return [...installed].sort();
 }
 
 /**
@@ -1037,7 +1136,7 @@ export async function saveWorkspaceSkillsConfig(
         throw new WorkspaceResourceRevisionError(expectedRevision, currentRevision);
       }
       const parsed = workspaceResourcesConfigSchema.safeParse({
-        schemaVersion: 1,
+        schemaVersion: 2,
         revision: currentRevision + 1,
         enabledSkills: config.enabledSkills,
         disabledSkills: config.disabledSkills ?? current.disabledSkills ?? [],

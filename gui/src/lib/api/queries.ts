@@ -32,6 +32,7 @@ import type {
   SkillItem,
   CodexAgentItem,
   WorkspaceSkillsConfig,
+  WorkspaceSkillsState,
   WorkspaceMode,
   WorkspaceLaunchTarget,
   WorkspaceStatus,
@@ -110,6 +111,8 @@ export interface CreateWorkspacePayload {
   enabledSkills?: string[];
   enabledAgents?: string[];
   enabledCategories?: string[];
+  /** Skills left out of a chosen category. */
+  disabledSkills?: string[];
   domainPacks?: string[];
   organizationId?: string;
 }
@@ -434,7 +437,7 @@ export function useOrchestratorAction(wsId: string) {
 
 // ─── Skills & Categories ──────────────────────────────────────────────────
 
-export type { SkillCategory, SkillItem, CodexAgentItem, WorkspaceSkillsConfig } from '../../types.js';
+export type { SkillCategory, SkillItem, CodexAgentItem, WorkspaceSkillsConfig, WorkspaceSkillsState } from '../../types.js';
 
 export function useSkillCategories() {
   return useQuery({
@@ -621,26 +624,56 @@ export function useDeleteAgent() {
 export function useWorkspaceSkills(wsId: string | null) {
   return useQuery({
     queryKey: ['workspace-skills', wsId],
-    queryFn: async ({ signal }) => {
-      const data = await apiFetch<{ config: WorkspaceSkillsConfig }>(`/api/skills/workspace/${encodeURIComponent(wsId!)}`, { signal });
-      return data.config;
+    queryFn: async ({ signal }): Promise<WorkspaceSkillsState> => {
+      const data = await apiFetch<Partial<WorkspaceSkillsState> & { config: WorkspaceSkillsConfig }>(`/api/skills/workspace/${encodeURIComponent(wsId!)}`, { signal });
+      return { config: data.config, resolvedSkills: data.resolvedSkills ?? [], installedSkills: data.installedSkills ?? [] };
     },
     enabled: !!wsId,
   });
 }
 
+export interface AssignWorkspaceSkillsInput {
+  workspaceId: string;
+  expectedRevision?: number;
+  /** Single picks. */
+  enabledSkills: string[];
+  enabledAgents: string[];
+  /** Categories the workspace subscribes to: only the ones the user turned on. */
+  enabledCategories?: string[];
+  /** Skills switched off inside a category that is on. */
+  disabledSkills?: string[];
+}
+
 export function useAssignWorkspaceSkills() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ workspaceId, expectedRevision, ...config }: WorkspaceSkillsConfig & { workspaceId: string; expectedRevision?: number }) =>
+    mutationFn: ({ workspaceId, expectedRevision, ...selection }: AssignWorkspaceSkillsInput) =>
       apiFetch<{ success: boolean; config: WorkspaceSkillsConfig }>(`/api/skills/workspace/${encodeURIComponent(workspaceId)}/assign`, {
         method: 'POST',
-        body: JSON.stringify({ ...config, expectedRevision }),
+        body: JSON.stringify({ ...selection, expectedRevision }),
       }),
-    onSuccess: (data, variables) => {
-      queryClient.setQueryData(['workspace-skills', variables.workspaceId], data.config);
-      queryClient.invalidateQueries({ queryKey: ['skills'] });
-    },
+    // Returned so the mutation settles only after the saved selection is read back: nothing shows the old one meanwhile.
+    onSuccess: (_data, variables) => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['workspace-skills', variables.workspaceId] }),
+      queryClient.invalidateQueries({ queryKey: ['skills'] }),
+    ]),
+  });
+}
+
+/** Copies one skill a tool ships into My library, so it can be turned on for every tool. 409 when the id is already there. */
+export function useImportHarnessSkill() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ harness, id }: { harness: string; id: string }) =>
+      apiFetch<{ skill: SkillItem }>('/api/skills/import', {
+        method: 'POST',
+        body: JSON.stringify({ harness, id }),
+      }),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['skill-categories'] }),
+      queryClient.invalidateQueries({ queryKey: ['workspace-skills'] }),
+    ]),
   });
 }
 

@@ -9,6 +9,7 @@ import {
 import { getAllSkills } from '../utils/skills-catalog.js';
 import { getAllAgents } from './agents-catalog.js';
 import { previewResourceFiles } from './materializer.js';
+import { resolveWorkspaceSkills } from './selection.js';
 import type { AIAssistant } from '../types.js';
 
 const runResourceAdministration = createMutationQueue();
@@ -72,15 +73,21 @@ export interface ResourcePreviewItem {
   files: string[];
 }
 
-/** What creating a workspace with these selections would install, and where. */
+/**
+ * What creating a workspace with these selections would install, and where. Skills come from the single picks
+ * and the subscribed categories, less the skills left out; a skill a harness ships is left out, since a workspace
+ * never copies it.
+ */
 export async function previewResourceSelections(
   enabledSkills: string[],
   enabledAgents: string[],
   assistants: AIAssistant[],
+  categories: string[] = [],
+  disabledSkills: string[] = [],
 ): Promise<ResourcePreviewItem[]> {
   await validateResourceSelections(enabledSkills, enabledAgents);
   const [skills, agents] = await Promise.all([getAllSkills(), getAllAgents()]);
-  const selectedSkills = skills.filter((skill) => enabledSkills.includes(skill.id));
+  const selectedSkills = resolveWorkspaceSkills({ enabledSkills, enabledCategories: categories, disabledSkills }, skills).skills;
   const selectedAgents = agents.filter((agent) => enabledAgents.includes(agent.id));
   const files = await previewResourceFiles(assistants, selectedSkills, selectedAgents);
   const filesOf = (kind: string, id: string) => files.filter((file) => file.kind === kind && file.resourceId === id).map((file) => file.path);

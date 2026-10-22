@@ -456,11 +456,24 @@ export interface CodexAgentItem {
 }
 
 export interface WorkspaceSkillsConfig {
-  schemaVersion?: 1;
+  schemaVersion?: 1 | 2;
   revision?: number;
+  /** Skills picked one by one. */
   enabledSkills: string[];
+  /** Skills switched off inside a category that is on. */
+  disabledSkills?: string[];
   enabledAgents?: string[];
+  /** Categories the workspace subscribes to. Only meaningful in a version 2 file: a version 1 file listed every category. */
   enabledCategories?: string[];
+}
+
+/** What the server says about one workspace's skills: the saved choice, what it turns on, and what the tools can read now. */
+export interface WorkspaceSkillsState {
+  config: WorkspaceSkillsConfig;
+  /** Ids the saved selection turns on (categories + single picks - exceptions). Built-in tool skills are never in it. */
+  resolvedSkills: string[];
+  /** Ids that have a SKILL.md in the workspace's .agents/skills or .claude/skills right now. */
+  installedSkills: string[];
 }
 
 // ─── Workrooms ────────────────────────────────────────────────────────────

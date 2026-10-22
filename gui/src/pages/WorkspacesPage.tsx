@@ -289,9 +289,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
   };
 
   // Active skills in this workspace
-  const workspaceSkillsConfig = useWorkspaceSkills(selected?.branchName ?? null).data;
+  const workspaceSkills = useWorkspaceSkills(selected?.branchName ?? null).data;
   const { data: allSkills = [] } = useSkills(selected?.branchName);
-  const activeSkills = allSkills.filter((s) => workspaceSkillsConfig?.enabledSkills?.includes(s.id));
+  // The skills the tools can read in the workspace now, whether they came by category or one by one.
+  const activeSkills = allSkills.filter((s) => workspaceSkills?.installedSkills.includes(s.id));
 
   // Enterprise domain packs, hierarchical categories, and specifications
   const [domainData, setDomainData] = useState<ResolvedCategoryRules | null>(null);

@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import fse from 'fs-extra';
 
-import type { CodexAgentItem, SkillItem } from '../types.js';
+import type { AIAssistant, CodexAgentItem, SkillItem } from '../types.js';
 import { previewResourceFiles, reconcileWorkspaceResources, ResourceConflictError } from './materializer.js';
 import { PRIMARY_CONFIG_DIR_NAME } from '../core/constants.js';
 
@@ -69,8 +69,38 @@ describe('workspace resource materializer', () => {
     // `installed` lists resource ids as well as files; compare the files.
     expect(preview.map((file) => file.path).sort()).toEqual(result.installed.filter((entry) => entry.includes('/')).sort());
     expect(preview).toContainEqual({ kind: 'codex-agent', resourceId: 'code_reviewer', path: '.codex/agents/code_reviewer.toml' });
-    // Only the assistants in use get a copy.
-    expect((await previewResourceFiles(['claude'], [skill], [])).map((file) => file.path)).toEqual(['.claude/skills/portable-skill/SKILL.md']);
+  });
+
+  it.each([[[]], [['claude']], [['codex']], [['antigravity', 'cursor']]] as Array<[AIAssistant[]]>)(
+    'copies a skill to both skill folders whichever assistants are chosen (%j)',
+    async (assistants) => {
+      const expected = ['.agents/skills/portable-skill/SKILL.md', '.claude/skills/portable-skill/SKILL.md'];
+      expect((await previewResourceFiles(assistants, [skill], [])).map((file) => file.path)).toEqual(expected);
+
+      const result = await reconcileWorkspaceResources(workspace, assistants, [skill], [agent]);
+
+      expect(result.installed.filter((entry) => entry.includes('/'))).toEqual(
+        expect.arrayContaining(expected),
+      );
+      for (const file of expected) expect(await fse.pathExists(path.join(workspace, file))).toBe(true);
+      // Agents are Codex-only: they need Codex to be a chosen assistant.
+      expect(await fse.pathExists(path.join(workspace, '.codex', 'agents', 'code_reviewer.toml'))).toBe(assistants.includes('codex'));
+    },
+  );
+
+  it('gives a workspace-only skill just the Claude copy, since its source already lives in .agents/skills', async () => {
+    const sourceDir = path.join(workspace, '.agents', 'skills', 'local-plan');
+    await fse.ensureDir(sourceDir);
+    const source = '---\nname: local-plan\ndescription: Local planning\n---\n# Local plan\n';
+    await fs.writeFile(path.join(sourceDir, 'SKILL.md'), source);
+    const local: SkillItem = { ...skill, id: 'local-plan', name: 'local-plan', scope: 'workspace', sourcePath: sourceDir };
+
+    for (const assistants of [[], ['claude'], ['codex']] as AIAssistant[][]) {
+      await reconcileWorkspaceResources(workspace, assistants, [local], []);
+      expect(await fse.pathExists(path.join(workspace, '.claude', 'skills', 'local-plan', 'SKILL.md'))).toBe(true);
+      expect(await fs.readFile(path.join(sourceDir, 'SKILL.md'), 'utf-8')).toBe(source);
+    }
+    expect((await previewResourceFiles([], [local], [])).map((file) => file.path)).toEqual(['.claude/skills/local-plan/SKILL.md']);
   });
 
   it('removes only unchanged owned packages and permits reassignment', async () => {
@@ -124,9 +154,11 @@ describe('workspace resource materializer', () => {
     expect(await fse.pathExists(path.join(workspace, '.agents', 'skills', 'portable-skill', 'SKILL.md'))).toBe(true);
 
     const updatedLock = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
-    expect(updatedLock.outputs).toHaveLength(1);
-    expect(updatedLock.outputs[0].adapter).toBe('agent-skill-v1');
-    expect(updatedLock.outputs[0].path).toBe('.agents/skills/portable-skill/SKILL.md');
+    // The legacy projections are gone; the skill is owned in both current folders.
+    expect(updatedLock.outputs.map((output: { adapter: string; path: string }) => [output.adapter, output.path])).toEqual([
+      ['agent-skill-v1', '.agents/skills/portable-skill/SKILL.md'],
+      ['claude-skill-v1', '.claude/skills/portable-skill/SKILL.md'],
+    ]);
   });
 
   it('detects user modifications to legacy projections and aborts without mutating anything', async () => {

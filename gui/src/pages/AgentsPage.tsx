@@ -37,6 +37,7 @@ import {
   useWorkspaces,
   useWorkspaceSkills,
 } from '../lib/api/queries.js';
+import { subscribedCategories } from '../features/skills/skillSelection.js';
 import { cn } from '../lib/utils.js';
 
 export interface AgentsPageProps {
@@ -95,7 +96,7 @@ export function AgentsPage({ showToast }: AgentsPageProps) {
       setDraftEnabledAgents(null);
       return;
     }
-    if (workspaceQuery.data) setDraftEnabledAgents([...(workspaceQuery.data.enabledAgents ?? [])]);
+    if (workspaceQuery.data) setDraftEnabledAgents([...(workspaceQuery.data.config.enabledAgents ?? [])]);
   }, [isWorkspaceView, selectedWorkspace, workspaceQuery.data]);
 
   const visibleAgents = useMemo(() => {
@@ -106,7 +107,7 @@ export function AgentsPage({ showToast }: AgentsPageProps) {
     );
   }, [agents, search]);
 
-  const enabledAgents = new Set(draftEnabledAgents ?? workspaceQuery.data?.enabledAgents ?? []);
+  const enabledAgents = new Set(draftEnabledAgents ?? workspaceQuery.data?.config.enabledAgents ?? []);
 
   function openCreate(): void {
     setEditingId(null);
@@ -172,13 +173,16 @@ export function AgentsPage({ showToast }: AgentsPageProps) {
 
   async function saveSelection(): Promise<void> {
     if (!workspaceQuery.data || draftEnabledAgents === null) return;
+    // Only the agents change here: the skill choice goes back exactly as it was saved.
+    const { config } = workspaceQuery.data;
     try {
       await assignMutation.mutateAsync({
         workspaceId: selectedWorkspace,
-        expectedRevision: workspaceQuery.data.revision ?? 0,
-        enabledSkills: workspaceQuery.data.enabledSkills,
+        expectedRevision: config.revision ?? 0,
+        enabledSkills: config.enabledSkills,
+        disabledSkills: config.disabledSkills ?? [],
         enabledAgents: draftEnabledAgents,
-        enabledCategories: workspaceQuery.data.enabledCategories ?? [],
+        enabledCategories: subscribedCategories(config),
       });
       showToast?.('Agent selection saved. Refresh the workspace to apply it.', 'success');
     } catch (error) {

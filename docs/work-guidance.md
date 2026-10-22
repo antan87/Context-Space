@@ -226,13 +226,38 @@ Cursor's `.cursor/mcp.json`, Copilot's `.vscode/mcp.json` and `.mcp.json`, and C
 in the assistant to enable its interactive tools. Antigravity uses user-level MCP
 configuration; configure it there or use the local CLI launcher.
 
-## Diagnose workspace skills
+## Choose and diagnose workspace skills
+
+Skills are named by who loads them:
+
+- **My library**: your own skills, kept in `~/.contextspace/skills`. You turn them on
+  per workspace, by category or one by one.
+- **This workspace only**: skills written inside the workspace, in `.agents/skills/<id>`.
+- **Built into Claude, Codex or Antigravity**: skills a tool ships or syncs itself, such
+  as `~/.claude/skills`. That tool loads them in every workspace, so they are read-only
+  here and never copied into a workspace. **Add to my library** makes a copy you can
+  turn on for every tool.
+
+A workspace gets every library or workspace skill in a category it subscribes to
+(including skills added to that category later), plus the skills picked one by one,
+minus the skills switched off. A skill's category is the `category:` in its own
+`SKILL.md`; a category's own list of skills does not turn anything on. Subscribing is
+saved as `enabledCategories` and switching one off as `disabledSkills` in
+`.contextspace/skills.json` (schema version 2). A version 1 file's categories are
+ignored: the old app saved every category it knew, not the ones anyone chose.
+
+Every skill is copied to both `.agents/skills/<id>` and `.claude/skills/<id>`,
+whichever assistants the workspace chose, so any tool can be opened on it later. A
+workspace-only skill already lives in `.agents/skills`, so it gets only the Claude copy.
+Codex agent files in `.codex/agents/` still need Codex to be a chosen assistant.
+`ctxspace refresh --check` reports a skill that is turned on but has no copy, or that
+is no longer in your library.
 
 The Skills tab includes workspace-local packages in selection validation and shows
 invalid-package, missing-global-source, and duplicate-ID diagnostics. A valid local
-package takes precedence over the same global ID. A workspace package labeled
-`scope: global` requires its source in the global catalog; restore that source or
-correct the scope if it is an authored local skill.
+package takes precedence over the same library ID. A workspace package labeled
+`scope: global` requires its source in the library; restore that source or correct the
+scope if it is an authored local skill.
 
 Explicit selection controls deployment; deselecting a local skill removes its
 managed Claude copy. Authored `.agents/skills` files are preserved, so assistants

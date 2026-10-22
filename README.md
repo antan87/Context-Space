@@ -497,7 +497,7 @@ The Codex Agent Library supports creating, editing, importing, and deleting basi
 
 When a workspace is refreshed, ContextSpace reconciles enabled resources through `.contextspace/resources.lock.json` (fallback: `.nexusflow/resources.lock.json`). It refuses unmanaged target collisions, removes only unchanged ContextSpace-owned outputs, and reports modified-file conflicts instead of overwriting them. Redundant `.codex/skills/` and `.cursor/skills/` mirror directories are retired in favor of universal discovery under `.agents/skills/`.
 
-| Assistant Harness | Deployment Path | Format |
+| Assistant Harness | Reads skills from | Format |
 |:---|:---|:---|
 | **Google Antigravity** | `.agents/skills/<name>/SKILL.md` | Universal `agentskills.io` standard (playbook + `references/` + `scripts/`) |
 | **Claude Code** | `.claude/skills/<name>/SKILL.md` | Compatibility projection for Claude Code |
@@ -505,11 +505,15 @@ When a workspace is refreshed, ContextSpace reconciles enabled resources through
 | **Cursor** | `.agents/skills/<name>/SKILL.md` | Complete portable Agent Skill directory |
 | **GitHub Copilot** | `.agents/skills/<name>/SKILL.md` | Complete portable Agent Skill directory |
 
-Codex custom agents are separate resources and deploy to `.codex/agents/<name>.toml`.
+Every skill is copied to both `.agents/skills/` and `.claude/skills/`, whichever assistants the workspace chose, so any tool can be opened on the workspace later. A skill written inside the workspace already lives in `.agents/skills/`, so it gets only the Claude copy.
+
+A workspace turns skills on by category (every skill whose `SKILL.md` names a subscribed category, including skills added later) or one by one, and can switch one skill off inside a subscribed category. See [Choose and diagnose workspace skills](docs/work-guidance.md#choose-and-diagnose-workspace-skills).
+
+Codex custom agents are separate resources and deploy to `.codex/agents/<name>.toml`, for workspaces that chose Codex.
 
 ### Skills Your Harnesses Already Have
 
-The skills list also shows the skills each assistant loads from its own global folders, for example `~/.claude/skills` (including skills synced from claude.ai), `~/.codex/skills`, and Antigravity's built-in and plugin skills. They are labelled with their harness and are read-only here: edit or delete them in the harness, or use **Create editable copy** to bring one into the ContextSpace catalog.
+The skills list also shows the skills each assistant loads from its own global folders, for example `~/.claude/skills` (including skills synced from claude.ai), `~/.codex/skills`, and Antigravity's built-in and plugin skills. They are labelled with their harness and are read-only here: edit or delete them in the harness. The harness loads them in every workspace, so a workspace never copies them. Use **Add to my library** to bring a copy into the ContextSpace catalog, where it can be turned on for every tool.
 
 - A skill in the ContextSpace catalog (`~/.contextspace/skills`) always wins over a harness skill with the same ID. When two harnesses ship the same ID, the first one registered is shown and the other is reported as a warning.
 - A harness skill that does not follow the `SKILL.md` rules (for example an underscore in `name`) is not listed, and the Skills page says why. `ctxspace skill lint` ignores these, since the files are not yours.

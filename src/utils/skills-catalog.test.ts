@@ -15,9 +15,13 @@ import {
   deleteSkill,
   getWorkspaceSkillsConfig,
   saveWorkspaceSkillsConfig,
+  importHarnessSkill,
+  listInstalledSkillIds,
+  SkillImportError,
   DEFAULT_CATEGORIES,
   DEFAULT_SKILLS,
 } from './skills-catalog.js';
+import { PRIMARY_CONFIG_DIR_NAME } from '../core/constants.js';
 
 describe('Skills Catalog & Frontmatter Utils', () => {
   let tempHome: string;
@@ -372,6 +376,115 @@ describe('Skills Catalog & Frontmatter Utils', () => {
         expect(loaded.enabledAgents).toEqual(['docs_researcher']);
         expect(loaded.enabledCategories).toEqual(['pull-requests', 'testing-qa']);
         expect(loaded.revision).toBe(1);
+      } finally {
+        await fse.remove(tempDir);
+      }
+    });
+
+    it('writes version 2 on every save and keeps the subscribed categories', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-ws-skills-test-'));
+      try {
+        const saved = await saveWorkspaceSkillsConfig(tempDir, {
+          enabledSkills: ['standup'],
+          enabledCategories: ['pull-requests'],
+        });
+        expect(saved.schemaVersion).toBe(2);
+        const onDisk = await fse.readJson(path.join(tempDir, PRIMARY_CONFIG_DIR_NAME, 'skills.json'));
+        expect(onDisk).toMatchObject({ schemaVersion: 2, revision: 1, enabledCategories: ['pull-requests'] });
+        expect((await getWorkspaceSkillsConfig(tempDir)).enabledCategories).toEqual(['pull-requests']);
+
+        const second = await saveWorkspaceSkillsConfig(tempDir, { enabledSkills: [], enabledCategories: ['pull-requests', 'notes'] });
+        expect(second.schemaVersion).toBe(2);
+        expect((await getWorkspaceSkillsConfig(tempDir)).enabledCategories).toEqual(['pull-requests', 'notes']);
+      } finally {
+        await fse.remove(tempDir);
+      }
+    });
+
+    it('saves the skills switched off when they are given, and clears them when given empty', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-ws-skills-test-'));
+      try {
+        await saveWorkspaceSkillsConfig(tempDir, {
+          enabledSkills: [],
+          enabledCategories: ['pull-requests'],
+          disabledSkills: ['write-description'],
+        });
+        expect((await getWorkspaceSkillsConfig(tempDir)).disabledSkills).toEqual(['write-description']);
+
+        await saveWorkspaceSkillsConfig(tempDir, { enabledSkills: [], enabledCategories: ['pull-requests'], disabledSkills: [] });
+        expect((await getWorkspaceSkillsConfig(tempDir)).disabledSkills).toEqual([]);
+      } finally {
+        await fse.remove(tempDir);
+      }
+    });
+
+    it('ignores the categories in a version 1 file, since the old app saved every registered category', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-ws-skills-test-'));
+      try {
+        await fse.ensureDir(path.join(tempDir, PRIMARY_CONFIG_DIR_NAME));
+        await fse.writeJson(path.join(tempDir, PRIMARY_CONFIG_DIR_NAME, 'skills.json'), {
+          schemaVersion: 1,
+          revision: 3,
+          enabledSkills: ['standup'],
+          disabledSkills: ['old-exception'],
+          enabledAgents: [],
+          enabledCategories: ['pull-requests', 'notes', 'testing'],
+        });
+
+        const loaded = await getWorkspaceSkillsConfig(tempDir);
+
+        expect(loaded).toMatchObject({ schemaVersion: 1, revision: 3, enabledSkills: ['standup'], disabledSkills: ['old-exception'] });
+        expect(loaded.enabledCategories).toEqual([]);
+
+        // Saving upgrades the file, and what it writes is what the caller chose.
+        const saved = await saveWorkspaceSkillsConfig(tempDir, { enabledSkills: ['standup'] }, 3);
+        expect(saved).toMatchObject({ schemaVersion: 2, revision: 4, enabledCategories: [] });
+      } finally {
+        await fse.remove(tempDir);
+      }
+    });
+
+    it('ignores the categories in a file written before versions existed', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-ws-skills-test-'));
+      try {
+        await fse.ensureDir(path.join(tempDir, PRIMARY_CONFIG_DIR_NAME));
+        await fse.writeJson(path.join(tempDir, PRIMARY_CONFIG_DIR_NAME, 'skills.json'), {
+          enabledSkills: ['standup'],
+          enabledCategories: ['pull-requests'],
+        });
+
+        expect(await getWorkspaceSkillsConfig(tempDir)).toMatchObject({ enabledSkills: ['standup'], enabledCategories: [] });
+      } finally {
+        await fse.remove(tempDir);
+      }
+    });
+
+    it('rejects a version it does not know', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-ws-skills-test-'));
+      try {
+        await fse.ensureDir(path.join(tempDir, PRIMARY_CONFIG_DIR_NAME));
+        await fse.writeJson(path.join(tempDir, PRIMARY_CONFIG_DIR_NAME, 'skills.json'), { schemaVersion: 3, enabledSkills: [] });
+        await expect(getWorkspaceSkillsConfig(tempDir)).rejects.toThrow(/Invalid workspace resource configuration/);
+      } finally {
+        await fse.remove(tempDir);
+      }
+    });
+
+    it('lists the skills that have a SKILL.md in either skill folder right now', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-ws-skills-test-'));
+      try {
+        const put = async (folder: string, id: string, file = 'SKILL.md') => {
+          await fse.ensureDir(path.join(tempDir, folder, 'skills', id));
+          await fs.writeFile(path.join(tempDir, folder, 'skills', id, file), '# skill');
+        };
+        await put('.agents', 'only-agents');
+        await put('.claude', 'only-claude');
+        await put('.agents', 'both');
+        await put('.claude', 'both');
+        await put('.claude', 'no-skill-file', 'README.md');
+
+        expect(await listInstalledSkillIds(tempDir)).toEqual(['both', 'only-agents', 'only-claude']);
+        expect(await listInstalledSkillIds(path.join(tempDir, 'nowhere'))).toEqual([]);
       } finally {
         await fse.remove(tempDir);
       }
@@ -796,5 +909,93 @@ describe('Skills owned by a harness', () => {
     await expect(deleteSkill('keep-me')).rejects.toThrow(/Skill not found/);
 
     expect(await fse.pathExists(path.join(dir, 'SKILL.md'))).toBe(true);
+  });
+  describe('adding one to My library', () => {
+    const importFromClaude = (id: string) => importHarnessSkill('claude', id, { harnessHomeDir: harnessHome });
+    const libraryCopy = (id: string, ...parts: string[]) => path.join(tempHome, 'skills', id, ...parts);
+
+    it('copies the skill folder into the library and returns it as a library skill', async () => {
+      const dir = await writeSkill('.claude/skills/pdf', ['category: documents']);
+      await fs.mkdir(path.join(dir, 'references'));
+      await fs.writeFile(path.join(dir, 'references', 'forms.md'), '# Forms');
+      await fs.mkdir(path.join(dir, 'scripts'));
+      await fs.writeFile(path.join(dir, 'scripts', 'fill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+      // A file a workspace copy would reject stays behind.
+      await fs.writeFile(path.join(dir, 'LICENSE.txt'), 'MIT');
+
+      const imported = await importFromClaude('pdf');
+
+      expect(imported).toMatchObject({ id: 'pdf', category: 'documents', custom: true, scope: 'global' });
+      expect(imported.source).toBeUndefined();
+      expect(imported.sourcePath).toBe(libraryCopy('pdf'));
+      expect(await fs.readFile(libraryCopy('pdf', 'SKILL.md'), 'utf-8')).toBe(await fs.readFile(path.join(dir, 'SKILL.md'), 'utf-8'));
+      expect(await fs.readFile(libraryCopy('pdf', 'references', 'forms.md'), 'utf-8')).toBe('# Forms');
+      expect((await fs.stat(libraryCopy('pdf', 'scripts', 'fill.sh'))).mode & 0o111).not.toBe(0);
+      expect(await fse.pathExists(libraryCopy('pdf', 'LICENSE.txt'))).toBe(false);
+      // The harness keeps its own copy, and the library now wins the id.
+      expect(await fse.pathExists(path.join(dir, 'SKILL.md'))).toBe(true);
+      const listed = (await list()).filter((skill) => skill.id === 'pdf');
+      expect(listed).toHaveLength(1);
+      expect(listed[0].source).toBeUndefined();
+      expect(await fs.readdir(path.join(tempHome, 'skills'))).toEqual(['pdf']);
+    });
+
+    it('finds a skill the harness keeps in a nested folder', async () => {
+      await writeSkill('.claude/skills/synced/bucket-1/pdf');
+      await expect(importFromClaude('pdf')).resolves.toMatchObject({ id: 'pdf' });
+    });
+
+    it('says not-found when that harness has no such skill', async () => {
+      await writeSkill('.codex/skills/.system/imagegen');
+
+      await expect(importFromClaude('imagegen')).rejects.toMatchObject({ name: 'SkillImportError', code: 'not-found' });
+      await expect(importFromClaude('nothing-here')).rejects.toBeInstanceOf(SkillImportError);
+      expect(await fse.pathExists(path.join(tempHome, 'skills'))).toBe(false);
+      await expect(importHarnessSkill('codex', 'imagegen', { harnessHomeDir: harnessHome })).resolves.toMatchObject({ id: 'imagegen' });
+    });
+
+    it('says exists when My library already has a skill with that id, and leaves both alone', async () => {
+      await writeSkill('.claude/skills/shared');
+      await saveSkill({ name: 'shared', description: 'Mine', content: '# Mine' });
+
+      await expect(importFromClaude('shared')).rejects.toMatchObject({ name: 'SkillImportError', code: 'exists' });
+
+      expect(await fs.readFile(libraryCopy('shared', 'SKILL.md'), 'utf-8')).toContain('description: Mine');
+      expect(await fse.pathExists(path.join(harnessHome, '.claude', 'skills', 'shared', 'SKILL.md'))).toBe(true);
+    });
+
+    it('does not write over a library folder that is there but does not load', async () => {
+      await writeSkill('.claude/skills/pdf');
+      await fse.ensureDir(libraryCopy('pdf'));
+      await fs.writeFile(libraryCopy('pdf', 'notes.txt'), 'keep me');
+
+      await expect(importFromClaude('pdf')).rejects.toMatchObject({ code: 'exists' });
+
+      expect(await fs.readFile(libraryCopy('pdf', 'notes.txt'), 'utf-8')).toBe('keep me');
+    });
+
+    it('lets only one of two simultaneous imports of the same skill through', async () => {
+      await writeSkill('.claude/skills/pdf');
+
+      const results = await Promise.allSettled([importFromClaude('pdf'), importFromClaude('pdf')]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult;
+      expect(rejected.reason).toMatchObject({ code: 'exists' });
+      expect(await fs.readdir(path.join(tempHome, 'skills'))).toEqual(['pdf']);
+    });
+
+    it('does not follow a link inside the skill, and leaves nothing behind', async () => {
+      const dir = await writeSkill('.claude/skills/linky');
+      const outside = path.join(harnessHome, 'secret.txt');
+      await fs.writeFile(outside, 'secret');
+      // The catalog does not look inside agents/, so the skill lists and the copy is what must refuse the link.
+      await fs.mkdir(path.join(dir, 'agents'));
+      await fs.symlink(outside, path.join(dir, 'agents', 'secret.txt'));
+
+      await expect(importFromClaude('linky')).rejects.toThrow(/Linked skill support files are not allowed/);
+
+      expect(await fs.readdir(path.join(tempHome, 'skills'))).toEqual([]);
+    });
   });
 });

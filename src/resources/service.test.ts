@@ -8,6 +8,7 @@ import { saveAgent } from './agents-catalog.js';
 import { saveSkill, getAllSkills, type SkillDiagnostic } from '../utils/skills-catalog.js';
 import {
   ResourceSelectionError,
+  previewResourceSelections,
   validateResourceSelections,
   withResourceAdministrationLock,
 } from './service.js';
@@ -101,5 +102,68 @@ describe('resource administration service', () => {
     expect(skills.find((skill) => skill.id === 'shadowed')?.scope).toBe('workspace');
     expect(skills.some((skill) => skill.id === 'orphan')).toBe(false);
     expect(diagnostics.map((item) => item.id).sort()).toEqual(['mismatch', 'orphan', 'shadowed']);
+  });
+
+  describe('previewResourceSelections', () => {
+    const files = (items: Awaited<ReturnType<typeof previewResourceSelections>>, id: string) =>
+      items.find((item) => item.id === id)?.files;
+
+    it('covers the skills of a chosen category as well as the single picks, in both skill folders', async () => {
+      await saveSkill({ name: 'review-pr', category: 'pull-requests', description: 'Reviews', content: '# Review' });
+      await saveSkill({ name: 'write-description', category: 'pull-requests', description: 'Describes', content: '# Describe' });
+      await saveSkill({ name: 'standup', category: 'notes', description: 'Notes', content: '# Notes' });
+      await saveSkill({ name: 'run-e2e', category: 'testing', description: 'Tests', content: '# Tests' });
+
+      const items = await previewResourceSelections(['standup'], [], [], ['pull-requests']);
+
+      expect(items.map((item) => item.id).sort()).toEqual(['review-pr', 'standup', 'write-description']);
+      expect(files(items, 'review-pr')).toEqual(['.agents/skills/review-pr/SKILL.md', '.claude/skills/review-pr/SKILL.md']);
+      expect(files(items, 'standup')).toEqual(['.agents/skills/standup/SKILL.md', '.claude/skills/standup/SKILL.md']);
+    });
+
+    it('leaves out a skill switched off inside a chosen category', async () => {
+      await saveSkill({ name: 'review-pr', category: 'pull-requests', description: 'Reviews', content: '# Review' });
+      await saveSkill({ name: 'write-description', category: 'pull-requests', description: 'Describes', content: '# Describe' });
+
+      const items = await previewResourceSelections([], [], [], ['pull-requests'], ['write-description']);
+
+      expect(items.map((item) => item.id)).toEqual(['review-pr']);
+    });
+
+    it('still previews only the single picks when no category is chosen', async () => {
+      await saveSkill({ name: 'review-pr', category: 'pull-requests', description: 'Reviews', content: '# Review' });
+      await saveSkill({ name: 'standup', category: 'notes', description: 'Notes', content: '# Notes' });
+
+      const items = await previewResourceSelections(['standup'], [], ['claude']);
+
+      expect(items.map((item) => item.id)).toEqual(['standup']);
+    });
+
+    it('leaves out a skill a harness ships, whether it is picked or in a chosen category', async () => {
+      const saved = { nexusflow: process.env.NEXUSFLOW_HOME, home: process.env.HOME, userProfile: process.env.USERPROFILE };
+      const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-resource-service-home-')));
+      try {
+        await fs.mkdir(path.join(home, '.claude', 'skills', 'pdf'), { recursive: true });
+        await fs.writeFile(
+          path.join(home, '.claude', 'skills', 'pdf', 'SKILL.md'),
+          '---\nname: pdf\ndescription: From Claude\ncategory: documents\n---\n# PDF\n',
+        );
+        // Harness folders are only read in a real home.
+        delete process.env.NEXUSFLOW_HOME;
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        await saveSkill({ name: 'write-report', category: 'documents', description: 'Writes', content: '# Report' });
+
+        const items = await previewResourceSelections(['pdf'], [], ['claude'], ['documents']);
+
+        expect(items.map((item) => item.id)).toEqual(['write-report']);
+      } finally {
+        for (const [key, value] of [['NEXUSFLOW_HOME', saved.nexusflow], ['HOME', saved.home], ['USERPROFILE', saved.userProfile]] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        await fse.remove(home);
+      }
+    });
   });
 });
