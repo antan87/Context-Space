@@ -1,7 +1,8 @@
 /**
- * Moving things on the Board: what may be dragged, how a drop is saved, and the keyboard's way of doing the same. A place
- * is kept in the workspace's board file by node id (a `move` change, POST /api/workspace/:id/board/changes), so it is
- * there after a reload and for everyone else. The pure parts are tested alone; the hooks hold what the screen needs
+ * Moving things on the Board: what may be dragged, how a drop is saved, and the keyboard's way of doing the same. Only
+ * what people arrange can be moved: the cards (notes and files). The app places the checkpoints, documents and commits
+ * itself. A place is kept in the workspace's board file by node id (a `move` change, POST /api/workspace/:id/board/changes),
+ * so it is there after a reload and for everyone else. The pure parts are tested alone; the hooks hold what the screen needs
  * between a drop and the answer of the backend.
  */
 
@@ -9,8 +10,8 @@ import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { NodeChange, OnNodeDrag, ReactFlowInstance } from '@xyflow/react';
 import { ApiError, apiFetch } from '../../lib/api/client.js';
-import { BOARD_DATA_LIMITS, boardKey, cleanBoard, isBoardNodeId, type BoardPoint, type BoardView } from './boardData.js';
-import { nodeTitle, type BoardNode, type Rect } from './boardLayout.js';
+import { BOARD_DATA_LIMITS, boardKey, cleanBoard, isCardId, type BoardPoint, type BoardView } from './boardData.js';
+import { clearPlace, nodeTitle, type BoardNode, type Rect } from './boardLayout.js';
 import type { Size, Viewport } from './boardView.js';
 
 /** How far Shift and an arrow key move a node, in canvas units. */
@@ -29,11 +30,11 @@ const REVEAL_MARGIN = 24;
 // ─── What may be moved ──────────────────────────────────────────────────────
 
 /**
- * Whether a node may be dragged: the board can keep a place for it (a card, or a checkpoint, document or commit, on its
- * own or standing in a lane; not a lane, the placeholder or the plan's own frame). A thing that stands in a lane leaves it
- * where it is dropped.
+ * Whether a node may be dragged: a card, on its own or standing in the "From the board" band, which it leaves where it is
+ * dropped. Checkpoints, documents and commits keep the place the board gives them, in their group and order, and so do the
+ * groups themselves.
  */
-export const isMovable = (node: Pick<BoardNode, 'id'>): boolean => isBoardNodeId(node.id);
+export const isMovable = (node: Pick<BoardNode, 'id'>): boolean => isCardId(node.id);
 
 /**
  * Where a node stands on the canvas, given its position as React Flow has it: relative to its lane for a thing that stands
@@ -43,6 +44,16 @@ export function canvasPlace(nodes: BoardNode[], id: string, at: BoardPoint): Boa
   const parentId = nodes.find((node) => node.id === id)?.parentId;
   const parent = parentId === undefined ? undefined : nodes.find((node) => node.id === parentId);
   return parent ? { x: parent.position.x + at.x, y: parent.position.y + at.y } : at;
+}
+
+/**
+ * Where a card that is put at `at` stands, which is the place that is saved: clear of every group as it is when open (a card
+ * is never drawn over one, open or folded), so it snaps clear at once and the answer to the save changes nothing on the screen.
+ * The card is a node of `nodes`; one that is not there is put where it was asked.
+ */
+export function clearedPlace(nodes: BoardNode[], id: string, at: BoardPoint): BoardPoint {
+  const node = nodes.find((entry) => entry.id === id);
+  return node ? placeOf(clearPlace(nodes, at, { width: node.width ?? 0, height: node.height ?? 0 })) : at;
 }
 
 /**
@@ -303,7 +314,7 @@ export function useBoardMoves({ workspaceId, nodes, flow, size, reveal, focusNod
     onNodeDragStop: (_event, node) => {
       const start = dragged.current;
       dragged.current = null;
-      const to = placeOf(canvasPlace(nodes, node.id, node.position));
+      const to = clearedPlace(nodes, node.id, placeOf(canvasPlace(nodes, node.id, node.position)));
       // Picked up and put down where it was: nothing to save, unless keys had moved it first.
       if (start?.id === node.id && !start.nudged && samePlace(placeOf(start.at), to)) { hold(node.id, null); return; }
       send(node.id, to, true);
@@ -322,9 +333,13 @@ export function useBoardMoves({ workspaceId, nodes, flow, size, reveal, focusNod
       if (!event.shiftKey || event.altKey) return false;
       const target = event.target as HTMLElement;
       const node = target.classList.contains('react-flow__node') && target.classList.contains('draggable') ? nodes.find((entry) => entry.id === target.dataset.id) : undefined;
-      const to = node && nudged(heldNow.current[node.id] ?? canvasPlace(nodes, node.id, node.position), event.key);
-      if (!node || !to) return false;
+      const from = node && (heldNow.current[node.id] ?? canvasPlace(nodes, node.id, node.position));
+      const step = from && nudged(from, event.key);
+      if (!node || !from || !step) return false;
+      const to = clearedPlace(nodes, node.id, step);
       event.preventDefault();
+      // Pushed against a group, where it would be put clear of it again: nothing moves, so nothing is saved.
+      if (samePlace(from, to)) return true;
       // Another node's run is over: it is saved now, and this one begins.
       if (keys.current && keys.current.id !== node.id) saveKeys();
       if (keys.current) clearTimeout(keys.current.timer);

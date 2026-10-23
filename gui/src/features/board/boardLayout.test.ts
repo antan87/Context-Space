@@ -4,8 +4,8 @@ import type { PlanFileCheckpoint, PlanFileDecision, PlanFileView } from '../plan
 import type { NewsRepo, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
 import {
-  BOARD_LIMITS, BOARD_SIZE, FRESH_MS, authorName, boardEdges, boardLayout, fileTypeOf, imageAlt, isFresh, moreText, nodeRects, nodeResolver, sidesBetween,
-  type BoardNode, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type LaneNode, type NoteNode, type PlaceholderNode,
+  BOARD_LIMITS, BOARD_SIZE, FRESH_MS, authorName, boardEdges, boardLayout, clearPlace, fileTypeOf, imageAlt, isFolded, isFresh, isGroup, moreText, nodeRects, nodeResolver, sidesBetween,
+  type BoardNode, type BoardSources, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type LaneNode, type NoteNode, type PlaceholderNode,
 } from './boardLayout.js';
 
 const NOW = Date.parse('2026-10-22T12:00:00.000Z');
@@ -40,6 +40,8 @@ const frames = (nodes: BoardNode[]) => ofType<CheckpointNode>(nodes, 'checkpoint
 const documents = (nodes: BoardNode[]) => ofType<DocumentNode>(nodes, 'document');
 const commits = (nodes: BoardNode[]) => ofType<CommitNode>(nodes, 'commit');
 const placeholders = (nodes: BoardNode[]) => ofType<PlaceholderNode>(nodes, 'placeholder');
+/** The board with every group open: for the specs about what is in a group. By default only the work under way is open. */
+const open = (sources: BoardSources) => boardLayout({ ...sources, folds: Object.fromEntries(boardLayout(sources).filter(isGroup).map((node) => [node.id, true])) });
 
 describe('boardLayout columns', () => {
   const nodes = boardLayout({
@@ -80,7 +82,7 @@ describe('boardLayout columns', () => {
     const onlyPlan = boardLayout({ plan: plan([checkpoint('Read the plan')]) });
     expect(onlyPlan.map((node) => node.type)).toEqual(['checkpoint']);
     expect(onlyPlan[0].position).toEqual({ x: 0, y: 0 });
-    expect(boardLayout({ documents: [doc('Design brief')] }).map((node) => node.type)).toEqual(['lane', 'document']);
+    expect(open({ documents: [doc('Design brief')] }).map((node) => node.type)).toEqual(['lane', 'document']);
   });
 
   it('keeps two checkpoints with one title apart', () => {
@@ -125,7 +127,7 @@ describe('checkpoint frames', () => {
   });
 
   it('grow with what they show, so a long checkpoint is taller than a short one', () => {
-    const [short, long] = frames(boardLayout({ plan: plan([
+    const [short, long] = frames(open({ plan: plan([
       checkpoint('Short', { steps: [step('One')] }),
       checkpoint('Long', { steps: Array.from({ length: 9 }, (_, index) => step(`Step ${index}`)) }),
     ]) }));
@@ -209,7 +211,7 @@ describe('the plan frame', () => {
 });
 
 describe('document cards', () => {
-  const nodes = boardLayout({ documents: [
+  const nodes = open({ documents: [
     doc('Requirements', { role: 'requirements', status: 'approved', summary: 'What it must do.' }),
     doc('Old design', { status: 'superseded', summary: 'Replaced.' }),
     doc('Notes', { role: 'reference', status: 'draft', summary: '' }),
@@ -244,7 +246,7 @@ describe('document cards', () => {
 
 describe('commit cards', () => {
   it('make one lane per repository, titled with its name, and keep each commit in its own repository lane', () => {
-    const nodes = boardLayout({ news: news([
+    const nodes = open({ news: news([
       repo('api', [commit('a1b2c3d4e5f6', 5), commit('b2c3d4e5f6a7', 10)]),
       repo('web', [commit('c3d4e5f6a7b8', 7)]),
     ]) });
@@ -256,14 +258,14 @@ describe('commit cards', () => {
   });
 
   it('show a 7-character sha, the subject, the author and when', () => {
-    const [card] = commits(boardLayout({ news: news([repo('api', [{ sha: 'a1b2c3d4e5f6a7b8', author: 'Ben', subject: 'Cache invoice lookups', at: minutesAgo(3) }])]) }));
+    const [card] = commits(open({ news: news([repo('api', [{ sha: 'a1b2c3d4e5f6a7b8', author: 'Ben', subject: 'Cache invoice lookups', at: minutesAgo(3) }])]) }));
     expect(card.data).toEqual({ sha: 'a1b2c3d', subject: 'Cache invoice lookups', author: 'Ben', at: minutesAgo(3) });
   });
 
   it(`keep the ${BOARD_LIMITS.commits} newest commits of a repository and count the rest, however they came in`, () => {
     // Twenty commits, listed oldest to newest here: the newest twelve are the ones that stay, newest first.
     const many = Array.from({ length: 20 }, (_, index) => commit(`${(index + 1).toString(16).padStart(7, '0')}`, 200 - index * 10));
-    const nodes = boardLayout({ news: news([repo('api', many, { more: 5 })]) });
+    const nodes = open({ news: news([repo('api', many, { more: 5 })]) });
     const cards = commits(nodes);
     expect(cards).toHaveLength(BOARD_LIMITS.commits);
     expect(cards.map((card) => card.data.sha)).toEqual(many.slice(-BOARD_LIMITS.commits).reverse().map((entry) => entry.sha));
@@ -273,7 +275,7 @@ describe('commit cards', () => {
 
   it('cap each repository on its own', () => {
     const many = (prefix: string) => Array.from({ length: 15 }, (_, index) => commit(`${prefix}${index.toString(16).padStart(6, '0')}`, index + 1));
-    const nodes = boardLayout({ news: news([repo('api', many('a')), repo('web', many('b'))]) });
+    const nodes = open({ news: news([repo('api', many('a')), repo('web', many('b'))]) });
     const [api, web] = lanes(nodes);
     expect(commits(nodes).filter((card) => card.parentId === api.id)).toHaveLength(BOARD_LIMITS.commits);
     expect(commits(nodes).filter((card) => card.parentId === web.id)).toHaveLength(BOARD_LIMITS.commits);
@@ -281,12 +283,12 @@ describe('commit cards', () => {
   });
 
   it('say when the count of what is left out is only a lower bound', () => {
-    const [lane] = lanes(boardLayout({ news: news([repo('api', [commit('a1b2c3d', 1)], { more: 90, moreAtLeast: true })]) }));
+    const [lane] = lanes(open({ news: news([repo('api', [commit('a1b2c3d', 1)], { more: 90, moreAtLeast: true })]) }));
     expect(lane.data).toMatchObject({ more: 90, moreAtLeast: true });
   });
 
   it('skip a repository with nothing new, and say why one could not be read', () => {
-    const nodes = boardLayout({ news: news([
+    const nodes = open({ news: news([
       repo('quiet', []),
       repo('gone', [], { problem: 'The folder is missing.' }),
       repo('busy', [commit('a1b2c3d', 1)]),
@@ -297,7 +299,7 @@ describe('commit cards', () => {
   });
 
   it('put a commit with no readable time after the ones that have one', () => {
-    const cards = commits(boardLayout({ news: news([repo('api', [commit('a1b2c3d', 1), { ...commit('b2c3d4e', 1), at: 'sometime' }, commit('c3d4e5f', 2)])]) }));
+    const cards = commits(open({ news: news([repo('api', [commit('a1b2c3d', 1), { ...commit('b2c3d4e', 1), at: 'sometime' }, commit('c3d4e5f', 2)])]) }));
     expect(cards.map((card) => card.data.sha)).toEqual(['a1b2c3d', 'c3d4e5f', 'b2c3d4e']);
   });
 });
@@ -380,6 +382,132 @@ describe('an empty board', () => {
 });
 
 
+describe('folded groups', () => {
+  const sources = {
+    now: NOW,
+    plan: plan([
+      checkpoint('Done one', { done: true, steps: [step('Query', true)] }),
+      checkpoint('Under way', { steps: [step('Write', true), step('Test'), step('Ship')], decisions: [decision('Which key?')] }),
+      checkpoint('Later', { steps: Array.from({ length: 9 }, (_, index) => step(`Later step ${index + 1}`)) }),
+    ], { steps: [step('Tidy the script'), step('Rename the module', true)], decisions: [decision('Which framework?')] }),
+    documents: [doc('Requirements'), doc('Rough notes', { status: 'draft' }), doc('Old design', { status: 'superseded' }), doc('Other draft', { status: 'draft' })],
+    news: news([repo('api', [commit('a1b2c3d4e5', 5, 'Write the writer'), { ...commit('b2c3d4e5f6', 1, 'Fix the header'), author: 'Ben' }], { more: 3 }), repo('web', [commit('c3d4e5f6a7', 7)])]),
+  };
+  const groupIds = ['lane:documents', 'plan:own', 'checkpoint:done-one', 'checkpoint:under-way', 'checkpoint:later', 'lane:commits:api', 'lane:commits:web'];
+  const groups = (nodes: BoardNode[]) => nodes.filter(isGroup);
+  const by = (nodes: BoardNode[], id: string) => nodes.find((node) => node.id === id)!;
+
+  it('open the work under way and fold every other group, whatever it holds', () => {
+    const nodes = boardLayout(sources);
+    expect(groups(nodes).map((node) => [node.id, !isFolded(node)])).toEqual(groupIds.map((id) => [id, id === 'checkpoint:under-way']));
+    expect(frames(nodes).map((frame) => [frame.id, frame.data.open])).toEqual([['plan:own', false], ['checkpoint:done-one', false], ['checkpoint:under-way', true], ['checkpoint:later', false]]);
+  });
+
+  it('give a folded group one small fixed height, the same for every kind, so the columns line up', () => {
+    const nodes = boardLayout(sources);
+    for (const node of groups(nodes).filter(isFolded)) expect(node.height, node.id).toBe(BOARD_SIZE.folded);
+    expect(by(nodes, 'checkpoint:under-way').height).toBeGreaterThan(BOARD_SIZE.folded);
+    // However much it holds: nine steps fold to the same height as none.
+    expect(by(nodes, 'checkpoint:later').height).toBe(by(nodes, 'checkpoint:done-one').height);
+  });
+
+  it('draw none of the cards of a folded lane, and all of them when it is open', () => {
+    const folded = boardLayout(sources);
+    expect(documents(folded)).toEqual([]);
+    expect(commits(folded)).toEqual([]);
+    expect(lanes(folded).filter((entry) => entry.data.group).map((entry) => entry.height)).toEqual([BOARD_SIZE.folded, BOARD_SIZE.folded, BOARD_SIZE.folded]);
+    const opened = open(sources);
+    expect(documents(opened)).toHaveLength(4);
+    expect(commits(opened)).toHaveLength(3);
+  });
+
+  it('keep what a folded checkpoint says: whether it is done, its steps, and the decisions that wait', () => {
+    const nodes = boardLayout(sources);
+    expect((by(nodes, 'checkpoint:done-one') as CheckpointNode).data).toMatchObject({ title: 'Done one', done: true, stepsDone: 1, stepsTotal: 1, open: false });
+    expect((by(nodes, 'checkpoint:later') as CheckpointNode).data).toMatchObject({ done: false, stepsDone: 0, stepsTotal: 9, open: false });
+    // The decision that waits is still flagged when it is folded, and it stays folded: only the user opens it.
+    expect((by(nodes, 'plan:own') as CheckpointNode).data).toMatchObject({ open: false, stepsDone: 1, stepsTotal: 2, waiting: [{ key: 'which-framework', question: 'Which framework?' }] });
+    expect(by(boardLayout({ ...sources, plan: plan([checkpoint('Asks', { decisions: [decision('Which one?')] }), checkpoint('Next')]) }), 'checkpoint:asks')).toMatchObject({ data: { open: true } });
+  });
+
+  it('fold the documents into how many there are and how many are drafts or superseded', () => {
+    const [folded] = lanes(boardLayout(sources)).filter((entry) => entry.id === 'lane:documents');
+    expect(folded.data.group).toMatchObject({ open: false, summary: { headline: '4 documents', detail: '2 drafts · 1 superseded' } });
+    const summary = (documentsOf: WorkDocument[]) => lanes(boardLayout({ documents: documentsOf }))[0].data.group!.summary;
+    expect(summary([doc('One')])).toEqual({ headline: '1 document' });
+    expect(summary([doc('One'), doc('Two', { status: 'draft' })])).toEqual({ headline: '2 documents', detail: '1 draft' });
+  });
+
+  it('fold a lane of commits into how many are new and the newest one, with its author', () => {
+    const lane = (id: string) => lanes(boardLayout(sources)).find((entry) => entry.id === id)!;
+    // Two listed and three more that the list leaves out; the newest is the one with the latest time, not the first.
+    expect(lane('lane:commits:api').data).toMatchObject({ title: 'api', group: { open: false, summary: { headline: '5 new since you last looked', detail: 'Fix the header', byline: 'Ben' } } });
+    expect(lane('lane:commits:web').data.group!.summary).toEqual({ headline: '1 new since you last looked', detail: 'Change c3d4e5f6a7', byline: 'Anna' });
+    const first = { basis: 'first-look' as const, at: '2026-10-22T12:00:00.000Z', from: '2026-10-19T12:00:00.000Z' };
+    expect(lanes(boardLayout({ news: news([repo('api', [commit('a1b2c3d', 1)], { more: 90, moreAtLeast: true })], first) }))[0].data.group!.summary.headline).toBe('91+ in the last 3 days');
+  });
+
+  it('say on a folded lane of commits that the repository could not be read in full, so the note it hides is not lost', () => {
+    const lane = (nodes: BoardNode[]) => lanes(nodes).find((entry) => entry.id === 'lane:commits:api')!;
+    const partly = { news: news([repo('api', [commit('a1b2c3d4e5', 5)], { problem: 'Some history is missing.' })]) };
+    expect(lane(boardLayout(partly)).data.group!.summary).toMatchObject({ headline: '1 new since you last looked', warning: 'Could not read everything' });
+    // Open, the lane says why itself, and its summary is not needed.
+    expect(lane(open(partly)).data.note).toContain('Some history is missing.');
+    // Without a problem there is no warning.
+    expect(lane(boardLayout({ news: news([repo('api', [commit('a1b2c3d4e5', 5)])]) })).data.group!.summary).not.toHaveProperty('warning');
+  });
+
+  it('stand in the same columns, open or folded, so nothing jumps sideways', () => {
+    const base = boardLayout(sources);
+    const everything = open(sources);
+    const xs = (nodes: BoardNode[]) => groups(nodes).map((node) => [node.id, node.position.x]);
+    expect(xs(everything)).toEqual(xs(base));
+    for (const id of groupIds) expect(by(base, id).position.y, id).toBe(0);
+    // Whatever is opened or folded, a column is where it was.
+    expect(xs(boardLayout({ ...sources, folds: { 'checkpoint:under-way': false, 'checkpoint:later': true } }))).toEqual(xs(base));
+  });
+
+  it('leave every other node where it was when a group opens, and fold back to where it was', () => {
+    const cards = { board: boardOf({ cards: [note(1), note(2), note(3)] }) };
+    const before = boardLayout({ ...sources, ...cards });
+    const after = boardLayout({ ...sources, ...cards, folds: { 'checkpoint:later': true } });
+    // The group that opened is as tall as its details; nothing else is touched, the band and its cards included.
+    expect(by(after, 'checkpoint:later').height).toBeGreaterThan(by(before, 'checkpoint:later').height!);
+    for (const node of before.filter((entry) => entry.id !== 'checkpoint:later')) expect(after.find((entry) => entry.id === node.id), node.id).toEqual(node);
+    // Folded again, it is where it was.
+    expect(boardLayout({ ...sources, ...cards, folds: { 'checkpoint:later': false } })).toEqual(before);
+  });
+
+  it('keep the band clear of every group that is open and of the summaries of the rest', () => {
+    const cards = { board: boardOf({ cards: [note(1)] }) };
+    for (const folds of [{}, { 'checkpoint:later': true }, { 'checkpoint:under-way': false }, Object.fromEntries(groupIds.map((id) => [id, true]))]) {
+      const nodes = boardLayout({ ...sources, ...cards, folds });
+      const rects = nodeRects(nodes);
+      for (const entry of frames(nodes)) expect(overlaps(rects.get(entry.id)!, rects.get('lane:board')!), `${entry.id} ${JSON.stringify(folds)}`).toBe(false);
+    }
+  });
+
+  it('follow the user\'s choices over the default, and the default again for a group they did not choose', () => {
+    const nodes = boardLayout({ ...sources, folds: { 'checkpoint:under-way': false, 'checkpoint:done-one': true, 'lane:documents': true } });
+    expect(groups(nodes).map((node) => [node.id, !isFolded(node)])).toEqual([
+      ['lane:documents', true], ['plan:own', false], ['checkpoint:done-one', true], ['checkpoint:under-way', false], ['checkpoint:later', false], ['lane:commits:api', false], ['lane:commits:web', false],
+    ]);
+  });
+
+  it('open the plan\'s own frame when there is no checkpoint, and nothing when there is no frame at all', () => {
+    expect(groups(boardLayout({ plan: plan([], { steps: [step('Loose')] }), documents: [doc('Brief')] })).map((node) => [node.id, !isFolded(node)])).toEqual([['lane:documents', false], ['plan:own', true]]);
+    expect(groups(boardLayout({ documents: [doc('Brief')] })).map((node) => [node.id, !isFolded(node)])).toEqual([['lane:documents', false]]);
+  });
+
+  it('leave a lane with nothing to fold as it is: the placeholder and a repository that could not be read', () => {
+    const nodes = boardLayout({ plan: plan([checkpoint('One')]), news: news([repo('gone', [], { problem: 'The folder is missing.' }), repo('api', [])]) });
+    expect(lanes(nodes).map((entry) => [entry.id, entry.data.group])).toEqual([['lane:commits', undefined], ['lane:commits:gone', undefined]]);
+    expect(lanes(nodes)[1].data.note).toContain('The folder is missing.');
+    expect(placeholders(nodes)).toHaveLength(1);
+  });
+});
+
+
 // ─── What people and AIs put on the board ───────────────────────────────────
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -445,18 +573,18 @@ describe('cards from the board', () => {
     }
   });
 
-  it('start under the checkpoint the work is on, oldest first, and go on to the right of it and round to the first', () => {
+  it('start under the first checkpoint, oldest first, and go on to the right of it and round to the first, whatever the work is on', () => {
     const nodes = boardLayout({
       now: NOW, plan: plan([checkpoint('Done', { done: true }), checkpoint('Under way'), checkpoint('Later')]),
       board: boardOf({ cards: [note(1), note(2), note(3), note(4)] }),
     });
     const column = (index: number) => BOARD_SIZE.pad + index * (BOARD_SIZE.column + BOARD_SIZE.columnGap);
     const at = (title: string) => notes(nodes).find((card) => card.data.title === title)!.position;
-    expect(at('Note 1')).toMatchObject({ x: column(1) });
-    expect(at('Note 2')).toMatchObject({ x: column(2) });
-    expect(at('Note 3')).toMatchObject({ x: column(0) });
+    expect(at('Note 1')).toMatchObject({ x: column(0) });
+    expect(at('Note 2')).toMatchObject({ x: column(1) });
+    expect(at('Note 3')).toMatchObject({ x: column(2) });
     expect(at('Note 1').y).toBe(at('Note 3').y);
-    expect(at('Note 4')).toMatchObject({ x: column(1), y: at('Note 1').y + BOARD_SIZE.note + BOARD_SIZE.gap });
+    expect(at('Note 4')).toMatchObject({ x: column(0), y: at('Note 1').y + BOARD_SIZE.note + BOARD_SIZE.gap });
     for (const card of notes(nodes)) expect(card.parentId).toBe('lane:board');
   });
 
@@ -466,34 +594,36 @@ describe('cards from the board', () => {
     const before = placesOf([note(1), note(2), note(3), note(4)]);
     const after = placesOf([note(1), note(2), note(3), note(4), note(5, { at: minutesAgo(0) })]);
     for (const [id, position] of before) expect(after.get(id), id).toEqual(position);
-    // The new one is the next in line: the second column's place in the second row (the row starts under the checkpoint under way).
-    expect(after.get(uuidOf(5))).toEqual({ x: BOARD_SIZE.pad + 2 * (BOARD_SIZE.column + BOARD_SIZE.columnGap), y: before.get(uuidOf(4))!.y });
+    // The new one is the next in line: the second column's place in the second row.
+    expect(after.get(uuidOf(5))).toEqual({ x: BOARD_SIZE.pad + (BOARD_SIZE.column + BOARD_SIZE.columnGap), y: before.get(uuidOf(4))!.y });
     // A card made earlier than the others comes first, whatever order the list is in.
     const early = placesOf([note(2), note(1, { at: minutesAgo(900) })]);
     expect(early.get(uuidOf(1))!.x).toBeLessThan(early.get(uuidOf(2))!.x);
   });
 
-  it('move the band to the next checkpoint, as one block in the same order, when the work moves on, and keep its top', () => {
+  it('do not move any card of the band when the work moves on, or when a checkpoint is ticked, or when a group is opened or folded', () => {
     const cards = [note(1), note(2), note(3), note(4)];
     const asked = [decision('Which format?'), decision('Which zone?')];
-    const sources = (doneCount: number) => ({
-      now: NOW, board: boardOf({ cards }),
+    const sources = (doneCount: number, folds?: BoardSources['folds']) => ({
+      now: NOW, board: boardOf({ cards }), folds,
       plan: plan([checkpoint('One', { done: doneCount > 0, decisions: asked }), checkpoint('Two', { done: doneCount > 1 }), checkpoint('Three')]),
     });
-    const [open, ticked] = [boardLayout(sources(0)), boardLayout(sources(1))];
-    const slotOf = (nodes: BoardNode[], title: string) => notes(nodes).find((card) => card.data.title === title)!.position;
-    const column = (index: number) => BOARD_SIZE.pad + index * (BOARD_SIZE.column + BOARD_SIZE.columnGap);
-    // Under the first checkpoint, then under the second: every card one column on, round to the first, rows unchanged.
-    expect(notes(open).map((card) => [card.data.title, card.position.x, card.position.y]).sort())
-      .toEqual([['Note 1', column(0), slotOf(open, 'Note 1').y], ['Note 2', column(1), slotOf(open, 'Note 1').y], ['Note 3', column(2), slotOf(open, 'Note 1').y], ['Note 4', column(0), slotOf(open, 'Note 4').y]]);
-    expect(['Note 1', 'Note 2', 'Note 3', 'Note 4'].map((title) => slotOf(ticked, title).x)).toEqual([column(1), column(2), column(0), column(1)]);
-    for (const title of ['Note 1', 'Note 2', 'Note 3', 'Note 4']) expect(slotOf(ticked, title).y).toBe(slotOf(open, title).y);
-    // The top does not move, though the frame that had decisions waiting is shorter now, and it stands clear of every frame.
-    const band = (nodes: BoardNode[]) => lanes(nodes).find((entry) => entry.id === 'lane:board')!;
-    expect(band(ticked).position).toEqual(band(open).position);
-    expect(frames(ticked)[0].height).toBeLessThan(frames(open)[0].height!);
-    expect(frames(open)[0].data.waiting).toHaveLength(2);
-    for (const frame of frames(open)) expect(frame.position.y + frame.height!).toBeLessThanOrEqual(band(open).position.y);
+    const band = (nodes: BoardNode[]) => [nodes.find((entry) => entry.id === 'lane:board')!.position, ...notes(nodes).map((card) => [card.id, card.position])];
+    const base = band(boardLayout(sources(0)));
+    // The work moves on to the next checkpoint, and on to the last.
+    expect(band(boardLayout(sources(1)))).toEqual(base);
+    expect(band(boardLayout(sources(2)))).toEqual(base);
+    // Any group opened or folded, as the user likes: the tallest frame, one that is short, and all of them at once.
+    for (const folds of [{ 'checkpoint:one': false }, { 'checkpoint:two': true }, { 'checkpoint:three': true }, { 'checkpoint:one': true, 'checkpoint:two': true, 'checkpoint:three': true }]) {
+      expect(band(boardLayout(sources(0, folds))), JSON.stringify(folds)).toEqual(base);
+    }
+    // It stands under the tallest a frame can be, with every decision waiting, though that frame is folded or ticked.
+    const first = frames(open(sources(0))).find((frame) => frame.data.title === 'One')!;
+    expect(base[0]).toMatchObject({ y: first.height! + BOARD_SIZE.columnGap });
+    for (const folds of [{}, { 'checkpoint:one': false }]) {
+      const nodes = boardLayout(sources(0, folds));
+      for (const frame of frames(nodes)) expect(frame.position.y + frame.height!, frame.id).toBeLessThanOrEqual((base[0] as { y: number }).y);
+    }
   });
 
   it('are a column of their own, after the last one, when there is no checkpoint to stand under', () => {
@@ -574,56 +704,32 @@ describe('saved places', () => {
     expect(lanes(nodes)).toEqual([]);
   });
 
-  it('override the automatic place of a checkpoint, and the rest of the row closes up around it', () => {
-    const base = boardLayout({ plan: plan([checkpoint('One'), checkpoint('Two'), checkpoint('Three')]) });
-    const moved = boardLayout({ plan: plan([checkpoint('One'), checkpoint('Two'), checkpoint('Three')]), board: boardOf({ positions: { 'checkpoint:two': { x: 500, y: 300 } } }) });
-    const by = (nodes: BoardNode[], title: string) => frames(nodes).find((entry) => entry.data.title === title)!;
-    expect(by(moved, 'Two').position).toEqual({ x: 500, y: 300 });
-    expect(by(moved, 'One').position).toEqual(by(base, 'One').position);
-    expect(by(moved, 'Three').position.x).toBe(by(base, 'Two').position.x);
+  it('ignore a saved place for a checkpoint, a document and a commit, which keep the place the board gives them', () => {
+    const sources = { plan: plan([checkpoint('One'), checkpoint('Two'), checkpoint('Three')]), documents: [doc('Brief'), doc('Other')], news: news([repo('api', [commit('a1b2c3d4e5', 5), commit('b2c3d4e5f6', 9)])]) };
+    const places = { 'checkpoint:two': { x: 500, y: 300 }, [`document:${slug('Brief')}`]: { x: 900, y: 10 }, 'commit:api:b2c3d4e5f6': { x: 910, y: 400 } };
+    // Folded and open alike: the same nodes, in the same columns, as if no place had been saved.
+    expect(boardLayout({ ...sources, board: boardOf({ positions: places }) })).toEqual(boardLayout(sources));
+    expect(open({ ...sources, board: boardOf({ positions: places }) })).toEqual(open(sources));
+    const nodes = open({ ...sources, board: boardOf({ positions: places }) });
+    expect(frames(nodes).find((entry) => entry.data.title === 'Two')!.position).toEqual({ x: 2 * (BOARD_SIZE.column + BOARD_SIZE.columnGap), y: 0 });
+    expect(documents(nodes).map((card) => card.parentId)).toEqual(['lane:documents', 'lane:documents']);
+    expect(commits(nodes).map((card) => card.parentId)).toEqual(['lane:commits:api', 'lane:commits:api']);
+    expect(lanes(nodes).map((entry) => entry.id)).toEqual(['lane:documents', 'lane:commits:api']);
   });
 
-  it('take a document or a commit out of its lane and stand it at its place', () => {
-    const briefId = `document:${slug('Brief')}`;
-    const nodes = boardLayout({
-      documents: [doc('Brief'), doc('Other')], news: news([repo('api', [commit('a1b2c3d4e5', 5), commit('b2c3d4e5f6', 9)])]),
-      board: boardOf({ positions: { [briefId]: { x: 900, y: 10 }, 'commit:api:b2c3d4e5f6': { x: 910, y: 400 } } }),
-    });
-    const brief = documents(nodes).find((card) => card.id === briefId)!;
-    expect(brief.parentId).toBeUndefined();
-    expect(brief.position).toEqual({ x: 900, y: 10 });
-    expect(documents(nodes).filter((card) => card.parentId).map((card) => card.data.title)).toEqual(['Other']);
-    expect(commits(nodes).filter((card) => !card.parentId).map((card) => card.position)).toEqual([{ x: 910, y: 400 }]);
-    // The cards that stayed are stacked from the top of their lane again.
-    expect(documents(nodes).find((card) => card.parentId)!.position.y).toBe(BOARD_SIZE.laneHeader);
-    expect(nodeRects(nodes).get(briefId)).toMatchObject({ x: 900, y: 10 });
+  it('keep a lane of commits whatever places were saved for them, since the commits stay in it', () => {
+    const nodes = open({ news: news([repo('api', [commit('a1b2c3d4e5', 5)], { more: 4 })]), board: boardOf({ positions: { 'commit:api:a1b2c3d4e5': { x: 1, y: 2 } } }) });
+    expect(lanes(nodes).map((entry) => [entry.data.title, entry.data.more])).toEqual([['api', 4]]);
+    expect(commits(nodes)[0].parentId).toBe('lane:commits:api');
   });
 
-  it('drop a lane whose cards were all put elsewhere, unless it has something to say', () => {
-    const only = boardLayout({ documents: [doc('Brief')], board: boardOf({ positions: { [`document:${slug('Brief')}`]: { x: 1, y: 2 } } }) });
-    expect(lanes(only)).toEqual([]);
-    const withMore = boardLayout({ news: news([repo('api', [commit('a1b2c3d4e5', 5)], { more: 4 })]), board: boardOf({ positions: { 'commit:api:a1b2c3d4e5': { x: 1, y: 2 } } }) });
-    expect(lanes(withMore).map((entry) => [entry.data.title, entry.data.more])).toEqual([['api', 4]]);
-  });
-
-  it('find a commit by a hash that begins the one the board knows, or that it begins', () => {
-    const sources = { news: news([repo('api', [commit('a1b2c3d4e5f6a7b8', 5)])]) };
-    for (const key of ['commit:api:a1b2c3d', 'commit:api:a1b2c3d4e5f6a7b8', 'commit:api:a1b2c3d4e5f6a7b8c9d0e1f2']) {
-      const [card] = commits(boardLayout({ ...sources, board: boardOf({ positions: { [key]: { x: 5, y: 6 } } }) }));
-      expect(card.position, key).toEqual({ x: 5, y: 6 });
-      expect(card.parentId, key).toBeUndefined();
-    }
-    for (const key of ['commit:api:a1b2c3e', 'commit:web:a1b2c3d', 'commit:api:a1b2c3d#2']) {
-      expect(commits(boardLayout({ ...sources, board: boardOf({ positions: { [key]: { x: 5, y: 6 } } }) }))[0].parentId, key).toBeDefined();
-    }
-  });
-
-  it('prefer the place written with the exact id over one found by prefix', () => {
-    const [card] = commits(boardLayout({
-      news: news([repo('api', [commit('a1b2c3d4e5f6', 5)])]),
-      board: boardOf({ positions: { 'commit:api:a1b2c3d': { x: 1, y: 1 }, 'commit:api:a1b2c3d4e5f6': { x: 2, y: 2 } } }),
-    }));
-    expect(card.position).toEqual({ x: 2, y: 2 });
+  it('keep the place of a card, and no other', () => {
+    const sources = { now: NOW, plan: plan([checkpoint('One')]), documents: [doc('Brief')], news: news([repo('api', [commit('a1b2c3d4e5', 5)])]) };
+    const base = boardLayout({ ...sources, board: boardOf({ cards: [note(1), note(2)] }) });
+    const placed = boardLayout({ ...sources, board: boardOf({ cards: [note(1), note(2)], positions: { [uuid(2)]: { x: 2000, y: -120 }, 'checkpoint:one': { x: 5, y: 5 }, [`document:${slug('Brief')}`]: { x: 6, y: 6 }, 'commit:api:a1b2c3d4e5': { x: 7, y: 7 } } }) });
+    expect(notes(placed).find((card) => card.id === uuid(2))!.position).toEqual({ x: 2000, y: -120 });
+    // Everything that is not that card is where it was without the places, the card in the band included.
+    expect(placed.filter((node) => node.id !== uuid(2) && node.id !== 'lane:board')).toEqual(base.filter((node) => node.id !== uuid(2) && node.id !== 'lane:board'));
   });
 
   it('ignore a place for something that is not on the board, silently', () => {
@@ -638,6 +744,80 @@ describe('saved places', () => {
   it('keep the plan frame where it is: it has no id the board knows', () => {
     const nodes = boardLayout({ plan: plan([], { steps: [step('A loose step')] }), board: boardOf({ positions: { 'plan:own': { x: 9, y: 9 } } }) });
     expect(frames(nodes)[0].position).toEqual({ x: 0, y: 0 });
+  });
+
+  describe('under a group, folded or open', () => {
+    const base = {
+      now: NOW, documents: [doc('Brief'), doc('Other')],
+      plan: plan([checkpoint('One', { done: true }), checkpoint('Two', { steps: [step('A'), step('B'), step('C')] }), checkpoint('Ship it', { steps: Array.from({ length: 6 }, (_, index) => step(`Step ${index}`)), decisions: [decision('Who signs off?')] })]),
+      news: news([repo('api', [commit('a1b2c3d4e5', 5), commit('b2c3d4e5f6', 9)])]),
+    };
+    const GROUPS = ['lane:documents', 'checkpoint:one', 'checkpoint:two', 'checkpoint:ship-it', 'lane:commits:api'];
+    /** A card put under each column, just below where the folded summary stands, so a group that opens grows over it. */
+    const placed = Object.fromEntries([0, 1, 2, 3, 4, 5].map((column) => [uuid(column + 1), { x: column * (BOARD_SIZE.column + BOARD_SIZE.columnGap) + 8, y: BOARD_SIZE.folded + 20 }]));
+    const cards = [1, 2, 3, 4, 5, 6].map((n) => note(n));
+    const free = (nodes: BoardNode[]) => nodes.filter((node) => node.parentId === undefined && node.type === 'note');
+    const subsets = Array.from({ length: 1 << GROUPS.length }, (_, mask) => Object.fromEntries(GROUPS.map((id, index) => [id, Boolean(mask & (1 << index))])));
+    const layout = (folds: Record<string, boolean>, positions = placed) => boardLayout({ ...base, board: boardOf({ cards, positions }), folds });
+    const placesOf = (nodes: BoardNode[]) => free(nodes).map((node) => [node.id, node.position]);
+    /** A group as it is when open: the room a card keeps clear, whether or not the group is open now. */
+    const footprint = (nodes: BoardNode[], id: string) => {
+      const node = nodes.find((entry) => entry.id === id)!;
+      return { ...nodeRects(nodes).get(id)!, height: node.type === 'checkpoint' ? (node as CheckpointNode).data.openHeight : (node as LaneNode).data.group!.openHeight };
+    };
+
+    it('draw a card in the same place whatever is open or folded, and clear of every group as it is when open', () => {
+      const every = placesOf(layout(subsets[0]!));
+      for (const folds of subsets) {
+        const nodes = layout(folds);
+        expect(placesOf(nodes), JSON.stringify(folds)).toEqual(every);
+        for (const card of free(nodes)) for (const id of GROUPS) expect(overlaps(nodeRects(nodes).get(card.id)!, footprint(nodes, id)), `${card.id} over ${id} with ${JSON.stringify(folds)}`).toBe(false);
+      }
+    });
+
+    it('put a card in the way just below the group, with the room between things, and leave a card that is not in the way where it was put', () => {
+      const nodes = layout({});
+      const card = (n: number) => nodes.find((node) => node.id === uuid(n))!;
+      const ship = footprint(nodes, 'checkpoint:ship-it');
+      // The open frame is taller than its summary, and the card is just below the open frame: not under its steps, folded or not.
+      expect(ship.height).toBeGreaterThan(BOARD_SIZE.folded + 20);
+      expect(card(4).position).toEqual({ x: placed[uuid(4)]!.x, y: ship.y + ship.height + BOARD_SIZE.gap });
+      // A card the group does not reach is where it was put: the one far from every column.
+      const far = boardLayout({ ...base, board: boardOf({ cards: [note(1)], positions: { [uuid(1)]: { x: 5000, y: 20 } } }) });
+      expect(free(far)[0]!.position).toEqual({ x: 5000, y: 20 });
+    });
+
+    it('draw a raw saved place that is under a group clear of it, without changing what is saved', () => {
+      const raw = { [uuid(4)]: { x: placed[uuid(4)]!.x, y: BOARD_SIZE.folded + 20 } };
+      const board = boardOf({ cards: [note(4)], positions: raw });
+      const nodes = boardLayout({ ...base, board });
+      expect(free(nodes)[0]!.position.y).toBeGreaterThan(BOARD_SIZE.folded + 20);
+      // The board that was given is as it was: the place saved is the one that was put, and it is what a read of the board says.
+      expect(board.positions).toEqual(raw);
+    });
+
+    it('clear a card of the band too, and every group it would be put under, when several are in the way', () => {
+      // One card wide enough to be under two columns at once.
+      const both = { [uuid(1)]: { x: 2 * (BOARD_SIZE.column + BOARD_SIZE.columnGap) + 200, y: BOARD_SIZE.folded + 20 } };
+      const nodes = boardLayout({ ...base, board: boardOf({ cards: [note(1), note(2)], positions: both }), folds: { 'checkpoint:two': true, 'checkpoint:ship-it': true } });
+      const rects = nodeRects(nodes);
+      const card = rects.get(uuid(1))!;
+      for (const id of ['checkpoint:two', 'checkpoint:ship-it']) expect(overlaps(card, footprint(nodes, id)), id).toBe(false);
+      expect(overlaps(card, rects.get('lane:board')!)).toBe(false);
+      expect(card.y).toBeGreaterThanOrEqual(rects.get('lane:board')!.y + rects.get('lane:board')!.height + BOARD_SIZE.gap);
+    });
+
+    it('give clearPlace, for a drop or a nudge, the place the layout draws, and the same place when asked again', () => {
+      const nodes = layout({});
+      const size = { width: BOARD_SIZE.card, height: BOARD_SIZE.note };
+      for (const [id, at] of Object.entries(placed)) {
+        const cleared = clearPlace(nodes, at, size);
+        expect(cleared, id).toEqual(nodes.find((node) => node.id === id)!.position);
+        expect(clearPlace(nodes, cleared, size), id).toEqual(cleared);
+      }
+      // A place that is clear is returned as it is.
+      expect(clearPlace(nodes, { x: 9000, y: 9000 }, size)).toEqual({ x: 9000, y: 9000 });
+    });
   });
 
   it('keep cards that were placed apart from the cards in the lane: nothing overlaps unless it was put there', () => {
@@ -693,7 +873,8 @@ describe('lines between things', () => {
     now: NOW, plan: plan([checkpoint('Build it'), checkpoint('Ship it')]), documents: [doc('Brief')], news: news([repo('api', [commit('a1b2c3d4e5f6', 5)])]),
     board: boardOf({ cards: [note(1), note(2)] }),
   };
-  const nodes = boardLayout(sources);
+  const nodes = open(sources);
+  const folded = boardLayout(sources);
 
   it('join cards to cards, checkpoints, documents and commits', () => {
     const links = [link(1, uuid(1), 'checkpoint:build-it', 'found while'), link(2, uuid(2), `document:${slug('Brief')}`), link(3, uuid(1), uuid(2)), link(4, 'checkpoint:ship-it', 'commit:api:a1b2c3d')];
@@ -722,9 +903,9 @@ describe('lines between things', () => {
   });
 
   it('find a commit by prefix, whichever of the two is shorter', () => {
-    const longer = boardLayout({ ...sources, news: news([repo('api', [commit('a1b2c3d4e5f6a7b8c9d0', 5)])]) });
+    const longer = open({ ...sources, news: news([repo('api', [commit('a1b2c3d4e5f6a7b8c9d0', 5)])]) });
     expect(boardEdges(longer, [link(1, uuid(1), 'commit:api:a1b2c3d4e5')])[0].target).toBe('commit:api:a1b2c3d4e5f6a7b8c9d0');
-    const shorter = boardLayout({ ...sources, news: news([repo('api', [commit('a1b2c3d', 5)])]) });
+    const shorter = open({ ...sources, news: news([repo('api', [commit('a1b2c3d', 5)])]) });
     expect(boardEdges(shorter, [link(1, uuid(1), 'commit:api:a1b2c3d4e5f6')])[0].target).toBe('commit:api:a1b2c3d');
     // Not another repository, and not another hash.
     expect(boardEdges(nodes, [link(1, uuid(1), 'commit:web:a1b2c3d'), link(2, uuid(1), 'commit:api:b1b2c3d')])).toEqual([]);
@@ -742,6 +923,36 @@ describe('lines between things', () => {
     expect(sidesBetween(box(300, 0), box(0, 0))).toEqual(['left', 'right']);
     expect(sidesBetween(box(0, 0), box(20, 300))).toEqual(['bottom', 'top']);
     expect(sidesBetween(box(20, 300), box(0, 0))).toEqual(['top', 'bottom']);
+  });
+
+  it('go to the summary of a folded group for a thing inside it, so no line points at nothing, and keep their labels', () => {
+    expect(folded.some((node) => node.id === 'commit:api:a1b2c3d4e5f6' || node.id === `document:${slug('Brief')}`)).toBe(false);
+    const edges = boardEdges(folded, [link(1, uuid(1), 'commit:api:a1b2c3d', 'found while'), link(2, uuid(2), `document:${slug('Brief')}`), link(3, uuid(1), 'checkpoint:build-it')]);
+    expect(edges.map((edge) => [edge.id, edge.source, edge.target])).toEqual([[uuid(901), uuid(1), 'lane:commits:api'], [uuid(902), uuid(2), 'lane:documents'], [uuid(903), uuid(1), 'checkpoint:build-it']]);
+    expect(edges[0].label).toBe('found while');
+    expect(edges[0].ariaLabel).toBe('Link from Note 1 to api: found while');
+    expect(edges[1].ariaLabel).toBe('Link from Note 2 to Documents');
+    // Every end of every line is a node that is drawn.
+    const drawn = new Set(folded.map((node) => node.id));
+    for (const edge of edges) { expect(drawn.has(edge.source), edge.id).toBe(true); expect(drawn.has(edge.target), edge.id).toBe(true); }
+  });
+
+  it('come back to the thing itself when its group opens', () => {
+    const links = [link(1, uuid(1), 'commit:api:a1b2c3d', 'found while')];
+    expect(boardEdges(folded, links)[0].target).toBe('lane:commits:api');
+    const opened = boardLayout({ ...sources, folds: { 'lane:commits:api': true } });
+    expect(boardEdges(opened, links)[0].target).toBe('commit:api:a1b2c3d4e5f6');
+  });
+
+  it('leave out a line between two things of the same folded group, which would only loop on its summary', () => {
+    const two = boardLayout({ ...sources, news: news([repo('api', [commit('a1b2c3d4e5f6', 5), commit('b2c3d4e5f6a7', 9)])]) });
+    expect(boardEdges(two, [link(1, 'commit:api:a1b2c3d', 'commit:api:b2c3d4e')])).toEqual([]);
+    // From one folded group to another, or to an open frame, it is drawn.
+    expect(boardEdges(two, [link(2, 'commit:api:a1b2c3d', `document:${slug('Brief')}`)]).map((edge) => [edge.source, edge.target])).toEqual([['lane:commits:api', 'lane:documents']]);
+  });
+
+  it('still skip a line to a thing that is not in the group it would be folded into', () => {
+    expect(boardEdges(folded, [link(1, uuid(1), 'commit:api:deadbeef'), link(2, uuid(1), 'commit:web:a1b2c3d')])).toEqual([]);
   });
 
   it('follow a card that was moved', () => {

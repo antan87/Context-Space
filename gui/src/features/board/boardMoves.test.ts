@@ -6,7 +6,7 @@ import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { WorkDocument } from '../../types.js';
 import { boardKey, type BoardCard, type BoardView } from './boardData.js';
 import { boardLayout, type BoardNode } from './boardLayout.js';
-import { MOVE_HELP, NUDGE_STEP, canvasPlace, isMovable, moveChange, moveNodeWith, moveProblem, nudged, placeHeld, placeOf, revealed, samePlace, undoChange, withMoves, withPlace } from './boardMoves.js';
+import { MOVE_HELP, NUDGE_STEP, canvasPlace, clearedPlace, isMovable, moveChange, moveNodeWith, moveProblem, nudged, placeHeld, placeOf, revealed, samePlace, undoChange, withMoves, withPlace } from './boardMoves.js';
 
 vi.mock('../../lib/api/client.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../lib/api/client.js')>()), apiFetch: vi.fn() }));
 const post = vi.mocked(apiFetch);
@@ -28,9 +28,14 @@ const news = (): WhatsNewView => ({
 const byId = (nodes: BoardNode[], id: string) => nodes.find((node) => node.id === id)!;
 
 describe('isMovable', () => {
-  it('is a card, a checkpoint, a document or a commit', () => {
-    for (const id of [uuid(1), 'checkpoint:reports-export-to-csv', 'checkpoint:same#2', `document:${uuid(7)}`, 'commit:billing api:a91f2e0c4d5b']) {
-      expect(isMovable({ id }), id).toBe(true);
+  it('is a card, and only a card', () => {
+    expect(isMovable({ id: uuid(1) })).toBe(true);
+    expect(isMovable({ id: uuid(2) })).toBe(true);
+  });
+
+  it('is not a checkpoint, a document or a commit: the app places those itself, in their group and order', () => {
+    for (const id of ['checkpoint:reports-export-to-csv', 'checkpoint:same#2', `document:${uuid(7)}`, 'commit:billing api:a91f2e0c4d5b']) {
+      expect(isMovable({ id }), id).toBe(false);
     }
   });
 
@@ -38,11 +43,6 @@ describe('isMovable', () => {
     for (const id of ['lane:documents', 'lane:commits:api', 'lane:board', 'placeholder:commits', 'plan:own', 'document:export-requirements', 'commit:api:xyz', '', 'constructor']) {
       expect(isMovable({ id }), id).toBe(false);
     }
-  });
-
-  it('is the same for a thing that stands in a lane: it leaves the lane where it is dropped', () => {
-    expect(isMovable({ id: uuid(1) })).toBe(true);
-    expect(isMovable({ id: 'commit:api:a91f2e0c4d5b' })).toBe(true);
   });
 });
 
@@ -53,22 +53,23 @@ describe('withMoves', () => {
     documents: [doc(uuid(50), 'Brief')],
     news: news(),
     board: boardOf({ cards: [note(1), note(2)], positions: { [uuid(1)]: { x: 700, y: 900 }, 'commit:api:a91f2e0': { x: 2000, y: 0 } } }),
+    // Everything open, so there is a node for each thing the board draws.
+    folds: { 'plan:own': true, 'checkpoint:one': true, 'lane:documents': true, 'lane:commits:api': true },
   });
   const moved = withMoves(nodes, 'moving-help');
 
-  it('makes what the board can keep a place for draggable, in a lane or not, and a stop for the keyboard that says how to move it', () => {
-    for (const id of ['checkpoint:one', 'checkpoint:two', uuid(1), uuid(2), `document:${uuid(50)}`, 'commit:api:a91f2e0c4d5b']) {
-      expect(byId(moved, id), id).toMatchObject({ draggable: true, focusable: true });
-    }
+  it('makes the cards draggable, in the band or not, and a stop for the keyboard that says how to move it', () => {
+    for (const id of [uuid(1), uuid(2)]) expect(byId(moved, id), id).toMatchObject({ draggable: true, focusable: true });
+    expect(byId(moved, uuid(1)).parentId).toBeUndefined();
+    expect(byId(moved, uuid(2)).parentId).toBe('lane:board');
     // Named for what it is; how to move it is the description, one element for all of them.
     expect(byId(moved, uuid(1)).ariaLabel).toBe('Note 1');
-    expect(byId(moved, 'commit:api:a91f2e0c4d5b').ariaLabel).toBe('commit a91f2e0');
     expect(byId(moved, uuid(1)).domAttributes).toEqual({ 'aria-describedby': 'moving-help' });
     expect(MOVE_HELP).toMatch(/Shift and an arrow key/);
   });
 
-  it('leaves everything else as the layout made it: the lanes and the plan\'s own frame are not dragged or focused', () => {
-    const rest = ['plan:own', 'lane:documents', 'lane:board'];
+  it('leaves everything else as the layout made it: checkpoints, documents, commits, the lanes and the plan\'s own frame are not dragged or focused', () => {
+    const rest = ['plan:own', 'checkpoint:one', 'checkpoint:two', `document:${uuid(50)}`, 'commit:api:a91f2e0c4d5b', 'lane:documents', 'lane:commits:api', 'lane:board'];
     for (const id of rest) {
       expect(byId(moved, id), id).toMatchObject({ draggable: false });
       expect(byId(moved, id).focusable, id).toBeUndefined();
@@ -102,6 +103,31 @@ describe('canvasPlace', () => {
     expect(card.parentId).toBe('lane:board');
     expect(canvasPlace(nodes, uuid(1), card.position)).toEqual({ x: lane.position.x + card.position.x, y: lane.position.y + card.position.y });
     expect(canvasPlace(nodes, uuid(1), { x: 0, y: 0 })).toEqual(lane.position);
+  });
+});
+
+describe('clearedPlace', () => {
+  const sources = { now: Date.parse(AT), plan: plan([checkpoint('One', { done: true }), checkpoint('Two', { steps: [{ key: 'a', text: 'A', done: false }, { key: 'b', text: 'B', done: false }] })]), board: boardOf({ cards: [note(1), note(2)], positions: { [uuid(1)]: { x: 3000, y: 3000 }, [uuid(2)]: { x: 3000, y: 4000 } } }) };
+  // One checkpoint is open (the work), the other folded: a card dropped on either lands clear of the group as it is when open.
+  const nodes = withMoves(boardLayout(sources), 'help');
+  const one = nodes.find((node) => node.id === 'checkpoint:one')!;
+  const two = nodes.find((node) => node.id === 'checkpoint:two')!;
+  const openHeight = (node: BoardNode) => (node as { data: { openHeight: number } }).data.openHeight;
+
+  it('puts a card dropped on an open group just below it, as a whole number, and the same place again when asked again', () => {
+    const at = clearedPlace(nodes, uuid(1), { x: two.position.x + 40.4, y: 30 });
+    expect(at).toEqual({ x: Math.round(two.position.x + 40.4), y: openHeight(two) + 12 });
+    expect(clearedPlace(nodes, uuid(1), at)).toEqual(at);
+  });
+
+  it('puts a card dropped under a folded summary below the group as it is when open, not just below its summary', () => {
+    expect(one.height).toBeLessThan(openHeight(one));
+    expect(clearedPlace(nodes, uuid(1), { x: one.position.x + 5, y: (one.height ?? 0) + 4 })).toEqual({ x: one.position.x + 5, y: openHeight(one) + 12 });
+  });
+
+  it('leaves a place that is clear where it is, and a node it does not know as it was asked', () => {
+    expect(clearedPlace(nodes, uuid(1), { x: 5000, y: -400 })).toEqual({ x: 5000, y: -400 });
+    expect(clearedPlace(nodes, uuid(99), { x: two.position.x, y: 10 })).toEqual({ x: two.position.x, y: 10 });
   });
 });
 

@@ -1,6 +1,6 @@
-import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, Pin, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, Pin, type LucideIcon } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -8,7 +8,7 @@ import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, Dial
 import { cn } from '../../lib/utils.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, documentFileUrl } from './boardActions.js';
-import { BOARD_SIZE, authorName, imageAlt, moreText, type CardData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type LaneNode, type NoteNode, type PlaceholderNode } from './boardLayout.js';
+import { BOARD_SIZE, authorName, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type LaneNode, type NoteNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
@@ -24,13 +24,65 @@ function Anchors() {
   return <>{SIDES.map(([position, id]) => <Handle key={id} id={id} type="source" position={position} isConnectable={false} className="board-handle" />)}</>;
 }
 
-/** The title of a lane: what its cards are, and what it leaves out. Its cards are separate nodes drawn over it. */
-export function BoardLane({ data }: NodeProps<LaneNode>) {
-  return <div className="flex h-full w-full flex-col rounded-2xl border border-dashed border-border bg-muted/40">
+/** What names a folded group to those who cannot see it: what it says of itself. That it can be opened is said by its state (aria-expanded). */
+const summaryLabel = (parts: Array<string | false | undefined>) => parts.filter(Boolean).join(', ');
+
+/** The ref for a group's button, which puts the keyboard on it when it takes the place of the one that was pressed (BoardActions.keepFocus). */
+function useKeepFocus(id: string) {
+  const actions = useContext(BoardActionsContext);
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (ref.current) actions?.keepFocus(id, ref.current); }, [actions, id]);
+  return ref;
+}
+
+/**
+ * A group folded into one summary, which is one button: a press anywhere on it opens the group where it stands. It is not
+ * a place to start moving the view from, so a press on it is only a press.
+ */
+function FoldedGroup({ id, label, className, children }: { id: string; label: string; className: string; children: ReactNode }) {
+  const actions = useContext(BoardActionsContext);
+  const ref = useKeepFocus(id);
+  return <div className="relative h-full w-full">
+    <Anchors />
+    <button
+      ref={ref} type="button" data-fold aria-label={label} aria-expanded="false" disabled={!actions} onClick={() => actions?.toggleGroup(id, true)}
+      className={cn('board-fold nodrag nopan relative flex h-full w-full flex-col overflow-hidden px-3 pt-3 text-left shadow-xs', className)}
+    >
+      {children}
+      <ChevronDown aria-hidden="true" className="absolute right-2.5 top-3 size-4 text-muted-foreground" />
+    </button>
+  </div>;
+}
+
+/** The button in the header of an open group that folds it again. */
+function FoldButton({ id, title }: { id: string; title: string }) {
+  const actions = useContext(BoardActionsContext);
+  const ref = useKeepFocus(id);
+  return <Button
+    ref={ref} type="button" size="icon-xs" variant="ghost" data-fold className="nodrag nopan absolute right-1.5 top-1.5"
+    aria-label={`Fold ${title}`} aria-expanded="true" title="Fold" disabled={!actions} onClick={() => actions?.toggleGroup(id, false)}
+  ><ChevronUp aria-hidden="true" /></Button>;
+}
+
+/** The title of a lane: what its cards are, and what it leaves out. Its cards are separate nodes drawn over it. Folded, it is one summary of them. */
+export function BoardLane({ id, data }: NodeProps<LaneNode>) {
+  const group = data.group;
+  if (group && !group.open) {
+    return <FoldedGroup id={id} className="rounded-2xl border border-dashed border-border bg-muted/40 text-foreground hover:bg-muted/70"
+      label={summaryLabel([data.title, group.summary.headline, group.summary.byline ? `latest: ${group.summary.detail} by ${group.summary.byline}` : group.summary.detail, group.summary.warning?.toLowerCase()])}>
+      <span className="block w-full truncate pr-6 text-sm font-semibold leading-5" title={data.title}>{data.title}</span>
+      <span className="block w-full truncate text-xs leading-4 text-muted-foreground">{group.summary.headline}</span>
+      {group.summary.detail && <span className="mt-1 block w-full truncate text-xs leading-4 text-foreground" title={group.summary.detail}>{group.summary.detail}</span>}
+      {group.summary.byline && <span className="block w-full truncate text-xs leading-4 text-muted-foreground">{group.summary.byline}</span>}
+      {group.summary.warning && <span className="block w-full truncate text-xs leading-4 text-destructive-foreground">{group.summary.warning}</span>}
+    </FoldedGroup>;
+  }
+  return <div className="relative flex h-full w-full flex-col rounded-2xl border border-dashed border-border bg-muted/40">
     <div className="px-4 pt-3" style={{ height: BOARD_SIZE.laneHeader }}>
-      <h2 className="truncate text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>
+      <h2 className={cn('truncate text-sm font-semibold leading-5 text-foreground', group && 'pr-6')} title={data.title}>{data.title}</h2>
       <p className="truncate text-xs leading-4 text-muted-foreground">{data.caption}</p>
     </div>
+    {group && <FoldButton id={id} title={data.title} />}
     {data.note && <p className="line-clamp-2 px-4 text-xs leading-5 text-destructive-foreground" style={{ height: BOARD_SIZE.laneNote }}>{data.note}</p>}
     {data.more > 0 && <p className="mt-auto flex items-center px-4 text-xs text-muted-foreground" style={{ height: BOARD_SIZE.laneMore }}>
       {moreText(data.more, data.moreAtLeast)}
@@ -38,32 +90,64 @@ export function BoardLane({ data }: NodeProps<LaneNode>) {
   </div>;
 }
 
-/** One checkpoint of PLAN.md: whether it is done, how far its steps are, what waits for the user, and the first steps. */
-export function BoardCheckpoint({ data }: NodeProps<CheckpointNode>) {
-  const titleId = useId();
+const stepsText = (data: CheckpointData) => (data.stepsTotal ? `${data.stepsDone} of ${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'}` : 'No steps');
+const waitingText = (waiting: number) => (waiting === 1 ? 'Waits for you' : `${waiting} wait for you`);
+
+/** What a frame says in its header, open or folded: whether it is done, how far its steps are, what waits, and a bar. */
+function FrameFacts({ data }: { data: CheckpointData }) {
   const waiting = data.waiting.length + data.moreWaiting;
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
+  return <>
+    <div className="mt-1.5 flex h-5 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+      {data.kind === 'checkpoint' && <Badge variant={data.done ? 'success' : 'outline'}>{data.done ? 'Done' : 'Not done'}</Badge>}
+      <span>{stepsText(data)}</span>
+      {waiting > 0 && <Badge variant="warning">{waitingText(waiting)}</Badge>}
+    </div>
+    <div aria-hidden="true" className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
+      <div className="h-full rounded-full bg-success" style={{ width: `${progress}%` }} />
+    </div>
+  </>;
+}
+
+/** What the plan's own frame says it holds. */
+const planSubtitle = (data: CheckpointData, open: boolean) =>
+  open ? 'Steps and decisions outside the checkpoints'
+    : data.stepsTotal ? `${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'} outside the checkpoints` : 'Decisions outside the checkpoints';
+
+/**
+ * One checkpoint of PLAN.md: whether it is done, how far its steps are, what waits for the user, and the first steps.
+ * Folded, it is the header alone, as one button that opens it.
+ */
+export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
+  const titleId = useId();
+  const waiting = data.waiting.length + data.moreWaiting;
+  const border = waiting ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border';
+  if (!data.open) {
+    return <FoldedGroup id={id} className={cn('rounded-xl border bg-card text-card-foreground hover:bg-accent/40', border)}
+      label={summaryLabel(data.kind === 'plan'
+        ? [data.title, planSubtitle(data, false), waiting > 0 && waitingText(waiting).toLowerCase()]
+        : [data.title, data.done ? 'done' : 'not done', stepsText(data).toLowerCase(), waiting > 0 && waitingText(waiting).toLowerCase()])}>
+      <span className="block h-10 w-full pr-6">
+        <span className={cn('block w-full text-sm font-semibold leading-5 text-foreground', data.kind === 'plan' ? 'truncate' : 'line-clamp-2')} title={data.title}>{data.title}</span>
+        {data.kind === 'plan' && <span className="block w-full truncate text-xs leading-5 text-muted-foreground">{planSubtitle(data, false)}</span>}
+      </span>
+      <FrameFacts data={data} />
+    </FoldedGroup>;
+  }
   return <article
     aria-labelledby={titleId}
-    className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs',
-      waiting ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border')}
+    className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}
   >
     <Anchors />
-    <header className="border-b border-border/60 px-3 pt-3" style={{ height: BOARD_SIZE.frameHeader }}>
+    <header className="relative border-b border-border/60 px-3 pt-3" style={{ height: BOARD_SIZE.frameHeader }}>
       {data.kind === 'plan'
-        ? <div className="h-10">
+        ? <div className="h-10 pr-6">
           <h2 id={titleId} className="truncate text-sm font-semibold leading-5 text-foreground">{data.title}</h2>
-          <p className="truncate text-xs leading-5 text-muted-foreground">Steps and decisions outside the checkpoints</p>
+          <p className="truncate text-xs leading-5 text-muted-foreground">{planSubtitle(data, true)}</p>
         </div>
-        : <h2 id={titleId} className="line-clamp-2 h-10 text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>}
-      <div className="mt-1.5 flex h-5 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
-        {data.kind === 'checkpoint' && <Badge variant={data.done ? 'success' : 'outline'}>{data.done ? 'Done' : 'Not done'}</Badge>}
-        <span>{data.stepsTotal ? `${data.stepsDone} of ${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'}` : 'No steps'}</span>
-        {waiting > 0 && <Badge variant="warning">{waiting === 1 ? 'Waits for you' : `${waiting} wait for you`}</Badge>}
-      </div>
-      <div aria-hidden="true" className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-success" style={{ width: `${progress}%` }} />
-      </div>
+        : <h2 id={titleId} className="line-clamp-2 h-10 pr-6 text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>}
+      <FrameFacts data={data} />
+      <FoldButton id={id} title={data.title} />
     </header>
     {data.waiting.length > 0 && <ul aria-label="Decisions waiting for you">
       {data.waiting.map((decision) => <li key={decision.key} className="flex items-start gap-2 border-l-2 border-warning bg-warning/8 px-3 py-1 text-xs leading-4 text-foreground" style={{ height: BOARD_SIZE.decisionRow }}>

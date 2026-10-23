@@ -20,13 +20,13 @@ Everything the board keeps is in one file, `contextspace-board.json`, in the wor
   "links": [
     { "id": "<uuid>", "from": "<card id>", "to": "checkpoint:reports-export-to-csv", "label": "found while", "by": "claude", "at": "…" }
   ],
-  "positions": { "<card id>": { "x": 120, "y": 40 }, "checkpoint:reports-export-to-csv": { "x": 400, "y": 0 } }
+  "positions": { "<card id>": { "x": 120, "y": 40 } }
 }
 ```
 
 - **Cards** are what someone put on the board. A `note` has a title (up to 200 characters) and a body (up to 4000). A `file` card shows a file in the workspace, with a title and a description (up to 4000); it is how an AI shows a picture, an HTML page, a PDF, a Markdown document or a deck it made. `pinned` keeps a card in front; `archived` puts it away without losing it. `by` is `user` for a person at the app, or the name of the AI tool, written in lower case with letters, digits, `.`, `_` and `-` only (anything else becomes a dash, so no name can pass for `user`).
 - **Links** are lines between two things, with an optional label (up to 200 characters). The same two ends can be linked once in each direction.
-- **Positions** remember where a thing was put on the canvas, for cards and for the board's own checkpoints, documents and commits alike. Each is a finite `x` and `y` between minus and plus 1,000,000. The board remembers at most 2000 places, so a place can be forgotten (see `move`).
+- **Positions** remember where a card was put on the canvas. Each is a finite `x` and `y` between minus and plus 1,000,000. The board remembers at most 2000 places, so a place can be forgotten (see `move`). The file and the API still accept a place for a checkpoint, a document or a commit, but for now the app places those itself and **ignores** a saved place for them (see "In the app").
 - **`revision`** counts the change requests applied. A request of several changes counts once.
 
 ### Node ids
@@ -40,7 +40,7 @@ A line or a position names a thing by its node id:
 | A source document | `document:<source document id>` |
 | A commit | `commit:<repository folder name>:<commit hash>` (7 characters or more) |
 
-Only the shape is checked for the generated things, because they come and go: a commit leaves the recent ones, a checkpoint is renamed. A line or a position naming a thing that is no longer there is kept as it is. A card end, by contrast, must be a card that is on the board.
+Only the shape is checked for the generated things, because they come and go: a commit leaves the recent ones, a checkpoint is renamed. A line or a position naming a thing that is no longer there is kept as it is. A card end, by contrast, must be a card that is on the board. A line to a commit or a document inside a group that is folded (see "In the app") is drawn to the group's summary.
 
 ### Limits
 
@@ -59,7 +59,7 @@ Changes are small operations. A request is a list of them, applied **in order, a
 | `add_card` | `kind` `note`: `title`, `body?`. `kind` `file`: `path`, `title?` (the file name by default), `description?`. Both: `pinned?`, `position?` `{x, y}`, `id?` (a uuid of your own, so the same request can link or move it) | Adds a card |
 | `update_card` | `id`, and any of `title`, `body` (notes), `description` (file cards), `pinned`, `archived` | Changes only what is given |
 | `remove_card` | `id` | Deletes the card, its links and its position |
-| `move` | `nodes`: a list of `{id, x, y}`; give `x` and `y` as `null` to forget a node's place | Remembers where each node is, or forgets it. Forgetting frees room when a commit or checkpoint has left the board; nodes are applied in order, so a request can forget some and place others at the limit |
+| `move` | `nodes`: a list of `{id, x, y}`; give `x` and `y` as `null` to forget a node's place | Remembers where each node is, or forgets it. Forgetting frees room when a card has left the board or a place is no longer wanted; nodes are applied in order, so a request can forget some and place others at the limit. The app only uses the places of cards |
 | `link` | `from`, `to`, `label?` | Draws a line |
 | `unlink` | `id`, or `from` and `to` | Removes a line |
 
@@ -84,7 +84,14 @@ Statuses: `200`; `400` for input that is not valid (the message names the change
 
 ## In the app
 
-On the Board tab you drag a card, a checkpoint, a document or a commit where you want it, out of its lane too, or focus it and press Shift with an arrow key (24 units a press; a run of presses is saved once, a moment after the last). The place is saved as a `move` of that one node, sent without a `revision` so that a live AI change cannot make it fail, and it is there after a reload and for everyone else. Undo is offered for about eight seconds (Control or Command and Z does the same, and the offer waits while the pointer or the keyboard is on it): it puts the node back at the place it had saved, or forgets the place so the node returns to where the board puts it. A move that is refused puts the node back and says why.
+The Board tab shows the big picture first: where the work stands, what changed, and what needs you. Each **group** is one small summary, and you open a group when you want its details.
+
+- **Groups** are a checkpoint, the plan's own steps (a frame for the steps and decisions that sit outside every checkpoint), the documents, and each repository's new commits. Folded, a checkpoint says its title, whether it is done, "x of y steps", a "Waits for you" badge when it has a decision open, and a thin progress bar; the plan's own frame says how many steps sit outside the checkpoints; the documents say how many there are and how many are drafts or superseded; a repository says how many commits are new and shows the newest one's subject and author. A group folded is always the same small height, and a group that waits for you shows its badge but stays folded.
+- **Open and folded.** The checkpoint the work is on (the first that is not done, else the last) is open and every other group is folded. Press a summary (it is one button, named for what it holds and marked as not expanded: a click anywhere on it, or Enter or Space) and the group opens where it stands: its column grows, and nothing moves, no column and no card of the "From the board" band, which stands under the tallest a frame can be when it is open, however many are open or folded and wherever the work is. A card with a place of its own never stands over a group as it is when open, whether the group is open or folded: a drop or a nudge that would put it there puts it just below the group instead and saves that place, and a saved place that is over one (written by an AI, or saved earlier) is drawn just below it, so everyone sees a card in the same place whatever they have folded. If the group no longer fits in view, the view moves smoothly to show as much of it as fits, top first. Opening or folding does not count as taking the view, so the view still follows the work. The fold button in the header of an open group (marked as expanded) folds it again. A summary of a repository that could not be read in full says so, since its note is hidden while it is folded. A double click on the board does not zoom it.
+- **Where it opens.** On a board whose groups, from the first column to the last, all fit the width of the view at a zoom of 0.7 or more, the board opens on all of them, side by side, centred, with the row at the top. A board that is wider opens on the work under way, with its neighbours, at a zoom that can be read; "Fit the board in view" shows everything.
+- **Remembered.** What you open or fold is kept in this browser (local storage), for this workspace, as the difference from the default only, so when the work moves on to the next checkpoint it opens by itself, unless you folded it. It is not shared with other people, and the board works without storage.
+- **Moving things.** Only the cards (notes and files) are arranged by people, so only a card can be dragged: out of the "From the board" band too, or focused and moved with Shift and an arrow key (24 units a press; a run of presses is saved once, a moment after the last). The app places checkpoints, documents and commits itself, in their group and order, and ignores any saved place for them for now; they cannot be dragged and are not stops for moving.
+- **Saving a place.** A drop is saved as a `move` of that one card, sent without a `revision` so that a live AI change cannot make it fail, and it is there after a reload and for everyone else. Undo is offered for about eight seconds (Control or Command and Z does the same, and the offer waits while the pointer or the keyboard is on it): it puts the card back at the place it had saved, or forgets the place so the card returns to where the board puts it. A move that is refused puts the card back and says why.
 
 ## MCP tools
 
@@ -96,6 +103,6 @@ Offered to `developer`, `interactive` and `full` sessions, like the screen tools
 | `board_add_card` | Put a note on the board, or show a file you made (a picture, an HTML page, a PDF, a deck) as a file card. Returns the card |
 | `board_update_card` | Change a card's title, text, description, pinned or archived |
 | `board_remove_card` | Delete a card that was a mistake (archive one that is only done) |
-| `board_move` | Place cards and the board's own checkpoints, documents and commits on the canvas, or forget a place with `null` |
+| `board_move` | Place cards on the canvas, or forget a place with `null`. A place given to a checkpoint, a document or a commit is saved but not used for now |
 | `board_link` | Draw a line between two things, with a short label |
 | `board_unlink` | Remove a line, by its id or by both ends |

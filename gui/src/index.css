@@ -693,6 +693,9 @@
 .board-flow .react-flow__node:focus-visible { outline: none; }
 .board-flow .react-flow__node:focus-visible > article { outline: 2px solid var(--ring); outline-offset: 2px; }
 
+/* A group folded into one summary is a button, and shows its focus itself. */
+.board-flow .board-fold:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
 /* The lines between things: the muted text colour, and a label that sits on the card colour so it reads over the line.
    The anchors a line is drawn to are there for the line only, so they are not drawn. */
 .board-flow .react-flow__edge-path { stroke: var(--muted-foreground); stroke-width: 1.5; }

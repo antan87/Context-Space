@@ -19,8 +19,9 @@ import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests } from '../workspace-shell/openRequests.js';
 import { BoardActionsContext, type BoardActions } from './boardActions.js';
 import { useBoard } from './boardData.js';
-import { boardEdges, boardLayout, type BoardNode } from './boardLayout.js';
-import { MOVE_HELP, useBoardMoves, withMoves, type MoveNotice } from './boardMoves.js';
+import { useBoardFolds } from './boardFolds.js';
+import { boardEdges, boardLayout, currentFrame, nodeRects, type BoardNode, type CheckpointNode } from './boardLayout.js';
+import { MOVE_HELP, revealed, useBoardMoves, withMoves, type MoveNotice } from './boardMoves.js';
 import { openingNodeId, openingView, type Viewport } from './boardView.js';
 import { BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardLane, BoardNote, BoardPlaceholder } from './BoardNodes.js';
 
@@ -29,6 +30,8 @@ const NODE_TYPES: NodeTypes = { lane: BoardLane, checkpoint: BoardCheckpoint, do
 /** "Fit the board in view" shows everything, but never zoomed in past life size: a lone card is not blown up. */
 const FIT = { padding: 0.12, maxZoom: 1 } as const;
 const PAN_STEP = 96;
+/** How far from the edge of the view a group that was opened is put, when the view moves to show it: clear of the buttons over the corners. */
+const OPEN_MARGIN = 40;
 /** How long a move of the view takes, in ms: none for those who ask for less motion. */
 const moveMs = (ms: number) => (window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : ms);
 /** Lines point from the thing that was linked to the thing it was linked to. */
@@ -129,8 +132,10 @@ function SourceProblem({ what, error, onRetry }: { what: string; error: unknown;
  * The Board: the workspace's real work on a canvas you can pan and zoom: its documents, the checkpoints of its plan and
  * the commits of each repository that are new since you last looked, and the notes and files that you and the AI put
  * on it, with the lines between them. It opens on the work that is under way, at a zoom you can read; "fit the board
- * in view" shows the lot. Cards, checkpoints, documents and commits can be dragged where you want them (out of their
- * lane too), or moved with Shift and the arrow keys, and the place is kept in the board file (boardMoves). It uses the queries the other parts already use,
+ * in view" shows the lot. It shows the big picture first: each group (a checkpoint, the documents, a repository's commits)
+ * is one summary, only the work under way is open, and pressing a summary opens that group where it stands (boardFolds
+ * remembers what was opened or folded). Cards can be dragged where you want them (out of their lane too), or moved with
+ * Shift and the arrow keys, and the place is kept in the board file (boardMoves). It uses the queries the other parts already use,
  * so a part that fails says so and the rest still draws. `active` is whether the board is the part on show: it stays
  * mounted behind the others.
  */
@@ -149,15 +154,22 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const size = useElementSize(container);
   const [showArchived, setShowArchived] = useState(false);
+  const [folds, setFold] = useBoardFolds(workspaceId);
 
   const planView = plan.data;
   const documents = guidance.data?.documents;
   const newsView = news.data;
   const board = boardQuery.data;
   const moveHelp = useId();
-  const nodes = useMemo(() => withMoves(boardLayout({ plan: planView, documents, news: newsView, board, showArchived }), moveHelp), [planView, documents, newsView, board, showArchived, moveHelp]);
+  const nodes = useMemo(() => withMoves(boardLayout({ plan: planView, documents, news: newsView, board, showArchived, folds }), moveHelp), [planView, documents, newsView, board, showArchived, folds, moveHelp]);
+  // The group the work is on is the one that is open unless the user chose otherwise.
+  const current = useMemo(() => currentFrame(nodes.filter((node): node is CheckpointNode => node.type === 'checkpoint'))?.id, [nodes]);
+  const currentRef = useRef(current);
+  useEffect(() => { currentRef.current = current; });
   // Whether the user has taken the view over (see below). Moving a thing off the screen with the keyboard counts.
   const taken = useRef(false);
+  /** Whether the view had been taken before the press that is going on. */
+  const takenBefore = useRef(false);
   const takeOver = () => { taken.current = true; };
   const moves = useBoardMoves({
     workspaceId, nodes, flow, size,
@@ -172,11 +184,41 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
   const edges = useMemo(() => boardEdges(moves.shown, board?.links ?? []), [moves.shown, board]);
   const archived = board?.cards.filter((card) => card.archived).length ?? 0;
 
-  // The files on the cards open where the app opens documents: in Docs.
+  // Opening or folding a group is not the user taking the view: the view only moves to show a group that opened and no
+  // longer fits (below), and the keyboard goes to the button that replaced the one it pressed.
+  const toggled = useRef<{ id: string; open: boolean; focus: boolean; at: number } | null>(null);
+  const focusing = useRef(false);
+
+  // The files on the cards open where the app opens documents: in Docs. The groups open and fold in place.
   const actions = useMemo<BoardActions>(() => ({
     workspaceId,
     openFile: (name) => { documentRequests.open(workspaceId, { name }); goToWorkspace(navigateTo, workspaceId, 'documents'); },
-  }), [workspaceId, navigateTo]);
+    toggleGroup: (id, open) => {
+      const pressed = document.activeElement;
+      toggled.current = { id, open, focus: pressed instanceof HTMLElement && pressed.closest('.react-flow__node')?.getAttribute('data-id') === id, at: Date.now() };
+      setFold(id, open, currentRef.current);
+    },
+    // The button that opens a group is gone when the group is open, and the other way round: the keyboard follows the group.
+    keepFocus: (id, button) => {
+      const pending = toggled.current;
+      if (!pending?.focus || pending.id !== id || Date.now() - pending.at > 1000) return;
+      toggled.current = { ...pending, focus: false };
+      focusing.current = true;
+      button.focus({ preventScroll: true });
+      focusing.current = false;
+    },
+  }), [workspaceId, navigateTo, setFold]);
+
+  // A group that was opened and no longer fits in the view: the view moves, smoothly, to show as much of it as fits, top first.
+  useEffect(() => {
+    const pending = toggled.current;
+    const instance = flow.current;
+    if (!pending?.open || !instance || size.width === 0) return;
+    toggled.current = { ...pending, open: false };
+    const rect = nodeRects(nodes).get(pending.id);
+    const view = rect && revealed(rect, instance.getViewport(), size, OPEN_MARGIN);
+    if (view) void instance.setViewport(view, { duration: moveMs(300) });
+  }, [nodes, size]);
 
   // A part without data is still loading or has failed; one that has data and fails a later refresh keeps what it had.
   const parts = [
@@ -218,9 +260,12 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
     body = <div className="relative min-h-0 flex-1">
       <div
         ref={setContainer} className="absolute inset-0"
-        onPointerDownCapture={(event) => { if (isViewGesture(container, event.target)) taken.current = true; }}
+        onPointerDownCapture={(event) => { takenBefore.current = taken.current; if (isViewGesture(container, event.target)) taken.current = true; }}
+        // The second press of a double click that opened or folded a group lands on the canvas, where the group's button was: not the
+        // user taking the view. Only the mouse event has the count (the pointer event's is always 0), and it follows the pointer's.
+        onMouseDownCapture={(event) => { if (event.detail >= 2) taken.current = takenBefore.current; }}
         onWheelCapture={(event) => { if (container?.contains(event.target as Node)) taken.current = true; }}
-        onFocusCapture={(event) => showFocused(flow.current, event, size, takeOver)}
+        onFocusCapture={(event) => { if (!focusing.current) showFocused(flow.current, event, size, takeOver); }}
       >
         {/* Ahead of the canvas, so it is the first stop for the keyboard, not the last one after every card. */}
         {opening && archived > 0 && <div className="absolute left-3 top-3 z-10">
@@ -269,6 +314,8 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
             multiSelectionKeyCode={null}
             zoomActivationKeyCode={null}
             disableKeyboardA11y
+            // A double click opens or folds a group and then lands on the canvas, which would zoom the view: the buttons and the zoom controls do that.
+            zoomOnDoubleClick={false}
             minZoom={0.1}
             maxZoom={1.5}
             attributionPosition="bottom-center"

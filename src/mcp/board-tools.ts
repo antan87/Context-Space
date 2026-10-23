@@ -112,7 +112,7 @@ const removeCardSchema = z.object({ id: cardId, revision, harness });
 
 const moveSchema = z.object({
   nodes: z.array(z.object({ id: nodeId, x: x.nullable(), y: y.nullable() }).strict()).min(1).max(BOARD_LIMITS.nodes)
-    .describe(`What to place, up to ${BOARD_LIMITS.nodes} at a time: each one's id and its x and y on the canvas. Give x and y as null to forget a node's place, for example a commit or checkpoint that has gone from the board.`),
+    .describe(`What to place, up to ${BOARD_LIMITS.nodes} at a time: each one's id and its x and y on the canvas. Give x and y as null to forget a node's place. The app uses only the places of cards.`),
   revision,
   harness,
 });
@@ -228,7 +228,7 @@ export const boardTools: NexusFlowTool[] = [
 
   boardTool(
     'board_move',
-    `Place cards, and the board's own checkpoints, documents and commits, on the canvas, by node id with x and y (pixels; y grows downward). The board remembers the places and keeps them. Move several in one call to lay a group out together, for example the cards about one checkpoint in a row beneath it. Give x and y as null to make the board forget a node's place, which frees room when a commit or checkpoint has left the board (the board remembers at most ${BOARD_LIMITS.positions} places).`,
+    `Place cards on the canvas, by card id with x and y (pixels; y grows downward). The board remembers the places and keeps them. Move several in one call to lay cards out together, for example the cards about one checkpoint in a row beneath it. The app places the board's own checkpoints, documents and commits itself and ignores a place saved for them for now, so place only cards. Give x and y as null to make the board forget a node's place (the board remembers at most ${BOARD_LIMITS.positions} places).`,
     moveSchema,
     async ({ nodes, revision }, ctx) => {
       const { board } = await change(ctx, { revision }, { op: 'move', nodes });

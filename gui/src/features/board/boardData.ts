@@ -47,7 +47,7 @@ export interface BoardView {
   revision: number;
   cards: BoardCard[];
   links: BoardLink[];
-  /** By node id, for cards and the board's own checkpoints, documents and commits alike. */
+  /** By node id. The file may hold a place for a checkpoint, document or commit too, but the app uses only the places of cards. */
   positions: Record<string, BoardPoint>;
 }
 

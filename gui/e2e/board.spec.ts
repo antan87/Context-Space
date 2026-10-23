@@ -8,7 +8,9 @@ import type { WorkDocument } from '../src/types.ts';
  * The Board: the workspace's plan, documents and commits on a canvas you can pan and zoom, and the notes and files that
  * people and AIs put on it. Each part is drawn from what the Plan, Docs and "Since you last looked" already read, and a
  * part that fails does not hide the rest. It opens on the work under way, and shows an AI's changes as the screen feed
- * reports them. Cards, checkpoints, documents and commits can be dragged where you want them; the place is kept in the board file.
+ * reports them. It shows the big picture first: every group (a checkpoint, the plan's own steps, the documents, a repository's
+ * commits) is one summary and only the work under way is open; a press opens a group where it stands. Only the cards that
+ * people and AIs put on the board can be dragged; the place is kept in the board file.
  */
 const workspace = { id: 'demo', branchName: 'demo', name: 'Reports CSV export', description: 'Add CSV export to reports', repos: [], assistants: [], workspacePath: '/tmp/demo', createdAt: '2026-10-01T00:00:00Z' };
 test.use({ workspacesData: [[workspace], { option: true }], viewport: { width: 1440, height: 900 } });
@@ -99,6 +101,22 @@ async function routePictures(page: Page) {
 const workspaceNav = (page: Page) => page.getByRole('navigation', { name: 'Workspace' });
 const board = (page: Page) => page.getByRole('region', { name: 'Board', exact: true });
 const node = (page: Page, id: string) => board(page).locator(`.react-flow__node[data-id="${id}"]`);
+/** What the folded groups of the mocked board are called: what each holds, and that pressing it opens it. */
+/** The summary of the one repository that the specs about late commits route. */
+const LATE_COMMITS = 'api, 1 new since you last looked, latest: Write the CSV writer by Anna';
+const SUMMARY = {
+  first: 'Report rows load fast, done, 1 of 1 step',
+  plan: 'Plan, 1 step outside the checkpoints',
+  documents: 'Documents, 2 documents, 1 superseded',
+  commits: 'billing api, 1 new since you last looked, latest: Write the CSV writer by Anna',
+};
+/** The summary of a folded group: one button. */
+const summary = (page: Page, name: string | RegExp) => board(page).getByRole('button', { name, exact: typeof name === 'string' });
+/** The button on the header of an open group that folds it again. */
+const foldButton = (page: Page, title: string) => board(page).getByRole('button', { name: `Fold ${title}`, exact: true });
+/** What the board keeps of what the user opened and folded, in this browser. */
+const FOLDS_KEY = 'contextspace_board_folds_v1:demo';
+const storedFolds = (page: Page) => page.evaluate((key) => { const raw = window.localStorage.getItem(key); return raw ? JSON.parse(raw) : null; }, FOLDS_KEY);
 /** What the board says about a move: its live region, which is there from the start and empty until there is something to say. */
 const status = (page: Page) => board(page).getByRole('status').filter({ hasNotText: /^Still loading/ });
 /** Where a node stands on the canvas (not on the screen): its own place, or its lane's for a card in one. */
@@ -141,6 +159,16 @@ async function fitted(page: Page) {
   await board(page).getByRole('button', { name: 'Fit the board in view' }).click();
   await viewAtRest(page);
 }
+/** Presses the summary of a folded group, with the whole board in view first, so it can be reached wherever the view is. */
+async function openGroup(page: Page, name: string | RegExp) {
+  await fitted(page);
+  await summary(page, name).click();
+}
+/** Presses the fold button of an open group, the same way. */
+async function foldGroup(page: Page, title: string) {
+  await fitted(page);
+  await foldButton(page, title).click();
+}
 /**
  * Drags from the middle of `target` by that many screen pixels with the mouse, and lets go unless told to hold on. React
  * Flow starts a drag at the first move of a few pixels and counts from there, so a short move starts it and the rest is
@@ -157,6 +185,8 @@ async function dragBy(page: Page, target: Locator, dx: number, dy: number, optio
   if (!options.hold) await page.mouse.up();
   return start;
 }
+/** How big a card is on the canvas, as the layout makes it: a note, and any card across. */
+const BOARD_CARD = { width: 264, note: 160 };
 const nearTo = (at: { x: number; y: number }, expected: { x: number; y: number }) => Math.abs(at.x - expected.x) <= 1 && Math.abs(at.y - expected.y) <= 1;
 
 test.describe('Board', () => {
@@ -170,11 +200,12 @@ test.describe('Board', () => {
     await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
   });
 
-  test('draws a frame per checkpoint, the documents and the commits of each repository', async ({ page }) => {
+  test('draws a group per checkpoint, the documents and the commits of each repository, and opens each to its details', async ({ page }) => {
     await routeBoard(page);
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
 
+    // The work under way is open: whether it is done, how far its steps are, what waits for the user, and the steps.
     const frame = canvas.getByRole('article', { name: 'Reports export to CSV' });
     await expect(frame).toBeVisible();
     await expect(frame).toContainText('Not done');
@@ -184,36 +215,101 @@ test.describe('Board', () => {
     // The decision that waits for the user is marked.
     await expect(frame).toContainText('Waits for you');
     await expect(frame.getByRole('list', { name: 'Decisions waiting for you' })).toContainText('Which time zone should export timestamps use?');
-    const finished = canvas.getByRole('article', { name: 'Report rows load fast' });
-    await expect(finished).toContainText('Done');
-    await expect(finished).not.toContainText('Waits for you');
 
-    // The plan's own step sits in a frame of its own, ahead of the checkpoints.
-    const own = canvas.getByRole('article', { name: 'Plan', exact: true });
-    await expect(own).toContainText('Tidy the old export script');
+    // The rest is folded: one summary each, named for what it holds.
+    const finished = summary(page, SUMMARY.first);
+    await expect(finished).toContainText('Report rows load fast');
+    await expect(finished).toContainText('Done');
+    await expect(finished).toContainText('1 of 1 step');
+    await expect(finished).not.toContainText('Waits for you');
+    // The plan's own step sits in a group of its own, ahead of the checkpoints.
+    const own = summary(page, SUMMARY.plan);
+    await expect(own).toContainText('1 step outside the checkpoints');
     await expect(own).not.toContainText('Done');
+    await expect(summary(page, SUMMARY.documents)).toContainText('2 documents');
+    await expect(summary(page, SUMMARY.documents)).toContainText('1 superseded');
+    const commits = summary(page, SUMMARY.commits);
+    await expect(commits).toContainText('billing api');
+    await expect(commits).toContainText('1 new since you last looked');
+    await expect(commits).toContainText('Write the CSV writer');
+    await expect(commits).toContainText('Anna');
+    for (const name of ['Report rows load fast', 'Export requirements', 'a91f2e0']) await expect(canvas.getByRole('article', { name })).toHaveCount(0);
+
     // In plan order, left to right: by where they stand on the canvas, which does not change while the view moves to the work.
-    const [lane, loose, first, second] = await Promise.all(['lane:documents', 'plan:own', 'checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv'].map((id) => canvasPosition(page, id)));
+    const [lane, loose, first, second, repo] = await Promise.all(['lane:documents', 'plan:own', 'checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv', 'lane:commits:billing api'].map((id) => canvasPosition(page, id)));
     expect(lane.x).toBeLessThan(loose.x);
     expect(loose.x).toBeLessThan(first.x);
     expect(first.x).toBeLessThan(second.x);
+    expect(repo.x).toBeGreaterThan(second.x);
 
+    // Open the documents: each with its role, status and summary, and a superseded one recedes but still says what it is.
+    await openGroup(page, SUMMARY.documents);
     const card = canvas.getByRole('article', { name: 'Export requirements' });
     await expect(card).toContainText('Requirements');
     await expect(card).toContainText('Approved');
     await expect(card).toContainText('Customers export their reports as CSV');
-    // A superseded document recedes but still says what it is.
-    const old = canvas.getByRole('article', { name: 'First export design' });
-    await expect(old).toContainText('Superseded');
+    await expect(canvas.getByRole('article', { name: 'First export design' })).toContainText('Superseded');
+    await expect(canvas.getByRole('heading', { name: 'Documents' })).toBeVisible();
 
-    // The documents are on the left, the commits on the right.
+    // Open the commits: the commit with who made it and when.
+    await openGroup(page, SUMMARY.commits);
     const commit = canvas.getByRole('article', { name: 'a91f2e0' });
     await expect(commit).toContainText('Write the CSV writer');
     await expect(commit).toContainText('Anna');
     await expect(commit).toContainText('30 min ago');
     await expect(canvas.getByRole('heading', { name: 'billing api' })).toBeVisible();
     await expect(canvas.getByText('New since you last looked')).toBeVisible();
-    expect((await canvasPosition(page, 'lane:commits:billing api')).x).toBeGreaterThan(second.x);
+
+    // The checkpoint that was done, and the plan's own steps.
+    await openGroup(page, SUMMARY.first);
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toContainText('Query the report rows');
+    await openGroup(page, SUMMARY.plan);
+    await expect(canvas.getByRole('article', { name: 'Plan', exact: true })).toContainText('Tidy the old export script');
+    // Nothing moved sideways for any of it.
+    expect(await Promise.all(['lane:documents', 'plan:own', 'checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv', 'lane:commits:billing api'].map((id) => canvasPosition(page, id)))).toEqual([lane, loose, first, second, repo]);
+  });
+
+  test('opens with the current checkpoint open and every other group folded', async ({ page }) => {
+    await routeBoard(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    // One group in detail, and one summary for each of the others.
+    await expect(canvas.getByRole('article')).toHaveCount(1);
+    // A folded group says it is closed, and an open one that it is open: the summaries are the four buttons that are not expanded.
+    await expect(canvas.locator('button[data-fold][aria-expanded="false"]')).toHaveCount(4);
+    await expect(canvas.locator('button[data-fold][aria-expanded="true"]')).toHaveCount(1);
+    for (const name of Object.values(SUMMARY)) await expect(summary(page, name)).toBeVisible();
+    // A folded group is small, and the same height whatever it holds.
+    const heights = await Promise.all(['lane:documents', 'plan:own', 'checkpoint:report-rows-load-fast', 'lane:commits:billing api'].map(async (id) => (await canvasBox(page, id)).height));
+    expect(new Set(heights).size).toBe(1);
+    expect(heights[0]).toBeLessThan((await canvasBox(page, 'checkpoint:reports-export-to-csv')).height);
+    // The groups that are folded show a fold button only once they are open.
+    await expect(canvas.getByRole('button', { name: /^Fold / })).toHaveCount(1);
+    await expect(foldButton(page, 'Reports export to CSV')).toBeVisible();
+    await expect(foldButton(page, 'Reports export to CSV')).toHaveAttribute('aria-expanded', 'true');
+    for (const name of Object.values(SUMMARY)) {
+      await expect(summary(page, name)).toHaveAttribute('aria-expanded', 'false');
+      // The name says what it is; that it opens is said by its state, not by a word in the name.
+      expect(name).not.toMatch(/open/i);
+    }
+  });
+
+  test('keeps a group that needs the user folded, and says so on its summary', async ({ page }) => {
+    await routeBoard(page);
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Report rows load fast', { done: true }),
+        checkpoint('Reports export to CSV', { steps: [step('Write the CSV writer')] }),
+        checkpoint('Release notes', { steps: [step('Draft them')], decisions: [decision('Who signs off?')] }),
+      ],
+    }) }));
+    await page.goto('/#/workspaces/demo/board');
+    const asks = summary(page, 'Release notes, not done, 0 of 1 step, waits for you');
+    await expect(asks).toBeVisible();
+    await expect(asks).toContainText('Waits for you');
+    await expect(board(page).getByRole('article', { name: 'Release notes' })).toHaveCount(0);
   });
 
   test('opens on the checkpoint under way, at a readable zoom, with zoom controls and a minimap', async ({ page }) => {
@@ -226,13 +322,13 @@ test.describe('Board', () => {
     await expect.poll(() => isWithin(current, canvas.locator('.react-flow'))).toBe(true);
     const [frame, area] = await Promise.all([current.boundingBox(), canvas.locator('.react-flow').boundingBox()]);
     expect(Math.abs(frame!.x + frame!.width / 2 - (area!.x + area!.width / 2))).toBeLessThan(area!.width / 4);
-    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeInViewport();
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeInViewport();
+    await expect(summary(page, SUMMARY.first)).toBeInViewport();
+    await expect(summary(page, SUMMARY.commits)).toBeInViewport();
     // At a zoom you can read, not the one that fits every column in the window: the documents are off to the left.
     const { scale } = await transformOf(page);
     expect(scale).toBeGreaterThanOrEqual(0.8);
     expect(scale).toBeLessThanOrEqual(1);
-    await expect(canvas.getByRole('article', { name: 'Export requirements' })).not.toBeInViewport();
+    await expect(summary(page, SUMMARY.documents)).not.toBeInViewport();
     await expect(canvas.getByRole('button', { name: 'Zoom in' })).toBeVisible();
     await expect(canvas.getByRole('button', { name: 'Zoom out' })).toBeVisible();
     await expect(canvas.getByRole('button', { name: 'Fit the board in view' })).toBeVisible();
@@ -250,14 +346,16 @@ test.describe('Board', () => {
     const last = canvas.getByRole('article', { name: 'Release notes' });
     await expect(last).toBeVisible();
     await expect.poll(() => isWithin(last, canvas.locator('.react-flow'))).toBe(true);
-    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).not.toBeInViewport();
+    // The others are folded, and the first is far from the work.
+    await expect(summary(page, /^Report rows load fast, done/)).not.toBeInViewport();
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toHaveCount(0);
   });
 
   test('zooms and pans with the controls and the keyboard, and fits the whole board on request', async ({ page }) => {
     await routeBoard(page);
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeInViewport();
+    await expect(summary(page, SUMMARY.commits)).toBeInViewport();
     const opened = await transformOf(page);
 
     await canvas.getByRole('button', { name: 'Zoom in' }).click();
@@ -266,7 +364,7 @@ test.describe('Board', () => {
     await canvas.getByRole('button', { name: 'Fit the board in view' }).click();
     await expect.poll(async () => (await transformOf(page)).scale).toBeLessThan(opened.scale);
     const area = canvas.locator('.react-flow');
-    for (const name of ['Export requirements', 'Reports export to CSV', 'a91f2e0']) await expect.poll(() => isWithin(canvas.getByRole('article', { name }), area)).toBe(true);
+    for (const target of [summary(page, SUMMARY.documents), canvas.getByRole('article', { name: 'Reports export to CSV' }), summary(page, SUMMARY.commits)]) await expect.poll(() => isWithin(target, area)).toBe(true);
     const fitted = await transformOf(page);
 
     // The canvas is one keyboard stop: arrows pan, plus and minus zoom, zero fits.
@@ -315,9 +413,9 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     // The canvas drawn for the first parts is the one that stays: its controls are marked now and must still be marked later.
     await canvas.locator('.react-flow__controls').evaluate((element) => { (element as HTMLElement & { marked?: boolean }).marked = true; });
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
-    // Untouched, the view moves to take in the new lane beside the work: the commit ends up whole on screen.
-    await expect.poll(() => isWithin(canvas.getByRole('article', { name: 'a91f2e0' }), canvas.locator('.react-flow'))).toBe(true);
+    await expect(summary(page, LATE_COMMITS)).toBeVisible();
+    // Untouched, the view moves to take in the new lane beside the work: its summary ends up whole on screen.
+    await expect.poll(() => isWithin(summary(page, LATE_COMMITS), canvas.locator('.react-flow'))).toBe(true);
     await expect.poll(() => isWithin(canvas.getByRole('article', { name: 'Reports export to CSV' }), canvas.locator('.react-flow'))).toBe(true);
     expect(await canvas.locator('.react-flow__controls').evaluate((element) => (element as HTMLElement & { marked?: boolean }).marked)).toBe(true);
   });
@@ -353,7 +451,7 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     const moved = await transformOf(page);
     await answered;
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeAttached();
+    await expect(summary(page, LATE_COMMITS)).toBeAttached();
     await afterSomeFrames(page);
     expect(await transformOf(page)).toEqual(moved);
   });
@@ -361,8 +459,8 @@ test.describe('Board', () => {
   test('keeps following the work after a press on a card\'s button or the archived toggle, which do not move the view', async ({ page }) => {
     const body = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long note.`).join('\n');
     await routeLateCommits(page);
-    // The long note stands in view above the checkpoints: when the focus comes back to its button, the card is not out of view.
-    await routeCards(page, boardFile({ cards: [boardNote(1, { archived: true }), boardNote(2, { title: 'A long note', body })], positions: { [boardId(2)]: { x: 800, y: -200 } } }));
+    // The long note stands in view under the checkpoints: when the focus comes back to its button, the card is not out of view.
+    await routeCards(page, boardFile({ cards: [boardNote(1, { archived: true }), boardNote(2, { title: 'A long note', body })], positions: { [boardId(2)]: { x: 800, y: 240 } } }));
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
@@ -377,7 +475,66 @@ test.describe('Board', () => {
     await expect(dialog).toHaveCount(0);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     // The view still moves to take in the commits that come: they end up whole on screen.
-    await expect.poll(() => isWithin(canvas.getByRole('article', { name: 'a91f2e0' }), canvas.locator('.react-flow'))).toBe(true);
+    await expect.poll(() => isWithin(summary(page, LATE_COMMITS), canvas.locator('.react-flow'))).toBe(true);
+  });
+
+  test('does not take the view from the user when a group opens or folds: the view still follows a part that arrives later', async ({ page }) => {
+    await routeLateCommits(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    await summary(page, SUMMARY.first).click();
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    const opened = await transformOf(page);
+    // The view moves to take in the commits that come, though a group was opened meanwhile: it was not the user taking the view.
+    await expect(summary(page, LATE_COMMITS)).toBeAttached();
+    await expect.poll(async () => (await transformOf(page)).x).not.toBe(opened.x);
+    await expect.poll(() => isWithin(summary(page, LATE_COMMITS), canvas.locator('.react-flow'))).toBe(true);
+  });
+
+  test('does not zoom the view, or take it from the user, when a summary is double-clicked', async ({ page }) => {
+    await routeLateCommits(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    // The view has stopped moving to take in the parts that came first.
+    let seen = '';
+    await expect.poll(async () => { const now = JSON.stringify(await transformOf(page)); const still = now === seen; seen = now; return still; }, { intervals: [150] }).toBe(true);
+    const before = await transformOf(page);
+    // The first press opens the group, and the second lands on the canvas where the summary was: a double click there zooms in.
+    await summary(page, SUMMARY.first).dblclick();
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
+    await frames(page, 8);
+    const opened = await transformOf(page);
+    expect(opened.scale).toBe(before.scale);
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    // It did not count as the user taking the view: the view still moves to take in the commits that come.
+    await expect(summary(page, LATE_COMMITS)).toBeAttached();
+    await expect.poll(async () => (await transformOf(page)).x).not.toBe(opened.x);
+    await expect.poll(() => isWithin(summary(page, LATE_COMMITS), canvas.locator('.react-flow'))).toBe(true);
+  });
+
+  test('takes the view from the user who pans the canvas right after opening a group, so it stays where they put it', async ({ page }) => {
+    await routeLateCommits(page);
+    const answered = page.waitForResponse('**/api/workspace/demo/news');
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    await summary(page, SUMMARY.first).click();
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
+    // At once, a drag of the empty canvas above the columns: it is a press of its own, the first of its click, and it counts.
+    const area = (await canvas.locator('.react-flow').boundingBox())!;
+    await page.mouse.move(area.x + 200, area.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(area.x + 350, area.y + 50, { steps: 5 });
+    await page.mouse.up();
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    const moved = await transformOf(page);
+    await answered;
+    await expect(summary(page, LATE_COMMITS)).toBeAttached();
+    await afterSomeFrames(page);
+    expect(await transformOf(page)).toEqual(moved);
   });
 
   test('does not take the Space key from the other sections', async ({ page }) => {
@@ -409,8 +566,8 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('alert')).toContainText('The commits could not be read', { timeout: 20_000 });
     await expect(canvas.getByRole('alert')).toHaveCount(1);
     await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
-    await expect(canvas.getByRole('article', { name: 'Export requirements' })).toBeVisible();
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toHaveCount(0);
+    await expect(summary(page, SUMMARY.documents)).toBeVisible();
+    await expect(canvas.getByRole('button', { name: /^billing api/ })).toHaveCount(0);
   });
 
   test('names the notes and files when they could not be read, and still draws the rest', async ({ page }) => {
@@ -421,7 +578,7 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('alert')).toContainText('The notes and files could not be read: The board file is not valid JSON.', { timeout: 20_000 });
     await expect(canvas.getByRole('alert')).toHaveCount(1);
     await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
+    await expect(summary(page, SUMMARY.commits)).toBeVisible();
   });
 
   test('does not read a reply that is not a board as an empty one', async ({ page }) => {
@@ -612,28 +769,78 @@ test.describe('Board cards', () => {
     await expect(canvas.getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
     const edges = canvas.locator('.react-flow__edge');
     await expect(edges).toHaveCount(3);
-    // Named by what they join, with the label, not by ids.
+    // Named by what they join, with the label, not by ids. The commit is inside a folded lane, so its line goes to the lane.
     await expect(canvas.getByRole('img', { name: 'Link from Export leaks memory to Reports export to CSV: found while' })).toBeAttached();
-    await expect(canvas.getByRole('img', { name: 'Link from Export flow to commit a91f2e0' })).toBeAttached();
+    await expect(canvas.getByRole('img', { name: 'Link from Export flow to billing api' })).toBeAttached();
     await expect(canvas.getByRole('img', { name: 'Link from Export leaks memory to Export flow' })).toBeAttached();
     await expect(canvas.locator('.react-flow__edge-text')).toHaveText(['found while']);
-    // The commit is found by the shorter hash a card was linked with.
     await expect(canvas.getByRole('img', { name: /gone/ })).toHaveCount(0);
+    // Open the lane and the line goes to the commit, found by the shorter hash the card was linked with.
+    await openGroup(page, SUMMARY.commits);
+    await expect(canvas.getByRole('img', { name: 'Link from Export flow to commit a91f2e0' })).toBeAttached();
+    await expect(canvas.getByRole('img', { name: 'Link from Export flow to billing api' })).toHaveCount(0);
+    await expect(edges).toHaveCount(3);
+  });
+
+  test('draws a line into a folded group to its summary, and keeps its label, until the group is opened', async ({ page }) => {
+    await routeBoard(page);
+    // Documents with ids a line can name.
+    await routeWork(page, [
+      document('Export requirements', { id: boardId(50), role: 'requirements', summary: 'Customers export their reports as CSV, up to 50,000 rows.' }),
+      document('First export design', { id: boardId(51), status: 'superseded', summary: 'Replaced by the queue design.' }),
+    ]);
+    await routeCards(page, boardFile({
+      cards: [boardNote(1, { title: 'Export leaks memory' })],
+      links: [
+        boardLink(1, boardId(1), 'commit:billing api:a91f2e0', 'found while'),
+        boardLink(2, boardId(1), `document:${boardId(50)}`, 'see'),
+      ],
+    }));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(summary(page, SUMMARY.commits)).toBeVisible();
+    const edges = canvas.locator('.react-flow__edge');
+    await expect(edges).toHaveCount(2);
+    await expect(canvas.getByRole('img', { name: 'Link from Export leaks memory to billing api: found while' })).toBeAttached();
+    await expect(canvas.getByRole('img', { name: 'Link from Export leaks memory to Documents: see' })).toBeAttached();
+    await expect(canvas.locator('.react-flow__edge-text')).toHaveText(['found while', 'see']);
+    // Each line ends at the summary it points to: where the edge's last point is, on the canvas, is on the edge of that node.
+    const ends = async (id: string) => canvas.locator(`.react-flow__edge[aria-label*="${id}"] path.react-flow__edge-path`).evaluate((path: SVGPathElement) => {
+      const end = path.getPointAtLength(path.getTotalLength());
+      const matrix = path.ownerSVGElement!.getScreenCTM()!;
+      return { x: end.x * matrix.a + matrix.e, y: end.y * matrix.d + matrix.f };
+    });
+    const touches = async (id: string, point: { x: number; y: number }) => {
+      const box = (await summary(page, id === 'api' ? SUMMARY.commits : SUMMARY.documents).boundingBox())!;
+      return point.x >= box.x - 6 && point.x <= box.x + box.width + 6 && point.y >= box.y - 6 && point.y <= box.y + box.height + 6;
+    };
+    expect(await touches('api', await ends('billing api'))).toBe(true);
+    expect(await touches('documents', await ends('Documents'))).toBe(true);
+
+    // Opened, a line goes to the thing itself, and when it is folded again it goes back to the summary.
+    await openGroup(page, SUMMARY.commits);
+    await expect(canvas.getByRole('img', { name: 'Link from Export leaks memory to commit a91f2e0: found while' })).toBeAttached();
+    await foldButton(page, 'billing api').click();
+    await expect(canvas.getByRole('img', { name: 'Link from Export leaks memory to billing api: found while' })).toBeAttached();
+    await expect(edges).toHaveCount(2);
   });
 
   test('uses a saved place over the automatic one, and puts the cards with none by the plan, not over it', async ({ page }) => {
     await routeBoard(page);
     await routeCards(page, boardFile({
       cards: [boardNote(1, { title: 'Placed note' }), boardNote(2, { title: 'Second note' }), boardNote(3, { title: 'Third note' }), boardFileCard(4, 'docs/a.html', { title: 'A page' })],
-      positions: { [boardId(1)]: { x: 1111, y: 333 }, 'checkpoint:report-rows-load-fast': { x: 700, y: 520 }, 'commit:billing api:a91f2e0': { x: 2000, y: 90 } },
+      positions: { [boardId(1)]: { x: 2300, y: 333 }, 'checkpoint:report-rows-load-fast': { x: 700, y: 520 }, 'commit:billing api:a91f2e0': { x: 2000, y: 90 } },
     }));
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
     await expect(canvas.getByRole('article', { name: 'Placed note' })).toBeVisible();
-    // Saved places are used as they are, for a card and for the board's own checkpoint and commit.
-    await expect(node(page, boardId(1))).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 1111, 333)');
-    await expect(node(page, 'checkpoint:report-rows-load-fast')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 700, 520)');
-    await expect(node(page, 'commit:billing api:a91f2e0c4d5b')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 2000, 90)');
+    // A saved place is used as it is for a card. The app places checkpoints, documents and commits itself: a place saved for
+    // one of them is ignored, and it stays in its group and order.
+    await expect(node(page, boardId(1))).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 2300, 333)');
+    expect(await canvasPosition(page, 'checkpoint:report-rows-load-fast')).toEqual({ x: 2 * 352, y: 0 });
+    await openGroup(page, SUMMARY.commits);
+    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
+    await expect.poll(() => canvasPosition(page, 'commit:billing api:a91f2e0c4d5b')).toEqual({ x: 4 * 352 + 12, y: 52 });
     // The others stand in a band under the checkpoints, clear of everything beside it.
     const band = canvas.getByRole('heading', { name: 'From the board' });
     await expect(band).toBeVisible();
@@ -682,11 +889,16 @@ test.describe('Board cards', () => {
     await expect(far).toBeVisible();
     await expect(far).not.toBeInViewport();
     await canvas.getByRole('application').focus();
-    // What can be moved is a stop for the keyboard, in reading order (the two checkpoints, the commit, then the card), and then its buttons.
-    for (const stop of ['checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv', 'commit:billing api:a91f2e0c4d5b', boardId(1)]) {
+    // The groups' buttons are stops for the keyboard (a folded one, and the fold button of the open one); only a card can be moved, so
+    // only a card is a stop of its own, and then its buttons. A stop is not a thing that moves, so the view stays until the card is reached.
+    const stops: string[] = [];
+    for (let press = 0; press < 12 && !(await node(page, boardId(1)).evaluate((element) => element === document.activeElement)); press += 1) {
       await page.keyboard.press('Tab');
-      await expect(node(page, stop)).toBeFocused();
+      stops.push(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? ''));
     }
+    await expect(node(page, boardId(1))).toBeFocused();
+    expect(stops.slice(0, -1)).toEqual(expect.arrayContaining([SUMMARY.first, 'Fold Reports export to CSV']));
+    expect(stops.at(-1)).toBe('A card far away');
     await expect.poll(() => isWithin(far, canvas.locator('.react-flow'))).toBe(true);
     await page.keyboard.press('Tab');
     await expect(canvas.getByRole('button', { name: 'Open A card far away' })).toBeFocused();
@@ -703,7 +915,7 @@ test.describe('Board cards', () => {
 
 test.describe('Board, moving things', () => {
   /** A note with a place of its own, above the checkpoint that is under way. */
-  const NOTE = { x: 1060, y: -240 };
+  const NOTE = { x: 1060, y: -420 };
   const placedNote = (fields: Record<string, unknown> = {}) => boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory', ...fields })], positions: { [boardId(1)]: NOTE } });
   async function openWith(page: Page, content: ReturnType<typeof boardFile>, options: { fit?: boolean } = {}) {
     // The view takes a late part in at once, so a drag is measured from a view that is not about to move.
@@ -837,25 +1049,6 @@ test.describe('Board, moving things', () => {
     await expect(status(page)).toHaveText('');
   });
 
-  test('forgets the place with Undo when the thing had none, so it goes back to where the board puts it', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4 }));
-    const canvas = board(page);
-    const ids = ['checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv'];
-    const before = await Promise.all(ids.map((id) => canvasPosition(page, id)));
-    // A checkpoint stands on its own in the row of columns, so it can be dragged too.
-    await dragBy(page, canvas.getByRole('article', { name: 'Report rows load fast' }), 40, 260);
-    await expect(status(page)).toContainText('Moved “Report rows load fast”');
-    expect(server.posted).toHaveLength(1);
-    expect(server.posted[0].changes[0].nodes[0]).toEqual({ id: ids[0], x: expect.any(Number), y: expect.any(Number) });
-    // Its column closes up around the gap, as it does for a place an AI gave it.
-    await expect.poll(async () => (await canvasPosition(page, ids[1])).x).toBeLessThan(before[1]!.x);
-
-    await canvas.getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => server.posted.length).toBe(2);
-    expect(server.posted[1]).toEqual({ changes: [{ op: 'move', nodes: [{ id: ids[0], x: null, y: null }] }] });
-    for (const [index, id] of ids.entries()) await expect.poll(() => canvasPosition(page, id)).toEqual(before[index]);
-  });
-
   test('offers Undo for about eight seconds', async ({ page }) => {
     await page.clock.install();
     await openWith(page, placedNote());
@@ -976,17 +1169,39 @@ test.describe('Board, moving things', () => {
     expect(server.posted[0].changes[0].nodes[0]).toEqual({ id: boardId(1), x: NOTE.x + 24, y: NOTE.y });
   });
 
-  test('can move a checkpoint, a commit and a card in a lane, and not a lane, the plan\'s own frame or what is no thing of the board\'s', async ({ page }) => {
+  test('can move a card, in the band or not, and nothing else: not a checkpoint, a document, a commit, a lane or the plan\'s own frame', async ({ page }) => {
     await openWith(page, boardFile({ revision: 4, cards: [boardNote(1)] }));
-    for (const id of ['checkpoint:reports-export-to-csv', 'commit:billing api:a91f2e0c4d5b', boardId(1)]) await expect(node(page, id)).toHaveClass(/draggable/);
-    // A card and a commit stand in a lane and are still moved; the lanes themselves are not, nor is the plan's own frame.
+    await expect(node(page, boardId(1))).toHaveClass(/draggable/);
+    // The card stands in the band, and is still moved.
     expect(await node(page, boardId(1)).evaluate((element) => Boolean(element.closest('.react-flow')?.querySelector('[data-id="lane:board"]')))).toBe(true);
-    for (const id of ['lane:documents', 'lane:board', 'lane:commits:billing api', 'plan:own']) {
-      await expect(node(page, id)).not.toHaveClass(/draggable/);
-      await expect(node(page, id)).not.toHaveAttribute('tabindex', /.*/);
+    // Open every group, so there is a node for each thing the board draws.
+    for (const name of [SUMMARY.documents, SUMMARY.commits, SUMMARY.first, SUMMARY.plan]) await openGroup(page, name);
+    await viewAtRest(page);
+    for (const id of ['checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv', 'commit:billing api:a91f2e0c4d5b', 'document:export-requirements', 'lane:documents', 'lane:board', 'lane:commits:billing api', 'plan:own']) {
+      await expect(node(page, id), id).not.toHaveClass(/draggable/);
+      await expect(node(page, id), id).not.toHaveAttribute('tabindex', /.*/);
     }
-    // The mocked documents have no uuid for an id, so the board cannot keep a place for them.
-    await expect(node(page, 'document:export-requirements')).not.toHaveClass(/draggable/);
+  });
+
+  test('does not move a checkpoint, a document or a commit when it is dragged, or when Shift and an arrow key are pressed on it', async ({ page }) => {
+    const server = await openWith(page, boardFile({ revision: 4 }));
+    for (const name of [SUMMARY.documents, SUMMARY.commits, SUMMARY.first]) await openGroup(page, name);
+    await fitted(page);
+    const ids = ['checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv', 'commit:billing api:a91f2e0c4d5b', 'document:export-requirements'];
+    const before = await Promise.all(ids.map((id) => canvasPosition(page, id)));
+    const canvas = board(page);
+    // A drag that starts on one of them is a drag of the canvas, so the whole board is brought into view for each.
+    for (const name of ['Report rows load fast', 'a91f2e0', 'Export requirements']) {
+      await fitted(page);
+      await dragBy(page, canvas.getByRole('article', { name }), 30, 160);
+    }
+    // The keys: the groups' buttons take them, and do nothing with them.
+    await foldButton(page, 'Reports export to CSV').focus();
+    await page.keyboard.press('Shift+ArrowRight');
+    await frames(page, 8);
+    expect(await Promise.all(ids.map((id) => canvasPosition(page, id)))).toEqual(before);
+    expect(server.posted).toEqual([]);
+    await expect(status(page)).toHaveText('');
   });
 
   /** Where a node stands on the canvas, sampled on every frame from now until `stop`: a jump between two frames shows. */
@@ -1013,8 +1228,9 @@ test.describe('Board, moving things', () => {
     const before = await canvasPosition(page, boardId(1));
     const { scale } = await transformOf(page);
     server.holdPosts = true;
-    await dragBy(page, card, 150, -120, { hold: true });
-    const dropped = { x: before.x + 150 / scale, y: before.y - 120 / scale };
+    // Down and across, in the band's own room: a drop over a group is put clear of it (see the specs for that).
+    await dragBy(page, card, 150, 120, { hold: true });
+    const dropped = { x: before.x + 150 / scale, y: before.y + 120 / scale };
     await expect.poll(async () => nearTo(await canvasPosition(page, boardId(1)), dropped)).toBe(true);
     // From before the card is let go: through the drop, the wait for the answer, the answer, and the layout that takes it out of the lane.
     const stop = await trackPlace(page, boardId(1));
@@ -1072,29 +1288,124 @@ test.describe('Board, moving things', () => {
     await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(before);
   });
 
-  test('drags a commit out of its lane, which goes when it is empty, and Undo brings both back', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4 }));
+  /** What is dragged is put clear of the groups before it is saved, so it snaps clear at once and the answer changes nothing. */
+  test('puts a card dropped on an open group clear of it, saves that place, and does not move it when the answer comes', async ({ page }) => {
+    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' }), boardNote(2, { title: 'Second note' })] }));
+    const canvas = board(page);
+    const card = canvas.getByRole('article', { name: 'Export leaks memory' });
+    const [from, onto] = await Promise.all([card.boundingBox(), canvas.getByRole('article', { name: 'Reports export to CSV' }).boundingBox()]);
+    server.holdPosts = true;
+    // Onto the middle of the frame that is open.
+    await dragBy(page, card, onto!.x + onto!.width / 2 - (from!.x + from!.width / 2) - 6, onto!.y + 80 - (from!.y + from!.height / 2));
+    await expect.poll(() => server.posted.length).toBe(1);
+    const saved = server.posted[0].changes[0].nodes[0];
+    const group = await canvasBox(page, 'checkpoint:reports-export-to-csv');
+    // What is saved is clear of the group: below it, with the room between things, and no part of the card is over it.
+    expect(saved.id).toBe(boardId(1));
+    expect(saved.y).toBeGreaterThanOrEqual(group.y + group.height + 12);
+    const box = { x: saved.x, y: saved.y, width: BOARD_CARD.width, height: BOARD_CARD.note };
+    expect(group.x + group.width <= box.x || box.x + box.width <= group.x || group.y + group.height <= box.y || box.y + box.height <= group.y).toBe(true);
+    // It snapped there when it was let go, before the answer.
+    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
+    const stop = await trackPlace(page, boardId(1));
+    server.holdPosts = false;
+    for (const answer of server.heldPosts.splice(0)) await answer();
+    await expect(status(page)).toContainText('Moved “Export leaks memory”');
+    await frames(page, 12);
+    for (const at of await stop()) expect(at, JSON.stringify(at)).toEqual({ x: saved.x, y: saved.y });
+    expect(await canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
+    // And it is the same after a reload.
+    await page.reload();
+    await expect(canvas.getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
+    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
+    expect(server.posted).toHaveLength(1);
+  });
+
+  test('puts a card dropped under a folded summary below the group as it is when open, and saves that place', async ({ page }) => {
+    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' }), boardNote(2, { title: 'Second note' })] }));
+    const canvas = board(page);
+    // How tall the commits are when they are open, which is the room the card keeps clear under their summary.
+    await openGroup(page, SUMMARY.commits);
+    const openHeight = (await canvasBox(page, 'lane:commits:billing api')).height;
+    await foldGroup(page, 'billing api');
+    await expect(summary(page, SUMMARY.commits)).toBeVisible();
+    const folded = await canvasBox(page, 'lane:commits:billing api');
+    expect(folded.height).toBeLessThan(openHeight);
+    await fitted(page);
+    const card = canvas.getByRole('article', { name: 'Export leaks memory' });
+    const [from, onto] = await Promise.all([card.boundingBox(), summary(page, SUMMARY.commits).boundingBox()]);
+    await dragBy(page, card, onto!.x + onto!.width / 2 - (from!.x + from!.width / 2) - 6, onto!.y + onto!.height / 2 - (from!.y + from!.height / 2));
+    await expect(status(page)).toContainText('Moved “Export leaks memory”');
+    const saved = server.posted[0].changes[0].nodes[0];
+    // Below the group as it is when open, not just below its summary.
+    expect(saved.y).toBe(folded.y + openHeight + 12);
+    expect(await canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
+    // So opening the group later covers nothing.
+    await openGroup(page, SUMMARY.commits);
+    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
+    expect(await canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
+  });
+
+  test('puts a card that is nudged into a group clear of it at once, saves that place, and saves nothing when it cannot move', async ({ page }) => {
+    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: { x: 1060, y: -170 } } }));
+    const wrapper = node(page, boardId(1));
+    const group = await canvasBox(page, 'checkpoint:reports-export-to-csv');
+    const clear = { x: 1060, y: group.y + group.height + 12 };
+    await wrapper.focus();
+    server.holdPosts = true;
+    // One press moves it 24 units down, into the frame that is open: it is put just below the frame, not left over it.
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(clear);
+    await expect.poll(() => server.posted.length).toBe(1);
+    expect(server.posted[0].changes[0].nodes[0]).toEqual({ id: boardId(1), ...clear });
+    const stop = await trackPlace(page, boardId(1));
+    server.holdPosts = false;
+    for (const answer of server.heldPosts.splice(0)) await answer();
+    await expect(status(page)).toContainText('Moved “Export leaks memory”');
+    await frames(page, 12);
+    for (const at of await stop()) expect(at, JSON.stringify(at)).toEqual(clear);
+    // Pushed up against it, it would be put clear again, so nothing moves and nothing is saved.
+    await page.keyboard.press('Shift+ArrowUp');
+    await frames(page, 12);
+    expect(await canvasPosition(page, boardId(1))).toEqual(clear);
+    expect(server.posted).toHaveLength(1);
+  });
+
+  test('moves a note but not a commit: a commit is where its lane puts it', async ({ page }) => {
+    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })] }));
+    await openGroup(page, SUMMARY.commits);
+    await viewAtRest(page);
+    const canvas = board(page);
+    const commit = canvas.getByRole('article', { name: 'a91f2e0' });
     const id = 'commit:billing api:a91f2e0c4d5b';
     const before = await Promise.all([canvasPosition(page, id), canvasPosition(page, 'lane:commits:billing api')]);
-    const { scale } = await transformOf(page);
-    await dragBy(page, board(page).getByRole('article', { name: 'a91f2e0' }), 0, 200);
-    await expect(status(page)).toContainText('Moved “commit a91f2e0”');
-    const dropped = { x: before[0].x, y: before[0].y + 200 / scale };
-    const saved = server.posted[0].changes[0].nodes[0];
-    expect(saved.id).toBe(id);
-    expect(nearTo(saved, dropped)).toBe(true);
-    await expect.poll(() => canvasPosition(page, id)).toEqual({ x: saved.x, y: saved.y });
-    // The only commit of the repository left, so its lane went with it.
-    await expect(node(page, 'lane:commits:billing api')).toHaveCount(0);
-    await board(page).getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => canvasPosition(page, id)).toEqual(before[0]);
-    await expect.poll(() => canvasPosition(page, 'lane:commits:billing api')).toEqual(before[1]);
+    await expect(node(page, id)).not.toHaveClass(/draggable/);
+    // A drag that starts on the commit is a drag of the canvas: the view moves and the commit stays in its lane.
+    const view = await transformOf(page);
+    await dragBy(page, commit, 0, 120);
+    await expect.poll(async () => (await transformOf(page)).y).toBeGreaterThan(view.y + 100);
+    expect(await Promise.all([canvasPosition(page, id), canvasPosition(page, 'lane:commits:billing api')])).toEqual(before);
+    await expect(node(page, 'lane:commits:billing api')).toBeAttached();
+    expect(server.posted).toEqual([]);
+    await expect(status(page)).toHaveText('');
+
+    // A note, in the same board, can be.
+    await fitted(page);
+    const note = canvas.getByRole('article', { name: 'Export leaks memory' });
+    const noteBefore = await canvasPosition(page, boardId(1));
+    await dragBy(page, note, 90, -60);
+    await expect(status(page)).toContainText('Moved “Export leaks memory”');
+    expect(server.posted).toHaveLength(1);
+    expect(server.posted[0].changes[0].nodes[0].id).toBe(boardId(1));
+    expect(await canvasPosition(page, boardId(1))).not.toEqual(noteBefore);
+    // The commit still stands where it did.
+    expect(await canvasPosition(page, id)).toEqual(before[0]);
   });
 
   test('leaves a newer message alone when the answer to an Undo comes after it', async ({ page }) => {
     const server = await openWith(page, boardFile({
       revision: 4, cards: [boardNote(1, { title: 'Note one' }), boardNote(2, { title: 'Note two' })],
-      positions: { [boardId(1)]: { x: 1060, y: -240 }, [boardId(2)]: { x: 1060, y: -40 } },
+      positions: { [boardId(1)]: { x: 1060, y: -420 }, [boardId(2)]: { x: 1060, y: -230 } },
     }));
     await dragBy(page, board(page).getByRole('article', { name: 'Note one' }), 100, 0);
     await expect(status(page)).toHaveText('Moved “Note one”');
@@ -1212,6 +1523,341 @@ test.describe('Board, moving things', () => {
     // The words on the screen are for the eye; the live region says them once.
     await expect(board(page).getByRole('alert')).toHaveCount(0);
     expect(await live.evaluate((element) => Boolean((element as HTMLElement & { marked?: boolean }).marked))).toBe(true);
+  });
+});
+
+test.describe('Board, groups', () => {
+  /** The plan with a third checkpoint that is taller than the one under way. */
+  async function routeTallPlan(page: Page) {
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Report rows load fast', { done: true, steps: [step('Query the report rows', true)] }),
+        checkpoint('Reports export to CSV', { steps: [step('Write the CSV writer', true), step('Background job queue for large exports'), step('Download link in the report page')], decisions: [decision('Which time zone should export timestamps use?')] }),
+        checkpoint('Ship it', { steps: Array.from({ length: 6 }, (_, index) => step(`Shipping step ${index + 1}`)) }),
+      ],
+    }) }));
+  }
+  const GROUPS = ['lane:documents', 'checkpoint:report-rows-load-fast', 'checkpoint:reports-export-to-csv', 'checkpoint:ship-it', 'lane:commits:billing api'];
+  const SHIP = 'Ship it, not done, 0 of 6 steps';
+
+  test('opens a folded checkpoint where it stands: no column moves, and no card under them does', async ({ page }) => {
+    await routeBoard(page);
+    await routeTallPlan(page);
+    await routeCards(page, boardFile({ cards: [boardNote(1, { title: 'Export leaks memory' })] }));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(summary(page, SHIP)).toBeVisible();
+    await expect(canvas.getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
+    const [before, band, note] = await Promise.all([Promise.all(GROUPS.map((id) => canvasPosition(page, id))), canvasPosition(page, 'lane:board'), canvasPosition(page, boardId(1))]);
+    const folded = await canvasBox(page, 'checkpoint:ship-it');
+
+    await summary(page, SHIP).click();
+    const opened = canvas.getByRole('article', { name: 'Ship it' });
+    await expect(opened).toContainText('Shipping step 1');
+    await expect(opened).toContainText('Shipping step 6');
+    await expect(summary(page, SHIP)).toHaveCount(0);
+    await expect(foldButton(page, 'Ship it')).toHaveAttribute('aria-expanded', 'true');
+    // Its column grows; no column moves, the others included: the same place on the canvas, x and y.
+    await expect.poll(async () => (await canvasBox(page, 'checkpoint:ship-it')).height).toBeGreaterThan(folded.height);
+    expect(await Promise.all(GROUPS.map((id) => canvasPosition(page, id)))).toEqual(before);
+    // The band of cards stands under the tallest a frame can be, so it is clear of the group that opened and did not move for it.
+    const ship = await canvasBox(page, 'checkpoint:ship-it');
+    expect(band.y).toBeGreaterThanOrEqual(ship.y + ship.height);
+    await frames(page, 6);
+    expect(await canvasPosition(page, 'lane:board')).toEqual(band);
+    expect(await canvasPosition(page, boardId(1))).toEqual(note);
+  });
+
+  test('keeps every card of the band where it was while groups open and fold and the work moves on', async ({ page }) => {
+    await routeBoard(page);
+    // The plan the page is read with, which the spec changes later: the work moves on to the last checkpoint.
+    const plans = { current: null as unknown };
+    plans.current = planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Report rows load fast', { done: true, steps: [step('Query the report rows', true)] }),
+        checkpoint('Reports export to CSV', { steps: [step('Write the CSV writer', true), step('Background job queue for large exports'), step('Download link in the report page')], decisions: [decision('Which time zone should export timestamps use?')] }),
+        checkpoint('Ship it', { steps: Array.from({ length: 6 }, (_, index) => step(`Shipping step ${index + 1}`)) }),
+      ],
+    });
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: plans.current }));
+    await routeCards(page, boardFile({ cards: [1, 2, 3, 4].map((n) => boardNote(n, { title: `Band note ${n}` })) }));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(summary(page, SHIP)).toBeVisible();
+    const cards = () => Promise.all([...[1, 2, 3, 4].map((n) => canvasPosition(page, boardId(n))), canvasPosition(page, 'lane:board')]);
+    const base = await cards();
+
+    // Opening the tallest group, folding the one under way, opening one that is done: no card moves.
+    await openGroup(page, SHIP);
+    await expect(canvas.getByRole('article', { name: 'Ship it' })).toBeVisible();
+    expect(await cards()).toEqual(base);
+    await foldGroup(page, 'Reports export to CSV');
+    await expect(summary(page, /^Reports export to CSV, not done/)).toBeVisible();
+    expect(await cards()).toEqual(base);
+    await openGroup(page, SUMMARY.first);
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
+    expect(await cards()).toEqual(base);
+
+    // The plan is read again, and the work has moved on: the checkpoint that was under way is done, and the next is the work.
+    plans.current = planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Report rows load fast', { done: true, steps: [step('Query the report rows', true)] }),
+        checkpoint('Reports export to CSV', { done: true, steps: [step('Write the CSV writer', true), step('Background job queue for large exports', true), step('Download link in the report page', true)], decisions: [decision('Which time zone should export timestamps use?', { done: true, answer: 'UTC' })] }),
+        checkpoint('Ship it', { steps: Array.from({ length: 6 }, (_, index) => step(`Shipping step ${index + 1}`)) }),
+      ],
+    });
+    await expect.poll(async () => {
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+      return summary(page, /^Reports export to CSV, done/).count();
+    }, { timeout: 20_000, intervals: [500, 1000] }).toBe(1);
+    expect(await cards()).toEqual(base);
+    // The work is on the last checkpoint now, and nothing was chosen for it: it is open by itself.
+    await expect(canvas.getByRole('article', { name: 'Ship it' })).toBeVisible();
+  });
+
+  test('draws a card that was put under a group clear of its open footprint, folded or open, and leaves the place that was saved alone', async ({ page }) => {
+    await routeBoard(page);
+    await routeTallPlan(page);
+    // Put just under where the folded summary of Ship it stands, which is where its steps are once it is open.
+    const PUT = { x: 1056 + 8, y: 150 };
+    const server = await routeMoves(page, boardFile({ cards: [boardNote(1, { title: 'Placed note' })], positions: { [boardId(1)]: PUT } }));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(summary(page, SHIP)).toBeVisible();
+    await expect(canvas.getByRole('article', { name: 'Placed note' })).toBeVisible();
+    // Folded, the group is a summary, but the card is already below it as it is when open, so opening it moves nothing.
+    const folded = await canvasBox(page, 'checkpoint:ship-it');
+    const before = await canvasPosition(page, boardId(1));
+    expect(before.x).toBe(PUT.x);
+
+    await summary(page, SHIP).click();
+    await expect(canvas.getByRole('article', { name: 'Ship it' })).toContainText('Shipping step 6');
+    await expect.poll(async () => (await canvasBox(page, 'checkpoint:ship-it')).height).toBeGreaterThan(folded.height);
+    const group = await canvasBox(page, 'checkpoint:ship-it');
+    // Just below the group, with the room between things; the whole card is clear of it, and of the steps.
+    expect(before.y).toBe(group.y + group.height + 12);
+    expect(await canvasPosition(page, boardId(1))).toEqual(before);
+    const card = await canvasBox(page, boardId(1));
+    expect(group.x + group.width <= card.x || card.x + card.width <= group.x || group.y + group.height <= card.y || card.y + card.height <= group.y).toBe(true);
+
+    // Folded again, it is still there. The place that was saved was not touched: the board still holds what was put.
+    await foldGroup(page, 'Ship it');
+    await expect(summary(page, SHIP)).toBeVisible();
+    expect(await canvasPosition(page, boardId(1))).toEqual(before);
+    expect(server.posted).toEqual([]);
+    expect(server.board.positions[boardId(1)]).toEqual(PUT);
+  });
+
+  test('folds an open group again, to where it was', async ({ page }) => {
+    await routeBoard(page);
+    await routeTallPlan(page);
+    await routeCards(page, boardFile({ cards: [boardNote(1, { title: 'Export leaks memory' })] }));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(summary(page, SHIP)).toBeVisible();
+    const [groups, band] = await Promise.all([Promise.all(GROUPS.map((id) => canvasPosition(page, id))), canvasPosition(page, 'lane:board')]);
+    const before = await canvasBox(page, 'checkpoint:ship-it');
+
+    await summary(page, SHIP).click();
+    await expect(canvas.getByRole('article', { name: 'Ship it' })).toBeVisible();
+    await expect.poll(async () => (await canvasBox(page, 'checkpoint:ship-it')).height).toBeGreaterThan(before.height);
+    await foldGroup(page, 'Ship it');
+    // The summary is back with its name, the details are gone, and the band is where it was.
+    await expect(summary(page, SHIP)).toBeVisible();
+    await expect(canvas.getByRole('article', { name: 'Ship it' })).toHaveCount(0);
+    await expect.poll(() => canvasBox(page, 'checkpoint:ship-it')).toEqual(before);
+    await expect.poll(() => canvasPosition(page, 'lane:board')).toEqual(band);
+    expect(await Promise.all(GROUPS.map((id) => canvasPosition(page, id)))).toEqual(groups);
+    // The work under way can be folded too, and opened again.
+    await foldGroup(page, 'Reports export to CSV');
+    await expect(summary(page, 'Reports export to CSV, not done, 1 of 3 steps, waits for you')).toBeVisible();
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toHaveCount(0);
+    await openGroup(page, 'Reports export to CSV, not done, 1 of 3 steps, waits for you');
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+  });
+
+  test('opens and folds a group from the keyboard: Enter or Space on its button, and the keyboard goes with it', async ({ page }) => {
+    await routeBoard(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    const first = summary(page, SUMMARY.first);
+    const article = canvas.getByRole('article', { name: 'Report rows load fast' });
+    await expect(first).toBeVisible();
+    // A real button: it is a stop for the keyboard, and it says it is closed.
+    expect(await first.evaluate((element) => element.tagName)).toBe('BUTTON');
+    await first.focus();
+    await page.keyboard.press('Enter');
+    await expect(article).toBeVisible();
+    await expect(foldButton(page, 'Report rows load fast')).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(article).toHaveCount(0);
+    await expect(first).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(article).toBeVisible();
+    await expect(foldButton(page, 'Report rows load fast')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(article).toHaveCount(0);
+    await expect(first).toBeFocused();
+    // The commits, the same way.
+    await summary(page, SUMMARY.commits).focus();
+    await page.keyboard.press('Space');
+    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
+    await expect(foldButton(page, 'billing api')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(summary(page, SUMMARY.commits)).toBeFocused();
+  });
+
+  test('keeps what was opened and folded after a reload, for this workspace, and only what differs from the default', async ({ page }) => {
+    await routeBoard(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    expect(await storedFolds(page)).toBeNull();
+    await openGroup(page, SUMMARY.documents);
+    await expect(canvas.getByRole('article', { name: 'Export requirements' })).toBeVisible();
+    await foldGroup(page, 'Reports export to CSV');
+    await expect(summary(page, /^Reports export to CSV, not done/)).toBeVisible();
+    // Only the two groups the user changed are kept; the rest follow the default.
+    expect(await storedFolds(page)).toEqual({ 'lane:documents': true, 'checkpoint:reports-export-to-csv': false });
+    expect(await page.evaluate(() => Object.keys(window.localStorage).filter((key) => key.startsWith('contextspace_board_folds')))).toEqual([FOLDS_KEY]);
+
+    await page.reload();
+    await expect(canvas.getByRole('article', { name: 'Export requirements' })).toBeVisible();
+    await expect(summary(page, /^Reports export to CSV, not done/)).toBeVisible();
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toHaveCount(0);
+    await expect(summary(page, SUMMARY.commits)).toBeVisible();
+    // Back to the default, a choice is forgotten, not kept as a copy of it.
+    await summary(page, /^Reports export to CSV, not done/).click();
+    await foldGroup(page, 'Documents');
+    await expect(summary(page, SUMMARY.documents)).toBeVisible();
+    await expect.poll(() => storedFolds(page)).toBeNull();
+    await page.reload();
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    await expect(summary(page, SUMMARY.documents)).toBeVisible();
+  });
+
+  test('opens the checkpoint the work moves on to by itself, unless the user folded it', async ({ page }) => {
+    await routeBoard(page);
+    await routeTallPlan(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    // The user folds the work under way. The work then moves on to the checkpoint after it (the one under way is done now).
+    await foldGroup(page, 'Reports export to CSV');
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Report rows load fast', { done: true }), checkpoint('Reports export to CSV', { done: true }),
+        checkpoint('Ship it', { steps: Array.from({ length: 6 }, (_, index) => step(`Shipping step ${index + 1}`)) }),
+      ],
+    }) }));
+    await page.reload();
+    // Nothing was chosen for it, so it opens by itself; the one that was folded stays folded, as it is done.
+    await expect(canvas.getByRole('article', { name: 'Ship it' })).toBeVisible();
+    await expect(summary(page, /^Reports export to CSV, done/)).toBeVisible();
+    await expect(canvas.getByRole('article')).toHaveCount(1);
+    // Folded by the user, it stays folded though the work is on it.
+    await foldGroup(page, 'Ship it');
+    await page.reload();
+    await expect(summary(page, /^Ship it, not done/)).toBeVisible();
+    await expect(canvas.getByRole('article')).toHaveCount(0);
+  });
+
+  test('works without storage: the choice holds for the visit and nothing fails', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.addInitScript(() => {
+      const blocked = (key: string) => key.startsWith('contextspace_board_folds');
+      const get = Storage.prototype.getItem;
+      const set = Storage.prototype.setItem;
+      Storage.prototype.getItem = function (key: string) { if (blocked(key)) throw new Error('Storage is blocked.'); return get.call(this, key); };
+      Storage.prototype.setItem = function (key: string, value: string) { if (blocked(key)) throw new Error('Storage is blocked.'); return set.call(this, key, value); };
+    });
+    await routeBoard(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    await expect(summary(page, SUMMARY.first)).toBeVisible();
+    await summary(page, SUMMARY.first).click();
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
+    await foldButton(page, 'Report rows load fast').click();
+    await expect(summary(page, SUMMARY.first)).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('moves the view to show as much of an opened group as fits, top first, and leaves it when the group fits', async ({ page }) => {
+    await routeBoard(page);
+    await routeWork(page, Array.from({ length: 16 }, (_, index) => document(`Source document ${index + 1}`, { summary: `Document number ${index + 1}.` })));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    const area = canvas.locator('.react-flow');
+    await expect(summary(page, /^Documents, 16 documents/)).toBeAttached();
+    await viewAtRest(page);
+    await fitted(page);
+
+    // A short group that is whole in the view does not move it.
+    const view = await transformOf(page);
+    await summary(page, SUMMARY.first).click();
+    await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
+    await frames(page, 6);
+    expect(await transformOf(page)).toEqual(view);
+    await foldGroup(page, 'Report rows load fast');
+
+    // A group much taller than the view: the view moves, smoothly, to its top, and shows as much as fits.
+    await openGroup(page, /^Documents, 16 documents/);
+    const lane = canvas.getByRole('heading', { name: 'Documents' });
+    await expect(lane).toBeVisible();
+    await expect.poll(() => isWithin(lane, area)).toBe(true);
+    await viewAtRest(page);
+    const [top, first, last, box] = await Promise.all([lane.boundingBox(), canvas.getByRole('article', { name: 'Source document 1', exact: true }).boundingBox(), canvas.getByRole('article', { name: 'Source document 16' }).boundingBox(), area.boundingBox()]);
+    expect(top!.y).toBeGreaterThanOrEqual(box!.y);
+    expect(top!.y - box!.y).toBeLessThan(80);
+    expect(first!.y + first!.height).toBeLessThanOrEqual(box!.y + box!.height);
+    expect(last!.y).toBeGreaterThanOrEqual(box!.y + box!.height);
+  });
+
+  test('opens a small board on all of its groups: the documents, the work and the commits are in view together', async ({ page }) => {
+    await routeBoard(page);
+    // One checkpoint and no loose steps: the documents, the checkpoint and the commits of one repository are three columns.
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({
+      title: 'Reports CSV export',
+      checkpoints: [checkpoint('Reports export to CSV', { steps: [step('Write the CSV writer', true), step('Download link in the report page')] })],
+    }) }));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    const area = canvas.locator('.react-flow');
+    const frame = canvas.getByRole('article', { name: 'Reports export to CSV' });
+    await expect(frame).toBeVisible();
+    await expect(canvas.getByText(/^Still loading/)).toHaveCount(0);
+    await viewAtRest(page);
+    const documents = summary(page, SUMMARY.documents);
+    const commits = summary(page, SUMMARY.commits);
+    for (const target of [documents, frame, commits]) await expect.poll(() => isWithin(target, area)).toBe(true);
+    // Side by side, left to right, with the top of the row at the top margin and the row in the middle across.
+    const [left, middle, right, box] = await Promise.all([documents.boundingBox(), frame.boundingBox(), commits.boundingBox(), area.boundingBox()]);
+    expect(left!.x).toBeLessThan(middle!.x);
+    expect(middle!.x).toBeLessThan(right!.x);
+    expect(Math.abs(left!.y - box!.y - box!.height * 0.06)).toBeLessThan(2);
+    expect(Math.abs((left!.x - box!.x) - (box!.x + box!.width - (right!.x + right!.width)))).toBeLessThan(2);
+    expect((await transformOf(page)).scale).toBeLessThanOrEqual(1);
+  });
+
+  test('says on the summary of a repository that could not be read in full that it could not, and says why when it is open', async ({ page }) => {
+    await routeBoard(page);
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [
+      { repo: 'billing api', more: 0, problem: 'Some history is missing.', commits: [{ sha: 'a91f2e0c4d5b', author: 'Anna', subject: 'Write the CSV writer', at: minutesAgo(30) }] },
+    ] }) }));
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    const folded = summary(page, 'billing api, 1 new since you last looked, latest: Write the CSV writer by Anna, could not read everything');
+    await expect(folded).toBeVisible();
+    await expect(folded).toContainText('Could not read everything');
+    await openGroup(page, 'billing api, 1 new since you last looked, latest: Write the CSV writer by Anna, could not read everything');
+    await expect(canvas.getByText('Could not be read: Some history is missing.')).toBeVisible();
+    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
   });
 });
 
@@ -1485,12 +2131,12 @@ test.describe('Board, live', () => {
     const feed = await holdFeed(page);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await routeBoard(page);
-    const NOTE = { x: 1060, y: -240 };
+    const NOTE = { x: 1060, y: -420 };
     const server = await routeMoves(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: NOTE } }));
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
     const card = canvas.getByRole('article', { name: 'Export leaks memory' });
-    await expect(card).toBeInViewport();
+    await expect(card).toBeVisible();
     await viewAtRest(page);
     await fitted(page);
     await expect.poll(() => feed.open()).toBe(1);
@@ -1539,7 +2185,7 @@ test.describe('Board, live', () => {
     const feed = await holdFeed(page);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await routeBoard(page);
-    const NOTE = { x: 1060, y: -240 };
+    const NOTE = { x: 1060, y: -420 };
     const server = await routeMoves(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: NOTE } }));
     await page.goto('/#/workspaces/demo/board');
     await expect(board(page).getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
@@ -1587,7 +2233,7 @@ test.describe('Board, live', () => {
     server.holdGets = false;
     for (const answer of server.heldGets.splice(0)) await answer();
     await expect(board(page).getByRole('article', { name: 'Added by the AI' })).toBeVisible();
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: 1060, y: -240 });
+    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: 1060, y: -420 });
   });
 
   test('puts the keyboard on the canvas when the message is put away after the card has gone', async ({ page }) => {
@@ -1640,10 +2286,23 @@ for (const colorScheme of ['light', 'dark'] as const) {
       }));
       await page.goto('/#/workspaces/demo/board');
       const canvas = board(page);
-      await expect(canvas.getByRole('article', { name: 'Draft notes' })).toBeVisible();
-      await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
+      // The groups folded into their summaries, with the work under way open.
+      const documents = /^Documents, 3 documents, 1 draft · 1 superseded/;
+      await expect(summary(page, documents)).toBeAttached();
+      await expect(summary(page, SUMMARY.commits)).toBeVisible();
       await expect(canvas.getByRole('article', { name: 'Export flow' }).getByRole('img', { name: 'Export flow' })).toBeAttached();
       await expect(canvas.getByRole('button', { name: 'Read all of Export leaks memory' })).toBeVisible();
+      await expect(canvas.locator('.react-flow__edge')).toHaveCount(2);
+      // Each summary says it is closed, and the group that is open says it is open.
+      await expect(canvas.locator('button[data-fold][aria-expanded="false"]')).toHaveCount(4);
+      await expect(canvas.locator('button[data-fold][aria-expanded="true"]')).toHaveCount(1);
+      await expectNoSeriousViolations(page, '[aria-label="Board"]');
+      // Every group open, with the lines to the things inside them.
+      for (const name of [documents, SUMMARY.commits, SUMMARY.first, SUMMARY.plan]) await openGroup(page, name);
+      await expect(canvas.getByRole('article', { name: 'Draft notes' })).toBeVisible();
+      await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
+      await expect(canvas.locator('button[data-fold][aria-expanded="false"]')).toHaveCount(0);
+      await expect(canvas.locator('button[data-fold][aria-expanded="true"]')).toHaveCount(5);
       await expect(canvas.locator('.react-flow__edge')).toHaveCount(2);
       await canvas.getByRole('button', { name: 'Archived (2)' }).click();
       await expect(canvas.getByRole('article', { name: 'The spec' })).toBeVisible();
