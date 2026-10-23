@@ -120,6 +120,11 @@ export type DocumentData = {
   summary: string;
   /** A superseded document is still there, but no longer what the work follows. */
   dimmed: boolean;
+  /** The id of the source document, to read it by. */
+  sourceId: string;
+  /** What it is kept as, in the workspace (a stored text document), or the link it stands for. A document has one of the two. */
+  filename?: string;
+  url?: string;
 };
 
 export type CommitData = { sha: string; subject: string; author: string; at: string };
@@ -429,7 +434,10 @@ export function boardLayout({ plan, documents, news, board, showArchived = false
   // First the ids of everything the board draws by itself, so a card's line can find it by prefix.
   const documentCards: LaneCard[] = (documents ?? []).map((document) => ({
     id: uniqueId(`document:${document.id}`, taken), type: 'document' as const, height: BOARD_SIZE.document,
-    data: { title: document.title, role: document.role, status: document.status, summary: document.summary, dimmed: document.status === 'superseded' },
+    data: {
+      title: document.title, role: document.role, status: document.status, summary: document.summary, dimmed: document.status === 'superseded',
+      sourceId: document.id, ...(document.filename ? { filename: document.filename } : {}), ...(document.url ? { url: document.url } : {}),
+    },
   }));
   const frames: CheckpointNode[] = [];
   if (plan) {

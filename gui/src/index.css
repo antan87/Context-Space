@@ -682,8 +682,21 @@
 .board-flow .react-flow__minimap-node.board-mini-checkpoint.board-mini-done { fill: var(--success); }
 
 /* React Flow gives a node that cannot be dragged or picked no pointer events, so a drag that starts on a card pans the
-   board. Its buttons need them back, or a click goes through them. */
-.board-flow .react-flow__node button { pointer-events: auto; }
+   board. Its buttons and links need them back, or a click goes through them. */
+.board-flow .react-flow__node :is(button, a) { pointer-events: auto; }
+
+/* The Markdown text of a note or a file card, at the size the card has always shown its text. The typography of documents
+   is not for a card, which has a fixed height: no margins but a small gap, line breaks as written, and the colour of the card. */
+.board-text .prose { font-size: inherit; line-height: inherit; color: inherit; }
+.board-text :is(p, li) { white-space: pre-line; }
+.board-text :is(p, ul, ol, blockquote, table) { margin-block: 0; }
+.board-text .prose > * + * { margin-top: 4px; }
+.board-text :is(ul, ol) { padding-inline-start: 1.25em; }
+.board-text li { margin-block: 0; padding-inline-start: 0; }
+.board-text :is(li, blockquote) > p { margin-block: 0; }
+.board-text blockquote { padding-inline-start: 0.75em; }
+.board-text :has(> pre) { margin-block: 4px; }
+.board-text pre { padding: 6px 8px; font-size: 11px; line-height: 16px; }
 
 /* A grab cursor on the board itself and on whatever can be dragged (the library gives those nodes theirs). A node that the
    keyboard can move shows its focus on the card inside it, which has the rounded corners. */

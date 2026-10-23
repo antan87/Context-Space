@@ -837,7 +837,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           {visitedSections.has('board') && !archived && (
             <div role="region" aria-label={SECTION_LABELS.board} hidden={subTab !== 'board'} className="min-h-0 flex-1">
               <Suspense fallback={<div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board</div>}>
-                <BoardSection key={selected.branchName} workspaceId={selected.branchName} active={subTab === 'board'} />
+                <BoardSection key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} active={subTab === 'board'} />
               </Suspense>
             </div>
           )}

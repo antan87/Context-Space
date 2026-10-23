@@ -233,6 +233,22 @@ describe('document cards', () => {
     expect(documents(nodes)[1].data.status).toBe('superseded');
   });
 
+  it('carry where the document is kept, or the link it stands for, so it can be opened; and nothing else for one with neither', () => {
+    const kept = open({ documents: [
+      doc('Kept', { filename: 'contextspace-document-1.md' }),
+      doc('Linked', { url: 'https://example.com/spec' }),
+      doc('Neither'),
+    ] });
+    const [first, second, third] = documents(kept).map((card) => card.data);
+    expect(first).toMatchObject({ filename: 'contextspace-document-1.md', sourceId: 'kept' });
+    expect(second).toMatchObject({ sourceId: 'linked' });
+    expect(first).not.toHaveProperty('url');
+    expect(second).toMatchObject({ url: 'https://example.com/spec' });
+    expect(second).not.toHaveProperty('filename');
+    expect(third).not.toHaveProperty('filename');
+    expect(third).not.toHaveProperty('url');
+  });
+
   it('stack inside their lane without overlapping', () => {
     const [lane] = lanes(nodes);
     const cards = documents(nodes);

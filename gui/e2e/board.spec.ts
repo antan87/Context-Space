@@ -92,6 +92,21 @@ async function routeMoves(page: Page, board: ReturnType<typeof boardFile>) {
   return state;
 }
 
+/**
+ * The board with its commits held back until the spec lets them go (the function it returns), so the board is open and the user can act
+ * before they arrive, however long that takes.
+ */
+async function routeLateCommits(page: Page) {
+  await routeBoard(page);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/api/workspace/demo/news', async (route) => {
+    await gate;
+    await route.fulfill({ json: whatsNew({ commits: [{ repo: 'api', more: 0, commits: [{ sha: 'a91f2e0c4d5b', author: 'Anna', subject: 'Write the CSV writer', at: minutesAgo(30) }] }] }) });
+  });
+  return release;
+}
+
 /** A one-pixel PNG, for the pictures of file cards. */
 const PICTURE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 async function routePictures(page: Page) {
@@ -139,11 +154,18 @@ async function isWithin(inner: Locator, outer: Locator) {
   return Boolean(a && b && a.x >= b.x && a.y >= b.y && a.x + a.width <= b.x + b.width && a.y + a.height <= b.y + b.height);
 }
 
-/** Waits until every part has arrived and the view has stopped moving: it moves by itself to take in a part that comes late, and a drag is measured from rest. */
+/**
+ * Waits until every part has arrived and the view has stopped moving: it moves by itself to take in a part that comes late, and a drag is
+ * measured from rest. A move shows over the frames that are drawn, so the view is read before and after a few of them: two reads one
+ * after the other can both come before a move that is about to start.
+ */
 async function viewAtRest(page: Page) {
   await expect(board(page).getByText(/^Still loading/)).toHaveCount(0);
-  let seen = JSON.stringify(await transformOf(page));
-  await expect.poll(async () => { const now = JSON.stringify(await transformOf(page)); const still = now === seen; seen = now; return still; }, { intervals: [120] }).toBe(true);
+  await expect.poll(async () => {
+    const before = JSON.stringify(await transformOf(page));
+    await frames(page, 6);
+    return JSON.stringify(await transformOf(page)) === before;
+  }, { intervals: [120] }).toBe(true);
 }
 /** Waits until the browser has drawn that many frames: whatever was going to happen in them has happened. */
 const frames = (page: Page, count = 6) => page.evaluate((total) => new Promise<void>((resolve) => {
@@ -420,14 +442,6 @@ test.describe('Board', () => {
     expect(await canvas.locator('.react-flow__controls').evaluate((element) => (element as HTMLElement & { marked?: boolean }).marked)).toBe(true);
   });
 
-  /** The commits, a second and a half late, so the board is open and the user can act before they arrive. */
-  async function routeLateCommits(page: Page) {
-    await routeBoard(page);
-    await page.route('**/api/workspace/demo/news', async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      await route.fulfill({ json: whatsNew({ commits: [{ repo: 'api', more: 0, commits: [{ sha: 'a91f2e0c4d5b', author: 'Anna', subject: 'Write the CSV writer', at: minutesAgo(30) }] }] }) });
-    });
-  }
   /** Waits until the browser has drawn a few frames, which is when a move of the view that was going to start has started. */
   const afterSomeFrames = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => {
     let frames = 0;
@@ -436,7 +450,7 @@ test.describe('Board', () => {
   }));
 
   test('leaves the view where the user put it when a part arrives after they moved it', async ({ page }) => {
-    await routeLateCommits(page);
+    const release = await routeLateCommits(page);
     const answered = page.waitForResponse('**/api/workspace/demo/news');
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
@@ -450,6 +464,7 @@ test.describe('Board', () => {
     // Still before the commits: the user moved the view first.
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     const moved = await transformOf(page);
+    release();
     await answered;
     await expect(summary(page, LATE_COMMITS)).toBeAttached();
     await afterSomeFrames(page);
@@ -458,7 +473,7 @@ test.describe('Board', () => {
 
   test('keeps following the work after a press on a card\'s button or the archived toggle, which do not move the view', async ({ page }) => {
     const body = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long note.`).join('\n');
-    await routeLateCommits(page);
+    const release = await routeLateCommits(page);
     // The long note stands in view under the checkpoints: when the focus comes back to its button, the card is not out of view.
     await routeCards(page, boardFile({ cards: [boardNote(1, { archived: true }), boardNote(2, { title: 'A long note', body })], positions: { [boardId(2)]: { x: 800, y: 240 } } }));
     await page.goto('/#/workspaces/demo/board');
@@ -474,12 +489,13 @@ test.describe('Board', () => {
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    release();
     // The view still moves to take in the commits that come: they end up whole on screen.
     await expect.poll(() => isWithin(summary(page, LATE_COMMITS), canvas.locator('.react-flow'))).toBe(true);
   });
 
   test('does not take the view from the user when a group opens or folds: the view still follows a part that arrives later', async ({ page }) => {
-    await routeLateCommits(page);
+    const release = await routeLateCommits(page);
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
@@ -487,6 +503,7 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     const opened = await transformOf(page);
+    release();
     // The view moves to take in the commits that come, though a group was opened meanwhile: it was not the user taking the view.
     await expect(summary(page, LATE_COMMITS)).toBeAttached();
     await expect.poll(async () => (await transformOf(page)).x).not.toBe(opened.x);
@@ -494,7 +511,7 @@ test.describe('Board', () => {
   });
 
   test('does not zoom the view, or take it from the user, when a summary is double-clicked', async ({ page }) => {
-    await routeLateCommits(page);
+    const release = await routeLateCommits(page);
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
@@ -509,6 +526,7 @@ test.describe('Board', () => {
     const opened = await transformOf(page);
     expect(opened.scale).toBe(before.scale);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    release();
     // It did not count as the user taking the view: the view still moves to take in the commits that come.
     await expect(summary(page, LATE_COMMITS)).toBeAttached();
     await expect.poll(async () => (await transformOf(page)).x).not.toBe(opened.x);
@@ -516,7 +534,7 @@ test.describe('Board', () => {
   });
 
   test('takes the view from the user who pans the canvas right after opening a group, so it stays where they put it', async ({ page }) => {
-    await routeLateCommits(page);
+    const release = await routeLateCommits(page);
     const answered = page.waitForResponse('**/api/workspace/demo/news');
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
@@ -531,6 +549,7 @@ test.describe('Board', () => {
     await page.mouse.up();
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     const moved = await transformOf(page);
+    release();
     await answered;
     await expect(summary(page, LATE_COMMITS)).toBeAttached();
     await afterSomeFrames(page);
@@ -680,26 +699,6 @@ test.describe('Board cards', () => {
     const gone = canvas.getByRole('article', { name: 'A picture that is gone' });
     await expect(gone).toContainText('Picture');
     await expect(gone.getByRole('img')).toHaveCount(0);
-  });
-
-  test('opens a file where the app opens documents: in Docs', async ({ page }) => {
-    await routeBoard(page);
-    const documents = [{ name: 'overview.html', kind: 'html', size: 120, modifiedAt: '2026-10-22T00:00:00.000Z' }];
-    const opened: string[] = [];
-    await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents } }));
-    await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
-      const name = new URL(route.request().url()).searchParams.get('name') ?? '';
-      opened.push(name);
-      return route.fulfill({ json: { name, kind: 'html', size: 120, modifiedAt: '2026-10-22T00:00:00.000Z', content: '<!doctype html><html><body><h1>The overview</h1></body></html>' } });
-    });
-    await routeCards(page, boardFile({ cards: [boardFileCard(1, 'overview.html', { title: 'Overview page', description: 'Start with the diagram.' })] }));
-    await page.goto('/#/workspaces/demo/board');
-    // The card stands in the band under the checkpoints, which may be out of view: the keyboard reaches it all the same.
-    await board(page).getByRole('article', { name: 'Overview page' }).getByRole('button', { name: 'Open Overview page' }).focus();
-    await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(/#\/workspaces\/demo\/documents$/);
-    await expect(page.getByTitle('Preview of overview.html')).toBeVisible();
-    expect(opened).toContain('overview.html');
   });
 
   test('marks a pinned card, and keeps an archived one out of sight until it is asked for', async ({ page }) => {
@@ -910,6 +909,546 @@ test.describe('Board cards', () => {
     await page.goto('/#/workspaces/demo/board');
     await expect(board(page).getByRole('article', { name: 'Fine' })).toBeVisible();
     await expect(board(page).getByRole('article', { name: /Sneak/ })).toHaveCount(0);
+  });
+});
+
+test.describe('Board, reader', () => {
+  const MODIFIED = '2026-10-22T00:00:00.000Z';
+  /** The workspace folder, so a link can name a file by its full path. */
+  const ROOT = workspace.workspacePath;
+  const REQUIREMENTS = 'contextspace-document-1.md';
+  const markdown = (content: string) => ({ kind: 'markdown', content });
+  const FILES: Record<string, { kind: string; content?: string }> = {
+    'docs/design.md': markdown('# The queue design\n\nLarge exports run in a background job.'),
+    'docs/spec.md': markdown('# The CSV spec\n\nOne row per line.'),
+    'overview.html': { kind: 'html', content: '<!doctype html><html><body><h1>The overview page</h1><script>window.unsafe = true</script></body></html>' },
+  };
+
+  /** What the work route reads source documents as, by id: the text kept for them. */
+  const SOURCES: Record<string, string> = {
+    'export-requirements': '# Customers export reports\n\nUp to 50,000 rows as CSV.\n\nSee [the design](docs/design.md).',
+  };
+
+  const reader = (page: Page) => board(page).getByRole('region', { name: 'Reader', exact: true });
+  const readerTitle = (page: Page, name: string) => reader(page).getByRole('heading', { name, level: 2, exact: true });
+  const card = (page: Page, title: string) => board(page).getByRole('article', { name: title, exact: true });
+  const opener = (page: Page, title: string) => card(page, title).getByRole('button', { name: `Open ${title}`, exact: true });
+
+  /** The documents panel's preview request, answered from FILES; the names that were asked for are kept. */
+  async function routeFiles(page: Page) {
+    const asked: string[] = [];
+    await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
+      const name = new URL(route.request().url()).searchParams.get('name') ?? '';
+      asked.push(name);
+      const file = FILES[name];
+      return file ? route.fulfill({ json: { name, size: 120, modifiedAt: MODIFIED, ...file } }) : route.fulfill({ status: 404, json: { error: 'No such document.' } });
+    });
+    await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: Object.entries(FILES).map(([name, file]) => ({ name, kind: file.kind, size: 120, modifiedAt: MODIFIED })) } }));
+    return asked;
+  }
+  /**
+   * The work route that reads a source document through the storage port, answered from SOURCES; the ids that were asked for are kept.
+   * A source document is not read from the folder by the preview request, which is for the files of the workspace.
+   */
+  async function routeSources(page: Page) {
+    const read: string[] = [];
+    await page.route('**/api/workspace/demo/work/documents/*', (route) => {
+      const id = new URL(route.request().url()).pathname.split('/').pop() ?? '';
+      read.push(id);
+      const content = SOURCES[id];
+      return content === undefined
+        ? route.fulfill({ status: 400, json: { error: 'Source document not found.' } })
+        : route.fulfill({ json: { document: document('Export requirements', { filename: REQUIREMENTS }), content, location: `${ROOT}/${REQUIREMENTS}` } });
+    });
+    return read;
+  }
+  /** The board of the specs: a source document that is kept as a file, and a few cards, one of each kind the reader opens. */
+  async function openBoard(page: Page, cards: Array<Record<string, unknown>> = [], positions: Record<string, { x: number; y: number }> = FILE_PLACES) {
+    await routeBoard(page);
+    await routeWork(page, [
+      document('Export requirements', { role: 'requirements', filename: REQUIREMENTS, summary: 'Customers export their reports as CSV.' }),
+      document('Pricing sheet', { url: 'https://example.com/pricing', summary: 'Kept on the web.' }),
+      document('Loose notes', { summary: 'Neither a file nor a link.' }),
+    ]);
+    await routeCards(page, boardFile({ cards, positions }));
+    await routeSources(page);
+    const asked = await routeFiles(page);
+    await page.goto('/#/workspaces/demo/board');
+    await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    await viewAtRest(page);
+    return asked;
+  }
+  const FILE_CARDS = [
+    boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec', description: 'What a row looks like.' }),
+    boardFileCard(2, 'overview.html', { title: 'Overview page', description: 'Start with the diagram.' }),
+  ];
+  /** Under the checkpoints, in sight when the board opens: the first stands where the reader will not be, the second where it will. */
+  const FILE_PLACES = { [boardId(1)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 } };
+  const DOCUMENTS = /^Documents, 3 documents/;
+
+  test('opens a document card in a reader beside the board, with its content, and the board stays in view', async ({ page }) => {
+    const asked = await openBoard(page, FILE_CARDS);
+    const sources = await routeSources(page);
+    await openGroup(page, DOCUMENTS);
+    await expect(reader(page)).toHaveCount(0);
+    await opener(page, 'Export requirements').click();
+    await expect(reader(page)).toBeVisible();
+    await expect(readerTitle(page, 'Export requirements')).toBeVisible();
+    await expect(reader(page).getByRole('heading', { name: 'Customers export reports', level: 1 })).toBeVisible();
+    await expect(reader(page)).toContainText('Up to 50,000 rows as CSV.');
+    // A source document is read through the work route, as the rest of the app reads them, and not from the folder by the preview request.
+    expect([...new Set(sources)]).toEqual(['export-requirements']);
+    expect(asked).toEqual([]);
+    await expect(reader(page).getByRole('link', { name: 'Download', exact: true })).toHaveCount(0);
+    // It is on the right, about 45% of the section and not under 360 px; the canvas is still there, on its left.
+    const [section, panel, canvas] = await Promise.all([board(page).boundingBox(), reader(page).boundingBox(), board(page).locator('.react-flow').boundingBox()]);
+    expect(Math.abs(panel!.width - section!.width * 0.45)).toBeLessThanOrEqual(2);
+    expect(panel!.width).toBeGreaterThanOrEqual(360);
+    expect(Math.abs(panel!.x + panel!.width - (section!.x + section!.width))).toBeLessThanOrEqual(1);
+    expect(canvas!.x + canvas!.width).toBeLessThanOrEqual(panel!.x + 1);
+    await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    await expect(board(page).getByRole('button', { name: 'Zoom in' })).toBeVisible();
+  });
+
+  test('opens a file card in the reader, and another card replaces what it shows', async ({ page }) => {
+    const asked = await openBoard(page, FILE_CARDS);
+    await opener(page, 'The CSV spec').click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
+    // A file of the workspace can be downloaded; it is read by the documents panel's preview request.
+    await expect(reader(page).getByRole('link', { name: 'Download', exact: true })).toHaveAttribute('href', /name=docs%2Fspec\.md&download=1$/);
+    await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
+    // The second card may be out of sight beside the reader: the keyboard brings it into view.
+    await opener(page, 'Overview page').focus();
+    await page.keyboard.press('Enter');
+    await expect(readerTitle(page, 'Overview page')).toBeVisible();
+    await expect(readerTitle(page, 'The CSV spec')).toHaveCount(0);
+    await expect(reader(page)).toHaveCount(1);
+    expect([...new Set(asked)]).toEqual(['docs/spec.md', 'overview.html']);
+  });
+
+  test('keeps a page\'s HTML out of the board: it is drawn in the sandboxed frame', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    await opener(page, 'Overview page').click();
+    const frame = reader(page).locator('iframe[title="Preview of overview.html"]');
+    await expect(frame).toBeVisible();
+    await expect(frame).toHaveAttribute('sandbox', '');
+    await expect(page.frameLocator('iframe[title="Preview of overview.html"]').getByRole('heading', { name: 'The overview page' })).toBeVisible();
+    // Neither the page's text nor its script is in the board's own page.
+    await expect(board(page).getByText('The overview page')).toHaveCount(0);
+    expect(await page.evaluate(() => 'unsafe' in window)).toBe(false);
+  });
+
+  test('marks the card that is open in the reader, and only that one', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    await expect(board(page).locator('[aria-current="true"]')).toHaveCount(0);
+    await opener(page, 'The CSV spec').click();
+    await expect(card(page, 'The CSV spec')).toHaveAttribute('aria-current', 'true');
+    await expect(card(page, 'The CSV spec')).toHaveClass(/ring-2/);
+    await opener(page, 'Overview page').focus();
+    await page.keyboard.press('Enter');
+    await expect(card(page, 'Overview page')).toHaveAttribute('aria-current', 'true');
+    await expect(card(page, 'The CSV spec')).not.toHaveAttribute('aria-current', /.*/);
+    await reader(page).getByRole('button', { name: 'Close' }).click();
+    await expect(board(page).locator('[aria-current="true"]')).toHaveCount(0);
+  });
+
+  test('opens a document that is a link on the web, and leaves one that is neither a file nor a link alone', async ({ page }) => {
+    await openBoard(page);
+    await openGroup(page, DOCUMENTS);
+    const link = card(page, 'Pricing sheet').getByRole('link', { name: 'Open Pricing sheet (opens outside the app)' });
+    await expect(link).toHaveAttribute('href', 'https://example.com/pricing');
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    await expect(card(page, 'Loose notes').getByRole('button')).toHaveCount(0);
+    await expect(card(page, 'Loose notes').getByRole('link')).toHaveCount(0);
+    await expect(card(page, 'Export requirements').getByRole('button', { name: 'Open Export requirements' })).toBeVisible();
+  });
+
+  test('takes the keyboard in when it opens, and gives it back to the card\'s button when Escape or Close closes it', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    const button = opener(page, 'The CSV spec');
+    await button.focus();
+    await page.keyboard.press('Enter');
+    await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(reader(page)).toHaveCount(0);
+    await expect(button).toBeFocused();
+    // The mouse opens it, and Close closes it.
+    await button.click();
+    await expect(reader(page)).toBeVisible();
+    await reader(page).getByRole('button', { name: 'Close' }).click();
+    await expect(reader(page)).toHaveCount(0);
+    await expect(button).toBeFocused();
+    // Escape works from the board too, and from a button of the reader.
+    await button.click();
+    await board(page).getByRole('application').focus();
+    await page.keyboard.press('Escape');
+    await expect(reader(page)).toHaveCount(0);
+    await button.click();
+    await reader(page).getByRole('button', { name: 'Open in Docs' }).focus();
+    await page.keyboard.press('Escape');
+    await expect(reader(page)).toHaveCount(0);
+    await expect(button).toBeFocused();
+  });
+
+  test('leaves Escape to a dialog that is open over the board', async ({ page }) => {
+    const body = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long note.`).join('\n');
+    await openBoard(page, [FILE_CARDS[0], boardNote(3, { title: 'A long note', body })], { [boardId(1)]: FILE_PLACES[boardId(1)], [boardId(3)]: { x: 1100, y: 240 } });
+    await opener(page, 'The CSV spec').click();
+    await board(page).getByRole('button', { name: 'Read all of A long note' }).focus();
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'A long note' });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(reader(page)).toBeVisible();
+  });
+
+  test('goes to the Docs tab with "Open in Docs", with the file open there', async ({ page }) => {
+    const asked = await openBoard(page, FILE_CARDS);
+    await opener(page, 'Overview page').click();
+    await expect(readerTitle(page, 'Overview page')).toBeVisible();
+    await reader(page).getByRole('button', { name: 'Open in Docs' }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/demo\/documents$/);
+    await expect(page.getByTitle('Preview of overview.html').first()).toBeVisible();
+    expect(asked).toContain('overview.html');
+  });
+
+  test('says why a file could not be read, and reads it again on request', async ({ page }) => {
+    await openBoard(page, [boardFileCard(3, 'docs/gone.md', { title: 'A file that is gone' })], { [boardId(3)]: { x: 800, y: 240 } });
+    let there = false;
+    await page.route('**/api/workspace/demo/documents/preview?*', (route) => (there
+      ? route.fulfill({ json: { name: 'docs/gone.md', size: 12, modifiedAt: MODIFIED, ...markdown('# Back again') } })
+      : route.fulfill({ status: 404, json: { error: 'No such document.' } })));
+    await opener(page, 'A file that is gone').click();
+    await expect(reader(page).getByRole('alert')).toContainText('No such document.');
+    there = true;
+    await reader(page).getByRole('button', { name: 'Retry preview' }).click();
+    await expect(reader(page).getByRole('heading', { name: 'Back again', level: 1 })).toBeVisible();
+    await expect(reader(page).getByRole('alert')).toHaveCount(0);
+  });
+
+  test('follows a link in the document to another file of the workspace, in the same reader', async ({ page }) => {
+    const asked = await openBoard(page);
+    await openGroup(page, DOCUMENTS);
+    await opener(page, 'Export requirements').click();
+    await reader(page).getByRole('link', { name: 'the design' }).click();
+    await expect(readerTitle(page, 'design.md')).toBeVisible();
+    // The source document came from the work route; the file it links to is a plain file of the workspace.
+    expect([...new Set(asked)]).toEqual(['docs/design.md']);
+    await expect(reader(page).getByRole('heading', { name: 'The queue design', level: 1 })).toBeVisible();
+    // It was not a card that was opened, so no card is marked; and the keyboard goes back to the card that began it.
+    await expect(board(page).locator('[aria-current="true"]')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(opener(page, 'Export requirements')).toBeFocused();
+  });
+
+  test('covers the canvas where the section is too narrow for both, and has a Close that gives it back', async ({ page }) => {
+    await page.setViewportSize({ width: 820, height: 900 });
+    await openBoard(page, FILE_CARDS);
+    // On a small screen the card is out of sight below the checkpoints: the keyboard brings it into view.
+    const button = opener(page, 'The CSV spec');
+    await button.focus();
+    await page.keyboard.press('Enter');
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    const [body, panel] = await Promise.all([board(page).locator('.react-flow').boundingBox(), reader(page).boundingBox()]);
+    expect(Math.abs(panel!.width - body!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(panel!.x - body!.x)).toBeLessThanOrEqual(1);
+    // The canvas waits under it, out of the keyboard's reach.
+    await expect(board(page).locator('[inert]')).toHaveCount(1);
+    await reader(page).getByRole('button', { name: 'Close' }).click();
+    await expect(reader(page)).toHaveCount(0);
+    await expect(board(page).locator('[inert]')).toHaveCount(0);
+    await expect(button).toBeFocused();
+    await expect(card(page, 'The CSV spec')).toBeInViewport();
+  });
+
+  test('moves the view only as far as it takes to keep the opened card in sight, and does not move the card', async ({ page }) => {
+    // The card stands in the right of the view, where the reader will be.
+    await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], { [boardId(1)]: { x: 1000, y: 330 } });
+    await fitted(page);
+    const canvas = board(page).locator('.react-flow');
+    const [before, area] = await Promise.all([card(page, 'The CSV spec').boundingBox(), canvas.boundingBox()]);
+    expect(before!.x + before!.width).toBeGreaterThan(area!.x + area!.width * 0.55);
+    const place = await canvasPosition(page, boardId(1));
+    const view = await transformOf(page);
+    await opener(page, 'The CSV spec').click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    const free = (await reader(page).boundingBox())!;
+    // The view glides there; it has arrived when the card is whole beside the reader.
+    await expect.poll(async () => { const box = (await card(page, 'The CSV spec').boundingBox())!; return box.x + box.width <= free.x; }).toBe(true);
+    await viewAtRest(page);
+    const after = (await card(page, 'The CSV spec').boundingBox())!;
+    expect(after.x).toBeGreaterThanOrEqual(area!.x);
+    // Only the left-right place of the view changed, by as little as it took; the zoom and the card's own place did not.
+    const moved = await transformOf(page);
+    expect(moved.scale).toBeCloseTo(view.scale, 5);
+    expect(moved.y).toBeCloseTo(view.y, 1);
+    expect(moved.x).toBeLessThan(view.x);
+    expect(await canvasPosition(page, boardId(1))).toEqual(place);
+    // Closing does not move it back: the view is the user's.
+    await reader(page).getByRole('button', { name: 'Close' }).click();
+    await viewAtRest(page);
+    expect(await transformOf(page)).toEqual(moved);
+  });
+
+  test('leaves the view alone when the opened card is in sight beside the reader already', async ({ page }) => {
+    await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], { [boardId(1)]: { x: 300, y: 330 } });
+    await fitted(page);
+    const view = await transformOf(page);
+    await opener(page, 'The CSV spec').click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    await frames(page);
+    expect(await transformOf(page)).toEqual(view);
+  });
+
+  test('is not the user taking the view: it still follows a part that arrives after the reader opened and closed', async ({ page }) => {
+    const release = await routeLateCommits(page);
+    await routeCards(page, boardFile({ cards: [FILE_CARDS[0]], positions: { [boardId(1)]: { x: 800, y: 240 } } }));
+    await routeFiles(page);
+    await page.goto('/#/workspaces/demo/board');
+    const canvas = board(page);
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    await expect.poll(() => isWithin(card(page, 'The CSV spec'), canvas.locator('.react-flow'))).toBe(true);
+    await opener(page, 'The CSV spec').click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(reader(page)).toHaveCount(0);
+    await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    release();
+    await expect(summary(page, LATE_COMMITS)).toBeAttached();
+    await expect.poll(() => isWithin(summary(page, LATE_COMMITS), canvas.locator('.react-flow'))).toBe(true);
+  });
+
+  test('leaves the view where the user put it when a link in the reader opens another file', async ({ page }) => {
+    await openBoard(page);
+    await openGroup(page, DOCUMENTS);
+    await opener(page, 'Export requirements').click();
+    await expect(reader(page).getByRole('heading', { name: 'Customers export reports', level: 1 })).toBeVisible();
+    // The user pans away from the card that was opened, by dragging the empty canvas, until it is out of sight.
+    const area = (await board(page).locator('.react-flow').boundingBox())!;
+    await page.mouse.move(area.x + 60, area.y + area.height - 30);
+    await page.mouse.down();
+    await page.mouse.move(area.x + 60, area.y - 20, { steps: 8 });
+    await page.mouse.up();
+    await viewAtRest(page);
+    expect(await isWithin(card(page, 'Export requirements'), board(page).locator('.react-flow'))).toBe(false);
+    const moved = await transformOf(page);
+    await reader(page).getByRole('link', { name: 'the design' }).click();
+    await expect(readerTitle(page, 'design.md')).toBeVisible();
+    await frames(page, 12);
+    expect(await transformOf(page)).toEqual(moved);
+  });
+
+  test('moves the keyboard to the reader when the window narrows until it covers the canvas, and Escape still closes it', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    const button = opener(page, 'The CSV spec');
+    await button.click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    // The keyboard is on the card again (the reader took it when it opened).
+    await button.focus();
+    await expect(button).toBeFocused();
+    await expect(board(page).locator('[inert]')).toHaveCount(0);
+    // The canvas is out of reach under the reader: the card that had the keyboard cannot keep it.
+    await page.setViewportSize({ width: 820, height: 900 });
+    await expect(board(page).locator('[inert]')).toHaveCount(1);
+    await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(reader(page)).toHaveCount(0);
+    await expect(board(page).locator('[inert]')).toHaveCount(0);
+    await expect(button).toBeFocused();
+  });
+
+  test('leaves the keyboard where it is when the canvas comes to be covered while it is outside the board', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    await opener(page, 'The CSV spec').click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    // The sidebar's field goes when the window narrows; the workspace header stays.
+    const field = page.getByRole('button', { name: /^Copy branch name/ });
+    await field.focus();
+    await expect(field).toBeFocused();
+    await page.setViewportSize({ width: 820, height: 900 });
+    await expect(board(page).locator('[inert]')).toHaveCount(1);
+    await frames(page, 30);
+    await expect(field).toBeFocused();
+    await expect(readerTitle(page, 'The CSV spec')).not.toBeFocused();
+  });
+
+  test('does not take the keyboard from the reader when the canvas comes to be covered while it is on one of its buttons', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    await opener(page, 'The CSV spec').click();
+    const docs = reader(page).getByRole('button', { name: 'Open in Docs' });
+    await docs.focus();
+    await page.setViewportSize({ width: 820, height: 900 });
+    await expect(board(page).locator('[inert]')).toHaveCount(1);
+    await expect(docs).toBeFocused();
+  });
+
+  test('closes with Escape when the keyboard has dropped to the page itself', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    const button = opener(page, 'The CSV spec');
+    await button.click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await expect(page.locator('body')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(reader(page)).toHaveCount(0);
+  });
+
+  test('does not close the reader behind another section when Escape is pressed there', async ({ page }) => {
+    await openBoard(page, FILE_CARDS);
+    await opener(page, 'The CSV spec').click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+    await workspaceNav(page).getByRole('link', { name: 'Plan' }).click();
+    await expect(board(page)).toBeHidden();
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Escape');
+    // The board stays mounted behind the other sections, with its reader as it was.
+    await workspaceNav(page).getByRole('link', { name: 'Board' }).click();
+    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+  });
+
+  test.describe('links in text', () => {
+    const NOTES = [
+      boardNote(1, { title: 'Links', body: 'Read [the CSV spec](https://example.com/spec) and [the file](docs/spec.md), or [by its full path](' + ROOT + '/docs/spec.md) or [as a file address](file://' + ROOT + '/docs/spec.md).' }),
+      boardNote(2, { title: 'Not links', body: '[click me](javascript:alert(1)) [mail me](mailto:me@example.com) [data](data:text/html,hi) [ftp](ftp://example.com/x) [up](../../secret.md) [here](#top) ![chart](https://example.com/chart.png)' }),
+      boardFileCard(3, 'docs/design.md', { title: 'The design', description: 'Per [the queue design](https://example.com/queue) and **bold** text.' }),
+    ];
+    const PLACES = { [boardId(1)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 }, [boardId(3)]: { x: 800, y: 560 } };
+    async function openNotes(page: Page) {
+      // A new tab is not the page: the context's routes cover it, and nothing reaches the network.
+      await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Example</title><p>An example page.</p>' }));
+      return openBoard(page, NOTES, PLACES);
+    }
+
+    test('opens an https link in a new tab, safely, without moving the card or the view', async ({ page }) => {
+      await openNotes(page);
+      const link = card(page, 'Links').getByRole('link', { name: /the CSV spec/ });
+      await expect(link).toHaveAttribute('href', 'https://example.com/spec');
+      await expect(link).toHaveAttribute('target', '_blank');
+      await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+      // A press on it is neither a drag nor a pan.
+      await expect(link).toHaveClass(/nodrag/);
+      await expect(link).toHaveClass(/nopan/);
+      const place = await canvasPosition(page, boardId(1));
+      const view = await transformOf(page);
+      const [popup] = await Promise.all([page.waitForEvent('popup'), link.click()]);
+      expect(popup.url()).toBe('https://example.com/spec');
+      // The tab was answered by the test's own route: nothing went to the network.
+      await expect(popup).toHaveTitle('Example');
+      await popup.close();
+      expect(await canvasPosition(page, boardId(1))).toEqual(place);
+      expect(await transformOf(page)).toEqual(view);
+      await expect(reader(page)).toHaveCount(0);
+      // The link on a file card's description works the same way.
+      await expect(card(page, 'The design').getByRole('link', { name: /the queue design/ })).toHaveAttribute('href', 'https://example.com/queue');
+      await expect(card(page, 'The design').locator('strong')).toHaveText('bold');
+    });
+
+    test('does not drag the card when a link is pressed and the pointer moves a little', async ({ page }) => {
+      await openNotes(page);
+      const link = card(page, 'Links').getByRole('link', { name: /the CSV spec/ });
+      const place = await canvasPosition(page, boardId(1));
+      const box = (await link.boundingBox())!;
+      await page.mouse.move(box.x + 4, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 24, box.y + box.height / 2 + 20, { steps: 4 });
+      await page.mouse.up();
+      await frames(page);
+      expect(await canvasPosition(page, boardId(1))).toEqual(place);
+    });
+
+    test('opens a link to a file of the workspace in the reader, by a relative path, a full path or a file address', async ({ page }) => {
+      const asked = await openNotes(page);
+      for (const text of ['the file', 'by its full path', 'as a file address']) {
+        await card(page, 'Links').getByRole('link', { name: text }).click();
+        await expect(readerTitle(page, 'spec.md')).toBeVisible();
+        await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
+        await reader(page).getByRole('button', { name: 'Close' }).click();
+        await expect(reader(page)).toHaveCount(0);
+      }
+      expect(new Set(asked)).toEqual(new Set(['docs/spec.md']));
+      // The keyboard went back to the link that was pressed.
+      await expect(card(page, 'Links').getByRole('link', { name: 'as a file address' })).toBeFocused();
+    });
+
+    test('opens a link from the keyboard, with Enter', async ({ page }) => {
+      await openNotes(page);
+      const link = card(page, 'Links').getByRole('link', { name: 'the file' });
+      await link.focus();
+      await page.keyboard.press('Enter');
+      await expect(readerTitle(page, 'spec.md')).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(link).toBeFocused();
+    });
+
+    test('does not make a link of any other scheme, of a path out of the workspace, or of a picture', async ({ page }) => {
+      await openNotes(page);
+      const note = card(page, 'Not links');
+      await expect(note).toContainText('click me');
+      await expect(note).toContainText('mail me');
+      await expect(note.getByRole('link')).toHaveCount(0);
+      await expect(note.locator('a')).toHaveCount(0);
+      await expect(note.locator('img')).toHaveCount(0);
+      await expect(note).toContainText('[image: chart]');
+      await expect(board(page).locator('a[href^="javascript:" i], a[href^="mailto:" i], a[href^="data:" i], a[href^="ftp:" i], a[href^="#"]')).toHaveCount(0);
+      // Pressing the words does nothing.
+      await note.getByText('click me').click();
+      await expect(reader(page)).toHaveCount(0);
+      await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
+    });
+
+    test('shows the whole text with working links, and a link to a file gives the dialog\'s place to the reader', async ({ page }) => {
+      const long = Array.from({ length: 12 }, (_, index) => `Line ${index + 1} of what was seen.`).join('\n');
+      await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Example</title>' }));
+      await openBoard(page, [boardNote(1, { title: 'A long note', body: `${long}\nThen [the spec](docs/spec.md) and [the web](https://example.com/end).` })], { [boardId(1)]: { x: 800, y: 240 } });
+      const readAll = board(page).getByRole('button', { name: 'Read all of A long note' });
+      await readAll.click();
+      const dialog = page.getByRole('dialog', { name: 'A long note' });
+      await expect(dialog).toContainText('Line 12 of what was seen.');
+      const web = dialog.getByRole('link', { name: /the web/ });
+      await expect(web).toHaveAttribute('href', 'https://example.com/end');
+      await expect(web).toHaveAttribute('target', '_blank');
+      await expect(web).toHaveAttribute('rel', 'noopener noreferrer');
+      await dialog.getByRole('link', { name: 'the spec' }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(readerTitle(page, 'spec.md')).toBeVisible();
+      await expect(readerTitle(page, 'spec.md')).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
+      await expect(readAll).toBeFocused();
+    });
+
+    test('keeps the links of a card whose text is cut off out of the keyboard\'s way, and Read all has them all', async ({ page }) => {
+      const body = [...Array.from({ length: 6 }, (_, index) => `Line ${index + 1}.`), 'Last line: [the hidden link](https://example.com/hidden)'].join('\n');
+      await openBoard(page, [boardNote(1, { title: 'Cut note', body }), boardNote(2, { title: 'Short note', body: 'One [short link](https://example.com/short).' })], { [boardId(1)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 } });
+      const cut = card(page, 'Cut note');
+      const readAll = cut.getByRole('button', { name: 'Read all of Cut note' });
+      await expect(readAll).toBeVisible();
+      // Some of its links may be where they cannot be seen, so none is a stop; a card that shows all of its text keeps its links as stops.
+      await expect(cut.getByRole('link', { name: /the hidden link/ })).toHaveAttribute('tabindex', '-1');
+      await expect(card(page, 'Short note').getByRole('link', { name: /short link/ })).not.toHaveAttribute('tabindex', /.*/);
+      await node(page, boardId(1)).focus();
+      await page.keyboard.press('Tab');
+      await expect(readAll).toBeFocused();
+      // The whole text is one press away, with every link a stop.
+      await page.keyboard.press('Enter');
+      const dialog = page.getByRole('dialog', { name: 'Cut note' });
+      await expect(dialog.getByRole('link', { name: /the hidden link/ })).not.toHaveAttribute('tabindex', /.*/);
+    });
+
+    test('keeps the clamp and the Read all button on a note written in Markdown', async ({ page }) => {
+      const body = ['# Findings', '', ...Array.from({ length: 10 }, (_, index) => `- point ${index + 1}`)].join('\n');
+      await openBoard(page, [boardNote(1, { title: 'Findings', body })], { [boardId(1)]: { x: 800, y: 240 } });
+      const note = card(page, 'Findings');
+      await expect(note.locator('li').first()).toBeVisible();
+      await expect(note.getByRole('button', { name: 'Read all of Findings' })).toBeVisible();
+      // The card shows four lines of text at most: the clamp holds with lists in it.
+      const lines = await note.locator('.board-text').evaluate((element) => Math.round(element.clientHeight / 18));
+      expect(lines).toBeLessThanOrEqual(4);
+      await expect(note.getByRole('heading')).toHaveCount(1);
+    });
   });
 });
 
@@ -2323,6 +2862,38 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.keyboard.press('Enter');
       await expect(page.getByRole('dialog', { name: 'Export leaks memory' })).toBeVisible();
       await expectNoSeriousViolations(page, '[role="dialog"]');
+    });
+
+    test('has no serious accessibility violations with links in the cards and the reader open beside them', async ({ page }) => {
+      await routeBoard(page);
+      await routeWork(page, [
+        document('Export requirements', { role: 'requirements', filename: 'contextspace-document-1.md', summary: 'Customers export their reports as CSV.' }),
+        document('Pricing sheet', { url: 'https://example.com/pricing', summary: 'Kept on the web.' }),
+      ]);
+      await routeCards(page, boardFile({
+        cards: [
+          boardNote(1, { title: 'Links', body: 'Read [the CSV spec](https://example.com/spec), [the file](docs/spec.md) and `code`.\n\n- one\n- two' }),
+          boardFileCard(2, 'docs/spec.md', { title: 'The CSV spec', description: 'See [the queue design](https://example.com/queue).' }),
+        ],
+        positions: { [boardId(1)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 } },
+      }));
+      // A source document is read through the work route.
+      await page.route('**/api/workspace/demo/work/documents/*', (route) => route.fulfill({ json: {
+        document: document('Export requirements', { filename: 'contextspace-document-1.md' }), location: '/tmp/demo/contextspace-document-1.md',
+        content: '# Customers export reports\n\nUp to 50,000 rows as CSV. See [the design](docs/design.md) and [the web](https://example.com).\n\n| Column | Meaning |\n| --- | --- |\n| id | The row |\n',
+      } }));
+      await page.goto('/#/workspaces/demo/board');
+      const canvas = board(page);
+      await expect(canvas.getByRole('article', { name: 'Links' }).getByRole('link', { name: 'the CSV spec' })).toBeVisible();
+      await expectNoSeriousViolations(page, '[aria-label="Board"]');
+      await openGroup(page, /^Documents, 2 documents/);
+      await canvas.getByRole('button', { name: 'Open Export requirements' }).click();
+      const reader = canvas.getByRole('region', { name: 'Reader', exact: true });
+      await expect(reader.getByRole('heading', { name: 'Customers export reports', level: 1 })).toBeVisible();
+      await expectNoSeriousViolations(page, '[aria-label="Board"]');
+      // The card that is open has its ring, and is still fine to read.
+      await expect(canvas.getByRole('article', { name: 'Export requirements' })).toHaveAttribute('aria-current', 'true');
+      await expectNoSeriousViolations(page, '[aria-label="Board"]');
     });
   });
 }

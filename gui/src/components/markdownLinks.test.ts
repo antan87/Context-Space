@@ -53,6 +53,31 @@ describe('classifyMarkdownLink', () => {
   });
 });
 
+describe('classifyMarkdownLink, schemes written another way', () => {
+  it('reads a scheme in any case as the scheme it is', () => {
+    for (const href of ['JaVaScRiPt:alert(1)', 'JAVASCRIPT:alert(1)', 'VBScript:x', 'DATA:text/html,hi', 'Ftp://example.com/x']) {
+      expect(classifyMarkdownLink(href, context), href).toEqual({ kind: 'inert', label: href });
+    }
+    expect(classifyMarkdownLink('HTTPS://Example.com/a', context)).toEqual({ kind: 'external', href: 'https://example.com/a' });
+    expect(classifyMarkdownLink('File:///home/me/workspaces/audit/a.md', context)).toEqual({ kind: 'workspace-file', path: 'a.md' });
+    expect(classifyMarkdownLink('File:///etc/passwd', context)).toEqual({ kind: 'inert', label: '/etc/passwd' });
+  });
+
+  it('never makes a link of a scheme that is written with percent signs: it is a file name, whatever it spells', () => {
+    // The page does not decode a link before it looks for its scheme, so these are paths of the workspace, never addresses.
+    for (const href of ['%6Aavascript:alert(1)', 'javascript%3Aalert(1)', '%6a%61vascript:alert(1)']) {
+      expect(classifyMarkdownLink(href, context), href).toEqual({ kind: 'workspace-file', path: 'javascript:alert(1)' });
+      expect(classifyMarkdownLink(href), href).toEqual({ kind: 'inert', label: 'javascript:alert(1)' });
+    }
+  });
+
+  it('reads the link a character reference spelled once the renderer has decoded it, and trims the spaces around it', () => {
+    expect(classifyMarkdownLink('javascript:alert(1)', context)).toEqual({ kind: 'inert', label: 'javascript:alert(1)' });
+    expect(classifyMarkdownLink('java\tscript:alert(1)', context)).toMatchObject({ kind: 'workspace-file' });
+    expect(classifyMarkdownLink(' \tjavascript:alert(1)', context)).toEqual({ kind: 'inert', label: 'javascript:alert(1)' });
+  });
+});
+
 describe('headingSlug', () => {
   it('matches GitHub anchors for typical headings', () => {
     expect(headingSlug('Open questions')).toBe('open-questions');

@@ -1,13 +1,15 @@
-import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { ChevronDown, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, Pin, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, PanelRightOpen, Pin, type LucideIcon } from 'lucide-react';
 
+import { ChatMarkdown } from '../../components/ChatMarkdown.js';
+import { classifyMarkdownLink } from '../../components/markdownLinks.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
 import { cn } from '../../lib/utils.js';
 import { agoText } from '../plan/whatsNew.js';
-import { BoardActionsContext, documentFileUrl } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, cardLinks, documentFileUrl } from './boardActions.js';
 import { BOARD_SIZE, authorName, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type LaneNode, type NoteNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
@@ -171,19 +173,37 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
   </article>;
 }
 
-/** A source document: its role and status, and the first lines of its summary. A superseded one recedes but keeps its status. */
-export function BoardDocument({ data }: NodeProps<DocumentNode>) {
+/** The title row of a card that opens: the whole row is the button, and a small icon at its end says where it opens. */
+const OPENER = 'nodrag nopan flex h-5 w-full items-center gap-1.5 rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none';
+
+/**
+ * A source document: its role and status, and the first lines of its summary. A superseded one recedes but keeps its status.
+ * Its title row opens it in the reader beside the board; a document that is a link opens on the web, in a new tab.
+ */
+export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
   const titleId = useId();
+  const actions = useContext(BoardActionsContext);
+  const reading = useContext(BoardReadingContext) === id;
+  const web = data.url ? classifyMarkdownLink(data.url) : undefined;
+  const href = web?.kind === 'external' && !web.href.startsWith('mailto:') ? web.href : undefined;
+  const icon = <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />;
+  const title = <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</span>;
   return <article
-    aria-labelledby={titleId}
+    aria-labelledby={titleId} aria-current={reading ? 'true' : undefined}
     className={cn('flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
-      data.dimmed ? 'border-dashed border-border bg-muted text-muted-foreground' : 'border-border bg-card text-card-foreground')}
+      data.dimmed ? 'border-dashed border-border bg-muted text-muted-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
   >
     <Anchors />
-    <div className="flex h-5 items-center gap-1.5">
-      <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-      <p id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</p>
-    </div>
+    {data.filename
+      ? <button
+        type="button" className={OPENER} aria-label={`Open ${data.title}`} disabled={!actions}
+        onClick={(event) => actions?.openInReader({ path: data.filename!, title: data.title, card: id, source: data.sourceId }, event.currentTarget)}
+      >{icon}{title}<PanelRightOpen aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" /></button>
+      : href
+        ? <a href={href} target="_blank" rel="noopener noreferrer" className={OPENER} aria-label={`Open ${data.title} (opens outside the app)`}>
+          {icon}{title}<ExternalLink aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+        </a>
+        : <div className="flex h-5 items-center gap-1.5">{icon}{title}</div>}
     <div className="flex h-[18px] items-center gap-1.5">
       <Badge variant="outline">{ROLE_LABEL[data.role] ?? data.role}</Badge>
       <Badge variant={STATUS_BADGE[data.status] ?? 'outline'}>{STATUS_LABEL[data.status] ?? data.status}</Badge>
@@ -247,17 +267,37 @@ function bylineText(data: CardData): string {
   return `by ${authorName(data.by)}${made ? ` · ${made}` : ''}${edited}`;
 }
 
-/** The whole text of a card, for when the card shows only the start of it. */
+/**
+ * The text of a card as Markdown, so its links work: one to the web opens in a new tab, one to a file of the workspace in
+ * the reader. A press on a link is only a press: it does not move the card or the view. `cut` is whether the card shows only
+ * the start of the text: the links are then not stops for the keyboard, since some may be in the part that cannot be seen, and
+ * "Read all" shows them all.
+ */
+function CardText({ text, cut, className, ref }: { text: string; cut: boolean; className?: string; ref?: Ref<HTMLDivElement> }) {
+  const actions = useContext(BoardActionsContext);
+  const links = useMemo(() => actions && cardLinks(actions), [actions]);
+  return <div ref={ref} className={cn('board-text break-words', className)}>
+    <ChatMarkdown content={text} links={links ?? undefined} onCard cut={cut} />
+  </div>;
+}
+
+/** The whole text of a card, for when the card shows only the start of it. A link in it that opens in the reader gives way to it. */
 function ReadAll({ data }: { data: CardData }) {
-  return <Dialog>
-    <DialogTrigger render={<Button size="xs" variant="ghost" className="nodrag nopan" aria-label={`Read all of ${data.title}`} />}>Read all</DialogTrigger>
-    <DialogPopup className="max-w-lg">
+  const actions = useContext(BoardActionsContext);
+  const [open, setOpen] = useState(false);
+  const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
+  // Whether the dialog closes to hand the keyboard to the reader, which takes it itself.
+  const [handingOver, setHandingOver] = useState(false);
+  const links = useMemo(() => actions && cardLinks(actions, trigger, () => { setHandingOver(true); setOpen(false); }), [actions, trigger]);
+  return <Dialog open={open} onOpenChange={(next) => { if (next) setHandingOver(false); setOpen(next); }}>
+    <DialogTrigger render={<Button ref={setTrigger} size="xs" variant="ghost" className="nodrag nopan" aria-label={`Read all of ${data.title}`} />}>Read all</DialogTrigger>
+    <DialogPopup className="max-w-lg" finalFocus={() => !handingOver}>
       <DialogHeader>
         <DialogTitle className="break-words pr-8 text-base leading-snug">{data.title}</DialogTitle>
         <DialogDescription>{bylineText(data)}</DialogDescription>
       </DialogHeader>
       <DialogPanel>
-        <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{data.text}</p>
+        <div className="board-text break-words text-sm leading-6 text-foreground"><ChatMarkdown content={data.text} links={links ?? undefined} onCard /></div>
       </DialogPanel>
     </DialogPopup>
   </Dialog>;
@@ -275,12 +315,12 @@ function Byline({ data, children }: { data: CardData; children?: ReactNode }) {
   </div>;
 }
 
-/** The frame every card shares. A card that is new, or was just changed by someone else, glows for a moment. */
-function CardFrame({ data, labelledBy, children }: { data: CardData; labelledBy: string; children: ReactNode }) {
+/** The frame every card shares. A card that is new, or was just changed by someone else, glows for a moment; the one open in the reader has a ring. */
+function CardFrame({ data, labelledBy, reading = false, children }: { data: CardData; labelledBy: string; reading?: boolean; children: ReactNode }) {
   return <article
-    aria-labelledby={labelledBy}
+    aria-labelledby={labelledBy} aria-current={reading ? 'true' : undefined}
     className={cn('relative flex h-full w-full flex-col overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
-      data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground')}
+      data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
   >
     <Anchors />
     {data.fresh && <span key={data.updatedAt} aria-hidden="true" className="board-fresh" />}
@@ -288,14 +328,14 @@ function CardFrame({ data, labelledBy, children }: { data: CardData; labelledBy:
   </article>;
 }
 
-/** A note someone put on the board: its title, the start of its text, who wrote it and when. The whole text is one button away. */
+/** A note someone put on the board: its title, the start of its text (Markdown, with links that work), who wrote it and when. The whole text is one button away. */
 export function BoardNote({ data }: NodeProps<NoteNode>) {
   const titleId = useId();
   const [titleRef, titleCut] = useCut<HTMLHeadingElement>(data.title);
-  const [bodyRef, bodyCut] = useCut<HTMLParagraphElement>(data.text);
+  const [bodyRef, bodyCut] = useCut<HTMLDivElement>(data.text);
   return <CardFrame data={data} labelledBy={titleId}>
     <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
-    <p ref={bodyRef} className="mt-1 line-clamp-4 shrink-0 whitespace-pre-line break-words text-xs leading-[18px]">{data.text}</p>
+    <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-1 line-clamp-4 shrink-0 text-xs leading-[18px]" />
     <div className="mt-auto" />
     <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
   </CardFrame>;
@@ -311,16 +351,17 @@ function FileKind({ type, path }: { type: FileType; path: string }) {
   </div>;
 }
 
-/** A file someone put on the board: a picture shows itself; anything else shows its kind. Open shows it where the app shows documents. */
-export function BoardFile({ data }: NodeProps<FileNode>) {
+/** A file someone put on the board: a picture shows itself; anything else shows its kind. Open shows it in the reader beside the board. */
+export function BoardFile({ id, data }: NodeProps<FileNode>) {
   const titleId = useId();
   const actions = useContext(BoardActionsContext);
+  const reading = useContext(BoardReadingContext) === id;
   // The path of a picture that would not load, so a card that now names another file tries it.
   const [brokenPath, setBrokenPath] = useState<string | null>(null);
   const [titleRef, titleCut] = useCut<HTMLHeadingElement>(data.title);
-  const [textRef, textCut] = useCut<HTMLParagraphElement>(data.text);
+  const [textRef, textCut] = useCut<HTMLDivElement>(data.text);
   const picture = data.fileType === 'image' && actions && brokenPath !== data.path;
-  return <CardFrame data={data} labelledBy={titleId}>
+  return <CardFrame data={data} labelledBy={titleId} reading={reading}>
     <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
     <div className="mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/60">
       {picture
@@ -330,11 +371,11 @@ export function BoardFile({ data }: NodeProps<FileNode>) {
         />
         : <FileKind type={data.fileType} path={data.path} />}
     </div>
-    <p ref={textRef} className="mt-1.5 line-clamp-3 shrink-0 whitespace-pre-line break-words text-xs leading-[18px]">{data.text}</p>
+    <CardText ref={textRef} text={data.text} cut={textCut} className="mt-1.5 line-clamp-3 shrink-0 text-xs leading-[18px]" />
     <div className="mt-auto" />
     <Byline data={data} />
     <div className="flex h-7 shrink-0 items-center gap-1">
-      <Button size="xs" variant="outline" className="nodrag nopan" aria-label={`Open ${data.title}`} onClick={() => actions?.openFile(data.path)} disabled={!actions}><ExternalLink aria-hidden="true" />Open</Button>
+      <Button size="xs" variant="outline" className="nodrag nopan" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" />Open</Button>
       {(titleCut || textCut) && <ReadAll data={data} />}
     </div>
   </CardFrame>;

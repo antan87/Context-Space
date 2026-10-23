@@ -21,6 +21,17 @@ export interface MarkdownDocumentLinks extends MarkdownLinkContext {
 interface ChatMarkdownProps {
   content: string;
   links?: MarkdownDocumentLinks;
+  /**
+   * The text sits on a card of the board, where a press on a link must not start a drag or a pan, and where only what opens
+   * is a link: the web, and the files of the workspace. Mail and in-page links, anything else, and pictures are plain text,
+   * and a heading is a bold line. The copy button of a code block does not start a drag either.
+   */
+  onCard?: boolean;
+  /**
+   * On a card: the card shows only the start of the text, so some of its links and buttons may be in the part that is cut off,
+   * where they cannot be seen. None of them is a stop for the keyboard (the whole text is one press away, where all of them are).
+   */
+  cut?: boolean;
 }
 
 function nodeText(node: React.ReactNode): string {
@@ -30,7 +41,7 @@ function nodeText(node: React.ReactNode): string {
   return '';
 }
 
-function CodeBlock({ children, ...props }: React.ComponentProps<'pre'> & { node?: unknown }) {
+function CodeBlock({ children, onCard = false, cut = false, ...props }: React.ComponentProps<'pre'> & { node?: unknown; onCard?: boolean; cut?: boolean }) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
   const text = nodeText(children).replace(/\r?\n$/, '');
@@ -51,7 +62,8 @@ function CodeBlock({ children, ...props }: React.ComponentProps<'pre'> & { node?
           type="button"
           aria-label={copied ? 'Code copied' : 'Copy code block'}
           title={copied ? 'Copied' : 'Copy code'}
-          className="absolute right-2 top-2 flex size-6 cursor-pointer items-center justify-center rounded border border-border/70 bg-background/80 text-muted-foreground opacity-0 backdrop-blur-xs transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/code:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          tabIndex={cut ? -1 : undefined}
+          className={cn('absolute right-2 top-2 flex size-6 cursor-pointer items-center justify-center rounded border border-border/70 bg-background/80 text-muted-foreground opacity-0 backdrop-blur-xs transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover/code:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring', onCard && 'nodrag nopan')}
           onClick={() => {
             void safeCopyToClipboard(text).then((ok) => {
               setCopied(ok);
@@ -89,34 +101,39 @@ function LocalPath({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links }) => {
+export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCard = false, cut = false }) => {
   const container = useRef<HTMLDivElement>(null);
 
   const components = useMemo<Components>(() => {
     const heading = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       ({ node: _node, children, ...props }: React.ComponentProps<typeof Tag> & { node?: unknown }) =>
-        <Tag id={headingSlug(nodeText(children)) || undefined} {...props}>{children}</Tag>;
+        // On a card a heading is only a bold line: the card has its own title, and its ids would repeat from card to card.
+        onCard ? <p className="font-semibold">{children}</p> : <Tag id={headingSlug(nodeText(children)) || undefined} {...props}>{children}</Tag>;
 
     return {
       h1: heading('h1'), h2: heading('h2'), h3: heading('h3'), h4: heading('h4'), h5: heading('h5'), h6: heading('h6'),
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      a: ({ node: _node, href, children, ...props }) => {
+      a: ({ node: _node, href, children, className, ...props }) => {
         const target = classifyMarkdownLink(href, links);
+        // On a card only the web and the workspace's files are links: the rest is the text it says.
+        if (onCard && !(target.kind === 'external' && !target.href.startsWith('mailto:')) && !(target.kind === 'workspace-file' && links)) return <>{children}</>;
+        const linkClass = onCard ? cn(className, 'nodrag nopan') : className;
+        const tabIndex = onCard && cut ? -1 : undefined;
         if (target.kind === 'anchor') {
-          return <a {...props} href={`#${target.id}`} onClick={(event) => {
+          return <a {...props} className={linkClass} tabIndex={tabIndex} href={`#${target.id}`} onClick={(event) => {
             // The app routes on the hash, so letting this through would leave the page.
             event.preventDefault();
             container.current?.querySelector(`[id="${CSS.escape(target.id)}"]`)?.scrollIntoView({ block: 'start' });
           }}>{children}</a>;
         }
         if (target.kind === 'external') {
-          return <a {...props} href={target.href} target="_blank" rel="noopener noreferrer">
+          return <a {...props} className={linkClass} tabIndex={tabIndex} href={target.href} target="_blank" rel="noopener noreferrer">
             {children}<ExternalLink aria-hidden="true" className="ml-0.5 inline size-3 align-baseline" /><span className="sr-only"> (opens outside the app)</span>
           </a>;
         }
         if (target.kind === 'workspace-file' && links) {
-          return <a {...props} href={links.fileUrl(target.path)} onClick={(event) => {
+          return <a {...props} className={linkClass} tabIndex={tabIndex} href={links.fileUrl(target.path)} onClick={(event) => {
             event.preventDefault();
             links.onOpenFile(target.path);
           }}>{children}</a>;
@@ -125,14 +142,15 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links }) =>
       },
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       img: ({ node: _node, src, alt, ...props }) => {
+        if (onCard) return <>{`[image${alt ? `: ${alt}` : ''}]`}</>;
         const target = classifyMarkdownLink(typeof src === 'string' ? src : undefined, links);
         if (target.kind === 'external' && !target.href.startsWith('mailto:')) return <img {...props} src={target.href} alt={alt ?? ''} />;
         if (target.kind === 'workspace-file' && links) return <img {...props} src={links.fileUrl(target.path)} alt={alt ?? ''} />;
         return <LocalPath label={target.kind === 'inert' ? target.label : ''}>{`[image${alt ? `: ${alt}` : ''}]`}</LocalPath>;
       },
-      pre: CodeBlock,
+      pre: (props) => <CodeBlock {...props} onCard={onCard} cut={cut} />,
     };
-  }, [links]);
+  }, [links, onCard, cut]);
 
   return (
     <div ref={container} className="prose prose-sm max-w-none text-foreground prose-a:text-primary prose-code:text-foreground prose-headings:text-foreground prose-pre:border prose-pre:border-border prose-pre:bg-muted/50 prose-strong:text-foreground prose-li:marker:text-muted-foreground">

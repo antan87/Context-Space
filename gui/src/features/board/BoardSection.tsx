@@ -1,6 +1,6 @@
 import '@xyflow/react/dist/style.css';
 
-import { useEffect, useId, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Background, BackgroundVariant, ConnectionMode, Controls, MarkerType, MiniMap, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { Archive, Kanban, RefreshCw, X } from 'lucide-react';
@@ -17,13 +17,15 @@ import { usePlanFile } from '../plan/planFile.js';
 import { useWhatsNew } from '../plan/whatsNew.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests } from '../workspace-shell/openRequests.js';
-import { BoardActionsContext, type BoardActions } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, type BoardActions, type ReaderTarget } from './boardActions.js';
 import { useBoard } from './boardData.js';
 import { useBoardFolds } from './boardFolds.js';
 import { boardEdges, boardLayout, currentFrame, nodeRects, type BoardNode, type CheckpointNode } from './boardLayout.js';
 import { MOVE_HELP, revealed, useBoardMoves, withMoves, type MoveNotice } from './boardMoves.js';
+import { fileTitle, readerDock, readerReveal } from './boardDock.js';
 import { openingNodeId, openingView, type Viewport } from './boardView.js';
 import { BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardLane, BoardNote, BoardPlaceholder } from './BoardNodes.js';
+import { BoardReader } from './BoardReader.js';
 
 const NODE_TYPES: NodeTypes = { lane: BoardLane, checkpoint: BoardCheckpoint, document: BoardDocument, commit: BoardCommit, placeholder: BoardPlaceholder, note: BoardNote, file: BoardFile };
 
@@ -135,11 +137,13 @@ function SourceProblem({ what, error, onRetry }: { what: string; error: unknown;
  * in view" shows the lot. It shows the big picture first: each group (a checkpoint, the documents, a repository's commits)
  * is one summary, only the work under way is open, and pressing a summary opens that group where it stands (boardFolds
  * remembers what was opened or folded). Cards can be dragged where you want them (out of their lane too), or moved with
- * Shift and the arrow keys, and the place is kept in the board file (boardMoves). It uses the queries the other parts already use,
- * so a part that fails says so and the rest still draws. `active` is whether the board is the part on show: it stays
+ * Shift and the arrow keys, and the place is kept in the board file (boardMoves). A document or a file opens in a reader docked
+ * to the right of the canvas (it covers the canvas where the section is too narrow for both), and so does a link in a note to a
+ * file of the workspace; the view moves only as far as it takes to keep the card that was opened in sight. It uses the queries
+ * the other parts already use, so a part that fails says so and the rest still draws. `active` is whether the board is the part on show: it stays
  * mounted behind the others.
  */
-export function BoardSection({ workspaceId, active }: { workspaceId: string; active: boolean }) {
+export function BoardSection({ workspaceId, workspacePath, active }: { workspaceId: string; workspacePath?: string; active: boolean }) {
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
   const news = useWhatsNew(workspaceId);
@@ -189,10 +193,35 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
   const toggled = useRef<{ id: string; open: boolean; focus: boolean; at: number } | null>(null);
   const focusing = useRef(false);
 
-  // The files on the cards open where the app opens documents: in Docs. The groups open and fold in place.
+  // The reader beside the canvas. Opening or closing it is not the user taking the view: the view only moves to keep the card
+  // that was opened in sight (below), and the keyboard goes into the reader and, when it closes, back to what opened it.
+  const [row, setRow] = useState<HTMLDivElement | null>(null);
+  const section = useElementSize(row);
+  const dock = readerDock(section.width);
+  const [reader, setReader] = useState<{ target: ReaderTarget; request: number } | null>(null);
+  const requests = useRef(0);
+  const opener = useRef<HTMLElement | null>(null);
+  /** The link that was pressed last: a file that a link opens does not say which link it was, and the keyboard goes back to it. */
+  const pressedLink = useRef<HTMLElement | null>(null);
+  /** The node whose card was opened, to keep in sight once the reader has taken its room. */
+  const revealing = useRef<string | null>(null);
+  /** Shows `target`. `reveal` is whether the view moves to keep the card that was opened in sight: not for a link in the reader, where the view is wherever the user has put it since. */
+  const show = useCallback((target: ReaderTarget, from: HTMLElement | null, reveal: boolean) => {
+    opener.current = from ?? pressedLink.current;
+    revealing.current = reveal ? opener.current?.closest('.react-flow__node')?.getAttribute('data-id') ?? null : null;
+    requests.current += 1;
+    setReader({ target, request: requests.current });
+  }, []);
+  const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from, true), [show]);
+  const closeReader = useCallback(() => setReader(null), []);
+  const openLinked = useCallback((path: string) => show({ path, title: fileTitle(path) }, opener.current, false), [show]);
+  const openInDocs = useCallback((name: string) => { documentRequests.open(workspaceId, { name }); goToWorkspace(navigateTo, workspaceId, 'documents'); }, [workspaceId, navigateTo]);
+
+  // The groups open and fold in place; a file or a document opens in the reader.
   const actions = useMemo<BoardActions>(() => ({
     workspaceId,
-    openFile: (name) => { documentRequests.open(workspaceId, { name }); goToWorkspace(navigateTo, workspaceId, 'documents'); },
+    workspacePath,
+    openInReader,
     toggleGroup: (id, open) => {
       const pressed = document.activeElement;
       toggled.current = { id, open, focus: pressed instanceof HTMLElement && pressed.closest('.react-flow__node')?.getAttribute('data-id') === id, at: Date.now() };
@@ -207,7 +236,49 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
       button.focus({ preventScroll: true });
       focusing.current = false;
     },
-  }), [workspaceId, navigateTo, setFold]);
+  }), [workspaceId, workspacePath, openInReader, setFold]);
+
+  // The card that was opened would be under the reader, or cut off by it: the view moves, smoothly, just far enough to show it.
+  useEffect(() => {
+    const id = revealing.current;
+    const instance = flow.current;
+    if (!reader || id === null || !instance || section.width === 0) return;
+    revealing.current = null;
+    const rect = nodeRects(moves.shown).get(id);
+    const view = rect && readerReveal(rect, instance.getViewport(), section, OPEN_MARGIN);
+    if (view) void instance.setViewport(view, { duration: moveMs(300) });
+  }, [reader, moves.shown, section]);
+
+  // When the reader has closed the keyboard goes back to what opened it, or to the canvas when that is gone. The view stays.
+  // Escape closes the reader, from the reader or from the board, and from nowhere in particular (the keyboard drops to the page when the
+  // card it was on goes out of reach: see `inert` below). Not when something has used it, or when it was pressed in a dialog or an
+  // expanded document, which are drawn outside this section.
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reader || !active) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target;
+      const inside = target instanceof Node && Boolean(root.current?.contains(target));
+      if (!inside && target !== document.body && target !== document.documentElement) return;
+      event.preventDefault();
+      closeReader();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [reader, active, closeReader]);
+
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (reader) { wasOpen.current = true; return; }
+    if (!wasOpen.current) return;
+    wasOpen.current = false;
+    const from = opener.current;
+    opener.current = null;
+    focusing.current = true;
+    (from?.isConnected ? from : container?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
+    focusing.current = false;
+  }, [reader, container]);
 
   // A group that was opened and no longer fits in the view: the view moves, smoothly, to show as much of it as fits, top first.
   useEffect(() => {
@@ -257,76 +328,83 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
 
   let body;
   if (nodes.length > 0) {
-    body = <div className="relative min-h-0 flex-1">
-      <div
-        ref={setContainer} className="absolute inset-0"
-        onPointerDownCapture={(event) => { takenBefore.current = taken.current; if (isViewGesture(container, event.target)) taken.current = true; }}
-        // The second press of a double click that opened or folded a group lands on the canvas, where the group's button was: not the
-        // user taking the view. Only the mouse event has the count (the pointer event's is always 0), and it follows the pointer's.
-        onMouseDownCapture={(event) => { if (event.detail >= 2) taken.current = takenBefore.current; }}
-        onWheelCapture={(event) => { if (container?.contains(event.target as Node)) taken.current = true; }}
-        onFocusCapture={(event) => { if (!focusing.current) showFocused(flow.current, event, size, takeOver); }}
-      >
-        {/* Ahead of the canvas, so it is the first stop for the keyboard, not the last one after every card. */}
-        {opening && archived > 0 && <div className="absolute left-3 top-3 z-10">
-          <Button size="xs" variant={showArchived ? 'secondary' : 'outline'} aria-pressed={showArchived} onClick={() => setShowArchived((shown) => !shown)}>
-            <Archive aria-hidden="true" />Archived ({archived})
-          </Button>
-        </div>}
-        {/* One live region, there before it has anything to say, for what became of a move; and what the cards say about moving. */}
-        {opening && <>
-          <p id={moveHelp} className="sr-only">{MOVE_HELP}</p>
-          <div role="status" className="sr-only">{moves.notice?.text}</div>
-        </>}
-        {/* Over the canvas, not above it: a strip that came and went would push every card down and up again. */}
-        {opening && moves.notice && <div className="pointer-events-none absolute inset-x-16 top-3 z-10 flex justify-center">
-          <MoveStatus notice={moves.notice} onDismiss={moves.dismiss} onKeep={moves.keepNotice} />
-        </div>}
-        {opening && <BoardActionsContext value={actions}>
-          <ReactFlow
-            className="board-flow"
-            aria-label="Board canvas. Arrow keys pan, plus and minus zoom, zero fits the board in view. Drag a card to move it, or press Shift and an arrow key on it."
-            tabIndex={0}
-            nodes={moves.shown}
-            edges={edges}
-            nodeTypes={NODE_TYPES}
-            defaultEdgeOptions={EDGE_OPTIONS}
-            defaultViewport={opening}
-            connectionMode={ConnectionMode.Loose}
-            onInit={(instance) => { flow.current = instance; }}
-            onKeyDown={(event) => { if (!moves.onKeyDown(event)) navigate(flow.current, event, takeOver); }}
-            onNodesChange={moves.onNodesChange}
-            onNodeDragStart={moves.onNodeDragStart}
-            onNodeDragStop={moves.onNodeDragStop}
-            // Only what `withMoves` marks can be dragged or reached by the keyboard; the rest is as it was. A press that
-            // slips a pixel or two is a click, not a move that would be saved.
-            nodeDragThreshold={3}
-            nodesDraggable={false}
-            nodesConnectable={false}
-            nodesFocusable={false}
-            edgesFocusable={false}
-            elementsSelectable={false}
-            // Nothing here is selected or deleted, and React Flow would otherwise keep a window-wide listener for these keys
-            // that swallows Space for the whole page, even while the board is hidden behind another section.
-            deleteKeyCode={null}
-            panActivationKeyCode={null}
-            selectionKeyCode={null}
-            multiSelectionKeyCode={null}
-            zoomActivationKeyCode={null}
-            disableKeyboardA11y
-            // A double click opens or folds a group and then lands on the canvas, which would zoom the view: the buttons and the zoom controls do that.
-            zoomOnDoubleClick={false}
-            minZoom={0.1}
-            maxZoom={1.5}
-            attributionPosition="bottom-center"
-            ariaLabelConfig={ARIA_LABELS}
-          >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
-            <Controls showInteractive={false} fitViewOptions={FIT} />
-            <MiniMap pannable zoomable nodeClassName={minimapClass} />
-          </ReactFlow>
-        </BoardActionsContext>}
+    body = <div ref={setRow} className="relative flex min-h-0 flex-1">
+      {/* While the reader covers the canvas the canvas waits under it, out of the keyboard's reach. */}
+      <div className="relative min-w-0 flex-1" inert={Boolean(reader) && dock.covers}>
+        <div
+          ref={setContainer} className="absolute inset-0"
+          onPointerDownCapture={(event) => { takenBefore.current = taken.current; if (isViewGesture(container, event.target)) taken.current = true; }}
+          // The second press of a double click that opened or folded a group lands on the canvas, where the group's button was: not the
+          // user taking the view. Only the mouse event has the count (the pointer event's is always 0), and it follows the pointer's.
+          onMouseDownCapture={(event) => { if (event.detail >= 2) taken.current = takenBefore.current; }}
+          onWheelCapture={(event) => { if (container?.contains(event.target as Node)) taken.current = true; }}
+          onFocusCapture={(event) => { if (!focusing.current) showFocused(flow.current, event, size, takeOver); }}
+        >
+          {/* Ahead of the canvas, so it is the first stop for the keyboard, not the last one after every card. */}
+          {opening && archived > 0 && <div className="absolute left-3 top-3 z-10">
+            <Button size="xs" variant={showArchived ? 'secondary' : 'outline'} aria-pressed={showArchived} onClick={() => setShowArchived((shown) => !shown)}>
+              <Archive aria-hidden="true" />Archived ({archived})
+            </Button>
+          </div>}
+          {/* One live region, there before it has anything to say, for what became of a move; and what the cards say about moving. */}
+          {opening && <>
+            <p id={moveHelp} className="sr-only">{MOVE_HELP}</p>
+            <div role="status" className="sr-only">{moves.notice?.text}</div>
+          </>}
+          {/* Over the canvas, not above it: a strip that came and went would push every card down and up again. */}
+          {opening && moves.notice && <div className="pointer-events-none absolute inset-x-16 top-3 z-10 flex justify-center">
+            <MoveStatus notice={moves.notice} onDismiss={moves.dismiss} onKeep={moves.keepNotice} />
+          </div>}
+          {opening && <BoardActionsContext value={actions}><BoardReadingContext value={reader?.target.card ?? null}>
+            <ReactFlow
+              className="board-flow"
+              aria-label="Board canvas. Arrow keys pan, plus and minus zoom, zero fits the board in view. Drag a card to move it, or press Shift and an arrow key on it."
+              tabIndex={0}
+              nodes={moves.shown}
+              edges={edges}
+              nodeTypes={NODE_TYPES}
+              defaultEdgeOptions={EDGE_OPTIONS}
+              defaultViewport={opening}
+              connectionMode={ConnectionMode.Loose}
+              onInit={(instance) => { flow.current = instance; }}
+              onKeyDown={(event) => { if (!moves.onKeyDown(event)) navigate(flow.current, event, takeOver); }}
+              onNodesChange={moves.onNodesChange}
+              onNodeDragStart={moves.onNodeDragStart}
+              onNodeDragStop={moves.onNodeDragStop}
+              // Only what `withMoves` marks can be dragged or reached by the keyboard; the rest is as it was. A press that
+              // slips a pixel or two is a click, not a move that would be saved.
+              nodeDragThreshold={3}
+              nodesDraggable={false}
+              nodesConnectable={false}
+              nodesFocusable={false}
+              edgesFocusable={false}
+              elementsSelectable={false}
+              // Nothing here is selected or deleted, and React Flow would otherwise keep a window-wide listener for these keys
+              // that swallows Space for the whole page, even while the board is hidden behind another section.
+              deleteKeyCode={null}
+              panActivationKeyCode={null}
+              selectionKeyCode={null}
+              multiSelectionKeyCode={null}
+              zoomActivationKeyCode={null}
+              disableKeyboardA11y
+              // A double click opens or folds a group and then lands on the canvas, which would zoom the view: the buttons and the zoom controls do that.
+              zoomOnDoubleClick={false}
+              minZoom={0.1}
+              maxZoom={1.5}
+              attributionPosition="bottom-center"
+              ariaLabelConfig={ARIA_LABELS}
+            >
+              <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
+              <Controls showInteractive={false} fitViewOptions={FIT} />
+              <MiniMap pannable zoomable nodeClassName={minimapClass} />
+            </ReactFlow>
+          </BoardReadingContext></BoardActionsContext>}
+        </div>
       </div>
+      {reader && <BoardReader
+        workspaceId={workspaceId} workspacePath={workspacePath} target={reader.target} request={reader.request}
+        covers={dock.covers} width={dock.width} onClose={closeReader} onOpenInDocs={openInDocs} onOpenFile={openLinked}
+      />}
     </div>;
   } else if (loading) {
     body = <div role="status" className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board</div>;
@@ -339,7 +417,11 @@ export function BoardSection({ workspaceId, active }: { workspaceId: string; act
     </Empty>;
   }
 
-  return <div className="flex h-full min-h-0 min-w-0 flex-col">
+  // A click is noted before it reaches what it was on (see `pressedLink`).
+  return <div
+    ref={root} className="flex h-full min-h-0 min-w-0 flex-col"
+    onClickCapture={(event) => { pressedLink.current = event.target instanceof Element ? event.target.closest<HTMLElement>('a') : null; }}
+  >
     {notices}
     {body}
   </div>;
