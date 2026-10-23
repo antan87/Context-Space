@@ -608,8 +608,10 @@ export interface BoardChangeOptions {
 /**
  * Applies changes to the board, all or none, under the lock and to the board as it is now. Returns the new board and,
  * for each change, what it made. The change is logged as made by `by`, and open screens are told to read the board again.
- * @throws {@link BoardInputError} when a change is not valid, {@link BoardConflictError} when `revision` is stale or the
- * board is busy, {@link BoardFileError} when the board file is not a board, and an Error saying why a change cannot be made.
+ * @throws {@link BoardInputError} when a change is not valid, {@link BoardChangeError} when a valid-looking change cannot
+ * be made on this board (no such card, a limit reached, a file that is not there), {@link BoardConflictError} when
+ * `revision` is stale or the board is busy, {@link BoardWorkspaceError} when the workspace is gone, an
+ * `ArchivedWorkspaceError` when it is archived, and {@link BoardFileError} when the board file is not a board.
  */
 export async function changeBoard(workspacePath: string, changes: unknown, options: BoardChangeOptions): Promise<{ board: Board; results: BoardChangeResult[] }> {
   const valid = parseBoardChanges(changes);

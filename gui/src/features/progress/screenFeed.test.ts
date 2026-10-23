@@ -66,6 +66,26 @@ describe('parseLiveFrame', () => {
   });
 });
 
+describe('board events', () => {
+  const board = (payload: unknown, extra: Record<string, unknown> = {}) => screen('board', payload, extra);
+
+  it('are read into their own kind of live event, never a screen event', () => {
+    expect(parseLiveFrame(board({ revision: 12, changes: 2 }))).toEqual({ type: 'board', timestamp: base.timestamp, revision: 12 });
+    expect(parseLiveFrame(board({ revision: 0, changes: 1, evil: '<script>' }, { harness: 'codex' }))).toEqual({ type: 'board', timestamp: base.timestamp, revision: 0 });
+  });
+
+  it('are not screen events: nothing that shows screen events can be handed one', () => {
+    expect(cleanScreenEvent({ ...base, event: 'board', payload: { revision: 1, changes: 1 } })).toBeNull();
+  });
+
+  it('are dropped when malformed, never throwing', () => {
+    for (const data of [board(null), board({}), board({ revision: '3', changes: 1 }), board({ revision: -1, changes: 1 }), board({ revision: 1.5, changes: 1 }), board({ revision: 1 }, { timestamp: '' }),
+      frame('screen', { event: { ...base, event: 'board' } }), frame('board', { timestamp: base.timestamp, revision: 1 })]) {
+      expect(parseLiveFrame(data), data).toBeNull();
+    }
+  });
+});
+
 describe('addScreenEvent', () => {
   const event = (id: string): ScreenEvent => ({ id, timestamp: base.timestamp, harness: 'c', event: 'next', payload: { title: id, reason: 'r' } });
 
@@ -118,6 +138,17 @@ describe('connectScreenFeed', () => {
     source!.emit('question', frame('question', { request: { id: 'q', timestamp: base.timestamp, harness: 'c', message: 'm' } }), 'id-2');
     expect(statuses).toEqual([true]);
     expect(lives.map((live) => live.type)).toEqual(['screen', 'question']);
+  });
+
+  it('passes a board event on as a board event, and resumes after it like any other', () => {
+    connect();
+    const [first] = FakeSource.all;
+    first!.emit('screen', screen('board', { revision: 3, changes: 1 }), '2026-10-02T10:30:00.000Z');
+    expect(lives).toEqual([{ type: 'board', timestamp: base.timestamp, revision: 3 }]);
+    first!.readyState = 2;
+    first!.emit('error');
+    vi.advanceTimersByTime(1000);
+    expect(FakeSource.all[1]!.url).toBe('/feed?since=2026-10-02T10:30:00.000Z');
   });
 
   it('skips malformed frames and keeps going', () => {

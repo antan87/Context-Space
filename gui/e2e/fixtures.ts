@@ -1,5 +1,5 @@
 import { test as base, expect, type Route } from '@playwright/test';
-import { planFile, whatsNew } from './planData';
+import { boardFile, planFile, whatsNew } from './planData';
 
 export type MockDataOptions = {
   configData: any;
@@ -154,6 +154,8 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/workspace/*/plan', json(planFile()));
     // Nothing changed since the user last looked, so no card above the plan; a spec about it routes its own.
     await page.route('**/api/workspace/*/news', json(whatsNew()));
+    // Nothing has been put on the board; a spec about the board routes its own.
+    await page.route('**/api/workspace/*/board', json(boardFile()));
     // Nothing needs the user in any workspace; a spec about the Overview routes its own.
     await page.route('**/api/needs-you?*', json({ workspaces: [] }));
     // The Where Are We strip above the chat: an empty plan and a live feed with nothing in it. A spec that

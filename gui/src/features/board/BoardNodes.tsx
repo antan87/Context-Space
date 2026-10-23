@@ -1,15 +1,28 @@
-import { useId } from 'react';
-import type { NodeProps } from '@xyflow/react';
-import { CircleCheck, Circle, CircleHelp, FileText, GitCommitHorizontal } from 'lucide-react';
+import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, Pin, type LucideIcon } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
+import { Button } from '../../components/ui/button.js';
+import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
 import { cn } from '../../lib/utils.js';
 import { agoText } from '../plan/whatsNew.js';
-import { BOARD_SIZE, moreText, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode } from './boardLayout.js';
+import { BoardActionsContext, documentFileUrl } from './boardActions.js';
+import { BOARD_SIZE, authorName, imageAlt, moreText, type CardData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type LaneNode, type NoteNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
 const STATUS_BADGE = { draft: 'warning', approved: 'success', superseded: 'secondary' } as const;
+
+const SIDES = [[Position.Top, 'top'], [Position.Right, 'right'], [Position.Bottom, 'bottom'], [Position.Left, 'left']] as const;
+
+/**
+ * Where a line to this node can end: one invisible point on each side, so a line leaves and enters by the sides that
+ * face each other. They are the line's anchors and nothing else: nothing can be connected by hand.
+ */
+function Anchors() {
+  return <>{SIDES.map(([position, id]) => <Handle key={id} id={id} type="source" position={position} isConnectable={false} className="board-handle" />)}</>;
+}
 
 /** The title of a lane: what its cards are, and what it leaves out. Its cards are separate nodes drawn over it. */
 export function BoardLane({ data }: NodeProps<LaneNode>) {
@@ -35,6 +48,7 @@ export function BoardCheckpoint({ data }: NodeProps<CheckpointNode>) {
     className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs',
       waiting ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border')}
   >
+    <Anchors />
     <header className="border-b border-border/60 px-3 pt-3" style={{ height: BOARD_SIZE.frameHeader }}>
       {data.kind === 'plan'
         ? <div className="h-10">
@@ -81,6 +95,7 @@ export function BoardDocument({ data }: NodeProps<DocumentNode>) {
     className={cn('flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
       data.dimmed ? 'border-dashed border-border bg-muted text-muted-foreground' : 'border-border bg-card text-card-foreground')}
   >
+    <Anchors />
     <div className="flex h-5 items-center gap-1.5">
       <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
       <p id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</p>
@@ -98,6 +113,7 @@ export function BoardCommit({ data }: NodeProps<CommitNode>) {
   const shaId = useId();
   const ago = agoText(data.at);
   return <article aria-labelledby={shaId} className="flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs">
+    <Anchors />
     <div className="flex h-4 items-center gap-2 text-xs">
       <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
       <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
@@ -111,4 +127,131 @@ export function BoardCommit({ data }: NodeProps<CommitNode>) {
 /** Stands in a lane that has nothing in it, so the gap is explained and not mistaken for something that failed to load. */
 export function BoardPlaceholder({ data }: NodeProps<PlaceholderNode>) {
   return <p className="flex h-full w-full items-center rounded-lg border border-dashed border-border bg-card/60 px-3 text-xs leading-4 text-muted-foreground">{data.text}</p>;
+}
+
+// ─── Cards ──────────────────────────────────────────────────────────────────
+
+const FILE_LABEL: Record<FileType, string> = { image: 'Picture', html: 'HTML page', pdf: 'PDF', markdown: 'Markdown', other: 'File' };
+const FILE_ICON: Record<FileType, LucideIcon> = { image: FileImage, html: Globe, pdf: FileText, markdown: FileCode, other: File };
+
+/**
+ * Whether the text in an element is cut off by its line clamp. Measured again when `key` changes and whenever the element
+ * changes size: a card that arrives while the board is hidden behind another part has no size yet, and is measured when it
+ * is shown.
+ */
+function useCut<T extends HTMLElement>(key: string): [RefObject<T | null>, boolean] {
+  const ref = useRef<T>(null);
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => setCut(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [key]);
+  return [ref, cut];
+}
+
+/** "by claude · 5 min ago", and who changed it since when someone did. */
+function bylineText(data: CardData): string {
+  const made = agoText(data.at);
+  const edited = Date.parse(data.updatedAt) - Date.parse(data.at) > 1000
+    ? ` · edited${data.updatedBy === data.by ? '' : ` by ${authorName(data.updatedBy)}`} ${agoText(data.updatedAt)}`.trimEnd()
+    : '';
+  return `by ${authorName(data.by)}${made ? ` · ${made}` : ''}${edited}`;
+}
+
+/** The whole text of a card, for when the card shows only the start of it. */
+function ReadAll({ data }: { data: CardData }) {
+  return <Dialog>
+    <DialogTrigger render={<Button size="xs" variant="ghost" className="nodrag nopan" aria-label={`Read all of ${data.title}`} />}>Read all</DialogTrigger>
+    <DialogPopup className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle className="break-words pr-8 text-base leading-snug">{data.title}</DialogTitle>
+        <DialogDescription>{bylineText(data)}</DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{data.text}</p>
+      </DialogPanel>
+    </DialogPopup>
+  </Dialog>;
+}
+
+/** The line under a card's text: who put it there and when, and whether it is pinned or put away. */
+function Byline({ data, children }: { data: CardData; children?: ReactNode }) {
+  const byline = bylineText(data);
+  return <div className="flex h-6 shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+    {data.pinned && <Pin aria-hidden="true" className="size-3 shrink-0 text-primary" />}
+    {data.pinned && <span className="sr-only">Pinned. </span>}
+    <span className="min-w-0 flex-1 truncate" title={byline}>{byline}</span>
+    {data.archived && <Badge variant="secondary" size="sm">Archived</Badge>}
+    {children}
+  </div>;
+}
+
+/** The frame every card shares. A card that is new, or was just changed by someone else, glows for a moment. */
+function CardFrame({ data, labelledBy, children }: { data: CardData; labelledBy: string; children: ReactNode }) {
+  return <article
+    aria-labelledby={labelledBy}
+    className={cn('relative flex h-full w-full flex-col overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
+      data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground')}
+  >
+    <Anchors />
+    {data.fresh && <span key={data.updatedAt} aria-hidden="true" className="board-fresh" />}
+    {children}
+  </article>;
+}
+
+/** A note someone put on the board: its title, the start of its text, who wrote it and when. The whole text is one button away. */
+export function BoardNote({ data }: NodeProps<NoteNode>) {
+  const titleId = useId();
+  const [titleRef, titleCut] = useCut<HTMLHeadingElement>(data.title);
+  const [bodyRef, bodyCut] = useCut<HTMLParagraphElement>(data.text);
+  return <CardFrame data={data} labelledBy={titleId}>
+    <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
+    <p ref={bodyRef} className="mt-1 line-clamp-4 shrink-0 whitespace-pre-line break-words text-xs leading-[18px]">{data.text}</p>
+    <div className="mt-auto" />
+    <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
+  </CardFrame>;
+}
+
+/** What stands in a file card where a picture would: the kind of file, and where it is. */
+function FileKind({ type, path }: { type: FileType; path: string }) {
+  const Icon = FILE_ICON[type];
+  return <div className="flex size-full flex-col items-center justify-center gap-1 px-3 text-center">
+    <Icon aria-hidden="true" className="size-8 text-muted-foreground" />
+    <span className="text-xs font-medium">{FILE_LABEL[type]}</span>
+    <code className="max-w-full truncate font-mono text-[11px] text-muted-foreground" title={path}>{path}</code>
+  </div>;
+}
+
+/** A file someone put on the board: a picture shows itself; anything else shows its kind. Open shows it where the app shows documents. */
+export function BoardFile({ data }: NodeProps<FileNode>) {
+  const titleId = useId();
+  const actions = useContext(BoardActionsContext);
+  // The path of a picture that would not load, so a card that now names another file tries it.
+  const [brokenPath, setBrokenPath] = useState<string | null>(null);
+  const [titleRef, titleCut] = useCut<HTMLHeadingElement>(data.title);
+  const [textRef, textCut] = useCut<HTMLParagraphElement>(data.text);
+  const picture = data.fileType === 'image' && actions && brokenPath !== data.path;
+  return <CardFrame data={data} labelledBy={titleId}>
+    <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
+    <div className="mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/60">
+      {picture
+        ? <img
+          src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
+          loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-contain"
+        />
+        : <FileKind type={data.fileType} path={data.path} />}
+    </div>
+    <p ref={textRef} className="mt-1.5 line-clamp-3 shrink-0 whitespace-pre-line break-words text-xs leading-[18px]">{data.text}</p>
+    <div className="mt-auto" />
+    <Byline data={data} />
+    <div className="flex h-7 shrink-0 items-center gap-1">
+      <Button size="xs" variant="outline" className="nodrag nopan" aria-label={`Open ${data.title}`} onClick={() => actions?.openFile(data.path)} disabled={!actions}><ExternalLink aria-hidden="true" />Open</Button>
+      {(titleCut || textCut) && <ReadAll data={data} />}
+    </div>
+  </CardFrame>;
 }

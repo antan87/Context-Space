@@ -286,7 +286,8 @@ export async function appendScreenEvent(
     const event = { id: randomUUID(), timestamp: new Date(now).toISOString(), harness, ...clean } as ScreenEvent;
     const line = JSON.stringify({ ...event, author: input.author === 'human' ? 'human' : 'agent', kind: SCREEN_EVENT_KIND }) + '\n';
     if (!(await appendWithin(file, line, ledger === 'board' ? BOARD_EVENTS_MAX_BYTES : SCREEN_EVENTS_MAX_BYTES))) {
-      // Keep one earlier file. Reading only ever needs the end, so nothing is lost that a screen could still want.
+      // Keep one earlier file. The feed reads only the current file, so lines written after the
+      // feed's last read and before this rotation are never delivered, and a screen that connects later does not replay them.
       await fs.rm(`${file}.1`, { force: true });
       await fs.rename(file, `${file}.1`).catch(() => {});
       await fs.appendFile(file, line, 'utf8');
