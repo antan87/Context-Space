@@ -140,7 +140,7 @@ export interface BoardSources {
   now?: number;
 }
 
-/** Read-only for now: nothing can be moved, linked or picked. */
+/** Nothing is linked or picked, and nothing can be moved here: what may be dragged is marked by `withMoves` (boardMoves). */
 const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
 
 /** Above the columns and the cards in them, so a card put on a column stays in front. A pinned card stays in front of the rest. */
@@ -473,8 +473,8 @@ export function sidesBetween(from: Rect, to: Rect): [Side, Side] {
   return from.y + from.height / 2 <= to.y + to.height / 2 ? ['bottom', 'top'] : ['top', 'bottom'];
 }
 
-/** What a node is called in words, for the line that joins it. */
-function nodeTitle(node: BoardNode): string {
+/** What a node is called in words, for the line that joins it and for the keyboard. */
+export function nodeTitle(node: BoardNode): string {
   switch (node.type) {
     case 'commit': return `commit ${node.data.sha}`;
     case 'lane': case 'placeholder': return node.id;

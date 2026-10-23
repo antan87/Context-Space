@@ -82,6 +82,10 @@ Both routes are behind the app's local-origin boundary.
 
 Statuses: `200`; `400` for input that is not valid (the message names the change and field, such as `Change 2, title: …`) or a change this board cannot take (no such card, a limit reached, a file that is not there or may not be shown); `404` for an unknown workspace, or one that has gone while the request was in flight; `409` for a stale `revision`, a busy board or an archived workspace; `413` for a request that is too large; `500` when the stored board is not usable (not JSON, a newer version, a folder or an unreadable file in its place) and when something fails that the request did not cause (a write, the lock, the disk). A `500` leaves the board as it was.
 
+## In the app
+
+On the Board tab you drag a card, a checkpoint, a document or a commit where you want it, out of its lane too, or focus it and press Shift with an arrow key (24 units a press; a run of presses is saved once, a moment after the last). The place is saved as a `move` of that one node, sent without a `revision` so that a live AI change cannot make it fail, and it is there after a reload and for everyone else. Undo is offered for about eight seconds (Control or Command and Z does the same, and the offer waits while the pointer or the keyboard is on it): it puts the node back at the place it had saved, or forgets the place so the node returns to where the board puts it. A move that is refused puts the node back and says why.
+
 ## MCP tools
 
 Offered to `developer`, `interactive` and `full` sessions, like the screen tools; `board_read` is offered to `readonly` and `review` sessions too. Each takes an optional `harness` (the name of the AI tool, recorded as who made the change in the plain form above; `user` becomes `ai`). Every tool but `board_read` also takes an optional `revision`. Answers are compact JSON.

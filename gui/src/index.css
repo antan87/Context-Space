@@ -685,10 +685,13 @@
    board. Its buttons need them back, or a click goes through them. */
 .board-flow .react-flow__node button { pointer-events: auto; }
 
-/* A plain grab cursor: nothing on the board can be dragged, only the board itself. */
+/* A grab cursor on the board itself and on whatever can be dragged (the library gives those nodes theirs). A node that the
+   keyboard can move shows its focus on the card inside it, which has the rounded corners. */
 .board-flow .react-flow__pane { cursor: grab; }
 .board-flow .react-flow__pane.dragging { cursor: grabbing; }
 .board-flow:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.board-flow .react-flow__node:focus-visible { outline: none; }
+.board-flow .react-flow__node:focus-visible > article { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* The lines between things: the muted text colour, and a label that sits on the card colour so it reads over the line.
    The anchors a line is drawn to are there for the line only, so they are not drawn. */
