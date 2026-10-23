@@ -1,5 +1,6 @@
 import { planningTools } from './planning-tools.js';
 import { screenTools } from './screen-tools.js';
+import { boardTools } from './board-tools.js';
 /**
  * @module mcp/tools
  * Registry of MCP tools NexusFlow exposes to AI assistants. Each tool declares
@@ -163,6 +164,7 @@ async function requireWorkspace(ctx: ToolContext): Promise<void> {
 export const tools: NexusFlowTool[] = [
   ...planningTools,
   ...screenTools,
+  ...boardTools,
   {
     name: 'get_work_context',
     description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is where PLAN.md stands (as `ctxspace plan` prints it) followed by its text. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan by editing PLAN.md.',
@@ -1378,6 +1380,7 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
+    'board_read',
   ],
   review: [
     'search_workspace',
@@ -1395,6 +1398,7 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'list_skills',
     'get_work_context',
     'read_work_document',
+    'board_read',
   ],
   ci: [
     'search_workspace',

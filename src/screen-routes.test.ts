@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { app } from './server.js';
 import * as configModule from './core/config.js';
-import { appendScreenEvent } from './core/screen-events.js';
+import { BOARD_EVENTS_FILE, appendScreenEvent } from './core/screen-events.js';
 
 let root: string;
 let dir: string;
@@ -149,6 +149,29 @@ describe('GET /api/workspace/:id/screen-events', () => {
     setTimeout(() => { void appendScreenEvent(dir, { event: 'show', payload: { view: 'document', path: 'plan.md' } }); }, 100);
     const frames = await readFrames(res, (f) => f.some((x) => x.event === 'screen'));
     expect(frames.find((f) => f.event === 'screen')!.data.event.payload).toMatchObject({ path: 'plan.md' });
+  });
+
+  it('delivers a board event written after the screen connected, from the board ledger, as a screen event', async () => {
+    const res = await app.request('/api/workspace/ws/screen-events');
+    setTimeout(() => { void appendScreenEvent(dir, { harness: 'user', author: 'human', event: 'board', payload: { revision: 4, changes: 2 } }); }, 100);
+    const frames = await readFrames(res, (f) => f.some((x) => x.event === 'screen'));
+    const frame = frames.find((f) => f.event === 'screen')!;
+    expect(frame.data).toMatchObject({ type: 'screen', event: { event: 'board', harness: 'user', payload: { revision: 4, changes: 2 } } });
+    expect(frame.id).toBe(frame.data.event.timestamp);
+    await expect(fs.access(path.join(dir, '.contextspace', BOARD_EVENTS_FILE))).resolves.toBeUndefined();
+  });
+
+  it('still replays the AI\'s earlier suggestion after a long run of board events, and replays none of the board events', async () => {
+    await appendScreenEvent(dir, { event: 'next', payload: { title: 'Answer two questions', reason: 'The build is paused' } }, Date.now() - 600_000);
+    const at = Date.now() - 300_000;
+    const rows = Array.from({ length: 2500 }, (_, n) => JSON.stringify({
+      id: `b${n}`, timestamp: new Date(at + n).toISOString(), harness: 'claude', author: 'agent', kind: 'screen_event', event: 'board', payload: { revision: n + 1, changes: 1 },
+    }));
+    await fs.writeFile(path.join(dir, '.contextspace', BOARD_EVENTS_FILE), `${rows.join('\n')}\n`);
+    expect((await fs.stat(path.join(dir, '.contextspace', BOARD_EVENTS_FILE))).size).toBeGreaterThan(256 * 1024);
+
+    const frames = await readFrames(await app.request('/api/workspace/ws/screen-events'), (f) => f.length >= 2, 1200);
+    expect(frames.map((f) => f.data.event.event)).toEqual(['next']);
   });
 
   it('carries the questions the AI asks, with their options', async () => {

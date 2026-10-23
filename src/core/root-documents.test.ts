@@ -2,7 +2,7 @@ import { beforeEach, afterEach, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { createRootFolder, listRootDocuments, moveRootDocument, readRootDocument, writeRootDocument } from './root-documents.js';
+import { createRootFolder, listRootDocuments, moveRootDocument, openableDocumentName, readRootDocument, writeRootDocument } from './root-documents.js';
 
 let root: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'root-docs-')); });
@@ -294,4 +294,13 @@ it('creates root folders and moves documents into subfolders', async () => {
   expect(metaDoc.size).toBeGreaterThan(0);
   expect(typeof metaDoc.modifiedAt).toBe('string');
   expect(new Date(metaDoc.modifiedAt!).toISOString()).toBe(metaDoc.modifiedAt);
+});
+
+it('checks a document name by the rules the panel opens files by, without touching the disk', () => {
+  expect(openableDocumentName('docs/overview.html')).toBe('docs/overview.html');
+  expect(openableDocumentName('docs\\shot.png')).toBe('docs/shot.png');
+  expect(openableDocumentName('.claude/notes.md')).toBe('.claude/notes.md');
+  for (const name of ['', '../x.md', 'a/../x.md', 'a//x.md', './x.md', '.git/config.md', '.contextspace/x.md', '.env.md', 'C:/x.md', 'x.md:stream', 'src/main.ts', 'folder']) {
+    expect(() => openableDocumentName(name), name).toThrow();
+  }
 });

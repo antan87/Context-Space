@@ -6,6 +6,11 @@
  * pushes new lines to the screen. The ledger is its own file so a chatty agent
  * cannot crowd real handoff messages out of the chat ledger's small windows.
  *
+ * Board events ("the board changed, read it again") have a ledger of their own,
+ * for the same reason one level down: the board is the chattiest source there is
+ * (every drag may save), and a long run of its events must not push what the AI
+ * said out of the screen ledger's read window or the replay.
+ *
  * Nothing here is trusted: every line is rebuilt field by field when read, so a
  * hand-edited or corrupt ledger can neither crash the screen nor point it at a
  * path outside the workspace.
@@ -35,6 +40,8 @@ import {
 
 export const SCREEN_EVENT_KIND = 'screen_event';
 export const SCREEN_EVENTS_FILE = 'screen-events.jsonl';
+/** Where board events are kept, in the same folder as {@link SCREEN_EVENTS_FILE}. */
+export const BOARD_EVENTS_FILE = 'board-events.jsonl';
 /** Events older than this are no longer replayed to a screen that connects. */
 export const SCREEN_EVENT_MAX_AGE_MS = 24 * 60 * 60_000;
 /** The same event from the same agent inside this window is shown once. */
@@ -43,6 +50,8 @@ export const SCREEN_EVENT_REPEAT_WINDOW_MS = 60_000;
 export const SCREEN_EVENT_REPLAY_LIMIT = 50;
 /** The ledger is rotated when it grows past this, so it cannot grow for ever. */
 export const SCREEN_EVENTS_MAX_BYTES = 2 * 1024 * 1024;
+/** The same for the board ledger, which is only ever read at its end and is written to far more often. */
+export const BOARD_EVENTS_MAX_BYTES = 512 * 1024;
 /** How much of a ledger's end each read looks at. */
 const TAIL_BYTES = 256 * 1024;
 /** How often the live feed looks for new lines. */
@@ -67,6 +76,8 @@ export type ScreenEvent = Base & (
   | { event: 'next'; payload: { title: string; reason: string; path?: string; repo?: string; line?: number } }
   | { event: 'milestone'; payload: { stepId: string; state: MilestoneEventState; note?: string } }
   | { event: 'milestone_proposal'; payload: { stepId: string; proposal: MilestoneProposalKind; reason: string } }
+  /** The board was changed (by a person or an AI); `revision` is the one it has now. A screen reads the board again. */
+  | { event: 'board'; payload: { revision: number; changes: number } }
 );
 export type ScreenEventName = ScreenEvent['event'];
 export type ScreenEventInput = { [E in ScreenEvent as E['event']]: { event: E['event']; payload: E['payload'] } }[ScreenEventName];
@@ -82,6 +93,7 @@ export type LiveEvent =
 // ─── Cleaning ───────────────────────────────────────────────────────────────
 
 const STEP_ID = /^[a-zA-Z0-9_-]{1,100}$/;
+const isCount = (value: unknown, max: number): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= max;
 
 /** Rebuilds a payload from untrusted input, or returns null when it does not make a usable event. */
 function cleanPayload(event: ScreenEventName, raw: unknown): ScreenEvent['payload'] | null {
@@ -133,6 +145,13 @@ function cleanPayload(event: ScreenEventName, raw: unknown): ScreenEvent['payloa
       if (typeof p.stepId !== 'string' || !STEP_ID.test(p.stepId) || !proposal || !reason) return null;
       return { stepId: p.stepId, proposal, reason };
     }
+    case 'board': {
+      // The revision is part of the payload on purpose: it makes every change a different event, so the repeat check
+      // below never swallows the second of two quick changes.
+      const { revision, changes } = p;
+      if (!isCount(revision, 1_000_000_000) || !isCount(changes, 1000)) return null;
+      return { revision, changes };
+    }
     default:
       return null;
   }
@@ -142,7 +161,7 @@ function cleanPayload(event: ScreenEventName, raw: unknown): ScreenEvent['payloa
 export function parseScreenEntry(entry: any, now: number): ScreenEvent | null {
   if (!entry || typeof entry !== 'object' || entry.kind !== SCREEN_EVENT_KIND) return null;
   const time = ledgerEntryTime(entry, now);
-  const names: readonly string[] = ['show', 'annotate', 'next', 'milestone', 'milestone_proposal'];
+  const names: readonly string[] = ['show', 'annotate', 'next', 'milestone', 'milestone_proposal', 'board'];
   if (time === null || typeof entry.id !== 'string' || !entry.id || !names.includes(entry.event)) return null;
   const payload = cleanPayload(entry.event, entry.payload);
   if (!payload) return null;
@@ -157,19 +176,24 @@ export function parseScreenEntry(entry: any, now: number): ScreenEvent | null {
 
 // ─── The ledger ─────────────────────────────────────────────────────────────
 
-async function screenEventsPath(workspaceRoot: string): Promise<{ file: string; dir: string }> {
-  const ledger = await resolveWorkspaceChatLedger(workspaceRoot);
-  return { file: path.join(ledger.chatDir, SCREEN_EVENTS_FILE), dir: ledger.chatDir };
+type Ledger = 'screen' | 'board';
+/** Which ledger an event is kept in. */
+const ledgerOf = (event: ScreenEventName): Ledger => (event === 'board' ? 'board' : 'screen');
+
+async function ledgerPath(workspaceRoot: string, ledger: Ledger = 'screen'): Promise<{ file: string; dir: string }> {
+  const chat = await resolveWorkspaceChatLedger(workspaceRoot);
+  return { file: path.join(chat.chatDir, ledger === 'board' ? BOARD_EVENTS_FILE : SCREEN_EVENTS_FILE), dir: chat.chatDir };
 }
 
-function parseLines(lines: readonly string[], now: number): ScreenEvent[] {
+/** The events a ledger holds. A line of the other kind in it is not counted, so one ledger cannot crowd the other. */
+function parseLines(lines: readonly string[], now: number, ledger: Ledger): ScreenEvent[] {
   const events: ScreenEvent[] = [];
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
       const event = parseScreenEntry(JSON.parse(trimmed), now);
-      if (event) events.push(event);
+      if (event && ledgerOf(event.event) === ledger) events.push(event);
     } catch {
       // A corrupt line is skipped.
     }
@@ -177,22 +201,38 @@ function parseLines(lines: readonly string[], now: number): ScreenEvent[] {
   return events;
 }
 
+async function listFrom(
+  workspaceRoot: string,
+  ledger: Ledger,
+  options: { sinceMs?: number; now?: number; limit?: number },
+): Promise<ScreenEvent[]> {
+  const now = options.now ?? Date.now();
+  const since = Math.max(options.sinceMs ?? 0, now - SCREEN_EVENT_MAX_AGE_MS);
+  const { file } = await ledgerPath(workspaceRoot, ledger);
+  const tail = await readLedgerTail(file, since, TAIL_BYTES);
+  return parseLines(tail.lines, now, ledger)
+    .filter((event) => Date.parse(event.timestamp) >= since)
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+    .slice(-(options.limit ?? SCREEN_EVENT_REPLAY_LIMIT));
+}
+
 /**
- * Screen events from the last {@link SCREEN_EVENT_MAX_AGE_MS}, oldest first,
- * at most `limit`. Reads only the end of the ledger.
+ * What the AI told the screen, from the last {@link SCREEN_EVENT_MAX_AGE_MS}, oldest first, at most `limit`. Reads only
+ * the end of the ledger. Board events are not in it (see {@link listBoardEvents}).
  */
 export async function listScreenEvents(
   workspaceRoot: string,
   options: { sinceMs?: number; now?: number; limit?: number } = {},
 ): Promise<ScreenEvent[]> {
-  const now = options.now ?? Date.now();
-  const since = Math.max(options.sinceMs ?? 0, now - SCREEN_EVENT_MAX_AGE_MS);
-  const { file } = await screenEventsPath(workspaceRoot);
-  const tail = await readLedgerTail(file, since, TAIL_BYTES);
-  return parseLines(tail.lines, now)
-    .filter((event) => Date.parse(event.timestamp) >= since)
-    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
-    .slice(-(options.limit ?? SCREEN_EVENT_REPLAY_LIMIT));
+  return listFrom(workspaceRoot, 'screen', options);
+}
+
+/** The board events from the last {@link SCREEN_EVENT_MAX_AGE_MS}, oldest first, at most `limit`. Reads only the end. */
+export async function listBoardEvents(
+  workspaceRoot: string,
+  options: { sinceMs?: number; now?: number; limit?: number } = {},
+): Promise<ScreenEvent[]> {
+  return listFrom(workspaceRoot, 'board', options);
 }
 
 function sameEvent(a: ScreenEventInput, b: ScreenEvent): boolean {
@@ -216,6 +256,9 @@ async function appendWithin(file: string, line: string, limit: number): Promise<
   }
 }
 
+/** Who wrote a line of the ledger: the AI (the default), or the person at the app. */
+export type ScreenEventAuthor = 'agent' | 'human';
+
 /**
  * Records one event. An identical event from the same agent inside
  * {@link SCREEN_EVENT_REPEAT_WINDOW_MS} is not recorded again, because an agent
@@ -224,7 +267,7 @@ async function appendWithin(file: string, line: string, limit: number): Promise<
  */
 export async function appendScreenEvent(
   workspaceRoot: string,
-  input: ScreenEventInput & { harness?: string },
+  input: ScreenEventInput & { harness?: string; author?: ScreenEventAuthor },
   now: number = Date.now(),
 ): Promise<{ status: 'shown' | 'already_shown'; event: ScreenEvent }> {
   const payload = cleanPayload(input.event, input.payload);
@@ -232,16 +275,17 @@ export async function appendScreenEvent(
   const harness = cleanInputRequestText(input.harness).slice(0, INPUT_REQUEST_HARNESS_LIMIT) || 'agent';
   const clean = { event: input.event, payload } as ScreenEventInput;
 
+  const ledger = ledgerOf(input.event);
   const run = async () => {
-    const { file, dir } = await screenEventsPath(workspaceRoot);
-    const recent = await listScreenEvents(workspaceRoot, { sinceMs: now - SCREEN_EVENT_REPEAT_WINDOW_MS, now, limit: 100 });
+    const { file, dir } = await ledgerPath(workspaceRoot, ledger);
+    const recent = await listFrom(workspaceRoot, ledger, { sinceMs: now - SCREEN_EVENT_REPEAT_WINDOW_MS, now, limit: 100 });
     const repeat = recent.find((event) => event.harness === harness && sameEvent(clean, event));
     if (repeat) return { status: 'already_shown' as const, event: repeat };
 
     await fs.mkdir(dir, { recursive: true });
     const event = { id: randomUUID(), timestamp: new Date(now).toISOString(), harness, ...clean } as ScreenEvent;
-    const line = JSON.stringify({ ...event, author: 'agent', kind: SCREEN_EVENT_KIND }) + '\n';
-    if (!(await appendWithin(file, line, SCREEN_EVENTS_MAX_BYTES))) {
+    const line = JSON.stringify({ ...event, author: input.author === 'human' ? 'human' : 'agent', kind: SCREEN_EVENT_KIND }) + '\n';
+    if (!(await appendWithin(file, line, ledger === 'board' ? BOARD_EVENTS_MAX_BYTES : SCREEN_EVENTS_MAX_BYTES))) {
       // Keep one earlier file. Reading only ever needs the end, so nothing is lost that a screen could still want.
       await fs.rm(`${file}.1`, { force: true });
       await fs.rename(file, `${file}.1`).catch(() => {});
@@ -262,10 +306,11 @@ async function signature(files: readonly string[]): Promise<string> {
 }
 
 /** Every file the feed reads. The chat ledger may not exist yet (the first question creates it), so its path is always included. */
-async function liveFiles(workspaceRoot: string): Promise<{ screen: string; chat: string[] }> {
+async function liveFiles(workspaceRoot: string): Promise<{ screen: string; board: string; chat: string[] }> {
   const ledger = await resolveWorkspaceChatLedger(workspaceRoot);
-  const { file } = await screenEventsPath(workspaceRoot);
-  return { screen: file, chat: [...new Set([ledger.chatPath, ...ledger.readPaths])] };
+  const { file } = await ledgerPath(workspaceRoot, 'screen');
+  const board = await ledgerPath(workspaceRoot, 'board');
+  return { screen: file, board: board.file, chat: [...new Set([ledger.chatPath, ...ledger.readPaths])] };
 }
 
 async function collect(
@@ -273,13 +318,16 @@ async function collect(
   sinceMs: number,
   now: number,
 ): Promise<Array<{ key: string; time: number; event: LiveEvent }>> {
-  const { screen: file, chat } = await liveFiles(workspaceRoot);
+  const { screen: file, board: boardFile, chat } = await liveFiles(workspaceRoot);
   const found: Array<{ key: string; time: number; event: LiveEvent }> = [];
 
-  const screen = await readLedgerTail(file, sinceMs, TAIL_BYTES);
-  for (const event of parseLines(screen.lines, now)) {
-    const time = Date.parse(event.timestamp);
-    if (time >= sinceMs) found.push({ key: `s:${event.id}`, time, event: { type: 'screen', event } });
+  // Two ledgers, read one after the other, so a busy board never takes room in what the AI said.
+  for (const [ledger, ledgerFile, prefix] of [['screen', file, 's'], ['board', boardFile, 'b']] as const) {
+    const tail = await readLedgerTail(ledgerFile, sinceMs, TAIL_BYTES);
+    for (const event of parseLines(tail.lines, now, ledger)) {
+      const time = Date.parse(event.timestamp);
+      if (time >= sinceMs) found.push({ key: `${prefix}:${event.id}`, time, event: { type: 'screen', event } });
+    }
   }
 
   for (const chatFile of chat) {
@@ -314,6 +362,22 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
+ * Forgets the remembered events that have left the read window. What the feed reads is the end of each file, and a
+ * file only grows at its end, so an event that has left the window cannot be read again: remembering it would only
+ * make the memory grow. This keeps what is remembered as large as the window, however many events there are, and
+ * never forgets one that could still be read.
+ *
+ * A kind of event (its key's first letter) is left alone while the window holds none of it. That is how a file that
+ * could not be read for a moment looks, and forgetting its events would send them again when it can be read.
+ */
+function forgetLeft(remembered: Set<string>, window: ReadonlySet<string>): void {
+  const present = new Set([...window].map((key) => key[0]));
+  for (const key of remembered) {
+    if (present.has(key[0]!) && !window.has(key)) remembered.delete(key);
+  }
+}
+
+/**
  * The live feed for one workspace: what the AI told the screen, the questions it
  * asked and when they were answered, oldest first. It first replays what is
  * recent (since `since`, at most the last {@link SCREEN_EVENT_REPLAY_LIMIT}), then yields
@@ -323,11 +387,20 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
  */
 export async function* watchLiveEvents(
   workspaceRoot: string,
-  options: { since?: number; signal?: AbortSignal; pollMs?: number; now?: () => number } = {},
+  options: {
+    since?: number;
+    signal?: AbortSignal;
+    pollMs?: number;
+    now?: () => number;
+    /** Called after each read of the files with how many events it held and how many the feed remembers. For tests and diagnostics. */
+    onRead?: (state: { window: number; remembered: number }) => void;
+  } = {},
 ): AsyncGenerator<LiveEvent> {
   const clock = options.now ?? Date.now;
   const pollMs = options.pollMs ?? SCREEN_FEED_POLL_MS;
+  // What was sent, and what was left out of the first replay: both only as far as the files can still be read.
   const seen = new Set<string>();
+  const heldBack = new Set<string>();
   let last = '';
   let first = true;
   const planFile = path.join(workspaceRoot, PLAN_FILE);
@@ -341,25 +414,29 @@ export async function* watchLiveEvents(
     planLast = planNow;
     // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.
     const files = await liveFiles(workspaceRoot);
-    const current = await signature([files.screen, ...files.chat]);
+    const current = await signature([files.screen, files.board, ...files.chat]);
     if (first || current !== last) {
       last = current;
       const since = Math.max(options.since ?? 0, now - SCREEN_EVENT_MAX_AGE_MS);
       let events = await collect(workspaceRoot, since, now);
+      const window = new Set(events.map((e) => e.key));
+      forgetLeft(seen, window);
+      forgetLeft(heldBack, window);
       if (first) {
-        // Replay only the newest few, so a long-running workspace does not flood a screen that just opened. What is
-        // held back counts as seen: the next read covers the same window, and must not send it after all.
-        const screens = events.filter((e) => e.event.type === 'screen');
-        const drop = new Set(screens.slice(0, Math.max(0, screens.length - SCREEN_EVENT_REPLAY_LIMIT)).map((e) => e.key));
-        for (const key of drop) seen.add(key);
-        events = events.filter((e) => !drop.has(e.key));
+        // A board event only says "read the board again", and a screen that opens reads it anyway, so none is replayed.
+        // Replay only the newest few of the rest, so a long-running workspace does not flood a screen that just opened.
+        // What is held back counts as seen: the next read covers the same window, and must not send it after all.
+        const screens = events.filter((e) => e.key.startsWith('s:'));
+        const held = [...screens.slice(0, Math.max(0, screens.length - SCREEN_EVENT_REPLAY_LIMIT)), ...events.filter((e) => e.key.startsWith('b:'))].map((e) => e.key);
+        for (const key of held) heldBack.add(key);
+        events = events.filter((e) => !heldBack.has(e.key));
       }
       for (const entry of events) {
-        if (seen.has(entry.key)) continue;
+        if (seen.has(entry.key) || heldBack.has(entry.key)) continue;
         seen.add(entry.key);
-        if (seen.size > 2000) seen.delete(seen.values().next().value as string);
         yield entry.event;
       }
+      options.onRead?.({ window: window.size, remembered: seen.size + heldBack.size });
       first = false;
     }
     await pause(pollMs, options.signal);

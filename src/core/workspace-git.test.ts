@@ -56,6 +56,21 @@ describe('workspace artifact git', () => {
     expect(staged.stdout).toContain('unrelated.txt');
   });
 
+  it('commits the board with the other workspace artifacts, and leaves its change log and lock out', async () => {
+    await fs.mkdir(path.join(workspacePath, '.contextspace'), { recursive: true });
+    await fs.writeFile(path.join(workspacePath, 'contextspace-board.json'), '{"version":1,"revision":1,"cards":[],"links":[],"positions":{}}\n');
+    await fs.writeFile(path.join(workspacePath, '.contextspace', 'board-changes.jsonl'), '{}\n');
+    await fs.writeFile(path.join(workspacePath, '.contextspace', 'board.lock'), '{}\n');
+    expect((await commitWorkspaceArtifacts(workspacePath, 'refresh')).committed).toBe(true);
+    const tracked = (await execa('git', ['ls-files'], { cwd: workspacePath })).stdout.split('\n');
+    expect(tracked).toContain('contextspace-board.json');
+    expect(tracked).not.toContain('.contextspace/board-changes.jsonl');
+    expect(tracked).not.toContain('.contextspace/board.lock');
+
+    await fs.writeFile(path.join(workspacePath, 'contextspace-board.json'), '{"version":1,"revision":2,"cards":[],"links":[],"positions":{}}\n');
+    expect((await commitWorkspaceArtifacts(workspacePath, 'refresh again')).committed).toBe(true);
+  });
+
   it('pushes history and refuses to pull over dirty workspace artifacts', async () => {
     await fs.writeFile(path.join(workspacePath, 'nexusflow-knowledge.md'), '# Knowledge\n');
     await commitExactWorkspaceArtifacts(workspacePath, 'remember', ['nexusflow-knowledge.md']);

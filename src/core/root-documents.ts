@@ -40,7 +40,7 @@ function format(name: string) {
  * segment may be `..`, empty, hidden (`.git`; only `.claude`, `.agents` and `.github` are open),
  * or carry Windows drive/stream syntax. Links on disk are rejected by the callers' safety checks.
  */
-function documentPath(root: string, name: string, operation: 'open' | 'save' = 'open') {
+function checkedDocumentName(name: string, operation: 'open' | 'save' = 'open') {
   const normalized = name.replace(/\\/g, '/').replace(/^\/+/, '');
   const segments = normalized.split('/');
   if (!normalized || path.isAbsolute(normalized) || /[:\x00-\x1f\x7f]/.test(normalized) || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
@@ -48,7 +48,20 @@ function documentPath(root: string, name: string, operation: 'open' | 'save' = '
   }
   if (segments.some(isClosedSegment)) throw new Error(`Choose a document inside this workspace. ${HIDDEN_REASON}`);
   if (operation === 'open' && !format(normalized)) throw new Error(`${path.extname(normalized) || 'This'} files can't be opened here. Open it from the workspace folder instead.`);
-  return path.join(root, ...segments);
+  return { normalized, segments };
+}
+
+function documentPath(root: string, name: string, operation: 'open' | 'save' = 'open') {
+  return path.join(root, ...checkedDocumentName(name, operation).segments);
+}
+
+/**
+ * Checks a workspace-relative name by the rules the documents panel opens files by, without touching the disk, and
+ * returns it with `/` separators. For features that point at a document (the board's file cards), so what they accept
+ * is what the panel can open. The callers check the file itself.
+ */
+export function openableDocumentName(name: string): string {
+  return checkedDocumentName(name, 'open').normalized;
 }
 
 const IGNORED_DIRECTORIES = new Set([

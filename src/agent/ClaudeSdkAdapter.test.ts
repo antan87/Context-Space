@@ -193,6 +193,18 @@ describe('ClaudeSdkAdapter', () => {
     expect(approvals.every((item) => item.decision.behavior === (profile === 'workspace-write' ? 'allow' : 'deny'))).toBe(true);
   });
 
+  it.each(['workspace-write', 'review'] as const)('respects the %s profile for the board tools', async (profile) => {
+    const names = ['board_read', 'board_add_card', 'board_update_card', 'board_remove_card', 'board_move', 'board_link', 'board_unlink'];
+    const { handle, approvals } = createMockHandle(names.map((name, index) => ({
+      type: 'approval_required', requestId: `board-${index}`, tool: `mcp__contextspace-mcp__${name}`, input: {},
+    })));
+    const adapter = new ClaudeSdkAdapter(undefined, createMockAdapter(handle));
+    await adapter.start('C:/test/workspace');
+    await adapter.send('Show the user what you found on the board', profile);
+    await vi.waitFor(() => expect(approvals).toHaveLength(names.length));
+    expect(approvals.every((item) => item.decision.behavior === (profile === 'workspace-write' ? 'allow' : 'deny'))).toBe(true);
+  });
+
   it.each(['workspace-write', 'review'] as const)('lets the AI run a plain ctxspace plan, ask, knowledge search or news command in the %s profile only when it may write', async (profile) => {
     const commands = [
       'ctxspace plan',

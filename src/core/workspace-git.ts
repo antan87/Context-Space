@@ -17,6 +17,8 @@ const CORE_ARTIFACTS = [
   'contextspace.json',
   'contextspace.lock',
   'contextspace-knowledge.md',
+  // The board's cards, links and places: authored by people and AIs, so it travels with the plan.
+  'contextspace-board.json',
   'PLAN.md',
   'contextspace-plan.md',
   'contextspace-plan.json',

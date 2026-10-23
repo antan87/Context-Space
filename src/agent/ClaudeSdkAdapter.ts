@@ -25,13 +25,15 @@ const READONLY_MCP_TOOLS = new Set([
   'run_doctor', 'get_service_logs', 'list_workspaces', 'list_repos', 'preview_archive',
   'add_knowledge', 'promote_knowledge', 'search_knowledge',
   'read_workroom_stream', 'refresh_context',
-  'get_work_context', 'read_work_document',
+  'get_work_context', 'read_work_document', 'board_read',
   // They only show things to the user or alert them; none edits a file, so none needs an approval prompt.
   'request_user_input', 'show_in_reader', 'annotate_document', 'suggest_next', 'get_screen_context',
 ]);
 
 const WORKSPACE_EDIT_MCP_TOOLS = new Set([
   'update_work_assignment', 'add_work_document', 'update_work_document',
+  // The AI keeps the board in order itself, and every change it makes is logged.
+  'board_add_card', 'board_update_card', 'board_remove_card', 'board_move', 'board_link', 'board_unlink',
 ]);
 
 const MUTATING_LIFECYCLE_TOOLS = new Set([
