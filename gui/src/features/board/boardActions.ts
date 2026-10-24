@@ -24,6 +24,8 @@ export interface BoardActions {
   toggleGroup: (id: string, open: boolean) => void;
   /** A button of a group that has just opened or folded, to put the keyboard on when it was on the one that was pressed. */
   keepFocus: (id: string, button: HTMLElement) => void;
+  /** Steps into an area from Level 0 (Overview) into Level 1 (Area). */
+  openArea?: (id: string, button: HTMLElement) => void;
 }
 
 export const BoardActionsContext = createContext<BoardActions | null>(null);

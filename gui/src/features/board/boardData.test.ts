@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOARD_DATA_LIMITS, cleanBoard, cleanCardPath, isBoardNodeId } from './boardData.js';
+import { BOARD_DATA_LIMITS, cleanBoard, cleanCardPath, isBoardAreaId, isBoardNodeId } from './boardData.js';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const AT = '2026-10-23T09:00:00.000Z';
@@ -51,6 +51,30 @@ describe('cleanBoard', () => {
     const [card] = cleanBoard(reply({ cards: [{ ...note(1), body: 7, pinned: 'yes', archived: 1, extra: '<script>', updatedBy: 'No One', updatedAt: 'later' }] })).cards;
     expect(card).toEqual({ id: uuid(1), kind: 'note', title: 'Note 1', body: '', pinned: false, archived: false, by: 'claude', at: AT, updatedBy: 'claude', updatedAt: AT });
     expect(Object.keys(card)).not.toContain('extra');
+  });
+
+  it('preserves valid area and drops invalid area', () => {
+    const validCheckpoint = note(1, { area: 'checkpoint:reports-export' });
+    const validPlanOwn = file(2, { area: 'plan:own' });
+    const badEmpty = note(3, { area: '' });
+    const badLane = note(4, { area: 'lane:documents' });
+    const badNull = note(5, { area: null });
+    const badNum = note(6, { area: 7 });
+    const badUuid = note(7, { area: uuid(99) });
+    const noArea = note(8);
+
+    const board = cleanBoard(reply({
+      cards: [validCheckpoint, validPlanOwn, badEmpty, badLane, badNull, badNum, badUuid, noArea],
+    }));
+
+    expect(board.cards).toHaveLength(8);
+    expect(board.cards[0].area).toBe('checkpoint:reports-export');
+    expect(board.cards[1].area).toBe('plan:own');
+    for (let i = 2; i < 8; i++) {
+      expect('area' in board.cards[i]).toBe(false);
+      expect(board.cards[i].area).toBeUndefined();
+      expect(Object.keys(board.cards[i])).not.toContain('area');
+    }
   });
 
   it('cuts text to the limits, and keeps a card with no text', () => {
@@ -111,6 +135,20 @@ describe('isBoardNodeId', () => {
   it('refuses the rest', () => {
     for (const id of ['', 'lane:documents', 'plan:own', 'checkpoint:', 'checkpoint:-a', 'checkpoint:a b', 'checkpoint:a#', 'document:abc', 'commit:api:abc123', 'commit:api:ABCDEF0', 'commit::a91f2e0', 'commit:a/b:a91f2e0', `commit:api:${'a'.repeat(65)}`, 'x'.repeat(401), 7, null, undefined]) {
       expect(isBoardNodeId(id), String(id)).toBe(false);
+    }
+  });
+});
+
+describe('isBoardAreaId', () => {
+  it('knows the shapes the board accepts for an area', () => {
+    for (const id of ['checkpoint:reports-export-to-csv', 'checkpoint:réports-2', 'checkpoint:a#2', 'plan:own']) {
+      expect(isBoardAreaId(id), id).toBe(true);
+    }
+  });
+
+  it('refuses the rest', () => {
+    for (const id of ['', uuid(1), 'lane:documents', 'checkpoint:', 'checkpoint:-a', 'checkpoint:a b', 'checkpoint:a#', `document:${uuid(2)}`, 'commit:api:abc1234', 'x'.repeat(401), 7, null, undefined]) {
+      expect(isBoardAreaId(id), String(id)).toBe(false);
     }
   });
 });

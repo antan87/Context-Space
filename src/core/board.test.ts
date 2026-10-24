@@ -15,6 +15,7 @@ import {
   BoardWorkspaceError,
   boardActorName,
   changeBoard,
+  isBoardAreaId,
   isBoardNodeId,
   parseBoardChanges,
   readBoard,
@@ -207,6 +208,27 @@ describe('node ids', () => {
   });
 });
 
+describe('area ids', () => {
+  it.each([
+    'checkpoint:reports-export-to-csv',
+    'checkpoint:reports-export-to-csv-2',
+    'checkpoint:ünïcode-schlüssel',
+    'checkpoint:plan#2',
+    'plan:own',
+  ])('accepts %s', (id) => {
+    expect(isBoardAreaId(id)).toBe(true);
+  });
+
+  it.each([
+    '', 'x', randomUUID(), 'document:7f3c1c6e-3c35-4f0a-9a3d-0b6a2d6f8d11',
+    'commit:NexusFlow:abc1234', 'lane:documents', 'checkpoint:', 'checkpoint:-x',
+    'checkpoint:a/b', 'checkpoint:a b', 'CHECKPOINT:x', `checkpoint:${'a'.repeat(401)}`,
+    42, null, {},
+  ])('refuses %j', (id) => {
+    expect(isBoardAreaId(id)).toBe(false);
+  });
+});
+
 describe('cards', () => {
   it('adds a note, recording who made it and when, and bumps the revision', async () => {
     const { board, results } = await changeBoard(root, [note('  Export finding  ', { body: 'Line one\r\nLine two', pinned: true })], as('claude'));
@@ -236,6 +258,74 @@ describe('cards', () => {
       { kind: 'file', path: 'docs/shot.png', title: 'Screenshot', description: '', pinned: true },
       { kind: 'file', path: '.claude/notes.md', title: 'notes.md' },
     ]);
+  });
+
+  it('adds a card with an area, for notes and files alike', async () => {
+    await write('docs/overview.html', '<h1>Hi</h1>');
+    const { board } = await changeBoard(root, [
+      note('Checkpoint note', { area: 'checkpoint:reports-export' }),
+      note('Plan note', { area: 'plan:own' }),
+      file('docs/overview.html', { area: 'checkpoint:reports-export' }),
+    ], as('claude'));
+    expect(board.cards[0]!.area).toBe('checkpoint:reports-export');
+    expect(board.cards[1]!.area).toBe('plan:own');
+    expect(board.cards[2]!.area).toBe('checkpoint:reports-export');
+    expect((await stored()).cards[0]!.area).toBe('checkpoint:reports-export');
+  });
+
+  it('updates a card area, sets it as sole field, and clears with null', async () => {
+    const { board: made } = await changeBoard(root, [note('A note')], as('user'));
+    const id = made.cards[0]!.id;
+    expect('area' in made.cards[0]!).toBe(false);
+
+    // Set area as sole field
+    const { board: step1 } = await changeBoard(root, [{ op: 'update_card', id, area: 'checkpoint:reports-export' }], as('user'));
+    expect(step1.cards[0]!.area).toBe('checkpoint:reports-export');
+
+    // Change area
+    const { board: step2 } = await changeBoard(root, [{ op: 'update_card', id, area: 'plan:own' }], as('user'));
+    expect(step2.cards[0]!.area).toBe('plan:own');
+
+    // Clear area with null
+    const { board: step3 } = await changeBoard(root, [{ op: 'update_card', id, area: null }], as('user'));
+    expect('area' in step3.cards[0]!).toBe(false);
+    expect(step3.cards[0]!.area).toBeUndefined();
+
+    // Verify stored JSON has no "area" key
+    const onDisk = await stored();
+    expect('area' in onDisk.cards[0]!).toBe(false);
+    expect(JSON.stringify(onDisk)).not.toContain('"area"');
+  });
+
+  it('refuses invalid area on add_card and update_card', async () => {
+    const id = randomUUID();
+    for (const badArea of ['', 'document:7f3c1c6e-3c35-4f0a-9a3d-0b6a2d6f8d11', 'lane:board', 123]) {
+      expect(() => parseBoardChanges([{ op: 'add_card', kind: 'note', title: 'T', area: badArea }])).toThrow(BoardInputError);
+      expect(() => parseBoardChanges([{ op: 'update_card', id, area: badArea }])).toThrow(BoardInputError);
+      await expect(changeBoard(root, [{ op: 'add_card', kind: 'note', title: 'T', area: badArea }], as('user'))).rejects.toThrow(BoardInputError);
+      await expect(changeBoard(root, [{ op: 'update_card', id, area: badArea }], as('user'))).rejects.toThrow(BoardInputError);
+    }
+  });
+
+  it('keeps valid area and drops invalid area when rebuilding cards', async () => {
+    const cardWithArea = { ...card(1), area: 'checkpoint:reports-export' };
+    const cardWithPlanOwn = { ...card(2), area: 'plan:own' };
+    const cardWithBadArea1 = { ...card(3), area: '' };
+    const cardWithBadArea2 = { ...card(4), area: 'lane:documents' };
+    const cardWithBadArea3 = { ...card(5), area: randomUUID() };
+    const cardWithBadArea4 = { ...card(6), area: 42 };
+    const cardWithNullArea = { ...card(7), area: null };
+    await seed({
+      cards: [cardWithArea, cardWithPlanOwn, cardWithBadArea1, cardWithBadArea2, cardWithBadArea3, cardWithBadArea4, cardWithNullArea],
+    });
+    const board = await readBoard(root);
+    expect(board.cards).toHaveLength(7);
+    expect(board.cards[0]!.area).toBe('checkpoint:reports-export');
+    expect(board.cards[1]!.area).toBe('plan:own');
+    for (let i = 2; i < 7; i++) {
+      expect('area' in board.cards[i]!).toBe(false);
+      expect(board.cards[i]!.area).toBeUndefined();
+    }
   });
 
   it('accepts a card id of the caller, so one request can add a card and then link and place it', async () => {

@@ -60,6 +60,8 @@ interface CardBase {
   updatedBy: string;
   updatedAt: string;
   title: string;
+  /** The board area (`checkpoint:<plan key>` or `plan:own`) the card belongs to. Cards without one go to a linked area or the current checkpoint. */
+  area?: string;
 }
 export interface BoardNote extends CardBase { kind: 'note'; body: string }
 export interface BoardFile extends CardBase {
@@ -175,6 +177,11 @@ export function isBoardNodeId(value: unknown): value is string {
     && (UUID.test(value) || CHECKPOINT.test(value) || DOCUMENT.test(value) || COMMIT.test(value));
 }
 
+/** Whether `value` has the shape of an area id on the board: `checkpoint:<plan key>` or `plan:own`. */
+export function isBoardAreaId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 400 && (CHECKPOINT.test(value) || value === 'plan:own');
+}
+
 const NOT_A_NODE = `That is not a board node id. Use ${BOARD_NODE_ID_FORMATS.card}, ${BOARD_NODE_ID_FORMATS.checkpoint}, ${BOARD_NODE_ID_FORMATS.document}, or ${BOARD_NODE_ID_FORMATS.commit}.`;
 
 // ─── Cleaning what is read ──────────────────────────────────────────────────
@@ -217,9 +224,11 @@ function cleanCard(raw: unknown): BoardCard | null {
   const title = cleanScreenText(raw.title, BOARD_LIMITS.title);
   const by = actor(raw.by);
   if (!title || !by || !validTime(raw.at)) return null;
+  const area = isBoardAreaId(raw.area) ? raw.area : undefined;
   const base = {
     id: raw.id, title, pinned: raw.pinned === true, archived: raw.archived === true, by, at: raw.at,
     updatedBy: actor(raw.updatedBy) ?? by, updatedAt: validTime(raw.updatedAt) ? raw.updatedAt : raw.at,
+    ...(area ? { area } : {}),
   };
   if (raw.kind === 'note') return { ...base, kind: 'note', body: cleanScreenBlock(raw.body, BOARD_LIMITS.body) ?? '' };
   if (raw.kind === 'file') {
@@ -353,6 +362,8 @@ async function appendLog(location: Location, entries: BoardLogEntry[]): Promise<
 const point = z.object({ x: z.number().min(-BOARD_LIMITS.coordinate).max(BOARD_LIMITS.coordinate), y: z.number().min(-BOARD_LIMITS.coordinate).max(BOARD_LIMITS.coordinate) }).strict();
 const uuid = z.string().refine(isBoardId, 'An id is a uuid, as board_read shows it.');
 const nodeId = z.string().refine(isBoardNodeId, NOT_A_NODE);
+const NOT_AN_AREA = `That is not a board area id. Use ${BOARD_NODE_ID_FORMATS.checkpoint} or plan:own, as board_read shows them.`;
+const areaId = z.string().refine(isBoardAreaId, NOT_AN_AREA);
 
 /** The fields a change is made of, so another surface (the MCP tools) can offer the same limits. */
 export const boardFields = {
@@ -363,6 +374,7 @@ export const boardFields = {
   label: z.string().trim().max(BOARD_LIMITS.label),
   uuid,
   nodeId,
+  area: areaId,
 };
 
 const addCardSchema = z.object({
@@ -375,6 +387,7 @@ const addCardSchema = z.object({
   path: boardFields.path.optional(),
   description: boardFields.description.optional(),
   pinned: z.boolean().optional(),
+  area: boardFields.area.optional(),
   position: point.optional(),
 }).strict().superRefine((card, context) => {
   const refuse = (field: string, message: string) => context.addIssue({ code: 'custom', path: [field], message });
@@ -396,7 +409,8 @@ const updateCardSchema = z.object({
   description: boardFields.description.optional(),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
-}).strict().refine((change) => ['title', 'body', 'description', 'pinned', 'archived'].some((field) => (change as Record<string, unknown>)[field] !== undefined), 'Give at least one thing to change.');
+  area: boardFields.area.nullable().optional(),
+}).strict().refine((change) => ['title', 'body', 'description', 'pinned', 'archived', 'area'].some((field) => (change as Record<string, unknown>)[field] !== undefined), 'Give at least one thing to change.');
 
 const removeCardSchema = z.object({ op: z.literal('remove_card'), id: uuid }).strict();
 
@@ -512,7 +526,10 @@ function apply({ board, by, now, log }: Applying, { change, filePath }: Prepared
       if (board.cards.length >= BOARD_LIMITS.cards) throw new BoardChangeError(`The board is full: it holds at most ${BOARD_LIMITS.cards} cards. Remove some first.`);
       const id = change.id ?? randomUUID();
       if (board.cards.some((card) => card.id === id)) throw new BoardChangeError(`A card with id ${id} is already on the board.`);
-      const base = { id, pinned: change.pinned === true, archived: false, by, at: now, updatedBy: by, updatedAt: now };
+      const base = {
+        id, pinned: change.pinned === true, archived: false, by, at: now, updatedBy: by, updatedAt: now,
+        ...(change.area ? { area: change.area } : {}),
+      };
       const card: BoardCard = change.kind === 'note'
         ? { ...base, kind: 'note', title: cleanTitle(change.title!), body: cleanScreenBlock(change.body, BOARD_LIMITS.body) ?? '' }
         : { ...base, kind: 'file', path: filePath!, title: cleanTitle(change.title ?? filePath!.split('/').pop()!), description: cleanScreenBlock(change.description, BOARD_LIMITS.description) ?? '' };
@@ -530,6 +547,8 @@ function apply({ board, by, now, log }: Applying, { change, filePath }: Prepared
       if (change.description !== undefined && card.kind === 'file') card.description = cleanScreenBlock(change.description, BOARD_LIMITS.description) ?? '';
       if (change.pinned !== undefined) card.pinned = change.pinned;
       if (change.archived !== undefined) card.archived = change.archived;
+      if (change.area === null) delete card.area;
+      else if (change.area !== undefined) card.area = change.area;
       card.updatedBy = by;
       card.updatedAt = now;
       record(card.id, card.title);

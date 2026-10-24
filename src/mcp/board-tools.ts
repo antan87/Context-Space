@@ -22,6 +22,7 @@ const x = z.number().min(-BOARD_LIMITS.coordinate).max(BOARD_LIMITS.coordinate);
 const y = x;
 const cardId = boardFields.uuid.describe('The id of a card, as board_read shows it.');
 const nodeId = boardFields.nodeId.describe(`A card id, or checkpoint:<plan key>, document:<document id> or commit:<repository>:<hash>, as board_read shows them.`);
+const area = boardFields.area.describe('Which area on the board this card belongs to: checkpoint:<plan key> or plan:own, from areas in board_read. Leave it out when unsure and the board places it in a linked area or the current checkpoint.');
 
 interface BoardToolContext { root: string; by: string }
 
@@ -91,6 +92,7 @@ const addCardSchema = z.object({
   path: boardFields.path.optional().describe('File cards only. The file, relative to the workspace folder, such as docs/overview.html. It must already exist.'),
   description: boardFields.description.optional().describe(`File cards only. One or two sentences on what the file is and what to look at, up to ${BOARD_LIMITS.description} characters.`),
   pinned: z.boolean().optional().describe('Keep the card in front of the user. Default false.'),
+  area: area.optional(),
   x: x.optional().describe('Where to put it on the canvas, with y. Leave both out and the board places it.'),
   y: y.optional(),
   revision,
@@ -104,6 +106,7 @@ const updateCardSchema = z.object({
   description: boardFields.description.optional().describe('File cards only. Replaces the description.'),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional().describe('true to put the card away without losing it, false to bring it back.'),
+  area: area.nullable().optional().describe('Move the card to another area (checkpoint:<plan key> or plan:own, from board_read), or null to clear its assigned area so it follows its links or the current checkpoint.'),
   revision,
   harness,
 });
@@ -150,22 +153,57 @@ function previewOf(card: BoardCard): BoardCard & { truncated?: true } {
   return { ...card, ...(card.kind === 'note' ? { body: cut } : { description: cut }), truncated: true };
 }
 
+export interface BoardAreaItem {
+  id: string;
+  title: string;
+  done: boolean;
+  current: boolean;
+}
+
+export interface BoardAreas {
+  current: string | null;
+  items: BoardAreaItem[];
+}
+
 /** What a link or a position can name that is not a card: the plan's checkpoints and the source documents. */
 async function linkTargets(root: string) {
   const problems: string[] = [];
-  const checkpoints = await readPlanFile(root)
-    .then(({ plan }) => plan.checkpoints.map((checkpoint) => ({ id: `checkpoint:${checkpoint.key}`, title: checkpoint.title })))
-    .catch((error) => { problems.push(`The plan could not be read: ${friendly(error)}`); return []; });
+  let checkpoints: Array<{ id: string; title: string }> = [];
+  let areas: BoardAreas = { current: null, items: [] };
+
+  try {
+    const { plan } = await readPlanFile(root);
+    checkpoints = plan.checkpoints.map((checkpoint) => ({ id: `checkpoint:${checkpoint.key}`, title: checkpoint.title }));
+
+    const rawItems: Array<{ id: string; title: string; done: boolean }> = [];
+    if (plan.steps.length > 0 || plan.decisions.some((decision) => !decision.done)) {
+      rawItems.push({ id: 'plan:own', title: 'Plan', done: false });
+    }
+    for (const checkpoint of plan.checkpoints) {
+      rawItems.push({ id: `checkpoint:${checkpoint.key}`, title: checkpoint.title, done: checkpoint.done });
+    }
+
+    const checkpointItems = rawItems.filter((entry) => entry.id.startsWith('checkpoint:'));
+    const current = (checkpointItems.find((entry) => !entry.done) ?? checkpointItems.at(-1) ?? rawItems[0])?.id ?? null;
+    areas = {
+      current,
+      items: rawItems.map((entry) => ({ ...entry, current: entry.id === current })),
+    };
+  } catch (error) {
+    problems.push(`The plan could not be read: ${friendly(error)}`);
+  }
+
   const documents = await loadWorkGuidance(root)
     .then(({ documents }) => documents.map((document) => ({ id: `document:${document.id}`, title: document.title })))
     .catch((error) => { problems.push(`The source documents could not be read: ${friendly(error)}`); return []; });
-  return { checkpoints, documents, problems };
+
+  return { checkpoints, documents, areas, problems };
 }
 
 export const boardTools: NexusFlowTool[] = [
   boardTool(
     'board_read',
-    `Read the workspace board: the cards people and AIs put on it, the lines between things, where things were moved to, and the board's revision. Also lists what a card or line can point at: the plan's checkpoints and the source documents, each with the node id to use, and the node id formats. Call it before you change the board, so you do not add what is already there. The board tab also draws the plan's checkpoints, the source documents and the new commits by itself; this lists only what was added or arranged by hand. To keep the answer small, a note's body and a file card's description longer than ${PREVIEW_CHARS} characters are cut and the card says "truncated": true; pass cardId to read that one card in full, with its lines and place.`,
+    `Read the workspace board: the cards people and AIs put on it, the lines between things, where things were moved to, the board's revision, and the areas cards can belong to (checkpoint:<plan key> or plan:own, with areas.current showing the checkpoint under way). Also lists what a card or line can point at: the plan's checkpoints and the source documents, each with the node id to use, and the node id formats. Call it before you change the board, so you do not add what is already there. The board tab also draws the plan's checkpoints, the source documents and the new commits by itself; this lists only what was added or arranged by hand. To keep the answer small, a note's body and a file card's description longer than ${PREVIEW_CHARS} characters are cut and the card says "truncated": true; pass cardId to read that one card in full, with its lines and place.`,
     readSchema,
     async ({ cardId }, { root }) => {
       const board = await readBoard(root);
@@ -178,9 +216,10 @@ export const boardTools: NexusFlowTool[] = [
           ...(board.positions[cardId] ? { position: board.positions[cardId] } : {}),
         };
       }
-      const { problems, ...canLinkTo } = await linkTargets(root);
+      const { problems, areas, ...canLinkTo } = await linkTargets(root);
       return {
         board: { ...board, cards: board.cards.map(previewOf) },
+        areas,
         canLinkTo: { ...canLinkTo, commits: `Not listed. Name one as ${BOARD_NODE_ID_FORMATS.commit}, with the hash as git log shows it (7 characters or more).` },
         nodeIds: BOARD_NODE_ID_FORMATS,
         limits: { cards: BOARD_LIMITS.cards, links: BOARD_LIMITS.links, positions: BOARD_LIMITS.positions },
@@ -192,12 +231,13 @@ export const boardTools: NexusFlowTool[] = [
 
   boardTool(
     'board_add_card',
-    `Put a card on the board where the user sees it. Use kind "note" for something worth keeping in view: a finding, a question, a summary, a risk. Use kind "file" to SHOW something you made instead of describing it: a picture (png, jpg, gif or webp), an HTML page, a PDF, a Markdown document, a deck or a spreadsheet (an SVG opens as its source text, not as a picture). Write the file inside the workspace first, then give its path relative to the workspace folder; the card opens that file for the user. The file must exist, and only files the app can open are accepted (not links, hidden folders other than .claude, .agents and .github, or anything outside the workspace). Add a short description saying what to look at. To tie the card to the plan or a document, call board_link next with the id this returns.`,
+    `Put a card on the board where the user sees it. Use kind "note" for something worth keeping in view: a finding, a question, a summary, a risk. Use kind "file" to SHOW something you made instead of describing it: a picture (png, jpg, gif or webp), an HTML page, a PDF, a Markdown document, a deck or a spreadsheet (an SVG opens as its source text, not as a picture). Write the file inside the workspace first, then give its path relative to the workspace folder; the card opens that file for the user. The file must exist, and only files the app can open are accepted (not links, hidden folders other than .claude, .agents and .github, or anything outside the workspace). Add a short description saying what to look at. Pass area (checkpoint:<plan key> or plan:own, from areas in board_read) to place it in that area, or leave it out when unsure so the board places it in a linked area or the current checkpoint. To tie the card to the plan or a document, call board_link next with the id this returns.`,
     addCardSchema,
-    async ({ kind, title, body, path, description, pinned, x, y, revision }, ctx) => {
+    async ({ kind, title, body, path, description, pinned, area, x, y, revision }, ctx) => {
       if ((x === undefined) !== (y === undefined)) throw new Error('Give both x and y to place the card, or neither.');
       const { board, results } = await change(ctx, { revision }, {
         op: 'add_card', kind, title, body, path, description, pinned,
+        ...(area !== undefined ? { area } : {}),
         ...(x !== undefined && y !== undefined ? { position: { x, y } } : {}),
       });
       return { revision: board.revision, card: cardOf(board, results[0]?.id) };
@@ -206,10 +246,13 @@ export const boardTools: NexusFlowTool[] = [
 
   boardTool(
     'board_update_card',
-    `Change a card you or someone else put on the board: its title, the text of a note (body), the description of a file card, whether it is pinned, or whether it is archived. Only what you give changes. Archive a card that is done but worth keeping; use board_remove_card only for a card that was a mistake.`,
+    `Change a card you or someone else put on the board: its title, the text of a note (body), the description of a file card, whether it is pinned, whether it is archived, or which area it belongs to (pass an area id from board_read, or null to clear it). Only what you give changes. Archive a card that is done but worth keeping; use board_remove_card only for a card that was a mistake.`,
     updateCardSchema,
-    async ({ id, title, body, description, pinned, archived, revision }, ctx) => {
-      const { board } = await change(ctx, { revision }, { op: 'update_card', id, title, body, description, pinned, archived });
+    async ({ id, title, body, description, pinned, archived, area, revision }, ctx) => {
+      const { board } = await change(ctx, { revision }, {
+        op: 'update_card', id, title, body, description, pinned, archived,
+        ...(area !== undefined ? { area } : {}),
+      });
       return { revision: board.revision, card: cardOf(board, id) };
     },
     { idempotent: true },

@@ -77,6 +77,8 @@ export type LaneGroup = {
   openHeight: number;
   /** The cards of the lane when it is folded and they are not drawn, so a line to one of them goes to the lane. */
   holds: string[];
+  /** Whether the lane shows a fold button when open. True by default when omitted. */
+  collapsible?: boolean;
 };
 
 export type LaneData = {
@@ -111,6 +113,8 @@ export type CheckpointData = {
   /** The decisions that wait for the user, up to the cap. */
   waiting: BoardDecision[];
   moreWaiting: number;
+  /** Whether the checkpoint shows a fold button when open. True by default when omitted. */
+  collapsible?: boolean;
 };
 
 export type DocumentData = {
@@ -179,7 +183,7 @@ export interface BoardSources {
 const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
 
 /** Above the columns and the cards in them, so a card put on a column stays in front. A pinned card stays in front of the rest. */
-const Z = { free: 5, card: 10, pinned: 20 } as const;
+export const Z = { free: 5, card: 10, pinned: 20 } as const;
 
 // ─── Node ids ───────────────────────────────────────────────────────────────
 
@@ -209,7 +213,7 @@ export function nodeResolver(nodeIds: Iterable<string>): (reference: string) => 
 }
 
 /** Two things with the same key (two checkpoints with one title) still get their own node. */
-function uniqueId(base: string, taken: Set<string>): string {
+export function uniqueId(base: string, taken: Set<string>): string {
   let id = base;
   for (let n = 2; taken.has(id); n++) id = `${base}#${n}`;
   taken.add(id);
@@ -250,15 +254,15 @@ export function imageAlt(card: { title: string; description: string; path: strin
  * The oldest first, so a card that is added takes the next place and the ones already there keep theirs. The order they
  * came in decides between equals. A pinned card is not moved up for it: it shows by its mark and by standing in front.
  */
-function cardOrder(cards: BoardCard[]): BoardCard[] {
+export function cardOrder(cards: BoardCard[]): BoardCard[] {
   return cards.map((card, index) => ({ card, index, at: Date.parse(card.at) || 0 }))
     .sort((a, b) => a.at - b.at || a.index - b.index)
     .map(({ card }) => card);
 }
 
-type CardPlan = { id: string; type: 'note' | 'file'; height: number; data: NoteData | FileCardData; z: number };
+export type CardPlan = { id: string; type: 'note' | 'file'; height: number; data: NoteData | FileCardData; z: number };
 
-function cardPlan(card: BoardCard, now: number): CardPlan {
+export function cardPlan(card: BoardCard, now: number): CardPlan {
   const common = {
     title: card.title, pinned: card.pinned, archived: card.archived, by: card.by, at: card.at, updatedBy: card.updatedBy, updatedAt: card.updatedAt,
     fresh: !card.archived && isFresh(card, now),
@@ -271,14 +275,14 @@ function cardPlan(card: BoardCard, now: number): CardPlan {
 
 // ─── Lanes ──────────────────────────────────────────────────────────────────
 
-type LaneCard = { id: string; type: 'document' | 'commit' | 'placeholder' | 'note' | 'file'; height: number; data: DocumentData | CommitData | PlaceholderData | NoteData | FileCardData };
+export type LaneCard = { id: string; type: 'document' | 'commit' | 'placeholder' | 'note' | 'file'; height: number; data: DocumentData | CommitData | PlaceholderData | NoteData | FileCardData };
 
 /**
  * A lane and its cards, one under the other, or in rows of `columns` when it is wider than one column, filled from the
  * first column. The cards belong to the lane, so they stay together. A lane that folds (`group`) and is folded is one
  * summary and its cards are not drawn.
  */
-function lane(id: string, x: number, data: LaneData, cards: LaneCard[], options: { y?: number; columns?: number; group?: Omit<LaneGroup, 'holds' | 'openHeight'> } = {}): BoardNode[] {
+export function lane(id: string, x: number, data: LaneData, cards: LaneCard[], options: { y?: number; columns?: number; group?: Omit<LaneGroup, 'holds' | 'openHeight'> } = {}): BoardNode[] {
   const columns = options.columns ?? 1;
   let y = BOARD_SIZE.laneHeader + (data.note ? BOARD_SIZE.laneNote : 0);
   const children: BoardNode[] = [];
@@ -300,12 +304,12 @@ function lane(id: string, x: number, data: LaneData, cards: LaneCard[], options:
 }
 
 /** A card that was put somewhere: it stands on its own at that place. */
-function freeCard(card: LaneCard, at: BoardPoint, z: number = Z.free): BoardNode {
+export function freeCard(card: LaneCard, at: BoardPoint, z: number = Z.free): BoardNode {
   return { id: card.id, type: card.type, position: { x: at.x, y: at.y }, width: CARD_WIDTH, height: card.height, data: card.data, zIndex: z, ...FIXED } as BoardNode;
 }
 
 /** Newest first. A commit with no readable time goes last, and the order the list came in decides between equals. */
-function newestFirst<T extends { at: string }>(items: T[]): T[] {
+export function newestFirst<T extends { at: string }>(items: T[]): T[] {
   const time = (item: T) => { const at = Date.parse(item.at); return Number.isFinite(at) ? at : -Infinity; };
   return items.map((item, index) => ({ item, index, at: time(item) }))
     .sort((a, b) => (b.at > a.at ? 1 : b.at < a.at ? -1 : a.index - b.index))
@@ -313,7 +317,7 @@ function newestFirst<T extends { at: string }>(items: T[]): T[] {
 }
 
 /** How far back the commits reach, as the list says so itself: since the last look, or the last few days. */
-function commitsSince(news: WhatsNewView): { caption: string; none: (others: boolean) => string; count: (n: number, atLeast?: boolean) => string } {
+export function commitsSince(news: WhatsNewView): { caption: string; none: (others: boolean) => string; count: (n: number, atLeast?: boolean) => string } {
   const which = (others: boolean) => (others ? 'in the other repositories' : '');
   const say = (parts: string[]) => parts.filter(Boolean).join(' ');
   const plus = (n: number, atLeast?: boolean) => `${n}${atLeast ? '+' : ''}`;
@@ -327,7 +331,7 @@ function commitsSince(news: WhatsNewView): { caption: string; none: (others: boo
 }
 
 /** What the documents column says folded: how many there are, and how many are not settled. */
-function documentsSummary(documents: WorkDocument[]): GroupSummary {
+export function documentsSummary(documents: WorkDocument[]): GroupSummary {
   const drafts = documents.filter((document) => document.status === 'draft').length;
   const superseded = documents.filter((document) => document.status === 'superseded').length;
   const detail = [drafts > 0 ? `${drafts} ${drafts === 1 ? 'draft' : 'drafts'}` : '', superseded > 0 ? `${superseded} superseded` : ''].filter(Boolean).join(' · ');
@@ -346,7 +350,7 @@ export function currentFrame<T extends CheckpointNode>(frames: T[]): T | undefin
 }
 
 /** How tall a frame is for this many steps and waiting decisions, each cut to its cap. A frame with no steps says so in one row. */
-function frameHeight(stepCount: number, waitingCount: number): number {
+export function frameHeight(stepCount: number, waitingCount: number): number {
   const steps = Math.min(stepCount, BOARD_LIMITS.steps);
   const waiting = Math.min(waitingCount, BOARD_LIMITS.waiting);
   return BOARD_SIZE.frameHeader
@@ -356,7 +360,7 @@ function frameHeight(stepCount: number, waitingCount: number): number {
 }
 
 /** A frame of steps and the decisions that wait, for a checkpoint or for the plan's own loose items. It is drawn open; `fold` closes it. */
-function frame(kind: CheckpointData['kind'], id: string, x: number, title: string, done: boolean, items: { steps: PlanFileStep[]; decisions: PlanFileDecision[] }, waitingKeys: Set<string>): CheckpointNode {
+export function frame(kind: CheckpointData['kind'], id: string, x: number, title: string, done: boolean, items: { steps: PlanFileStep[]; decisions: PlanFileDecision[] }, waitingKeys: Set<string>, collapsible?: boolean): CheckpointNode {
   const { done: stepsComplete, total } = stepsDone(items);
   const waiting = items.decisions.filter((decision) => waitingKeys.has(decision.key));
   const shownWaiting = waiting.slice(0, BOARD_LIMITS.waiting);
@@ -370,6 +374,7 @@ function frame(kind: CheckpointData['kind'], id: string, x: number, title: strin
       kind, open: true, openHeight: frameHeight(items.steps.length, items.decisions.length), title, done, stepsDone: stepsComplete, stepsTotal: total,
       steps: steps.map(({ key, text, done: stepDone }) => ({ key, text, done: stepDone })), moreSteps,
       waiting: shownWaiting.map(({ key, question }) => ({ key, question })), moreWaiting,
+      ...(collapsible !== undefined ? { collapsible } : {}),
     },
   };
 }
@@ -401,7 +406,7 @@ export function clearPlace(nodes: BoardNode[], at: BoardPoint, size: { width: nu
 }
 
 /** The cards with a place of their own, drawn where `clearPlace` puts them. Only the drawing changes: the saved place is as it was. */
-function clearOfGroups(nodes: BoardNode[]): BoardNode[] {
+export function clearOfGroups(nodes: BoardNode[]): BoardNode[] {
   if (!nodes.some(isGroup)) return nodes;
   return nodes.map((node) => {
     if (node.parentId !== undefined || (node.type !== 'note' && node.type !== 'file')) return node;

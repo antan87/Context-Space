@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { ChevronDown, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, PanelRightOpen, Pin, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, PanelRightOpen, Pin, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
@@ -10,6 +10,7 @@ import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, Dial
 import { cn } from '../../lib/utils.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, cardLinks, documentFileUrl } from './boardActions.js';
+import { stepsText, waitingText, type AreaNode } from './boardAreas.js';
 import { BOARD_SIZE, authorName, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type LaneNode, type NoteNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
@@ -84,16 +85,13 @@ export function BoardLane({ id, data }: NodeProps<LaneNode>) {
       <h2 className={cn('truncate text-sm font-semibold leading-5 text-foreground', group && 'pr-6')} title={data.title}>{data.title}</h2>
       <p className="truncate text-xs leading-4 text-muted-foreground">{data.caption}</p>
     </div>
-    {group && <FoldButton id={id} title={data.title} />}
+    {group && group.collapsible !== false && <FoldButton id={id} title={data.title} />}
     {data.note && <p className="line-clamp-2 px-4 text-xs leading-5 text-destructive-foreground" style={{ height: BOARD_SIZE.laneNote }}>{data.note}</p>}
     {data.more > 0 && <p className="mt-auto flex items-center px-4 text-xs text-muted-foreground" style={{ height: BOARD_SIZE.laneMore }}>
       {moreText(data.more, data.moreAtLeast)}
     </p>}
   </div>;
 }
-
-const stepsText = (data: CheckpointData) => (data.stepsTotal ? `${data.stepsDone} of ${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'}` : 'No steps');
-const waitingText = (waiting: number) => (waiting === 1 ? 'Waits for you' : `${waiting} wait for you`);
 
 /** What a frame says in its header, open or folded: whether it is done, how far its steps are, what waits, and a bar. */
 function FrameFacts({ data }: { data: CheckpointData }) {
@@ -149,7 +147,7 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
         </div>
         : <h2 id={titleId} className="line-clamp-2 h-10 pr-6 text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>}
       <FrameFacts data={data} />
-      <FoldButton id={id} title={data.title} />
+      {data.collapsible !== false && <FoldButton id={id} title={data.title} />}
     </header>
     {data.waiting.length > 0 && <ul aria-label="Decisions waiting for you">
       {data.waiting.map((decision) => <li key={decision.key} className="flex items-start gap-2 border-l-2 border-warning bg-warning/8 px-3 py-1 text-xs leading-4 text-foreground" style={{ height: BOARD_SIZE.decisionRow }}>
@@ -380,3 +378,131 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
     </div>
   </CardFrame>;
 }
+
+/** An area at Level 0: an interactive overview card summarizing a checkpoint or logical area. */
+export function BoardArea({ id, data }: NodeProps<AreaNode>) {
+  const actions = useContext(BoardActionsContext);
+  const [failedPics, setFailedPics] = useState<string[]>([]);
+  const visiblePics = data.pictures.filter((pic) => !failedPics.includes(pic.path));
+  const waiting = data.waitingCount;
+  const border = waiting > 0 ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border';
+
+  const statusPart = data.done
+    ? 'done'
+    : data.current
+      ? 'current'
+      : data.kind === 'checkpoint'
+        ? 'not done'
+        : undefined;
+
+  const stepsLabel = data.kind === 'plan'
+    ? (data.stepsTotal ? `${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'} outside the checkpoints` : 'Steps outside the checkpoints')
+    : (data.stepsTotal ? `${data.stepsDone} of ${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'}` : 'No steps');
+
+  const stepsPart = data.kind !== 'work' ? stepsLabel.toLowerCase() : undefined;
+  const waitingPart = waiting > 0 ? (waiting === 1 ? 'waits for you' : `${waiting} wait for you`) : undefined;
+
+  const countItems: string[] = [];
+  if (data.noteCount > 0) countItems.push(`${data.noteCount} ${data.noteCount === 1 ? 'note' : 'notes'}`);
+  if (data.pictureCount > 0) countItems.push(`${data.pictureCount} ${data.pictureCount === 1 ? 'picture' : 'pictures'}`);
+  if (data.fileCount > data.pictureCount) {
+    const otherFiles = data.fileCount - data.pictureCount;
+    countItems.push(`${otherFiles} ${otherFiles === 1 ? 'file' : 'files'}`);
+  }
+  if (data.documentCount > 0) countItems.push(`${data.documentCount} ${data.documentCount === 1 ? 'document' : 'documents'}`);
+  if (data.commitCount > 0) countItems.push(`${data.commitCount} ${data.commitCount === 1 ? 'commit' : 'commits'}`);
+  const countsPart = countItems.length > 0 ? countItems.join(', ') : 'no items yet';
+
+  const label = summaryLabel([
+    data.title,
+    statusPart,
+    stepsPart,
+    waitingPart,
+    countsPart,
+    data.warning?.toLowerCase(),
+  ]);
+
+  const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
+
+  return (
+    <div className="relative h-full w-full rounded-2xl">
+      <Anchors />
+      {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh" />}
+      <button
+        type="button"
+        onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+        aria-label={label}
+        className={cn(
+          'board-area nodrag nopan relative flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-card p-4 text-left text-card-foreground shadow-xs transition-colors hover:bg-accent/35',
+          border,
+        )}
+      >
+        <span className="flex h-5 w-full items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+          {data.kind === 'checkpoint' && (
+            data.done ? (
+              <Badge variant="success" className="board-area-badge">Done</Badge>
+            ) : data.current ? (
+              <Badge variant="default" className="board-area-badge">Current</Badge>
+            ) : (
+              <Badge variant="outline" className="board-area-badge">Not done</Badge>
+            )
+          )}
+          {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge">Plan</Badge>}
+          {data.kind === 'work' && <Badge variant="default" className="board-area-badge">Current</Badge>}
+          {waiting > 0 && <Badge variant="warning">{waitingText(waiting)}</Badge>}
+          <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
+        </span>
+
+        <span className="mt-1.5 line-clamp-2 block text-sm font-semibold leading-5 text-foreground" title={data.title}>
+          {data.title}
+        </span>
+
+        {data.kind !== 'work' && (
+          <span className="mt-1 block">
+            <span className="block truncate text-xs leading-4 text-muted-foreground">{stepsLabel}</span>
+            <span aria-hidden="true" className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted">
+              <span
+                className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')}
+                style={{ width: `${progress}%` }}
+              />
+            </span>
+          </span>
+        )}
+
+        <span className="mt-2 flex min-h-0 flex-1 flex-col justify-center">
+          {visiblePics.length > 0 && actions ? (
+            <span className="flex h-16 items-center gap-2 overflow-hidden rounded-md">
+              {visiblePics.map((pic) => (
+                <img
+                  key={pic.path}
+                  src={documentFileUrl(actions.workspaceId, pic.path)}
+                  alt=""
+                  aria-hidden="true"
+                  loading="lazy"
+                  onError={() => {
+                    setFailedPics((prev) => (prev.includes(pic.path) ? prev : [...prev, pic.path]));
+                  }}
+                  className="h-full w-20 rounded border border-border/50 object-cover"
+                />
+              ))}
+            </span>
+          ) : data.preview ? (
+            <span className="line-clamp-2 block text-xs leading-4 text-muted-foreground">{data.preview}</span>
+          ) : null}
+        </span>
+
+        <span className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-border/50 pt-2 text-xs text-muted-foreground">
+          {countItems.length > 0 ? (
+            <span className="truncate">{countItems.join(' · ')}</span>
+          ) : (
+            <span>Empty</span>
+          )}
+          {data.warning && (
+            <span className="text-destructive-foreground">{data.warning}</span>
+          )}
+        </span>
+      </button>
+    </div>
+  );
+}
+

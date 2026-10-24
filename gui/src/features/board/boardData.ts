@@ -21,6 +21,8 @@ interface CardBase {
   at: string;
   updatedBy: string;
   updatedAt: string;
+  /** The board area (`checkpoint:<plan key>` or `plan:own`) the card belongs to. */
+  area?: string;
 }
 export interface BoardNoteCard extends CardBase { kind: 'note'; body: string }
 export interface BoardFileCard extends CardBase {
@@ -69,6 +71,11 @@ export function isBoardNodeId(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 400 && (UUID.test(value) || CHECKPOINT.test(value) || DOCUMENT.test(value) || COMMIT.test(value));
 }
 
+/** Whether `value` has the shape of an area id on the board: `checkpoint:<plan key>` or `plan:own`. */
+export function isBoardAreaId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 400 && (CHECKPOINT.test(value) || value === 'plan:own');
+}
+
 // ─── Rebuilding the reply ───────────────────────────────────────────────────
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -94,9 +101,11 @@ function cleanCard(raw: unknown): BoardCard | null {
   if (!isRecord(raw) || !isCardId(raw.id) || !actor(raw.by) || !validTime(raw.at)) return null;
   const title = text(raw.title, BOARD_DATA_LIMITS.title);
   if (!title) return null;
+  const area = isBoardAreaId(raw.area) ? raw.area : undefined;
   const base = {
     id: raw.id, title, pinned: raw.pinned === true, archived: raw.archived === true, by: raw.by, at: raw.at,
     updatedBy: actor(raw.updatedBy) ? raw.updatedBy : raw.by, updatedAt: validTime(raw.updatedAt) ? raw.updatedAt : raw.at,
+    ...(area ? { area } : {}),
   };
   if (raw.kind === 'note') return { ...base, kind: 'note', body: typeof raw.body === 'string' ? raw.body.slice(0, BOARD_DATA_LIMITS.text) : '' };
   if (raw.kind === 'file') {

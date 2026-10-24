@@ -220,7 +220,80 @@ describe('working on the board', () => {
   it('reads an empty board in a workspace with no plan and no documents', async () => {
     const read = await ok('board_read');
     expect(read.board).toEqual({ version: 1, revision: 0, cards: [], links: [], positions: {} });
+    expect(read.areas).toEqual({ current: null, items: [] });
     expect(read.canLinkTo).toMatchObject({ checkpoints: [], documents: [] });
+  });
+
+  it('reads board areas, determining current checkpoint or plan:own', async () => {
+    // 1. Empty workspace with no plan
+    const emptyRead = await ok('board_read');
+    expect(emptyRead.areas).toEqual({ current: null, items: [] });
+
+    // 2. Loose plan steps and open decisions with no checkpoints -> current is plan:own
+    await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n- [ ] Step 1\n- [ ] Decide: Should we proceed?\n');
+    const looseRead = await ok('board_read');
+    expect(looseRead.areas).toEqual({
+      current: 'plan:own',
+      items: [{ id: 'plan:own', title: 'Plan', done: false, current: true }],
+    });
+
+    // 3. Undone + done checkpoints -> current is the first undone checkpoint, with loose steps preceding checkpoints
+    await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n- [ ] Step 1\n\n## Checkpoints\n\n- [x] First outcome\n- [ ] Second outcome\n- [ ] Third outcome\n');
+    const mixedRead = await ok('board_read');
+    expect(mixedRead.areas).toEqual({
+      current: 'checkpoint:second-outcome',
+      items: [
+        { id: 'plan:own', title: 'Plan', done: false, current: false },
+        { id: 'checkpoint:first-outcome', title: 'First outcome', done: true, current: false },
+        { id: 'checkpoint:second-outcome', title: 'Second outcome', done: false, current: true },
+        { id: 'checkpoint:third-outcome', title: 'Third outcome', done: false, current: false },
+      ],
+    });
+
+    // 4. All checkpoints done -> current is the last checkpoint
+    await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n## Checkpoints\n\n- [x] First outcome\n- [x] Second outcome\n');
+    const allDoneRead = await ok('board_read');
+    expect(allDoneRead.areas).toEqual({
+      current: 'checkpoint:second-outcome',
+      items: [
+        { id: 'checkpoint:first-outcome', title: 'First outcome', done: true, current: false },
+        { id: 'checkpoint:second-outcome', title: 'Second outcome', done: true, current: true },
+      ],
+    });
+  });
+
+  it('adds and updates cards with area, reads them back, and rejects invalid areas', async () => {
+    const { card } = await ok('board_add_card', { kind: 'note', title: 'Note 1', area: 'checkpoint:reports-export' });
+    expect(card.area).toBe('checkpoint:reports-export');
+
+    // board_read (full)
+    const readFull = await ok('board_read');
+    expect(readFull.board.cards[0].area).toBe('checkpoint:reports-export');
+
+    // board_read (single card)
+    const readCard = await ok('board_read', { cardId: card.id });
+    expect(readCard.card.area).toBe('checkpoint:reports-export');
+
+    // update area
+    const updated = await ok('board_update_card', { id: card.id, area: 'plan:own' });
+    expect(updated.card.area).toBe('plan:own');
+    expect((await ok('board_read', { cardId: card.id })).card.area).toBe('plan:own');
+
+    // clear area with null
+    const cleared = await ok('board_update_card', { id: card.id, area: null });
+    expect('area' in cleared.card).toBe(false);
+    expect(cleared.card.area).toBeUndefined();
+    expect('area' in (await ok('board_read', { cardId: card.id })).card).toBe(false);
+
+    // invalid area on board_add_card
+    const badAdd = await call('board_add_card', { kind: 'note', title: 'Bad', area: 'lane:documents' });
+    expect(badAdd.isError).toBe(true);
+    expect(badAdd.text).toMatch(/That is not a board area id/);
+
+    // invalid area on board_update_card
+    const badUpdate = await call('board_update_card', { id: card.id, area: 'not-an-area' });
+    expect(badUpdate.isError).toBe(true);
+    expect(badUpdate.text).toMatch(/That is not a board area id/);
   });
 
   it('works from a folder below the workspace root, and writes the board at the root', async () => {
