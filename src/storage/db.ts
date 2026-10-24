@@ -287,25 +287,44 @@ export class FallbackDatabase implements IDatabaseSync {
     const self = this;
 
     if (normalized.startsWith('INSERT INTO chat_threads')) {
+      const colMatch = normalized.match(/INSERT INTO chat_threads\s*\(([^)]+)\)/i);
+      const cols = colMatch ? colMatch[1].split(',').map((c) => c.trim().toLowerCase()) : null;
+
       return {
-        run(
-          workspace_id: unknown,
-          provider_id: unknown,
-          sessions_json: unknown,
-          profiles_json: unknown,
-          models_json: unknown,
-          efforts_json: unknown,
-          updated_at: unknown,
-        ) {
-          self.getActiveThreads().set(String(workspace_id), {
-            workspace_id: String(workspace_id),
-            provider_id: provider_id !== null && provider_id !== undefined ? String(provider_id) : null,
-            sessions_json: String(sessions_json ?? '{}'),
-            profiles_json: String(profiles_json ?? '{}'),
-            models_json: String(models_json ?? '{}'),
-            efforts_json: String(efforts_json ?? '{}'),
-            updated_at: Number(updated_at),
-          });
+        run(...args: unknown[]) {
+          const row: ChatThreadRow = {
+            workspace_id: '',
+            provider_id: null,
+            sessions_json: '{}',
+            profiles_json: '{}',
+            models_json: '{}',
+            efforts_json: '{}',
+            updated_at: Date.now(),
+          };
+
+          if (cols) {
+            for (let i = 0; i < cols.length; i++) {
+              const col = cols[i];
+              const val = args[i];
+              if (col === 'workspace_id') row.workspace_id = String(val ?? '');
+              else if (col === 'provider_id') row.provider_id = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'sessions_json') row.sessions_json = String(val ?? '{}');
+              else if (col === 'profiles_json') row.profiles_json = String(val ?? '{}');
+              else if (col === 'models_json') row.models_json = String(val ?? '{}');
+              else if (col === 'efforts_json') row.efforts_json = String(val ?? '{}');
+              else if (col === 'updated_at') row.updated_at = Number(val ?? Date.now());
+            }
+          } else {
+            row.workspace_id = String(args[0] ?? '');
+            row.provider_id = args[1] !== null && args[1] !== undefined ? String(args[1]) : null;
+            row.sessions_json = String(args[2] ?? '{}');
+            row.profiles_json = String(args[3] ?? '{}');
+            row.models_json = String(args[4] ?? '{}');
+            row.efforts_json = String(args[5] ?? '{}');
+            row.updated_at = Number(args[6] ?? Date.now());
+          }
+
+          self.getActiveThreads().set(row.workspace_id, row);
           self.onMutation();
           return { changes: 1 };
         },
@@ -317,9 +336,11 @@ export class FallbackDatabase implements IDatabaseSync {
     if (normalized.startsWith('DELETE FROM chat_turns WHERE workspace_id = ?')) {
       return {
         run(workspace_id: unknown) {
-          self.getActiveTurns().delete(String(workspace_id));
-          self.onMutation();
-          return { changes: 1 };
+          const existed = self.getActiveTurns().delete(String(workspace_id));
+          if (existed) {
+            self.onMutation();
+          }
+          return { changes: existed ? 1 : 0 };
         },
         get() { return undefined; },
         all() { return []; },
@@ -327,38 +348,60 @@ export class FallbackDatabase implements IDatabaseSync {
     }
 
     if (normalized.startsWith('INSERT INTO chat_turns')) {
+      const colMatch = normalized.match(/INSERT INTO chat_turns\s*\(([^)]+)\)/i);
+      const cols = colMatch ? colMatch[1].split(',').map((c) => c.trim().toLowerCase()) : null;
+
       return {
-        run(
-          id: unknown,
-          workspace_id: unknown,
-          turn_index: unknown,
-          role: unknown,
-          content: unknown,
-          kind: unknown,
-          execution_profile: unknown,
-          images_json: unknown,
-          files_changed_json: unknown,
-          created_at: unknown,
-        ) {
-          const wsId = String(workspace_id);
+        run(...args: unknown[]) {
+          const row: ChatTurnRow = {
+            id: '',
+            workspace_id: '',
+            turn_index: 0,
+            role: 'user',
+            content: '',
+            kind: null,
+            execution_profile: null,
+            images_json: null,
+            files_changed_json: null,
+            created_at: Date.now(),
+          };
+
+          if (cols) {
+            for (let i = 0; i < cols.length; i++) {
+              const col = cols[i];
+              const val = args[i];
+              if (col === 'id') row.id = String(val ?? '');
+              else if (col === 'workspace_id') row.workspace_id = String(val ?? '');
+              else if (col === 'turn_index') row.turn_index = Number(val ?? 0);
+              else if (col === 'role') row.role = String(val ?? '');
+              else if (col === 'content') row.content = String(val ?? '');
+              else if (col === 'kind') row.kind = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'execution_profile') row.execution_profile = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'images_json') row.images_json = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'files_changed_json') row.files_changed_json = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'created_at') row.created_at = Number(val ?? Date.now());
+            }
+          } else {
+            row.id = String(args[0] ?? '');
+            row.workspace_id = String(args[1] ?? '');
+            row.turn_index = Number(args[2] ?? 0);
+            row.role = String(args[3] ?? '');
+            row.content = String(args[4] ?? '');
+            row.kind = args[5] !== null && args[5] !== undefined ? String(args[5]) : null;
+            row.execution_profile = args[6] !== null && args[6] !== undefined ? String(args[6]) : null;
+            row.images_json = args[7] !== null && args[7] !== undefined ? String(args[7]) : null;
+            row.files_changed_json = args[8] !== null && args[8] !== undefined ? String(args[8]) : null;
+            row.created_at = Number(args[9] ?? Date.now());
+          }
+
+          const wsId = row.workspace_id;
           const map = self.getActiveTurns();
           let list = map.get(wsId);
           if (!list) {
             list = [];
             map.set(wsId, list);
           }
-          list.push({
-            id: String(id),
-            workspace_id: wsId,
-            turn_index: Number(turn_index),
-            role: String(role),
-            content: String(content),
-            kind: kind !== null && kind !== undefined ? String(kind) : null,
-            execution_profile: execution_profile !== null && execution_profile !== undefined ? String(execution_profile) : null,
-            images_json: images_json !== null && images_json !== undefined ? String(images_json) : null,
-            files_changed_json: files_changed_json !== null && files_changed_json !== undefined ? String(files_changed_json) : null,
-            created_at: Number(created_at),
-          });
+          list.push(row);
           self.onMutation();
           return { changes: 1 };
         },
@@ -398,10 +441,12 @@ export class FallbackDatabase implements IDatabaseSync {
       return {
         run(workspace_id: unknown) {
           const wsId = String(workspace_id);
-          self.getActiveThreads().delete(wsId);
-          self.getActiveTurns().delete(wsId);
-          self.onMutation();
-          return { changes: 1 };
+          const deletedThread = self.getActiveThreads().delete(wsId);
+          const deletedTurns = self.getActiveTurns().delete(wsId);
+          if (deletedThread || deletedTurns) {
+            self.onMutation();
+          }
+          return { changes: deletedThread ? 1 : 0 };
         },
         get() { return undefined; },
         all() { return []; },
@@ -410,25 +455,38 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('INSERT INTO tool_approvals')) {
       return {
-        run(
-          id: unknown,
-          workspace_id: unknown,
-          tool: unknown,
-          input_json: unknown,
-          description: unknown,
-          created_at: unknown,
-        ) {
-          const appId = String(id);
+        run(...args: unknown[]) {
+          const appId = String(args[0] ?? '');
+          const wsId = String(args[1] ?? '');
+          const tool = String(args[2] ?? '');
+          const inputJson = String(args[3] ?? '{}');
+          const desc = args[4] !== null && args[4] !== undefined ? String(args[4]) : null;
+          let decision = 'pending';
+          let createdAt = Date.now();
+
+          if (args.length >= 7) {
+            decision = String(args[5] ?? 'pending');
+            createdAt = Number(args[6] ?? Date.now());
+          } else if (args.length === 6) {
+            if (typeof args[5] === 'number') {
+              createdAt = args[5];
+            } else if (!Number.isNaN(Number(args[5])) && String(args[5]).trim() !== '' && !['pending', 'allow', 'deny'].includes(String(args[5]))) {
+              createdAt = Number(args[5]);
+            } else {
+              decision = String(args[5] ?? 'pending');
+            }
+          }
+
           const map = self.getActiveApprovals();
           const existing = map.get(appId);
           map.set(appId, {
             id: appId,
-            workspace_id: String(workspace_id),
-            tool: String(tool),
-            input_json: String(input_json),
-            description: description !== null && description !== undefined ? String(description) : null,
-            decision: existing ? existing.decision : 'pending',
-            created_at: Number(created_at),
+            workspace_id: wsId,
+            tool,
+            input_json: inputJson,
+            description: desc,
+            decision: existing ? existing.decision : decision,
+            created_at: createdAt,
             resolved_at: existing?.resolved_at ?? null,
           });
           self.onMutation();
@@ -449,8 +507,9 @@ export class FallbackDatabase implements IDatabaseSync {
             existing.decision = String(decision);
             existing.resolved_at = Number(resolved_at);
             self.onMutation();
+            return { changes: 1 };
           }
-          return { changes: 1 };
+          return { changes: 0 };
         },
         get() { return undefined; },
         all() { return []; },
@@ -458,19 +517,33 @@ export class FallbackDatabase implements IDatabaseSync {
     }
 
     if (normalized.startsWith('SELECT * FROM tool_approvals WHERE workspace_id = ?')) {
+      const pendingOnly = normalized.includes("decision = 'pending'");
       return {
         run() { return { changes: 0 }; },
         get(workspace_id: unknown) {
           const list = Array.from(self.getActiveApprovals().values()).filter(
-            (a) => a.workspace_id === String(workspace_id) && a.decision === 'pending',
+            (a) => a.workspace_id === String(workspace_id) && (!pendingOnly || a.decision === 'pending'),
           );
           return list[0] as Row | undefined;
         },
         all(workspace_id: unknown) {
           const list = Array.from(self.getActiveApprovals().values()).filter(
-            (a) => a.workspace_id === String(workspace_id) && a.decision === 'pending',
+            (a) => a.workspace_id === String(workspace_id) && (!pendingOnly || a.decision === 'pending'),
           );
           return list.sort((a, b) => a.created_at - b.created_at) as Row[];
+        },
+      };
+    }
+
+    if (normalized.startsWith('SELECT * FROM tool_approvals WHERE id = ?')) {
+      return {
+        run() { return { changes: 0 }; },
+        get(id: unknown) {
+          return self.getActiveApprovals().get(String(id)) as Row | undefined;
+        },
+        all(id: unknown) {
+          const item = self.getActiveApprovals().get(String(id));
+          return (item ? [item] : []) as Row[];
         },
       };
     }
@@ -720,10 +793,10 @@ export function loadChatThread(
     };
   });
 
-  let sessions = {};
-  let profilesByProvider = {};
-  let modelsByProvider = {};
-  let effortsByProvider = {};
+  let sessions: Record<string, { id: string; started: boolean; model?: string; effort?: string }> = {};
+  let profilesByProvider: Record<string, string> = {};
+  let modelsByProvider: Record<string, string> = {};
+  let effortsByProvider: Record<string, string> = {};
 
   try { sessions = JSON.parse(threadRow.sessions_json || '{}'); } catch { /* ignore */ }
   try { profilesByProvider = JSON.parse(threadRow.profiles_json || '{}'); } catch { /* ignore */ }
@@ -797,14 +870,22 @@ export function getPendingApprovals(
     ORDER BY created_at ASC
   `);
   const rows = stmt.all(workspaceId);
-  return rows.map((row) => ({
-    id: row.id,
-    workspaceId: row.workspace_id,
-    tool: row.tool,
-    input: JSON.parse(row.input_json || '{}'),
-    description: row.description || undefined,
-    decision: row.decision as 'pending' | 'allow' | 'deny',
-    createdAt: Number(row.created_at),
-    resolvedAt: row.resolved_at ? Number(row.resolved_at) : undefined,
-  }));
+  return rows.map((row) => {
+    let input: Record<string, unknown> = {};
+    try {
+      input = JSON.parse(row.input_json || '{}');
+    } catch {
+      input = {};
+    }
+    return {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      tool: row.tool,
+      input,
+      description: row.description || undefined,
+      decision: row.decision as 'pending' | 'allow' | 'deny',
+      createdAt: Number(row.created_at),
+      resolvedAt: row.resolved_at ? Number(row.resolved_at) : undefined,
+    };
+  });
 }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -741,6 +741,73 @@ describe('JSON error boundaries and malformed lines resilience', () => {
           copilotDb.close();
         }
       } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('discovers Copilot sessions, active assistants, and loads transcripts via COPILOT_DB_PATH', async () => {
+      const { DatabaseSync } = await import('node:sqlite');
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-discovery-'));
+      const dbPath = path.join(tempDir, 'session-store.db');
+      const workspaceDir = path.join(tempDir, 'repo');
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      try {
+        const sqlite = new DatabaseSync(dbPath);
+        sqlite.exec(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            cwd TEXT,
+            summary TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          );
+          CREATE TABLE turns (
+            session_id TEXT,
+            turn_index INTEGER,
+            user_message TEXT,
+            assistant_response TEXT,
+            timestamp TEXT
+          );
+        `);
+
+        sqlite.prepare(`
+          INSERT INTO sessions (id, cwd, summary, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run('c0011002-1234-4000-8000-123456789abc', workspaceDir, 'Copilot Feature Discussion', '2026-10-24T10:00:00Z', '2026-10-24T10:30:00Z');
+
+        sqlite.prepare(`
+          INSERT INTO turns (session_id, turn_index, user_message, assistant_response, timestamp)
+          VALUES (?, ?, ?, ?, ?)
+        `).run('c0011002-1234-4000-8000-123456789abc', 0, 'Implement typed store', 'Done with strong typing', '2026-10-24T10:01:00Z');
+
+        sqlite.close();
+
+        vi.stubEnv('COPILOT_DB_PATH', dbPath);
+        clearSessionFinderCache();
+
+        // 1. findSessions
+        const sessions = await findSessions(workspaceDir, [], 'copilot');
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0].id).toBe('c0011002-1234-4000-8000-123456789abc');
+        expect(sessions[0].assistant).toBe('copilot');
+        expect(sessions[0].title).toBe('Copilot Feature Discussion');
+        expect(sessions[0].messageCount).toBe(2);
+
+        // 2. findActiveAssistants
+        const assistants = await findActiveAssistants(workspaceDir);
+        expect(assistants).toContain('copilot');
+
+        // 3. getSessionTranscript
+        const transcript = await getSessionTranscript('copilot', 'c0011002-1234-4000-8000-123456789abc');
+        expect(transcript).toHaveLength(2);
+        expect(transcript[0].role).toBe('user');
+        expect(transcript[0].content).toBe('Implement typed store');
+        expect(transcript[1].role).toBe('assistant');
+        expect(transcript[1].content).toBe('Done with strong typing');
+      } finally {
+        vi.unstubAllEnvs();
+        clearSessionFinderCache();
         await fs.rm(tempDir, { recursive: true, force: true });
       }
     });

@@ -290,7 +290,7 @@ export interface CopilotTranscriptTurnRow {
  */
 export async function openCopilotDb(customPath?: string): Promise<IDatabaseSync | null> {
   try {
-    const dbPath = customPath || path.join(os.homedir(), '.copilot', 'session-store.db');
+    const dbPath = customPath || process.env.COPILOT_DB_PATH || path.join(os.homedir(), '.copilot', 'session-store.db');
     await fs.access(dbPath);
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(dbPath, { readOnly: true });
@@ -901,25 +901,27 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
       const rows = copilotDb.prepare<CopilotSessionRow>(
         'SELECT id, cwd, summary, created_at, updated_at FROM sessions'
       ).all();
+      const countStmt = copilotDb.prepare<CopilotTurnCountRow>(
+        `SELECT
+           SUM(CASE WHEN TRIM(COALESCE(user_message, '')) != '' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN TRIM(COALESCE(assistant_response, '')) != '' THEN 1 ELSE 0 END) AS n
+         FROM turns WHERE session_id = ?`
+      );
+      const firstStmt = copilotDb.prepare<CopilotFirstMessageRow>(
+        `SELECT user_message FROM turns
+         WHERE session_id = ? AND TRIM(COALESCE(user_message, '')) != ''
+           AND TRIM(user_message) NOT LIKE '<%'
+         ORDER BY turn_index LIMIT 1`
+      );
       for (const row of rows) {
         if (!isPathMatch(row.cwd)) continue;
 
-        const counted = copilotDb.prepare<CopilotTurnCountRow>(
-          `SELECT
-             SUM(CASE WHEN TRIM(COALESCE(user_message, '')) != '' THEN 1 ELSE 0 END)
-             + SUM(CASE WHEN TRIM(COALESCE(assistant_response, '')) != '' THEN 1 ELSE 0 END) AS n
-           FROM turns WHERE session_id = ?`
-        ).get(row.id);
+        const counted = countStmt.get(row.id);
         const messageCount = Number(counted?.n ?? 0);
 
         let title = (row.summary || '').trim();
         if (!title) {
-          const first = copilotDb.prepare<CopilotFirstMessageRow>(
-            `SELECT user_message FROM turns
-             WHERE session_id = ? AND TRIM(COALESCE(user_message, '')) != ''
-               AND TRIM(user_message) NOT LIKE '<%'
-             ORDER BY turn_index LIMIT 1`
-          ).get(row.id);
+          const first = firstStmt.get(row.id);
           title = (first?.user_message || '').trim();
         }
         // Skip contentless sessions (no summary and no turns).
@@ -1082,7 +1084,7 @@ async function getAntigravityWorkspaces(agDir: string): Promise<string[]> {
 }
 
 async function getCopilotCwds(): Promise<string[]> {
-  const dbPath = path.join(os.homedir(), '.copilot', 'session-store.db');
+  const dbPath = process.env.COPILOT_DB_PATH || path.join(os.homedir(), '.copilot', 'session-store.db');
   try {
     const stat = await fs.stat(dbPath);
     if (copilotSessionsCache && copilotSessionsCache.mtime === stat.mtimeMs) {
