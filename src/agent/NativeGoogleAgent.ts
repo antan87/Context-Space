@@ -7,6 +7,7 @@ import {
   buildSystemPrompt,
   executeNativeTool,
 } from './nativeTools.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export class NativeGoogleAgent extends NativeAgentBase {
   protected readonly label = 'NativeGoogleAgent';
@@ -92,8 +93,8 @@ export class NativeGoogleAgent extends NativeAgentBase {
         let result: string;
         try {
           result = await executeNativeTool(this.cwd, call.name, call.args || {});
-        } catch (e: any) {
-          result = `Error: ${e.message}`;
+        } catch (e) {
+          result = `Error: ${toErrorMessage(e)}`;
         }
         functionResponses.push({ functionResponse: { name: call.name, response: { result } } });
       }

@@ -100,6 +100,7 @@ import {
 import { repoName } from '../lib/status.js';
 import { apiFetch } from '../lib/api/client.js';
 import { cn } from '../lib/utils.js';
+import { toErrorMessage } from '../lib/errors.js';
 import { SessionHistory } from '../features/sessions/SessionHistory.js';
 import { IconButton } from '../components/ui/icon-button.js';
 import { useFloatingChat } from '../features/chat/floatingChatStore.js';
@@ -281,8 +282,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       showToast?.(`Workspace successfully upgraded to native ${BRAND_NAME}!`, 'success');
       setIsLegacy(false);
       props.fetchWorkspaces?.();
-    } catch (e: any) {
-      showToast?.(e.message || 'Failed to migrate workspace', 'error');
+    } catch (e) {
+      showToast?.(toErrorMessage(e, 'Failed to migrate workspace'), 'error');
     } finally {
       setMigrating(false);
     }
@@ -444,8 +445,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       setNewTagRules('');
       setNewTagMicroserviceName('');
       showToast?.(`Created category "${newTagName}" and attached to workspace!`, 'success');
-    } catch (err: any) {
-      showToast?.(err.message || 'Failed to create category tag', 'error');
+    } catch (err) {
+      showToast?.(toErrorMessage(err, 'Failed to create category tag'), 'error');
     } finally {
       setSavingNewTag(false);
     }
@@ -507,8 +508,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
 
       showToast?.(`Tag "${inspectTagName.trim()}" updated successfully`, 'success');
       setInspectingTag(null);
-    } catch (err: any) {
-      showToast?.(err.message || 'Failed to update tag', 'error');
+    } catch (err) {
+      showToast?.(toErrorMessage(err, 'Failed to update tag'), 'error');
     } finally {
       setSavingTagDetails(false);
     }
@@ -543,8 +544,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
 
       showToast?.(isOverriddenBuiltin ? `Reset "${inspectingTag.name}" to built-in defaults` : `Deleted tag "${inspectingTag.name}"`, 'success');
       setInspectingTag(null);
-    } catch (err: any) {
-      showToast?.(err.message || 'Failed to delete/reset tag', 'error');
+    } catch (err) {
+      showToast?.(toErrorMessage(err, 'Failed to delete/reset tag'), 'error');
     } finally {
       setDeletingTagDetails(false);
     }

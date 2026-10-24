@@ -13,6 +13,7 @@ import { streamSSE } from 'hono/streaming';
 import { generate } from 'selfsigned';
 
 import { assertFileHandleMatchesPath, readFileHandleAtMost } from '../resources/fs-safety.js';
+import { getErrorCode } from '../utils/errors.js';
 
 import {
   WorkroomAuthorizationError,
@@ -592,7 +593,7 @@ export async function commitHostedWorkroomCredentialRotation(roomDir: string): P
 
 export async function discardHostedWorkroomCredentialRotation(roomDir: string): Promise<void> {
   await fs.unlink(path.join(roomDir, PENDING_HOST_CREDENTIAL_FILE)).catch((error) => {
-    if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) throw error;
+    if (getErrorCode(error) !== 'ENOENT') throw error;
   });
 }
 
@@ -769,7 +770,7 @@ export async function resumeHostedWorkroom(homeDir: string, roomId: string, pass
       throw new WorkroomValidationError('This Workroom is quarantined because its import did not complete.');
     } catch (error) {
       if (error instanceof WorkroomValidationError) throw error;
-      if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) throw error;
+      if (getErrorCode(error) !== 'ENOENT') throw error;
     }
   }
   const store = new WorkroomSqliteStore(roomDir);

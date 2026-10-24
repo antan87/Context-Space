@@ -13,6 +13,7 @@ import { getAllSkills, saveSkill, deleteSkill, type SkillDiagnostic, type SkillI
 import { resolveWorkspaceInteractive, resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { refreshWorkspace } from '../core/refresh.js';
 import { BRAND_NAME } from '../core/constants.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export interface SkillListOptions {
   json?: boolean;
@@ -179,8 +180,8 @@ export async function skillCreateCommand(
   if (options.file) {
     try {
       content = await fs.readFile(options.file, 'utf-8');
-    } catch (err: any) {
-      console.error(chalk.red(`Error reading skill file: ${err.message}`));
+    } catch (err) {
+      console.error(chalk.red(`Error reading skill file: ${toErrorMessage(err)}`));
       process.exit(1);
     }
   }
@@ -219,8 +220,8 @@ export async function skillCreateCommand(
       console.log(chalk.dim(`  Tags:    ${saved.tags.join(', ')}`));
     }
     console.log('');
-  } catch (err: any) {
-    console.error(chalk.red(`\nError creating skill: ${err.message}\n`));
+  } catch (err) {
+    console.error(chalk.red(`\nError creating skill: ${toErrorMessage(err)}\n`));
     process.exit(1);
   }
 }
@@ -272,8 +273,8 @@ export async function skillDeleteCommand(
     }
 
     console.log(chalk.green(`\n✔ Skill "${cleanId}" deleted successfully (${scope} scope).\n`));
-  } catch (err: any) {
-    console.error(chalk.red(`\nError deleting skill: ${err.message}\n`));
+  } catch (err) {
+    console.error(chalk.red(`\nError deleting skill: ${toErrorMessage(err)}\n`));
     process.exitCode = 1;
   }
 }

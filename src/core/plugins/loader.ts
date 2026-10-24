@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { PluginRegistryContext, NexusFlowPlugin } from './index.js';
 import { registerStorageProvider } from '../adapters/registry.js';
+import { toErrorMessage } from '../../utils/errors.js';
 
 export async function loadPlugins(program: any, pluginsList: string[]): Promise<void> {
   const context: PluginRegistryContext = {
@@ -30,8 +31,8 @@ export async function loadPlugins(program: any, pluginsList: string[]): Promise<
       } else {
         console.warn(`Warning: Plugin at "${pluginPath}" does not export a valid NexusFlowPlugin.`);
       }
-    } catch (error: any) {
-      console.error(`Failed to load plugin "${pluginPath}":`, error.message);
+    } catch (error) {
+      console.error(`Failed to load plugin "${pluginPath}":`, toErrorMessage(error));
     }
   }
 }

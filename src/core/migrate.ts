@@ -10,6 +10,7 @@ import * as os from 'node:os';
 import { BRAND_CONFIG } from './brand-config.js';
 import { loadFeatureConfig } from './workspace.js';
 import { refreshWorkspace } from './refresh.js';
+import { toErrorMessage, getErrorCode } from '../utils/errors.js';
 
 export interface FileMigrationResult {
   from: string;
@@ -230,12 +231,12 @@ export async function migrateWorkspace(
               to: mapping.primary,
               status: 'renamed',
             });
-          } catch (err: any) {
+          } catch (err) {
             report.renamedFiles.push({
               from: mapping.legacy,
               to: mapping.primary,
               status: 'failed',
-              error: err.message,
+              error: toErrorMessage(err),
             });
           }
         } else {
@@ -303,7 +304,7 @@ export async function migrateWorkspace(
             to: BRAND_CONFIG.files.configDir.primary,
             status: 'renamed',
           });
-        } catch (err: any) {
+        } catch {
           // Fall back to recursive merge if atomic rename failed
           await fs.mkdir(primaryDir, { recursive: true });
           const mergeResult = await mergeDirectoryRecursive(legacyDir, primaryDir, resolvedPath, dryRun);
@@ -340,8 +341,8 @@ export async function migrateWorkspace(
       let content: string;
       try {
         content = await fs.readFile(filePath, 'utf-8');
-      } catch (err: any) {
-        if (err.code === 'ENOENT') continue;
+      } catch (err) {
+        if (getErrorCode(err) === 'ENOENT') continue;
         throw err;
       }
       let updated = content;
@@ -366,8 +367,8 @@ export async function migrateWorkspace(
         }
         report.updatedSentinels.push(rel);
       }
-    } catch (e: any) {
-      report.warnings.push(`Failed to update markdown sentinels in ${rel}: ${e.message}`);
+    } catch (e) {
+      report.warnings.push(`Failed to update markdown sentinels in ${rel}: ${toErrorMessage(e)}`);
     }
   }
 
@@ -438,9 +439,9 @@ export async function migrateWorkspace(
       }
       report.updatedSentinels.push('.gitignore');
     }
-  } catch (err: any) {
-    if (err.code !== 'ENOENT') {
-      report.warnings.push(`Failed to update .gitignore: ${err.message}`);
+  } catch (err) {
+    if (getErrorCode(err) !== 'ENOENT') {
+      report.warnings.push(`Failed to update .gitignore: ${toErrorMessage(err)}`);
     }
   }
 
@@ -449,8 +450,8 @@ export async function migrateWorkspace(
     try {
       await refreshWorkspace(resolvedPath, { force: true });
       report.refreshedContext = true;
-    } catch (e: any) {
-      report.warnings.push(`Workspace refreshed with warning: ${e.message}`);
+    } catch (e) {
+      report.warnings.push(`Workspace refreshed with warning: ${toErrorMessage(e)}`);
     }
   }
 

@@ -14,6 +14,7 @@ import type { ServiceConfig, RunningService, RunningState, ServiceFailure, Servi
 import { BRAND_CONFIG, getPm2ProcessPrefix } from '../core/constants.js';
 import { findExecutable } from '../utils/user-paths.js';
 import { isLocalPortListening } from '../utils/ports.js';
+import { toErrorMessage, getErrorCode } from '../utils/errors.js';
 
 /** Name of the state file that tracks running services. */
 const PRIMARY_STATE_FILE = BRAND_CONFIG.files.runningState.primary;
@@ -553,8 +554,8 @@ export async function stopServices(workspacePath: string): Promise<void> {
         console.log(chalk.green(`  ✔ All services stopped.`));
       }
     }
-  } catch (error: any) {
-    console.error(chalk.red(`  ✖ Failed to stop services via PM2: ${error.message}`));
+  } catch (error) {
+    console.error(chalk.red(`  ✖ Failed to stop services via PM2: ${toErrorMessage(error)}`));
   }
 
   await mutateRunningState(workspacePath, (state) => ({
@@ -593,8 +594,8 @@ export async function getServiceStatus(workspacePath: string): Promise<void> {
         `  ${status} ${chalk.bold(name)} (PID: ${pid}, since ${uptime})`,
       );
     }
-  } catch (error: any) {
-    console.error(chalk.red(`  ✖ Failed to query PM2 status: ${error.message}`));
+  } catch (error) {
+    console.error(chalk.red(`  ✖ Failed to query PM2 status: ${toErrorMessage(error)}`));
   }
 }
 
@@ -612,9 +613,9 @@ async function collectLogFiles(dir: string): Promise<string[]> {
         results.push(fullPath);
       }
     }
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') {
-      console.warn(chalk.yellow(`  Warning: could not read directory ${dir}: ${error?.message || error}`));
+  } catch (error) {
+    if (getErrorCode(error) !== 'ENOENT') {
+      console.warn(chalk.yellow(`  Warning: could not read directory ${dir}: ${toErrorMessage(error)}`));
     }
   }
   return results.sort((a, b) => a.localeCompare(b));

@@ -7,6 +7,7 @@ import {
   buildSystemPrompt,
   executeNativeTool,
 } from './nativeTools.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export class NativeClaudeAgent extends NativeAgentBase {
   protected readonly label = 'NativeClaudeAgent';
@@ -116,8 +117,8 @@ export class NativeClaudeAgent extends NativeAgentBase {
         try {
           const result = await executeNativeTool(this.cwd, call.name, call.args);
           toolResultContent.push({ type: 'tool_result', tool_use_id: call.id, content: result });
-        } catch (err: any) {
-          toolResultContent.push({ type: 'tool_result', tool_use_id: call.id, content: `Error: ${err.message}`, is_error: true });
+        } catch (err) {
+          toolResultContent.push({ type: 'tool_result', tool_use_id: call.id, content: `Error: ${toErrorMessage(err)}`, is_error: true });
         }
       }
 

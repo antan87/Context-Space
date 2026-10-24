@@ -42,6 +42,7 @@ import { ScrollArea } from '../components/ui/scroll-area.js';
 import { Spinner } from '../components/ui/spinner.js';
 import { Textarea } from '../components/ui/textarea.js';
 import { cn } from '../lib/utils.js';
+import { toErrorMessage } from '../lib/errors.js';
 import {
   useSkillCategories,
   useSaveSkillCategory,
@@ -315,8 +316,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
       );
       setSkillModalOpen(false);
       setEditingSkill(null);
-    } catch (err: any) {
-      showToast?.(err?.message || 'Failed to save skill', 'error');
+    } catch (err) {
+      showToast?.(toErrorMessage(err, 'Failed to save skill'), 'error');
       console.error(err);
     }
   };
@@ -343,8 +344,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
       }
       setDeleteConfirmModalOpen(false);
       setDeleteTarget(null);
-    } catch (err: any) {
-      showToast?.(err?.message || 'Failed to delete item', 'error');
+    } catch (err) {
+      showToast?.(toErrorMessage(err, 'Failed to delete item'), 'error');
       console.error(err);
     }
   };

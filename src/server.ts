@@ -43,6 +43,7 @@ import {
   BRAND_NAME,
 } from './core/constants.js';
 import { configPatchSchema } from './core/config-schema.js';
+import { toErrorMessage, getErrorCode } from './utils/errors.js';
 import { countRequest, installPerfCounters, resetPerfCounters, snapshotPerfCounters } from './core/perf-counters.js';
 import { listStorageProviders } from './core/adapters/registry.js';
 import { scanForRepos } from './core/scanner.js';
@@ -2347,18 +2348,18 @@ app.post('/api/workspace/:id/changes/revert', async (c) => {
         indexPath = path.resolve(worktreePath, relIndexPath);
         try {
           originalIndexBuf = await fs.readFile(indexPath);
-        } catch (readErr: any) {
-          if (readErr?.code !== 'ENOENT') {
+        } catch (readErr) {
+          if (getErrorCode(readErr) !== 'ENOENT') {
             return c.json({
-              error: `Failed to snapshot Git index before revert: ${readErr?.message ?? String(readErr)}`,
+              error: `Failed to snapshot Git index before revert: ${toErrorMessage(readErr)}`,
             }, 500);
           }
           originalIndexBuf = null;
         }
       }
-    } catch (gitErr: any) {
+    } catch (gitErr) {
       return c.json({
-        error: `Failed to resolve Git index path before revert: ${gitErr?.message ?? String(gitErr)}`,
+        error: `Failed to resolve Git index path before revert: ${toErrorMessage(gitErr)}`,
       }, 500);
     }
 
@@ -2424,8 +2425,8 @@ app.post('/api/workspace/:id/changes/revert', async (c) => {
             await handle.close();
           }
         }
-      } catch (err: any) {
-        if (err?.code !== 'ENOENT') {
+      } catch (err) {
+        if (getErrorCode(err) !== 'ENOENT') {
           throw err;
         }
         exists = false;
@@ -2454,15 +2455,15 @@ app.post('/api/workspace/:id/changes/revert', async (c) => {
         }
         executedReverts.push(item);
       }
-    } catch (revertErr: any) {
+    } catch (revertErr) {
       const rollbackErrors: string[] = [];
 
       // 1. Restore the Git index first if it was snapshotted
       if (indexPath && originalIndexBuf) {
         try {
           await fs.writeFile(indexPath, originalIndexBuf);
-        } catch (indexErr: any) {
-          rollbackErrors.push(`Failed to restore git index: ${indexErr?.message ?? String(indexErr)}`);
+        } catch (indexErr) {
+          rollbackErrors.push(`Failed to restore git index: ${toErrorMessage(indexErr)}`);
         }
       }
 
@@ -2475,8 +2476,8 @@ app.post('/api/workspace/:id/changes/revert', async (c) => {
               if (item.originalMode !== undefined && typeof fs.chmod === 'function') {
                 try {
                   await fs.chmod(item.resolvedFile, item.originalMode);
-                } catch (chmodErr: any) {
-                  rollbackErrors.push(`Failed to restore mode on ${item.relFile}: ${chmodErr?.message ?? String(chmodErr)}`);
+                } catch (chmodErr) {
+                  rollbackErrors.push(`Failed to restore mode on ${item.relFile}: ${toErrorMessage(chmodErr)}`);
                 }
               }
             }
@@ -2486,33 +2487,33 @@ app.post('/api/workspace/:id/changes/revert', async (c) => {
               if (item.originalMode !== undefined && typeof fs.chmod === 'function') {
                 try {
                   await fs.chmod(item.resolvedFile, item.originalMode);
-                } catch (chmodErr: any) {
-                  rollbackErrors.push(`Failed to restore mode on ${item.relFile}: ${chmodErr?.message ?? String(chmodErr)}`);
+                } catch (chmodErr) {
+                  rollbackErrors.push(`Failed to restore mode on ${item.relFile}: ${toErrorMessage(chmodErr)}`);
                 }
               }
             } else if (!item.exists) {
               try {
                 await fs.unlink(item.resolvedFile);
-              } catch (unlinkErr: any) {
-                if (unlinkErr?.code !== 'ENOENT') {
-                  rollbackErrors.push(`Failed to remove checked-out file ${item.relFile}: ${unlinkErr?.message ?? String(unlinkErr)}`);
+              } catch (unlinkErr) {
+                if (getErrorCode(unlinkErr) !== 'ENOENT') {
+                  rollbackErrors.push(`Failed to remove checked-out file ${item.relFile}: ${toErrorMessage(unlinkErr)}`);
                 }
               }
             }
           }
-        } catch (restoreErr: any) {
-          rollbackErrors.push(`Failed to restore ${item.relFile}: ${restoreErr?.message ?? String(restoreErr)}`);
+        } catch (restoreErr) {
+          rollbackErrors.push(`Failed to restore ${item.relFile}: ${toErrorMessage(restoreErr)}`);
         }
       }
 
       if (rollbackErrors.length > 0) {
         return c.json({
-          error: `Failed to revert files: ${revertErr?.message ?? String(revertErr)}. Warning: Rollback could not fully restore state: ${rollbackErrors.join('; ')}`,
+          error: `Failed to revert files: ${toErrorMessage(revertErr)}. Warning: Rollback could not fully restore state: ${rollbackErrors.join('; ')}`,
         }, 500);
       }
 
       return c.json({
-        error: `Failed to revert files: ${revertErr?.message ?? String(revertErr)}. Any modified files were rolled back.`,
+        error: `Failed to revert files: ${toErrorMessage(revertErr)}. Any modified files were rolled back.`,
       }, 500);
     }
 

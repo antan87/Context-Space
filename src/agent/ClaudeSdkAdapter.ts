@@ -13,6 +13,7 @@ import {
   MCP_ADAPTER_SERVER_NAME,
   LEGACY_MCP_ADAPTER_SERVER_NAME,
 } from '../core/constants.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const CORE_ALLOWED_TOOLS = new Set([
   'Edit', 'Write', 'MultiEdit', 'NotebookEdit',
@@ -105,8 +106,8 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
         }
 
         this.bindEvents(this.handle);
-      } catch (err: any) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      } catch (err) {
+        this.emit('error', err instanceof Error ? err : new Error(toErrorMessage(err)));
         this.emit('idle');
       }
     } else {
@@ -227,8 +228,8 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
               break;
           }
         }
-      } catch (err: any) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      } catch (err) {
+        this.emit('error', err instanceof Error ? err : new Error(toErrorMessage(err)));
       } finally {
         if (this.active) {
           this.emit('idle');

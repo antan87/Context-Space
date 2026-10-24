@@ -7,6 +7,7 @@ import {
   buildSystemPrompt,
   executeNativeTool,
 } from './nativeTools.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export class NativeAgent extends NativeAgentBase {
   protected readonly label = 'NativeAgent';
@@ -103,8 +104,8 @@ export class NativeAgent extends NativeAgentBase {
         try {
           const args = JSON.parse(tc.function.arguments || '{}');
           result = await executeNativeTool(this.cwd, tc.function.name, args);
-        } catch (err: any) {
-          result = `Error: ${err.message}`;
+        } catch (err) {
+          result = `Error: ${toErrorMessage(err)}`;
         }
         this.messages.push({ role: 'tool', tool_call_id: tc.id, name: tc.function.name, content: result });
       }

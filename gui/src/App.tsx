@@ -24,6 +24,7 @@ import { ArchiveWorkspaceDialog } from './components/ArchiveWorkspaceDialog.js';
 import { Spinner } from './components/ui/spinner.js';
 import { safeCopyToClipboard } from './lib/clipboard.js';
 import { cn } from './lib/utils.js';
+import { toErrorMessage } from './lib/errors.js';
 import { perfMark, perfMarkOnce } from './lib/perfMarks.js';
 import { changesFromResponse } from './features/changes/utils/changesResponse.js';
 import { parseSection, type WorkspaceSection } from './features/workspace-shell/destinations.js';
@@ -488,8 +489,8 @@ function AppInner() {
         const err = await res.json();
         showToast(err.error || 'Failed to save template', 'error');
       }
-    } catch (e: any) {
-      showToast(e.message || 'Error saving template', 'error');
+    } catch (e) {
+      showToast(toErrorMessage(e, 'Error saving template'), 'error');
     } finally {
       setSavingTemplate(false);
     }
@@ -513,8 +514,8 @@ function AppInner() {
         const err = await res.json();
         showToast(err.error || 'Failed to delete template', 'error');
       }
-    } catch (e: any) {
-      showToast(e.message || 'Error deleting template', 'error');
+    } catch (e) {
+      showToast(toErrorMessage(e, 'Error deleting template'), 'error');
     } finally {
       setDeletingTemplate(false);
     }
@@ -539,8 +540,8 @@ function AppInner() {
         const err = await res.json();
         showToast(err.error || 'Failed to analyze template using the selected assistant harness.', 'error');
       }
-    } catch (e: any) {
-      showToast(e.message || 'Error analyzing template', 'error');
+    } catch (e) {
+      showToast(toErrorMessage(e, 'Error analyzing template'), 'error');
     } finally {
       setAnalyzingTemplate(false);
     }

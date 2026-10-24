@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { getConfigDir } from '../core/config.js';
+import { getErrorCode } from '../utils/errors.js';
 
 export interface IDatabaseSync {
   exec(sql: string): void;
@@ -120,8 +121,8 @@ export class FallbackDatabase implements IDatabaseSync {
     try {
       const raw = fs.readFileSync(jsonPath, 'utf8');
       parsedData = JSON.parse(raw);
-    } catch (err: any) {
-      if (err?.code !== 'ENOENT') {
+    } catch (err) {
+      if (getErrorCode(err) !== 'ENOENT') {
         console.warn(`[FallbackDatabase] Failed to read or parse ${jsonPath}, attempting backup recovery:`, err);
       }
       parsedData = null;
@@ -131,8 +132,8 @@ export class FallbackDatabase implements IDatabaseSync {
       try {
         const raw = fs.readFileSync(bakPath, 'utf8');
         parsedData = JSON.parse(raw);
-      } catch (bakErr: any) {
-        if (bakErr?.code !== 'ENOENT') {
+      } catch (bakErr) {
+        if (getErrorCode(bakErr) !== 'ENOENT') {
           console.warn(`[FallbackDatabase] Failed to read or parse backup ${bakPath}:`, bakErr);
         }
         parsedData = null;

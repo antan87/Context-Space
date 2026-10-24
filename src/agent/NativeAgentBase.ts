@@ -48,7 +48,7 @@ export abstract class NativeAgentBase extends EventEmitter {
     this.abortController = controller;
     try {
       await this.runLoop(data, controller.signal);
-    } catch (err: any) {
+    } catch (err) {
       // Any error surfacing after an intentional Stop is the abort, not a
       // failure — the SDKs throw APIUserAbortError (name !== 'AbortError'),
       // so check the signal rather than the error name.

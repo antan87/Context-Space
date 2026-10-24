@@ -14,6 +14,7 @@ import { loadConfig } from '../core/config.js';
 import { loadFeatureConfig, listWorkspaces } from '../core/workspace.js';
 import { getWorkspaceRepos, getRepoStatus, type WorkspaceRepo, type RepoStatus } from '../utils/multi-git.js';
 import { BRAND_NAME, CLI_NAME, PRIMARY_MANIFEST_FILE, MCP_SERVER_NAME } from '../core/constants.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const COMMANDS = ['sync', 'doctor', 'refresh', 'status', 'start', 'stop', 'logs', 'list', 'create', 'open', 'remove', 'add-repo', 'help'];
 
@@ -324,8 +325,8 @@ export async function tuiCommand(options: { workspace?: string }): Promise<void>
                   stdio: 'inherit',
                   shell: false,
                 });
-              } catch (err: any) {
-                console.error(chalk.red(`\n✖ Command failed: ${err.message}`));
+              } catch (err) {
+                console.error(chalk.red(`\n✖ Command failed: ${toErrorMessage(err)}`));
               }
 
               // Check if workspace still exists (in case it was deleted by 'remove')
@@ -372,8 +373,8 @@ export async function tuiCommand(options: { workspace?: string }): Promise<void>
               }
               log(chalk.green('✔ Command completed successfully.'));
             }
-          } catch (err: any) {
-            log(chalk.red(`✖ Command failed: ${err.message}`));
+          } catch (err) {
+            log(chalk.red(`✖ Command failed: ${toErrorMessage(err)}`));
           } finally {
             state.activeCommandRunning = false;
             await updateGitStatus();
@@ -437,8 +438,8 @@ export async function tuiCommand(options: { workspace?: string }): Promise<void>
           const { stdout } = await execa('node', [script, 'sync'], { cwd: workspacePath });
           stdout.split('\n').filter(Boolean).forEach((l) => log(`  ${l}`));
           log(chalk.green('✔ Sync completed successfully.'));
-        } catch (err: any) {
-          log(chalk.red(`✖ Sync failed: ${err.message}`));
+        } catch (err) {
+          log(chalk.red(`✖ Sync failed: ${toErrorMessage(err)}`));
         } finally {
           state.activeCommandRunning = false;
           await updateGitStatus();
@@ -454,8 +455,8 @@ export async function tuiCommand(options: { workspace?: string }): Promise<void>
           const { stdout } = await execa('node', [script, 'doctor'], { cwd: workspacePath });
           stdout.split('\n').filter(Boolean).forEach((l) => log(`  ${l}`));
           log(chalk.green('✔ Diagnostics check complete.'));
-        } catch (err: any) {
-          log(chalk.red(`✖ Diagnostics failed: ${err.message}`));
+        } catch (err) {
+          log(chalk.red(`✖ Diagnostics failed: ${toErrorMessage(err)}`));
         } finally {
           state.activeCommandRunning = false;
           await updateGitStatus();
@@ -471,8 +472,8 @@ export async function tuiCommand(options: { workspace?: string }): Promise<void>
           const { stdout } = await execa('node', [script, 'refresh'], { cwd: workspacePath });
           stdout.split('\n').filter(Boolean).forEach((l) => log(`  ${l}`));
           log(chalk.green('✔ Context successfully refreshed.'));
-        } catch (err: any) {
-          log(chalk.red(`✖ Refresh failed: ${err.message}`));
+        } catch (err) {
+          log(chalk.red(`✖ Refresh failed: ${toErrorMessage(err)}`));
         } finally {
           state.activeCommandRunning = false;
           await updateGitStatus();

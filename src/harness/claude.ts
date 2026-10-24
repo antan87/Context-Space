@@ -26,6 +26,7 @@ import type {
   StartSpec,
   WorkspaceRef,
 } from "./types.js";
+import { toErrorMessage } from "../utils/errors.js";
 
 interface SDKUserMessage {
   type: "user";
@@ -105,7 +106,7 @@ function extractFileChangedEvent(toolName: string, input: any): HarnessEvent | n
 function extractClaudeErrorMessage(msg: any, subtype?: string): string {
   if (Array.isArray(msg?.errors) && msg.errors.length > 0) {
     const errorStrings = msg.errors
-      .map((e: unknown) => (typeof e === "string" ? e : (e as any)?.message ?? String(e)))
+      .map((e: unknown) => toErrorMessage(e))
       .filter((s: string) => typeof s === "string" && s.trim().length > 0);
     if (errorStrings.length > 0) {
       return errorStrings.join("; ").slice(0, 2000);

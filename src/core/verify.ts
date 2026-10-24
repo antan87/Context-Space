@@ -23,6 +23,7 @@ import { resolveFeatureRepoPath } from '../utils/feature.js';
 import { getRepoStatus } from '../utils/multi-git.js';
 import { recordVerificationReport } from './workspace-state.js';
 import { resolveActiveDomainRules, getDomainPack } from './domain-packs.js';
+import { toErrorMessage } from '../utils/errors.js';
 import { assertWorkspaceActive } from './archive-guard.js';
 
 export interface VerifyCommandSpec {
@@ -405,7 +406,7 @@ export async function verifyRepo(
       stderr: stderr || undefined,
       verifiedAt,
     };
-  } catch (err: any) {
+  } catch (err) {
     const durationMs = Date.now() - startTime;
     return {
       repoName,
@@ -417,7 +418,7 @@ export async function verifyRepo(
       clean,
       dirtyFiles: dirtyFiles.length > 0 ? dirtyFiles : undefined,
       durationMs,
-      error: err.message,
+      error: toErrorMessage(err),
       verifiedAt,
     };
   }
