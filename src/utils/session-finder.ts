@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { AISession, ChatMessage, NormalizedUsage, NormalizedRemainingQuota, SessionAssistant } from '../types.js';
 import type { SessionSource } from './cli-harnesses.js';
+import type { IDatabaseSync } from '../storage/db.js';
 import { MODULAR_SESSION_READERS, modularSessionReader } from './session-readers.js';
 export { SESSION_SOURCES } from './cli-harnesses.js';
 export type { SessionSource } from './cli-harnesses.js';
@@ -254,6 +255,32 @@ export function sanitizeSessionTitle(rawTitle: string, maxLength = 80): string {
   return singleLine.length > maxLength ? singleLine.slice(0, maxLength) + '...' : singleLine;
 }
 
+export interface CopilotSessionRow {
+  id: string;
+  cwd: string;
+  summary: string | null;
+  created_at: string | number | null;
+  updated_at: string | number | null;
+}
+
+export interface CopilotTurnCountRow {
+  n: number | null;
+}
+
+export interface CopilotFirstMessageRow {
+  user_message: string | null;
+}
+
+export interface CopilotCwdRow {
+  cwd: string | null;
+}
+
+export interface CopilotTranscriptTurnRow {
+  user_message: string | null;
+  assistant_response: string | null;
+  timestamp?: string | number | null;
+}
+
 /**
  * Opens GitHub Copilot's SQLite session store (`~/.copilot/session-store.db`)
  * read-only via Node's built-in `node:sqlite`. Returns null when the store is
@@ -261,16 +288,16 @@ export function sanitizeSessionTitle(rawTitle: string, maxLength = 80): string {
  * packaged Electron build) so Copilot support degrades gracefully instead of
  * throwing. Caller must close the returned handle.
  */
-async function openCopilotDb(): Promise<any | null> {
+export async function openCopilotDb(customPath?: string): Promise<IDatabaseSync | null> {
   try {
-    const dbPath = path.join(os.homedir(), '.copilot', 'session-store.db');
+    const dbPath = customPath || path.join(os.homedir(), '.copilot', 'session-store.db');
     await fs.access(dbPath);
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       db.exec('PRAGMA busy_timeout = 3000;');
     } catch {}
-    return db;
+    return db as unknown as IDatabaseSync;
   } catch {
     return null;
   }
@@ -871,28 +898,28 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
   const copilotDb = await openCopilotDb();
   if (copilotDb) {
     try {
-      const rows = copilotDb.prepare(
+      const rows = copilotDb.prepare<CopilotSessionRow>(
         'SELECT id, cwd, summary, created_at, updated_at FROM sessions'
-      ).all() as any[];
+      ).all();
       for (const row of rows) {
         if (!isPathMatch(row.cwd)) continue;
 
-        const counted = copilotDb.prepare(
+        const counted = copilotDb.prepare<CopilotTurnCountRow>(
           `SELECT
              SUM(CASE WHEN TRIM(COALESCE(user_message, '')) != '' THEN 1 ELSE 0 END)
              + SUM(CASE WHEN TRIM(COALESCE(assistant_response, '')) != '' THEN 1 ELSE 0 END) AS n
            FROM turns WHERE session_id = ?`
-        ).get(row.id) as any;
+        ).get(row.id);
         const messageCount = Number(counted?.n ?? 0);
 
         let title = (row.summary || '').trim();
         if (!title) {
-          const first = copilotDb.prepare(
+          const first = copilotDb.prepare<CopilotFirstMessageRow>(
             `SELECT user_message FROM turns
              WHERE session_id = ? AND TRIM(COALESCE(user_message, '')) != ''
                AND TRIM(user_message) NOT LIKE '<%'
              ORDER BY turn_index LIMIT 1`
-          ).get(row.id) as any;
+          ).get(row.id);
           title = (first?.user_message || '').trim();
         }
         // Skip contentless sessions (no summary and no turns).
@@ -1064,7 +1091,7 @@ async function getCopilotCwds(): Promise<string[]> {
     const copilotDb = await openCopilotDb();
     if (!copilotDb) return [];
     try {
-      const rows = copilotDb.prepare('SELECT cwd FROM sessions').all() as any[];
+      const rows = copilotDb.prepare<CopilotCwdRow>('SELECT cwd FROM sessions').all();
       const cwds = rows.map((r) => r.cwd).filter((c): c is string => typeof c === 'string');
       copilotSessionsCache = { mtime: stat.mtimeMs, cwds };
       return cwds;
@@ -1385,17 +1412,18 @@ export async function getSessionTranscript(assistant: string, sessionId: string)
       throw new Error('Copilot session store is unavailable in this runtime.');
     }
     try {
-      const turns = copilotDb.prepare(
+      const turns = copilotDb.prepare<CopilotTranscriptTurnRow>(
         'SELECT user_message, assistant_response, timestamp FROM turns WHERE session_id = ? ORDER BY turn_index'
-      ).all(sessionId) as any[];
+      ).all(sessionId);
       for (const t of turns) {
         const user = (t.user_message || '').trim();
         const assistantText = (t.assistant_response || '').trim();
+        const ts = t.timestamp ? String(t.timestamp) : undefined;
         // Skip Copilot's injected <system_reminder> pseudo-turns.
         if (user && !isInjectedContextText(user)) {
-          messages.push({ role: 'user', content: user, timestamp: t.timestamp });
+          messages.push({ role: 'user', content: user, timestamp: ts });
         }
-        if (assistantText) messages.push({ role: 'assistant', content: assistantText, timestamp: t.timestamp });
+        if (assistantText) messages.push({ role: 'assistant', content: assistantText, timestamp: ts });
       }
     } finally {
       try { copilotDb.close(); } catch {}

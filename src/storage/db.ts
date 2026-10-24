@@ -13,14 +13,50 @@ import * as os from 'node:os';
 import { getConfigDir } from '../core/config.js';
 import { getErrorCode } from '../utils/errors.js';
 
+export interface IPreparedStatement<Row = Record<string, unknown>> {
+  run(...args: unknown[]): { changes?: number | bigint; lastInsertRowid?: number | bigint };
+  get(...args: unknown[]): Row | undefined;
+  all(...args: unknown[]): Row[];
+}
+
 export interface IDatabaseSync {
   exec(sql: string): void;
-  prepare(sql: string): {
-    run(...args: any[]): any;
-    get(...args: any[]): any;
-    all(...args: any[]): any[];
-  };
+  prepare<Row = Record<string, unknown>>(sql: string): IPreparedStatement<Row>;
   close(): void;
+}
+
+export interface ChatThreadRow {
+  workspace_id: string;
+  provider_id: string | null;
+  sessions_json: string;
+  profiles_json: string;
+  models_json: string;
+  efforts_json: string;
+  updated_at: number;
+}
+
+export interface ChatTurnRow {
+  id: string;
+  workspace_id: string;
+  turn_index: number;
+  role: string;
+  content: string;
+  kind: string | null;
+  execution_profile: string | null;
+  images_json: string | null;
+  files_changed_json?: string | null;
+  created_at: number;
+}
+
+export interface ToolApprovalRow {
+  id: string;
+  workspace_id: string;
+  tool: string;
+  input_json: string;
+  description: string | null;
+  decision: string;
+  created_at: number;
+  resolved_at: number | null;
 }
 
 export interface StoredChatMessage {
@@ -72,14 +108,14 @@ try {
  */
 export class FallbackDatabase implements IDatabaseSync {
   private targetPath: string;
-  private threads = new Map<string, any>();
-  private turns = new Map<string, any[]>();
-  private approvals = new Map<string, any>();
+  private threads = new Map<string, ChatThreadRow>();
+  private turns = new Map<string, ChatTurnRow[]>();
+  private approvals = new Map<string, ToolApprovalRow>();
 
   private inTransaction = false;
-  private stagingThreads = new Map<string, any>();
-  private stagingTurns = new Map<string, any[]>();
-  private stagingApprovals = new Map<string, any>();
+  private stagingThreads = new Map<string, ChatThreadRow>();
+  private stagingTurns = new Map<string, ChatTurnRow[]>();
+  private stagingApprovals = new Map<string, ToolApprovalRow>();
 
   constructor(targetPath: string) {
     this.targetPath = targetPath;
@@ -94,15 +130,15 @@ export class FallbackDatabase implements IDatabaseSync {
     return { jsonPath, bakPath };
   }
 
-  private getActiveThreads(): Map<string, any> {
+  private getActiveThreads(): Map<string, ChatThreadRow> {
     return this.inTransaction ? this.stagingThreads : this.threads;
   }
 
-  private getActiveTurns(): Map<string, any[]> {
+  private getActiveTurns(): Map<string, ChatTurnRow[]> {
     return this.inTransaction ? this.stagingTurns : this.turns;
   }
 
-  private getActiveApprovals(): Map<string, any> {
+  private getActiveApprovals(): Map<string, ToolApprovalRow> {
     return this.inTransaction ? this.stagingApprovals : this.approvals;
   }
 
@@ -116,7 +152,11 @@ export class FallbackDatabase implements IDatabaseSync {
     if (this.targetPath === ':memory:') return;
     const { jsonPath, bakPath } = this.getJsonPaths();
 
-    let parsedData: any = null;
+    let parsedData: {
+      threads?: Record<string, ChatThreadRow>;
+      turns?: Record<string, ChatTurnRow[]>;
+      approvals?: Record<string, ToolApprovalRow>;
+    } | null = null;
 
     try {
       const raw = fs.readFileSync(jsonPath, 'utf8');
@@ -148,7 +188,7 @@ export class FallbackDatabase implements IDatabaseSync {
       }
       if (parsedData.turns) {
         for (const [k, v] of Object.entries(parsedData.turns)) {
-          this.turns.set(k, v as any[]);
+          this.turns.set(k, v);
         }
       }
       if (parsedData.approvals) {
@@ -160,9 +200,9 @@ export class FallbackDatabase implements IDatabaseSync {
   }
 
   private saveToDisk(
-    threadsMap: Map<string, any> = this.threads,
-    turnsMap: Map<string, any[]> = this.turns,
-    approvalsMap: Map<string, any> = this.approvals,
+    threadsMap: Map<string, ChatThreadRow> = this.threads,
+    turnsMap: Map<string, ChatTurnRow[]> = this.turns,
+    approvalsMap: Map<string, ToolApprovalRow> = this.approvals,
   ): void {
     if (this.targetPath === ':memory:') return;
     const { jsonPath, bakPath } = this.getJsonPaths();
@@ -242,33 +282,29 @@ export class FallbackDatabase implements IDatabaseSync {
     }
   }
 
-  prepare(sql: string): {
-    run(...args: any[]): any;
-    get(...args: any[]): any;
-    all(...args: any[]): any[];
-  } {
+  prepare<Row = Record<string, unknown>>(sql: string): IPreparedStatement<Row> {
     const normalized = sql.trim().replace(/\s+/g, ' ');
     const self = this;
 
     if (normalized.startsWith('INSERT INTO chat_threads')) {
       return {
         run(
-          workspace_id: string,
-          provider_id: string | null,
-          sessions_json: string,
-          profiles_json: string,
-          models_json: string,
-          efforts_json: string,
-          updated_at: number,
+          workspace_id: unknown,
+          provider_id: unknown,
+          sessions_json: unknown,
+          profiles_json: unknown,
+          models_json: unknown,
+          efforts_json: unknown,
+          updated_at: unknown,
         ) {
-          self.getActiveThreads().set(workspace_id, {
-            workspace_id,
-            provider_id,
-            sessions_json,
-            profiles_json,
-            models_json,
-            efforts_json,
-            updated_at,
+          self.getActiveThreads().set(String(workspace_id), {
+            workspace_id: String(workspace_id),
+            provider_id: provider_id !== null && provider_id !== undefined ? String(provider_id) : null,
+            sessions_json: String(sessions_json ?? '{}'),
+            profiles_json: String(profiles_json ?? '{}'),
+            models_json: String(models_json ?? '{}'),
+            efforts_json: String(efforts_json ?? '{}'),
+            updated_at: Number(updated_at),
           });
           self.onMutation();
           return { changes: 1 };
@@ -280,8 +316,8 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('DELETE FROM chat_turns WHERE workspace_id = ?')) {
       return {
-        run(workspace_id: string) {
-          self.getActiveTurns().delete(workspace_id);
+        run(workspace_id: unknown) {
+          self.getActiveTurns().delete(String(workspace_id));
           self.onMutation();
           return { changes: 1 };
         },
@@ -293,34 +329,35 @@ export class FallbackDatabase implements IDatabaseSync {
     if (normalized.startsWith('INSERT INTO chat_turns')) {
       return {
         run(
-          id: string,
-          workspace_id: string,
-          turn_index: number,
-          role: string,
-          content: string,
-          kind: string | null,
-          execution_profile: string | null,
-          images_json: string | null,
-          files_changed_json: string | null,
-          created_at: number,
+          id: unknown,
+          workspace_id: unknown,
+          turn_index: unknown,
+          role: unknown,
+          content: unknown,
+          kind: unknown,
+          execution_profile: unknown,
+          images_json: unknown,
+          files_changed_json: unknown,
+          created_at: unknown,
         ) {
+          const wsId = String(workspace_id);
           const map = self.getActiveTurns();
-          let list = map.get(workspace_id);
+          let list = map.get(wsId);
           if (!list) {
             list = [];
-            map.set(workspace_id, list);
+            map.set(wsId, list);
           }
           list.push({
-            id,
-            workspace_id,
-            turn_index,
-            role,
-            content,
-            kind,
-            execution_profile,
-            images_json,
-            files_changed_json,
-            created_at,
+            id: String(id),
+            workspace_id: wsId,
+            turn_index: Number(turn_index),
+            role: String(role),
+            content: String(content),
+            kind: kind !== null && kind !== undefined ? String(kind) : null,
+            execution_profile: execution_profile !== null && execution_profile !== undefined ? String(execution_profile) : null,
+            images_json: images_json !== null && images_json !== undefined ? String(images_json) : null,
+            files_changed_json: files_changed_json !== null && files_changed_json !== undefined ? String(files_changed_json) : null,
+            created_at: Number(created_at),
           });
           self.onMutation();
           return { changes: 1 };
@@ -332,36 +369,37 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('SELECT * FROM chat_threads WHERE workspace_id = ?')) {
       return {
-        run() { return {}; },
-        get(workspace_id: string) {
-          return self.getActiveThreads().get(workspace_id);
+        run() { return { changes: 0 }; },
+        get(workspace_id: unknown) {
+          return self.getActiveThreads().get(String(workspace_id)) as Row | undefined;
         },
-        all(workspace_id: string) {
-          const item = self.getActiveThreads().get(workspace_id);
-          return item ? [item] : [];
+        all(workspace_id: unknown) {
+          const item = self.getActiveThreads().get(String(workspace_id));
+          return (item ? [item] : []) as Row[];
         },
       };
     }
 
     if (normalized.startsWith('SELECT * FROM chat_turns WHERE workspace_id = ?')) {
       return {
-        run() { return {}; },
-        get(workspace_id: string) {
-          const list = self.getActiveTurns().get(workspace_id) || [];
-          return list[0];
+        run() { return { changes: 0 }; },
+        get(workspace_id: unknown) {
+          const list = self.getActiveTurns().get(String(workspace_id)) || [];
+          return list[0] as Row | undefined;
         },
-        all(workspace_id: string) {
-          const list = self.getActiveTurns().get(workspace_id) || [];
-          return [...list].sort((a, b) => a.turn_index - b.turn_index);
+        all(workspace_id: unknown) {
+          const list = self.getActiveTurns().get(String(workspace_id)) || [];
+          return [...list].sort((a, b) => a.turn_index - b.turn_index) as Row[];
         },
       };
     }
 
     if (normalized.startsWith('DELETE FROM chat_threads WHERE workspace_id = ?')) {
       return {
-        run(workspace_id: string) {
-          self.getActiveThreads().delete(workspace_id);
-          self.getActiveTurns().delete(workspace_id);
+        run(workspace_id: unknown) {
+          const wsId = String(workspace_id);
+          self.getActiveThreads().delete(wsId);
+          self.getActiveTurns().delete(wsId);
           self.onMutation();
           return { changes: 1 };
         },
@@ -373,23 +411,24 @@ export class FallbackDatabase implements IDatabaseSync {
     if (normalized.startsWith('INSERT INTO tool_approvals')) {
       return {
         run(
-          id: string,
-          workspace_id: string,
-          tool: string,
-          input_json: string,
-          description: string | null,
-          created_at: number,
+          id: unknown,
+          workspace_id: unknown,
+          tool: unknown,
+          input_json: unknown,
+          description: unknown,
+          created_at: unknown,
         ) {
+          const appId = String(id);
           const map = self.getActiveApprovals();
-          const existing = map.get(id);
-          map.set(id, {
-            id,
-            workspace_id,
-            tool,
-            input_json,
-            description,
+          const existing = map.get(appId);
+          map.set(appId, {
+            id: appId,
+            workspace_id: String(workspace_id),
+            tool: String(tool),
+            input_json: String(input_json),
+            description: description !== null && description !== undefined ? String(description) : null,
             decision: existing ? existing.decision : 'pending',
-            created_at,
+            created_at: Number(created_at),
             resolved_at: existing?.resolved_at ?? null,
           });
           self.onMutation();
@@ -402,12 +441,13 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('UPDATE tool_approvals SET decision = ?, resolved_at = ? WHERE id = ?')) {
       return {
-        run(decision: string, resolved_at: number, id: string) {
+        run(decision: unknown, resolved_at: unknown, id: unknown) {
+          const appId = String(id);
           const map = self.getActiveApprovals();
-          const existing = map.get(id);
+          const existing = map.get(appId);
           if (existing) {
-            existing.decision = decision;
-            existing.resolved_at = resolved_at;
+            existing.decision = String(decision);
+            existing.resolved_at = Number(resolved_at);
             self.onMutation();
           }
           return { changes: 1 };
@@ -419,18 +459,18 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('SELECT * FROM tool_approvals WHERE workspace_id = ?')) {
       return {
-        run() { return {}; },
-        get(workspace_id: string) {
+        run() { return { changes: 0 }; },
+        get(workspace_id: unknown) {
           const list = Array.from(self.getActiveApprovals().values()).filter(
-            (a) => a.workspace_id === workspace_id && a.decision === 'pending',
+            (a) => a.workspace_id === String(workspace_id) && a.decision === 'pending',
           );
-          return list[0];
+          return list[0] as Row | undefined;
         },
-        all(workspace_id: string) {
+        all(workspace_id: unknown) {
           const list = Array.from(self.getActiveApprovals().values()).filter(
-            (a) => a.workspace_id === workspace_id && a.decision === 'pending',
+            (a) => a.workspace_id === String(workspace_id) && a.decision === 'pending',
           );
-          return list.sort((a, b) => a.created_at - b.created_at);
+          return list.sort((a, b) => a.created_at - b.created_at) as Row[];
         },
       };
     }
@@ -495,10 +535,10 @@ export function initDatabase(dbPath?: string): IDatabaseSync {
 
     let db: IDatabaseSync;
     try {
-      db = new NodeDatabaseSyncClass(targetPath);
+      db = new NodeDatabaseSyncClass(targetPath) as unknown as IDatabaseSync;
     } catch {
       targetPath = ':memory:';
-      db = new NodeDatabaseSyncClass(targetPath);
+      db = new NodeDatabaseSyncClass(targetPath) as unknown as IDatabaseSync;
     }
 
     activeDb = db;
@@ -645,12 +685,12 @@ export function loadChatThread(
   workspaceId: string,
   db = initDatabase(),
 ): StoredChatThread | null {
-  const threadStmt = db.prepare('SELECT * FROM chat_threads WHERE workspace_id = ?');
-  const threadRow = threadStmt.get(workspaceId) as any;
+  const threadStmt = db.prepare<ChatThreadRow>('SELECT * FROM chat_threads WHERE workspace_id = ?');
+  const threadRow = threadStmt.get(workspaceId);
   if (!threadRow) return null;
 
-  const turnsStmt = db.prepare('SELECT * FROM chat_turns WHERE workspace_id = ? ORDER BY turn_index ASC');
-  const turnRows = turnsStmt.all(workspaceId) as any[];
+  const turnsStmt = db.prepare<ChatTurnRow>('SELECT * FROM chat_turns WHERE workspace_id = ? ORDER BY turn_index ASC');
+  const turnRows = turnsStmt.all(workspaceId);
 
   const messages: StoredChatMessage[] = turnRows.map((row) => {
     let images: string[] | undefined;
@@ -751,12 +791,12 @@ export function getPendingApprovals(
   workspaceId: string,
   db = initDatabase(),
 ): StoredApproval[] {
-  const stmt = db.prepare(`
+  const stmt = db.prepare<ToolApprovalRow>(`
     SELECT * FROM tool_approvals
     WHERE workspace_id = ? AND decision = 'pending'
     ORDER BY created_at ASC
   `);
-  const rows = stmt.all(workspaceId) as any[];
+  const rows = stmt.all(workspaceId);
   return rows.map((row) => ({
     id: row.id,
     workspaceId: row.workspace_id,
