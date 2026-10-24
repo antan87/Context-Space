@@ -17,6 +17,27 @@ export interface TerminalLaunchOptions {
   title?: string;
 }
 
+/** A child process or spawned process handle that supports detached background execution. */
+export interface DetachableChild {
+  unref?: () => void;
+  catch?: (onrejected?: (reason: unknown) => unknown) => unknown;
+  nodeChildProcess?: {
+    unref?: () => void;
+  };
+}
+
+export function detachChild(child: DetachableChild | null | undefined): void {
+  if (typeof child?.catch === 'function') {
+    child.catch(() => {});
+  }
+  if (typeof child?.nodeChildProcess?.unref === 'function') {
+    child.nodeChildProcess.unref();
+  }
+  if (typeof child?.unref === 'function') {
+    child.unref();
+  }
+}
+
 export const SUPPORTED_ASSISTANTS = new Set(Object.keys(CLI_HARNESSES));
 
 /**
@@ -168,9 +189,7 @@ export async function launchWorkspaceTerminal(
           reject: false,
         });
         if (wtResult && wtResult.exitCode === 0) {
-          if (typeof (wtResult as any).unref === 'function') {
-            (wtResult as any).unref();
-          }
+          detachChild(wtResult as DetachableChild);
           return { success: true, command: cmdToRun };
         }
       } catch {
@@ -204,12 +223,7 @@ export async function launchWorkspaceTerminal(
           windowsHide: false,
         },
       );
-      if (child && typeof (child as any).catch === 'function') {
-        (child as any).catch(() => {});
-      }
-      if (child && typeof (child as any).unref === 'function') {
-        (child as any).unref();
-      }
+      detachChild(child);
       return { success: true, command: cmdToRun };
     } catch (err) {
       throw new Error(`Failed to launch terminal on Windows: ${err instanceof Error ? err.message : String(err)}`);
@@ -231,12 +245,7 @@ export async function launchWorkspaceTerminal(
         detached: true,
         stdio: 'ignore',
       });
-      if (child && typeof (child as any).catch === 'function') {
-        (child as any).catch(() => {});
-      }
-      if (child && typeof (child as any).unref === 'function') {
-        (child as any).unref();
-      }
+      detachChild(child);
       return { success: true, command: cmdToRun };
     } catch (err) {
       throw new Error(`Failed to launch Terminal.app on macOS: ${err instanceof Error ? err.message : String(err)}`);
@@ -275,12 +284,7 @@ export async function launchWorkspaceTerminal(
           detached: true,
           stdio: 'ignore',
         });
-        if (child && typeof (child as any).catch === 'function') {
-          (child as any).catch(() => {});
-        }
-        if (child && typeof (child as any).unref === 'function') {
-          (child as any).unref();
-        }
+        detachChild(child);
         return { success: true, command: cmdToRun };
       } catch {
         // Try next candidate

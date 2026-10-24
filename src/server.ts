@@ -145,6 +145,7 @@ import {
   tailLogFile,
   loadRunningState,
   readPm2List,
+  type Pm2Process,
 } from './orchestration/index.js';
 import { checkForUpdates, getCurrentVersion, getToolsStatus } from './utils/update-check.js';
 import { installDesktop } from './commands/desktop.js';
@@ -894,7 +895,7 @@ type RepoStatusMemo = Map<string, ReturnType<typeof getRepoStatus>>;
 const statusSnapshots = new Map<string, {
   workspacesDir: string;
   workspaces: Feature[];
-  pm2List: Promise<any[] | null>;
+  pm2List: Promise<Pm2Process[] | null>;
   repoStatus: RepoStatusMemo;
   expiresAt: number;
 }>();
