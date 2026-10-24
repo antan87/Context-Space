@@ -5,20 +5,21 @@ import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
 import { registerPlanFileRoutes } from './http/plan-file-routes.js';
 import { registerNewsRoutes } from './http/news-routes.js';
 import { registerNeedsYouRoute } from './http/needs-you-routes.js';
-import { extractAstSymbols } from './services/symbolService.js';
+import { extractAstSymbols, type ExtractedSymbol } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
 /**
  * @module server
  * Hono local web server for the NexusFlow GUI.
  */
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { cors } from 'hono/cors';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
 import { createNodeWebSocket } from '@hono/node-ws';
+import type * as http from 'node:http';
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
 import { existsSync } from 'node:fs';
@@ -179,7 +180,7 @@ import {
   withResourceAdministrationLock,
 } from './resources/service.js';
 
-import type { AIAssistant, Feature, RepoInfo, RepoSelection, WorkspaceContext, SyncStatus, RepoSyncState, WorkspaceStatus, OrganizationConventions, DomainPack } from './types.js';
+import type { AIAssistant, Feature, RepoInfo, RepoSelection, WorkspaceContext, SyncStatus, RepoSyncState, WorkspaceStatus, OrganizationConventions, DomainPack, NexusFlowConfig, SessionAssistant, ResumptionConfig } from './types.js';
 import { suggestWorkflow } from './utils/workflow-advisor.js';
 import {
   WorkroomAuthorizationError,
@@ -352,7 +353,7 @@ export function resolveRepoPath(workspacePath: string, repoName: string): string
 }
 
 /** Consistent error response; path-containment violations map to 400. */
-function errorResponse(c: any, error: unknown) {
+function errorResponse(c: Context, error: unknown) {
   if (error instanceof PathAccessError || error instanceof KnowledgeRepositoryError) {
     return c.json({ error: error.message }, 400);
   }
@@ -1051,6 +1052,27 @@ app.get('/api/editor-detect', async (c) => {
 
 
 
+export interface WorkspaceCreationPayload {
+  mode?: 'worktree' | 'in-place';
+  projectId?: string;
+  /** Human-readable workspace name; required for in-place mode. */
+  name?: string;
+  branchName?: string;
+  description?: string;
+  repos: RepoSelection[];
+  assistants: SessionAssistant[];
+  enabledSkills?: string[];
+  enabledAgents?: string[];
+  enabledCategories?: string[];
+  flowType?: 'quick' | 'feature' | 'epic';
+  workType?: Feature['workType'];
+  domainPacks?: string[];
+  organizationId?: string;
+  teamworkInstructions?: string;
+  autoUpdateBase?: boolean;
+  resumption?: ResumptionConfig;
+}
+
 interface JobStep {
   id: string;
   name: string;
@@ -1135,12 +1157,12 @@ function updateJobStep(
   }
 }
 
-async function runCreationJob(jobId: string, body: any, config: any) {
+async function runCreationJob(jobId: string, body: WorkspaceCreationPayload, config: NexusFlowConfig) {
   try {
     const inPlace = body.mode === 'in-place';
     // Workspace id doubles as the directory name: the branch for worktree
     // mode, the (slugified) workspace name for in-place mode.
-    const workspaceId = inPlace ? jobId : body.branchName;
+    const workspaceId = inPlace ? jobId : body.branchName!;
     const workspacePath = resolveWorkspacePath(config.workspacesDir, workspaceId);
     const job = creationJobs.get(jobId);
     if (job) {
@@ -1149,7 +1171,7 @@ async function runCreationJob(jobId: string, body: any, config: any) {
 
     // Record which repos ride an existing branch instead of the feature branch.
     const repoBranches: Record<string, string> = {};
-    for (const r of body.repos as RepoSelection[]) {
+    for (const r of body.repos) {
       if (r.existingBranch) {
         repoBranches[r.name] = r.existingBranch;
       }
@@ -1164,12 +1186,12 @@ async function runCreationJob(jobId: string, body: any, config: any) {
       name: body.name?.trim() || undefined,
       // In-place features never create a branch; keeping branchName populated
       // (= id) avoids breaking every consumer of the non-optional field.
-      branchName: inPlace ? workspaceId : body.branchName,
+      branchName: inPlace ? workspaceId : body.branchName!,
       description: body.description ?? '',
       repos: inPlace
-        ? body.repos.map((r: any) => r.path)
-        : body.repos.map((r: any) => path.join(workspacePath, r.name)),
-      originalRepos: body.repos.map((r: any) => r.path),
+        ? body.repos.map((r) => r.path)
+        : body.repos.map((r) => path.join(workspacePath, r.name)),
+      originalRepos: body.repos.map((r) => r.path),
       repoBranches: !inPlace && Object.keys(repoBranches).length > 0 ? repoBranches : undefined,
       assistants: body.assistants,
       workspacePath,
@@ -1179,7 +1201,7 @@ async function runCreationJob(jobId: string, body: any, config: any) {
       organizationId: body.organizationId,
       domainPacks: Array.isArray(body.domainPacks) && body.domainPacks.length > 0
         ? body.domainPacks
-        : matchDomainPacks(body.description || '', (body.repos || []).map((r: any) => r.name)).map((p) => p.id),
+        : matchDomainPacks(body.description || '', (body.repos || []).map((r) => r.name)).map((p) => p.id),
     };
     if (job) {
       job.feature = feature;
@@ -1211,7 +1233,7 @@ async function runCreationJob(jobId: string, body: any, config: any) {
     updateJobStep(jobId, 'analysis', 'running', 'Analyzing projects and dependencies...');
     const workspaceRepos = inPlace
       ? body.repos
-      : body.repos.map((repo: any) => ({
+      : body.repos.map((repo) => ({
           ...repo,
           path: path.join(workspacePath, repo.name),
         }));
@@ -1244,30 +1266,7 @@ async function runCreationJob(jobId: string, body: any, config: any) {
 // 7. Create workspace
 app.post('/api/workspace', async (c) => {
   try {
-    const body = await c.req.json() as {
-      mode?: 'worktree' | 'in-place';
-      projectId?: string;
-      /** Human-readable workspace name; required for in-place mode. */
-      name?: string;
-      branchName?: string;
-      description?: string;
-      repos: RepoSelection[];
-      assistants: any[];
-      enabledSkills?: string[];
-      enabledAgents?: string[];
-      enabledCategories?: string[];
-      flowType?: 'quick' | 'feature' | 'epic';
-      workType?: Feature['workType'];
-      domainPacks?: string[];
-      organizationId?: string;
-      teamworkInstructions?: string;
-      autoUpdateBase?: boolean;
-      resumption?: {
-        testCommand?: string;
-        mockCommand?: string;
-        startCommand?: string;
-      };
-    };
+    const body = await c.req.json() as WorkspaceCreationPayload;
 
     if (body.workType !== undefined && !['bug', 'feature', 'performance', 'refactor', 'rewrite'].includes(body.workType)) {
       return c.json({ error: 'Choose a valid work type.' }, 400);
@@ -2189,7 +2188,7 @@ app.get('/api/workspace/:id/changes/diff', async (c) => {
       originalContent = '';
     }
 
-    let symbols: any[] = [];
+    let symbols: ExtractedSymbol[] = [];
     if (fileContent) {
       try {
         symbols = await extractAstSymbols(filePath, fileContent);
@@ -2244,7 +2243,7 @@ app.get('/api/workspace/:id/changes/symbols', async (c) => {
       return c.json({ error: 'Workspace configuration not found.' }, 404);
     }
 
-    const allSymbols: any[] = [];
+    const allSymbols: Array<ExtractedSymbol & { repoName: string; repoPath: string; filePath: string }> = [];
 
     // Concurrently scan modified files across repositories in feature
     await Promise.all(
@@ -4612,13 +4611,32 @@ app.get('/api/schedules', async (c) => {
   return c.json({ jobs });
 });
 
+const createScheduleInput = z.object({
+  task: z.enum(['sync', 'refresh'], {
+    message: 'task must be "sync" or "refresh"',
+  }),
+  intervalMinutes: z.number().optional(),
+  every: z.string().optional(),
+  workspacePath: z.string().optional(),
+  workspaceId: z.string().optional(),
+});
+
+const scheduleEnabledInput = z.object({
+  enabled: z.boolean().optional(),
+});
+
 // Create a scheduled job
 app.post('/api/schedules', async (c) => {
-  const body = await c.req.json().catch(() => ({} as any));
-  const task = body.task === 'refresh' ? 'refresh' : body.task === 'sync' ? 'sync' : null;
-  if (!task) {
-    return c.json({ error: 'task must be "sync" or "refresh"' }, 400);
+  const raw = await c.req.json().catch(() => ({}));
+  const parsed = createScheduleInput.safeParse(raw);
+  if (!parsed.success) {
+    const taskError = parsed.error.issues.find((issue) => issue.path.includes('task'));
+    if (taskError) {
+      return c.json({ error: 'task must be "sync" or "refresh"' }, 400);
+    }
+    return c.json({ error: parsed.error.issues[0]?.message || 'Invalid schedule payload' }, 400);
   }
+  const body = parsed.data;
 
   const intervalMinutes =
     typeof body.intervalMinutes === 'number' && body.intervalMinutes > 0
@@ -4630,9 +4648,9 @@ app.post('/api/schedules', async (c) => {
 
   const config = await loadConfig();
   const workspacePath = body.workspacePath
-    ? String(body.workspacePath)
+    ? body.workspacePath
     : body.workspaceId
-      ? path.join(config.workspacesDir, String(body.workspaceId))
+      ? path.join(config.workspacesDir, body.workspaceId)
       : null;
   if (!workspacePath) {
     return c.json({ error: 'Provide workspacePath or workspaceId' }, 400);
@@ -4643,14 +4661,18 @@ app.post('/api/schedules', async (c) => {
     return c.json({ error: `No NexusFlow workspace found at ${workspacePath}` }, 404);
   }
 
-  const job = await addSchedule({ workspacePath, task, intervalMinutes });
+  const job = await addSchedule({ workspacePath, task: body.task, intervalMinutes });
   return c.json({ job }, 201);
 });
 
 // Enable/disable a scheduled job
 app.post('/api/schedules/:id/enabled', async (c) => {
-  const body = await c.req.json().catch(() => ({} as any));
-  const job = await setScheduleEnabled(c.req.param('id'), Boolean(body.enabled));
+  const raw = await c.req.json().catch(() => ({}));
+  const parsed = scheduleEnabledInput.safeParse(raw);
+  if (!parsed.success) {
+    return c.json({ error: 'Invalid payload: enabled must be a boolean' }, 400);
+  }
+  const job = await setScheduleEnabled(c.req.param('id'), Boolean(parsed.data.enabled));
   if (!job) return c.json({ error: 'Schedule not found' }, 404);
   return c.json({ job });
 });
@@ -4716,14 +4738,14 @@ app.get('*', (c) => {
 export function startServer(
   port = 3000,
   opts: { strictPort?: boolean } = {},
-): Promise<{ port: number; server: any }> {
+): Promise<{ port: number; server: http.Server }> {
   return new Promise((resolve, reject) => {
     const server = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, (info) => {
       // The dashboard server doubles as the host for recurring workspace
       // jobs (nexusflow schedule ...); jobs are re-read from disk each tick.
       startScheduler({ log: (message) => console.log(`[scheduler] ${message}`) });
       resolve({ port: info.port, server });
-    }) as import('node:http').Server;
+    }) as http.Server;
 
     injectWebSocket(server);
     const stopTerminals = () => { terminalManager.dispose(); process.exit(0); };
@@ -4741,8 +4763,8 @@ export function startServer(
       });
     });
 
-    server.on('error', (e: any) => {
-      if (e.code === 'EADDRINUSE') {
+    server.on('error', (e: unknown) => {
+      if (getErrorCode(e) === 'EADDRINUSE') {
         // Callers that own their backend (desktop/extension) pass strictPort so
         // they can rely on the port they requested instead of chasing a silent
         // increment they'd never find.

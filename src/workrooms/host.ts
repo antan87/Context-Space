@@ -7,7 +7,7 @@ import * as path from 'node:path';
 
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { serve } from '@hono/node-server';
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { generate } from 'selfsigned';
@@ -65,7 +65,7 @@ function remoteSourceKey(c: Parameters<typeof getConnInfo>[0]): string {
   }
 }
 
-function workroomError(c: any, error: unknown) {
+function workroomError(c: Context, error: unknown) {
   if (error instanceof WorkroomAuthorizationError) return c.json({ error: error.message }, 401);
   if (error instanceof WorkroomRevisionError) {
     return c.json({ error: error.message, expectedRevision: error.expected, actualRevision: error.actual }, 409);

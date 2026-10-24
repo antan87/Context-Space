@@ -72,7 +72,7 @@ export class TerminalAccess {
 }
 
 export const terminalManager = new TerminalManager();
-export function registerTerminalRoutes(app: Hono, upgrade: UpgradeWebSocket<any, any>, resolveWorkspace: (id: string) => Promise<string | null>, manager = terminalManager) {
+export function registerTerminalRoutes(app: Hono, upgrade: UpgradeWebSocket, resolveWorkspace: (id: string) => Promise<string | null>, manager = terminalManager) {
   const access = new TerminalAccess();
   const boundary = (c: Context) => {
     const origin = c.req.header('origin');
@@ -162,16 +162,17 @@ export function registerTerminalRoutes(app: Hono, upgrade: UpgradeWebSocket<any,
       async onMessage(event, ws) {
         try {
           if (typeof event.data !== 'string' || event.data.length > 20_000) throw new Error('Invalid terminal frame.');
-          const message = JSON.parse(event.data);
+          const rawMessage: unknown = JSON.parse(event.data);
           if (!attached) {
             if (connecting) throw new Error('Terminal attachment is pending.');
+            const message = (rawMessage && typeof rawMessage === 'object') ? rawMessage as Record<string, unknown> : {};
             if (message.type !== 'attach' || !access.validate(owner, message.token)) throw new Error('Terminal access expired. Reconnect from ContextSpace.');
             connecting = true;
             workspace = workspaceId.parse(message.workspace); id = uuid.parse(message.id);
             await rootFor(workspace);
             if (closed) return;
             manager.attach(owner, workspace, id, client!); attached = true; clearTimeout(deadline);
-          } else manager.control(owner, workspace, id, client!, message);
+          } else manager.control(owner, workspace, id, client!, rawMessage);
         } catch (error) {
           ws.send(JSON.stringify({ type: 'error', message: error instanceof z.ZodError ? 'Invalid terminal attachment.' : (error as Error).message, ...(error instanceof TerminalNotFoundError ? { code: error.code } : {}) }));
           ws.close(1008);
