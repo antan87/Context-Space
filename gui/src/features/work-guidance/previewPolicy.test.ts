@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPreviewDocument,
   dependsOnExternalScript,
+  ESCAPE_MESSAGE,
+  FIT_SCRIPT,
   isStyleSheetHref,
   previewCsp,
   safeAssetUrl,
@@ -136,6 +138,35 @@ describe('preview document assembly', () => {
     expect(trusted).toContain(previewCsp(true));
     expect(trusted).toContain('script-src');
     expect(locked).not.toContain('script-src');
+  });
+
+  it('fits a page that is wider than the frame, in a trusted document only: it is a script', () => {
+    const trusted = buildPreviewDocument({ body: '<p>hi</p>', trusted: true });
+    const locked = buildPreviewDocument({ body: '<p>hi</p>', trusted: false });
+    expect(trusted).toContain(`<script>${FIT_SCRIPT}</script>`);
+    expect(trusted.indexOf(FIT_SCRIPT)).toBeLessThan(trusted.indexOf('<body>'));
+    expect(locked).not.toContain('<script');
+    expect(locked).not.toContain('zoom');
+  });
+
+  it('keeps the script from ending its own element or reaching out of the frame, but for one fixed message: Escape', () => {
+    expect(FIT_SCRIPT.toLowerCase()).not.toContain('</script');
+    // Exactly one way out, and what it says is fixed: it carries nothing of the page.
+    const message = `parent.postMessage('${ESCAPE_MESSAGE}','*')`;
+    expect(ESCAPE_MESSAGE).toBe('contextspace:escape');
+    expect(FIT_SCRIPT.split(message)).toHaveLength(2);
+    const rest = FIT_SCRIPT.replace(message, '');
+    for (const reach of ['fetch', 'XMLHttpRequest', 'WebSocket', 'postMessage', 'parent', 'top.', 'location', 'cookie', 'localStorage', 'sessionStorage', 'eval', 'Function(', 'import(', 'innerHTML', 'src=']) {
+      expect(rest, reach).not.toContain(reach);
+    }
+    // It answers Escape only when the page has not used it.
+    expect(FIT_SCRIPT).toContain("event.key==='Escape'&&!event.defaultPrevented");
+  });
+
+  it('scales a page to half at the least, and watches size with a ResizeObserver, not the whole tree of elements', () => {
+    expect(FIT_SCRIPT).toContain('Math.max(0.5,room/wide)');
+    expect(FIT_SCRIPT).toContain('ResizeObserver');
+    expect(FIT_SCRIPT).not.toContain('MutationObserver');
   });
 
   it('wraps the body in a complete document', () => {

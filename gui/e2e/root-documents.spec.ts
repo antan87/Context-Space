@@ -46,7 +46,8 @@ test('opens agent-created Markdown, HTML, PDF and Office documents from the root
   await expect(html).toBeVisible();
   await expect.poll(() => html.evaluate((frame: HTMLIFrameElement) => frame.srcdoc)).toContain('Rendered HTML');
   await expect(page.frameLocator('iframe[title="Preview of page.html"]').getByRole('heading', { name: 'Rendered HTML' })).toHaveCSS('color', 'rgb(18, 52, 86)');
-  expect(await html.evaluate((frame: HTMLIFrameElement) => frame.srcdoc)).not.toContain('<script>');
+  // The page's own inline script never reaches the frame, whether the scripts of the internet run or not.
+  expect(await html.evaluate((frame: HTMLIFrameElement) => frame.srcdoc)).not.toContain('window.unsafe');
   await page.getByRole('treeitem', { name: /evidence.pdf/ }).click();
   await expect(page.getByTitle('Preview of evidence.pdf')).toBeVisible();
   await page.getByRole('treeitem', { name: /brief.docx/ }).click();
@@ -220,8 +221,12 @@ async function openStyledPage(page: import('@playwright/test').Page) {
   return { frame: page.getByTitle('Preview of report.html'), srcdoc };
 }
 
-test('keeps presentational markup and strips active content from agent HTML by default', async ({ page }) => {
+test('keeps presentational markup and strips active content from agent HTML, with its scripts stopped', async ({ page }) => {
   const { frame, srcdoc } = await openStyledPage(page);
+  // The default is to run them; this is one document put back in the locked mode.
+  await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+  await page.getByRole('button', { name: 'Stop scripts', exact: true }).click();
+  await expect(frame).toHaveAttribute('sandbox', '');
   const html = await srcdoc();
 
   // Styling survives, hoisted from the source <head> into the head the viewer builds.
@@ -242,7 +247,7 @@ test('keeps presentational markup and strips active content from agent HTML by d
   expect(html).not.toContain('rel="preload"');
   expect(html).not.toContain('app.js');
 
-  // Locked by default, and declares a charset now that the document cannot carry its own.
+  // Locked, and declares a charset now that the document cannot carry its own.
   expect(await frame.getAttribute('sandbox')).toBe('');
   expect(html).toContain('<meta charset="utf-8">');
   expect(html).toContain("default-src 'none'");
@@ -250,13 +255,14 @@ test('keeps presentational markup and strips active content from agent HTML by d
   expect(html).not.toContain('script-src');
 
   // A page whose styling needs a script explains itself rather than looking broken.
-  await expect(page.getByText('This page loads styling from an external script, which is blocked.', { exact: false })).toBeVisible();
+  await expect(page.getByText('Scripts are stopped, so the styling this page loads from an external script is blocked.', { exact: false })).toBeVisible();
 });
 
-test('runs a trusted document in an opaque-origin frame', async ({ page }) => {
+test('runs the scripts of an HTML document by default, in an opaque-origin frame, with no prompt', async ({ page }) => {
   const { frame, srcdoc } = await openStyledPage(page);
 
-  await page.getByRole('button', { name: 'Trust this document', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Trust/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop scripts', exact: true })).toBeVisible();
   const trusted = await srcdoc();
   // The URL is normalised through `new URL`, hence the trailing slash on a bare origin.
   expect(trusted).toMatch(/<script src="https:\/\/cdn\.tailwindcss\.com\/"><\/script>/);
@@ -266,13 +272,14 @@ test('runs a trusted document in an opaque-origin frame', async ({ page }) => {
   expect(trusted).not.toContain('<iframe');
   expect(trusted).not.toContain('onclick');
   expect(trusted).not.toContain('javascript:');
-  // Trusting a document readmits remote scripts, never inline ones.
+  // The document's scripts of the internet run, never its inline ones.
   expect(trusted).not.toContain('window.unsafe = true');
   expect(trusted).toContain("default-src 'none'");
-  await expect(page.getByText('remote code is running in a sandboxed frame', { exact: false })).toBeVisible();
+  await expect(page.getByText('This page runs scripts from the internet in a sandboxed frame', { exact: false })).toBeVisible();
+  await expect(page.getByText('This page loads styling from an external script, which is blocked.', { exact: false })).toHaveCount(0);
 });
 
-test('rejects a second document that tries to inherit trust', async ({ page }) => {
+test('does not carry stopped scripts over to another document', async ({ page }) => {
   const documents = [
     { name: 'report.html', kind: 'html', size: 120, modifiedAt: '2026-09-22T00:00:00.000Z' },
     { name: 'other.html', kind: 'html', size: 120, modifiedAt: '2026-09-22T00:00:00.000Z' },
@@ -285,16 +292,47 @@ test('rejects a second document that tries to inherit trust', async ({ page }) =
   await page.goto('/#/workspaces/demo/documents');
   await page.getByRole('treeitem', { name: /report.html/ }).click();
   await expect(page.getByTitle('Preview of report.html')).toBeVisible();
-  await page.getByRole('button', { name: 'Trust this document', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Stop trusting', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop scripts', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop scripts', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Run scripts', exact: true })).toBeVisible();
+  await expect(page.getByTitle('Preview of report.html')).toHaveAttribute('sandbox', '');
 
   await page.getByRole('treeitem', { name: /other.html/ }).click();
   await expect(page.getByTitle('Preview of other.html')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Trust this document', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Stop trusting', exact: true })).toHaveCount(0);
-  expect(await page.getByTitle('Preview of other.html').evaluate((node: HTMLIFrameElement) => node.srcdoc)).not.toContain('script-src');
-  // The stylesheet is still hoisted, because that is Q1 and not gated on trust.
+  await expect(page.getByRole('button', { name: 'Stop scripts', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run scripts', exact: true })).toHaveCount(0);
+  await expect(page.getByTitle('Preview of other.html')).toHaveAttribute('sandbox', 'allow-scripts');
+  expect(await page.getByTitle('Preview of other.html').evaluate((node: HTMLIFrameElement) => node.srcdoc)).toContain('script-src');
+  // The stylesheet is hoisted either way, because that is Q1 and not gated on scripts.
   expect(await page.getByTitle('Preview of other.html').evaluate((node: HTMLIFrameElement) => node.srcdoc)).toContain('bootstrap.min.css');
+});
+
+test('fits an HTML page that is wider than the frame to its width instead of scrolling sideways', async ({ page }) => {
+  const documents = [{ name: 'wide.html', kind: 'html', size: 120, modifiedAt: '2026-09-22T00:00:00.000Z' }];
+  await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents } }));
+  await page.route('**/api/workspace/demo/documents/preview?*', (route) => route.fulfill({ json: {
+    name: 'wide.html', kind: 'html',
+    content: '<!doctype html><html><head><style>body { margin: 0; } .page { width: 1280px; height: 200px; background: #93c5fd; }</style></head><body><div class="page"><h1>A page made for 1280 px</h1></div></body></html>',
+  } }));
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto('/#/workspaces/demo/documents');
+  await page.getByRole('treeitem', { name: /wide.html/ }).click();
+  const frameBox = page.getByTitle('Preview of wide.html');
+  await expect(frameBox).toBeVisible();
+  const frame = (await (await frameBox.elementHandle())!.contentFrame())!;
+  const measure = () => frame.evaluate(() => ({ width: document.documentElement.scrollWidth, room: document.documentElement.clientWidth, zoom: Number(document.body.style.zoom || 1) }));
+  // Wider than half of the page, so it can be scaled to fit, and narrower than the page.
+  expect((await frameBox.boundingBox())!.width).toBeLessThan(1280);
+  expect((await frameBox.boundingBox())!.width).toBeGreaterThan(660);
+  // The Docs tab keeps its frame at a share of the screen's height, as before.
+  expect(Math.abs((await frameBox.boundingBox())!.height - 800 * 0.65)).toBeLessThanOrEqual(2);
+  await expect.poll(async () => { const now = await measure(); return now.width <= now.room && now.zoom < 1; }).toBe(true);
+  // With the scripts stopped nothing runs in the frame: the page is as wide as it was made, as before.
+  await page.getByRole('button', { name: 'Stop scripts', exact: true }).click();
+  await expect(frameBox).toHaveAttribute('sandbox', '');
+  await expect(page.frameLocator('iframe[title="Preview of wide.html"]').getByRole('heading', { name: 'A page made for 1280 px' })).toBeVisible();
+  const locked = await (await (await frameBox.elementHandle())!.contentFrame())!.evaluate(() => ({ width: document.documentElement.scrollWidth, room: document.documentElement.clientWidth }));
+  expect(locked.width).toBeGreaterThan(locked.room);
 });
 
 test('offers opening an HTML document in the real browser, and only for HTML', async ({ page }) => {

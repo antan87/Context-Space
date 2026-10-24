@@ -922,6 +922,11 @@ test.describe('Board, reader', () => {
     'docs/design.md': markdown('# The queue design\n\nLarge exports run in a background job.'),
     'docs/spec.md': markdown('# The CSV spec\n\nOne row per line.'),
     'overview.html': { kind: 'html', content: '<!doctype html><html><body><h1>The overview page</h1><script>window.unsafe = true</script></body></html>' },
+    /** A page made for 1280 px, as a designer or an AI would write it: its width is in its own style. */
+    'wide.html': { kind: 'html', content: '<!doctype html><html><head><style>body { margin: 0; } .page { width: 1280px; height: 240px; background: linear-gradient(90deg, #fde68a, #93c5fd); }</style></head><body><div class="page"><h1>A page made for 1280 px</h1></div></body></html>' },
+    /** A page that gets its styling from a script on the internet, which the viewer says it runs. */
+    'styled.html': { kind: 'html', content: '<!doctype html><html><head><script src="https://cdn.tailwindcss.com"></script></head><body><h1>The styled page</h1></body></html>' },
+    'wide.svg': { kind: 'image' },
   };
 
   /** What the work route reads source documents as, by id: the text kept for them. */
@@ -962,8 +967,17 @@ test.describe('Board, reader', () => {
     });
     return read;
   }
-  /** The board of the specs: a source document that is kept as a file, and a few cards, one of each kind the reader opens. */
-  async function openBoard(page: Page, cards: Array<Record<string, unknown>> = [], positions: Record<string, { x: number; y: number }> = FILE_PLACES) {
+  /** What this browser remembers of how the reader is shown. */
+  const LAYOUT_KEY = 'contextspace_board_reader_layout_v1';
+  const storedLayout = (page: Page) => page.evaluate((key) => window.localStorage.getItem(key), LAYOUT_KEY);
+  /** The viewer has chosen "Side by side", unless this browser has a choice already: the specs of the docked reader. */
+  const dockReader = (page: Page) => page.addInitScript((key) => { if (window.localStorage.getItem(key) === null) window.localStorage.setItem(key, 'side'); }, LAYOUT_KEY);
+  /**
+   * The board of the specs: a source document that is kept as a file, and a few cards, one of each kind the reader opens. The reader is
+   * docked beside the canvas, as the viewer may choose, except where `layout` is 'default': then nothing is chosen, and it is the large window.
+   */
+  async function openBoard(page: Page, cards: Array<Record<string, unknown>> = [], positions: Record<string, { x: number; y: number }> = FILE_PLACES, layout: 'side' | 'default' = 'side') {
+    if (layout === 'side') await dockReader(page);
     await routeBoard(page);
     await routeWork(page, [
       document('Export requirements', { role: 'requirements', filename: REQUIREMENTS, summary: 'Customers export their reports as CSV.' }),
@@ -1032,7 +1046,8 @@ test.describe('Board, reader', () => {
     await opener(page, 'Overview page').click();
     const frame = reader(page).locator('iframe[title="Preview of overview.html"]');
     await expect(frame).toBeVisible();
-    await expect(frame).toHaveAttribute('sandbox', '');
+    // Its scripts run by default, and the frame never shares the app's origin.
+    await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
     await expect(page.frameLocator('iframe[title="Preview of overview.html"]').getByRole('heading', { name: 'The overview page' })).toBeVisible();
     // Neither the page's text nor its script is in the board's own page.
     await expect(board(page).getByText('The overview page')).toHaveCount(0);
@@ -1105,8 +1120,8 @@ test.describe('Board, reader', () => {
     await expect(reader(page)).toBeVisible();
   });
 
-  test('goes to the Docs tab with "Open in Docs", with the file open there', async ({ page }) => {
-    const asked = await openBoard(page, FILE_CARDS);
+  test('goes to the Docs tab with "Open in Docs", with the file open there, from the large window', async ({ page }) => {
+    const asked = await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
     await opener(page, 'Overview page').click();
     await expect(readerTitle(page, 'Overview page')).toBeVisible();
     await reader(page).getByRole('button', { name: 'Open in Docs' }).click();
@@ -1205,6 +1220,7 @@ test.describe('Board, reader', () => {
 
   test('is not the user taking the view: it still follows a part that arrives after the reader opened and closed', async ({ page }) => {
     const release = await routeLateCommits(page);
+    await dockReader(page);
     await routeCards(page, boardFile({ cards: [FILE_CARDS[0]], positions: { [boardId(1)]: { x: 800, y: 240 } } }));
     await routeFiles(page);
     await page.goto('/#/workspaces/demo/board');
@@ -1307,6 +1323,354 @@ test.describe('Board, reader', () => {
     // The board stays mounted behind the other sections, with its reader as it was.
     await workspaceNav(page).getByRole('link', { name: 'Board' }).click();
     await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+  });
+
+  test.describe('in a large window', () => {
+    /** The dimmed board the window stands on: it fills the Board section, under the window. */
+    const behind = (page: Page) => reader(page).locator('xpath=..');
+    const backButton = (page: Page) => reader(page).getByRole('button', { name: 'Back to board', exact: true });
+    const sideBySide = (page: Page) => reader(page).getByRole('button', { name: 'Side by side', exact: true });
+    const large = (page: Page) => reader(page).getByRole('button', { name: 'Large', exact: true });
+    /** The documents panel's file request, answered with a picture that is wider than any window. */
+    async function routeWidePicture(page: Page) {
+      await page.route('**/api/workspace/demo/documents/file**', (route) => route.fulfill({
+        contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="900"><rect width="2400" height="900" fill="#93c5fd"/></svg>',
+      }));
+    }
+    /** The frame of an HTML page in the reader: its document, which the board cannot measure but the browser's tools can. */
+    async function pageFrame(page: Page, name: string) {
+      const frame = await reader(page).locator(`iframe[title="Preview of ${name}"]`).elementHandle();
+      return (await frame!.contentFrame())!;
+    }
+    const fit = (frame: Awaited<ReturnType<typeof pageFrame>>) => frame.evaluate(() => ({
+      width: document.documentElement.scrollWidth, room: document.documentElement.clientWidth, zoom: Number(document.body.style.zoom || 1),
+    }));
+
+    test('opens a file in a large window over the board: about 92% by 88% of the section, centred, with the board dimmed but in sight all round it', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      await expect(reader(page)).toHaveCount(0);
+      const view = await transformOf(page);
+      await opener(page, 'The CSV spec').click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
+      await expect(reader(page).getByRole('button', { name: 'Open in Docs', exact: true })).toBeVisible();
+      const [area, win, canvas] = await Promise.all([behind(page).boundingBox(), reader(page).boundingBox(), board(page).locator('.react-flow').boundingBox()]);
+      expect(Math.abs(win!.width / area!.width - 0.92)).toBeLessThan(0.005);
+      expect(Math.abs(win!.height / area!.height - 0.88)).toBeLessThan(0.005);
+      // Centred, and the dimmed board shows on every side of it.
+      expect(Math.abs((win!.x - area!.x) - (area!.x + area!.width - win!.x - win!.width))).toBeLessThanOrEqual(1);
+      expect(Math.abs((win!.y - area!.y) - (area!.y + area!.height - win!.y - win!.height))).toBeLessThanOrEqual(1);
+      expect(win!.x - canvas!.x).toBeGreaterThan(40);
+      expect(win!.y - canvas!.y).toBeGreaterThan(20);
+      expect(canvas!.x + canvas!.width - (win!.x + win!.width)).toBeGreaterThan(40);
+      expect(canvas!.y + canvas!.height - (win!.y + win!.height)).toBeGreaterThan(20);
+      // The board is still drawn under the dimming, where it was: the view did not move, and the card that was opened is marked.
+      await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+      await expect(card(page, 'The CSV spec')).toHaveAttribute('aria-current', 'true');
+      expect(await transformOf(page)).toEqual(view);
+      // A press beside the window lands on the dimmed board and not on the canvas under it, which waits out of the keyboard's reach.
+      expect(await behind(page).evaluate((element, spot) => document.elementFromPoint(spot.x, spot.y) === element, { x: area!.x + 8, y: area!.y + 8 })).toBe(true);
+      await expect(board(page).locator('[inert]')).toHaveCount(1);
+      await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
+    });
+
+    test('opens a source document in the large window too, and a link in a note', async ({ page }) => {
+      await openBoard(page, [boardNote(1, { title: 'Links', body: 'See [the spec](docs/spec.md).' })], { [boardId(1)]: { x: 800, y: 240 } }, 'default');
+      await board(page).getByRole('article', { name: 'Links' }).getByRole('link', { name: 'the spec' }).click();
+      await expect(readerTitle(page, 'spec.md')).toBeFocused();
+      await expect(behind(page)).toHaveCount(1);
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
+      await expect(board(page).getByRole('article', { name: 'Links' }).getByRole('link', { name: 'the spec' })).toBeFocused();
+      await openGroup(page, DOCUMENTS);
+      await opener(page, 'Export requirements').click();
+      await expect(reader(page).getByRole('heading', { name: 'Customers export reports', level: 1 })).toBeVisible();
+      expect(Math.abs((await reader(page).boundingBox())!.width / (await behind(page).boundingBox())!.width - 0.92)).toBeLessThan(0.005);
+    });
+
+    test('closes with Escape, with "Back to board" and with a click on the board behind it, and gives the keyboard back to the card', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      const button = opener(page, 'The CSV spec');
+      // Escape.
+      await button.focus();
+      await page.keyboard.press('Enter');
+      await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+      await expect(board(page).locator('[inert]')).toHaveCount(0);
+      // Back to board.
+      await button.click();
+      await expect(backButton(page)).toBeVisible();
+      await backButton(page).click();
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+      // A click on the dimmed board behind the window, which is beside it and not in it.
+      await button.click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      const area = (await behind(page).boundingBox())!;
+      await page.mouse.click(area.x + 10, area.y + 10);
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+      // Escape from a button of the window works as well.
+      await button.click();
+      await reader(page).getByRole('button', { name: 'Open in Docs' }).focus();
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+    });
+
+    test('stays open for a press or a drag in the window, even one that ends on the board behind it', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      await opener(page, 'The CSV spec').click();
+      const heading = reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 });
+      await heading.click();
+      await expect(reader(page)).toBeVisible();
+      // Selecting text from inside the window out to the board behind it is not a click on the board.
+      const [text, area] = await Promise.all([heading.boundingBox(), behind(page).boundingBox()]);
+      await page.mouse.move(text!.x + 4, text!.y + text!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(area!.x + 6, area!.y + 6, { steps: 6 });
+      await page.mouse.up();
+      await frames(page);
+      await expect(reader(page)).toBeVisible();
+    });
+
+    test('stays open for a press that begins on the board behind the window and ends in it', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      await opener(page, 'The CSV spec').click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      const [area, text] = await Promise.all([behind(page).boundingBox(), reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 }).boundingBox()]);
+      await page.mouse.move(area!.x + 8, area!.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(text!.x + 10, text!.y + text!.height / 2, { steps: 6 });
+      await page.mouse.up();
+      await frames(page);
+      await expect(reader(page)).toBeVisible();
+      // And a press and a release that are both on the board close it, as before.
+      await page.mouse.move(area!.x + 8, area!.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(area!.x + 14, area!.y + area!.height - 8, { steps: 4 });
+      await page.mouse.up();
+      await expect(reader(page)).toHaveCount(0);
+    });
+
+    test('closes with Escape pressed in the HTML page itself, and gives the keyboard back to the card', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      const button = opener(page, 'Overview page');
+      await button.click();
+      const inside = page.frameLocator('iframe[title="Preview of overview.html"]');
+      await expect(inside.getByRole('heading', { name: 'The overview page' })).toBeVisible();
+      // The keyboard is in the page, where a key never reaches the board.
+      await inside.getByRole('heading', { name: 'The overview page' }).click();
+      await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toBeFocused();
+      // Another window, or the board's own page, saying the same words is not Escape.
+      await page.evaluate(() => window.postMessage('contextspace:escape', '*'));
+      await frames(page, 6);
+      await expect(reader(page)).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+    });
+
+    test('takes the whole height of the window for a page, which scrolls by itself: nothing scrolls twice', async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1200 });
+      await openBoard(page, [boardFileCard(3, 'wide.html', { title: 'Wide page' }), FILE_CARDS[0]], { [boardId(3)]: { x: 800, y: 240 }, [boardId(1)]: { x: 1100, y: 240 } }, 'default');
+      await opener(page, 'Wide page').click();
+      const frame = reader(page).locator('iframe[title="Preview of wide.html"]');
+      await expect(frame).toBeVisible();
+      const holder = frame.locator('xpath=..');
+      // The body of the window does not scroll, and the frame fills what is left of it, inside the body's padding.
+      await expect.poll(async () => {
+        const [inner, shown] = await Promise.all([holder.evaluate((element) => ({ top: element.getBoundingClientRect().top, height: element.clientHeight, scroll: element.scrollHeight, overflow: getComputedStyle(element).overflowY })), frame.boundingBox()]);
+        return inner.overflow === 'hidden' && inner.scroll <= inner.height && Math.abs(shown!.height - (inner.height - 32)) <= 2;
+      }).toBe(true);
+      // A frame that fills it is taller than the share of the screen it had before.
+      expect((await frame.boundingBox())!.height).toBeGreaterThan(1200 * 0.65 + 40);
+      // A document that is not a page still scrolls in the body.
+      await reader(page).getByRole('button', { name: 'Back to board' }).click();
+      await opener(page, 'The CSV spec').click();
+      await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
+      expect(await reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 }).evaluate((element) => {
+        let holder = element.parentElement;
+        while (holder && getComputedStyle(holder).overflowY !== 'auto') holder = holder.parentElement;
+        return Boolean(holder);
+      })).toBe(true);
+    });
+
+    test('docks beside the board with "Side by side", comes back with "Large", and remembers the choice after a reload', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      expect(await storedLayout(page)).toBeNull();
+      await opener(page, 'The CSV spec').click();
+      await expect(large(page)).toHaveCount(0);
+      await sideBySide(page).click();
+      // Beside the canvas, as before: about 45% of the section on its right, the canvas free again, and Close in place of Back to board.
+      await expect(large(page)).toBeVisible();
+      await expect(backButton(page)).toHaveCount(0);
+      await expect(reader(page).getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+      await expect(board(page).locator('[inert]')).toHaveCount(0);
+      const [section, panel] = await Promise.all([board(page).boundingBox(), reader(page).boundingBox()]);
+      expect(Math.abs(panel!.width - section!.width * 0.45)).toBeLessThanOrEqual(2);
+      expect(Math.abs(panel!.x + panel!.width - (section!.x + section!.width))).toBeLessThanOrEqual(1);
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
+      expect(await storedLayout(page)).toBe('side');
+      // Kept for the next visit.
+      await page.reload();
+      await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+      await viewAtRest(page);
+      await opener(page, 'The CSV spec').click();
+      await expect(large(page)).toBeVisible();
+      expect(Math.abs((await reader(page).boundingBox())!.width - (await board(page).boundingBox())!.width * 0.45)).toBeLessThanOrEqual(2);
+      // And back to the window, kept the same way.
+      await large(page).click();
+      await expect(sideBySide(page)).toBeVisible();
+      await expect(backButton(page)).toBeVisible();
+      await expect(board(page).locator('[inert]')).toHaveCount(1);
+      expect(await storedLayout(page)).toBe('large');
+      await page.reload();
+      await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+      await viewAtRest(page);
+      await opener(page, 'The CSV spec').click();
+      await expect(backButton(page)).toBeVisible();
+    });
+
+    test('keeps what is open, and where the keyboard is, when it changes between the window and the dock', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      const button = opener(page, 'The CSV spec');
+      await button.click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      await sideBySide(page).click();
+      await expect(large(page)).toBeFocused();
+      await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
+      await large(page).click();
+      await expect(sideBySide(page)).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+    });
+
+    test('moves the view to keep the card in sight when the window is docked over it', async ({ page }) => {
+      // The card stands in the right of the view, where the dock will be.
+      await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], { [boardId(1)]: { x: 1000, y: 330 } }, 'default');
+      await fitted(page);
+      await opener(page, 'The CSV spec').click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      const view = await transformOf(page);
+      await sideBySide(page).click();
+      const free = (await reader(page).boundingBox())!;
+      await expect.poll(async () => { const box = (await card(page, 'The CSV spec').boundingBox())!; return box.x + box.width <= free.x; }).toBe(true);
+      expect((await transformOf(page)).x).toBeLessThan(view.x);
+    });
+
+    test('offers no dock where the section is too narrow for both, and the window still fits', async ({ page }) => {
+      await page.setViewportSize({ width: 820, height: 900 });
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      const button = opener(page, 'The CSV spec');
+      await button.focus();
+      await page.keyboard.press('Enter');
+      await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
+      await expect(sideBySide(page)).toHaveCount(0);
+      await expect(backButton(page)).toBeVisible();
+      expect(Math.abs((await reader(page).boundingBox())!.width / (await behind(page).boundingBox())!.width - 0.92)).toBeLessThan(0.005);
+      await backButton(page).click();
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+    });
+
+    test('fits an HTML page that is wider than the window to its width, and again when the window changes size', async ({ page }) => {
+      await openBoard(page, [boardFileCard(3, 'wide.html', { title: 'Wide page' })], { [boardId(3)]: { x: 800, y: 240 } }, 'default');
+      await opener(page, 'Wide page').click();
+      const frameBox = reader(page).locator('iframe[title="Preview of wide.html"]');
+      await expect(frameBox).toBeVisible();
+      const frame = await pageFrame(page, 'wide.html');
+      // The page is 1280 px wide and the window is not: it is scaled down to fit and not scrolled sideways.
+      expect((await frameBox.boundingBox())!.width).toBeLessThan(1280);
+      await expect.poll(async () => { const now = await fit(frame); return now.width <= now.room && now.zoom < 1; }).toBe(true);
+      const first = await fit(frame);
+      expect(first.zoom).toBeGreaterThan(0.4);
+      // Nothing in the window scrolls sideways either.
+      expect(await reader(page).evaluate((element) => Array.from(element.querySelectorAll<HTMLElement>('*'))
+        .filter((node) => ['auto', 'scroll'].includes(getComputedStyle(node).overflowX)).every((node) => node.scrollWidth <= node.clientWidth + 1))).toBe(true);
+      // A narrower window scales it further.
+      await page.setViewportSize({ width: 1100, height: 900 });
+      await expect.poll(async () => { const now = await fit(frame); return now.width <= now.room && now.zoom < first.zoom; }).toBe(true);
+      // Never smaller than half: a page that is more than twice the window's width is scaled to half and left to scroll.
+      await page.setViewportSize({ width: 700, height: 900 });
+      await expect.poll(async () => (await frameBox.boundingBox())!.width).toBeLessThan(640);
+      await expect.poll(async () => { const now = await fit(frame); return now.zoom === 0.5 && now.width > now.room; }).toBe(true);
+      // One that is wider than the page leaves it as it was made.
+      await page.setViewportSize({ width: 2000, height: 900 });
+      await expect.poll(async () => { const now = await fit(frame); return now.zoom === 1 && now.width <= now.room; }).toBe(true);
+    });
+
+    test('leaves a page that fits as it is, and a page whose scripts are stopped keeps today\'s behaviour', async ({ page }) => {
+      await openBoard(page, [FILE_CARDS[1], boardFileCard(3, 'wide.html', { title: 'Wide page' })], { [boardId(2)]: { x: 1100, y: 240 }, [boardId(3)]: { x: 800, y: 240 } }, 'default');
+      await opener(page, 'Overview page').click();
+      await expect(page.frameLocator('iframe[title="Preview of overview.html"]').getByRole('heading', { name: 'The overview page' })).toBeVisible();
+      await frames(page, 8);
+      expect((await fit(await pageFrame(page, 'overview.html'))).zoom).toBe(1);
+      await backButton(page).click();
+      // With the scripts stopped nothing runs in the frame to scale the page: it is as wide as it was made.
+      await opener(page, 'Wide page').click();
+      await expect.poll(async () => (await fit(await pageFrame(page, 'wide.html'))).zoom < 1).toBe(true);
+      await reader(page).getByRole('button', { name: 'Stop scripts', exact: true }).click();
+      await expect(reader(page).locator('iframe[title="Preview of wide.html"]')).toHaveAttribute('sandbox', '');
+      await expect(page.frameLocator('iframe[title="Preview of wide.html"]').getByRole('heading', { name: 'A page made for 1280 px' })).toBeVisible();
+      await frames(page, 8);
+      const locked = await fit(await pageFrame(page, 'wide.html'));
+      expect(locked.zoom).toBe(1);
+      expect(locked.width).toBeGreaterThan(locked.room);
+    });
+
+    test('fits a picture to the window', async ({ page }) => {
+      await routeWidePicture(page);
+      await openBoard(page, [boardFileCard(3, 'wide.svg', { title: 'Wide picture' })], { [boardId(3)]: { x: 800, y: 240 } }, 'default');
+      await opener(page, 'Wide picture').click();
+      const picture = reader(page).getByRole('img', { name: 'wide.svg' });
+      await expect(picture).toBeVisible();
+      await expect.poll(async () => (await picture.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth))).toBe(2400);
+      const [win, shown] = await Promise.all([reader(page).boundingBox(), picture.boundingBox()]);
+      expect(shown!.width).toBeLessThan(2400);
+      expect(shown!.x).toBeGreaterThanOrEqual(win!.x);
+      expect(shown!.x + shown!.width).toBeLessThanOrEqual(win!.x + win!.width);
+      expect(await picture.evaluate((image) => {
+        let holder = image.parentElement;
+        while (holder && !['auto', 'scroll'].includes(getComputedStyle(holder).overflowX)) holder = holder.parentElement;
+        return holder ? holder.scrollWidth <= holder.clientWidth : true;
+      })).toBe(true);
+    });
+
+    test('runs the scripts of an HTML page by default, with no prompt, and "Stop scripts" puts that page back in the locked mode', async ({ page }) => {
+      await openBoard(page, [boardFileCard(3, 'styled.html', { title: 'Styled page' }), FILE_CARDS[1]], { [boardId(3)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 } }, 'default');
+      await opener(page, 'Styled page').click();
+      const frame = reader(page).locator('iframe[title="Preview of styled.html"]');
+      const srcdoc = () => frame.evaluate((element: HTMLIFrameElement) => element.srcdoc);
+      await expect(frame).toBeVisible();
+      await expect(reader(page).getByRole('button', { name: /^Trust/ })).toHaveCount(0);
+      await expect(reader(page).getByText('Trust the document')).toHaveCount(0);
+      // Trusted from the start: the script of the internet is in the page, and the frame is still an opaque origin.
+      await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+      expect(await srcdoc()).toMatch(/<script src="https:\/\/cdn\.tailwindcss\.com\/"><\/script>/);
+      expect(await srcdoc()).toContain('script-src');
+      await expect(reader(page).getByText('This page runs scripts from the internet in a sandboxed frame', { exact: false })).toBeVisible();
+      // Stop scripts: the same page, locked.
+      await reader(page).getByRole('button', { name: 'Stop scripts', exact: true }).click();
+      await expect(frame).toHaveAttribute('sandbox', '');
+      expect(await srcdoc()).not.toContain('script-src');
+      expect(await srcdoc()).not.toContain('<script');
+      await expect(reader(page).getByText('Scripts are stopped', { exact: false })).toBeVisible();
+      await expect(reader(page).getByRole('button', { name: 'Stop scripts', exact: true })).toHaveCount(0);
+      // It can be run again, and another page starts with its scripts running whatever was done to this one.
+      await reader(page).getByRole('button', { name: 'Run scripts', exact: true }).click();
+      await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+      await reader(page).getByRole('button', { name: 'Stop scripts', exact: true }).click();
+      await expect(frame).toHaveAttribute('sandbox', '');
+      await backButton(page).click();
+      await opener(page, 'Overview page').click();
+      await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toHaveAttribute('sandbox', 'allow-scripts');
+      await expect(reader(page).getByRole('button', { name: 'Stop scripts', exact: true })).toBeVisible();
+    });
   });
 
   test.describe('links in text', () => {
@@ -2864,7 +3228,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expectNoSeriousViolations(page, '[role="dialog"]');
     });
 
-    test('has no serious accessibility violations with links in the cards and the reader open beside them', async ({ page }) => {
+    /** The board with links in its cards and a source document to open: the reader docked beside the canvas when `docked`, else in its large window. */
+    async function checkReader(page: Page, docked: boolean) {
+      if (docked) await page.addInitScript(() => window.localStorage.setItem('contextspace_board_reader_layout_v1', 'side'));
       await routeBoard(page);
       await routeWork(page, [
         document('Export requirements', { role: 'requirements', filename: 'contextspace-document-1.md', summary: 'Customers export their reports as CSV.' }),
@@ -2894,6 +3260,20 @@ for (const colorScheme of ['light', 'dark'] as const) {
       // The card that is open has its ring, and is still fine to read.
       await expect(canvas.getByRole('article', { name: 'Export requirements' })).toHaveAttribute('aria-current', 'true');
       await expectNoSeriousViolations(page, '[aria-label="Board"]');
+    }
+
+    test('has no serious accessibility violations with links in the cards and the reader open in its large window', async ({ page }) => {
+      await checkReader(page, false);
+      const reader = board(page).getByRole('region', { name: 'Reader', exact: true });
+      await expect(reader.getByRole('button', { name: 'Back to board' })).toBeVisible();
+      await expect(reader.getByRole('button', { name: 'Side by side' })).toBeVisible();
+      await expectNoSeriousViolations(page, '[aria-label="Board"]');
+    });
+
+    test('has no serious accessibility violations with links in the cards and the reader open beside them', async ({ page }) => {
+      await checkReader(page, true);
+      const reader = board(page).getByRole('region', { name: 'Reader', exact: true });
+      await expect(reader.getByRole('button', { name: 'Large', exact: true })).toBeVisible();
     });
   });
 }

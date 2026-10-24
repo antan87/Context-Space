@@ -488,15 +488,28 @@ if (installPerfCounters()) {
   });
 }
 
-// Enforce trusted local origin on all mutating HTTP methods across /api/* to defend against
-// cross-site request forgery and browser form posts from untrusted web pages.
+// Cross-site and cross-origin guard for /api/*, to defend against forged requests from untrusted web pages: a page of
+// another site, or the sandboxed frame of an HTML document (an opaque origin, `Origin: null`), which runs its scripts.
+//  - Every request the browser says is cross-site (`Sec-Fetch-Site`) is refused unless it names an app origin, because some GETs
+//    do work (a fetch, the news record, a migration) and a page can send them without being able to read the answer: an <img>
+//    or a no-cors fetch carries no Origin at all. The CORS allowance below does not stop that: it only decides what a page may read.
+//  - A mutating method is refused when it is cross-site at all, and when its Origin or Referer is not a local one.
+// A request with no Sec-Fetch-Site (the CLI, the MCP server, curl: not a browser) and one that is same-origin or same-site
+// (the dashboard, also the Vite dev server on localhost reaching the backend on localhost) pass as before.
+function hasAppOrigin(origin: string | undefined, requestUrl: string): boolean {
+  return hasTrustedLocalOrigin(origin) || hasExactDashboardOrigin(origin, requestUrl);
+}
+
 app.use('/api/*', async (c, next) => {
+  const secFetchSite = c.req.header('sec-fetch-site');
+  const origin = c.req.header('origin');
+  if (secFetchSite === 'cross-site' && !hasAppOrigin(origin, c.req.url)) {
+    return c.json({ error: 'Forbidden cross-site request.' }, 403);
+  }
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(c.req.method)) {
-    const secFetchSite = c.req.header('sec-fetch-site');
     if (secFetchSite === 'cross-site') {
       return c.json({ error: 'Forbidden cross-site request.' }, 403);
     }
-    const origin = c.req.header('origin');
     if (origin && !hasTrustedLocalOrigin(origin)) {
       return c.json({ error: 'Forbidden cross-origin request.' }, 403);
     }

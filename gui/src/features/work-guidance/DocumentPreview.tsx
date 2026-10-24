@@ -65,11 +65,12 @@ function collectHeadAssets(html: string, trusted: boolean): HeadAssets {
 }
 
 /**
+ * `fillFrame` is set by a surface that gives the document all the room it has and does not scroll around it (the Board's window).
  * `expanded` is set by DocumentViewer when the document fills the app viewport. Every branch that
  * has an intrinsic height has to opt out of its capped height there, otherwise maximizing only
  * rescales a letterboxed frame.
  */
-export function DocumentPreview({ preview, fileUrl, raw, expanded = false, trusted = false, links }: { preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks }) {
+export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillFrame = false, trusted = false, links }: { preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; fillFrame?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks }) {
   const htmlDocument = useMemo(() => {
     if (preview.kind !== 'html' || raw) return '';
     const source = preview.content ?? '';
@@ -79,7 +80,8 @@ export function DocumentPreview({ preview, fileUrl, raw, expanded = false, trust
       trusted,
     });
   }, [preview, raw, trusted]);
-  const height = expanded ? 'h-full flex-1' : 'h-[65vh]';
+  // `fillFrame` is for a container that is a column of its own height and does not scroll: the frame of a page (or a PDF) is as tall as what is left of it.
+  const height = expanded ? 'h-full flex-1' : fillFrame ? 'min-h-0 flex-1' : 'h-[65vh]';
 
   // Only the trusted path may run script, and it must never be sandboxed into the app's origin.
   const sandbox = trusted ? 'allow-scripts' : '';

@@ -1,9 +1,21 @@
 /**
  * Policy for rendering agent-created HTML in the document viewer.
  *
- * The viewer renders untrusted, AI-authored HTML, so the default is locked: no script, opaque
- * origin, and remote subresources limited to presentational types. A document can be explicitly
- * trusted by the user, which is the only path that lets the Play CDN style a page.
+ * Every HTML document is trusted by default ("trusted" mode below): its remote scripts run, which is
+ * what lets the Play CDN style a page, and never one of the document's own inline scripts, which are
+ * stripped with the rest of the active content. A user can switch one document to the locked mode: no
+ * script, and remote subresources limited to presentational types.
+ *
+ * Once scripts run, the CSP in the document's <meta> is NOT a security boundary: a script can navigate its
+ * own frame to a page that has no such CSP, and nobody should count on `connect-src` (or any other
+ * directive here) to keep a trusted page from sending requests. What protects the app is, together:
+ *  - the sandbox: `allow-scripts` and never `allow-same-origin`, so the frame has an opaque origin that
+ *    holds none of the app's data, cookies or storage and cannot reach into the app's page; and
+ *  - the server: it refuses a state-changing request from such a frame (its `Origin` is "null") and every
+ *    /api request the browser marks cross-site that names no app origin, and gives it no CORS allowance
+ *    to read an answer (src/server.ts, and the tests in src/server.test.ts).
+ * The CSP is kept for what it does well, in the locked mode above all: it keeps a page with no script from
+ * loading anything but presentational resources.
  *
  * Kept free of DOM access so the policy is unit-testable without a browser; the DOM-level effects
  * are asserted in gui/e2e/root-documents.spec.ts against real Chromium.
@@ -20,7 +32,7 @@ const BASE = "default-src 'none'; base-uri 'none'; form-action 'none'";
 const ASSETS = "img-src data: https: http:; style-src 'unsafe-inline' https: http:; font-src data: https: http:";
 
 /**
- * Q5: only reachable when the user trusts one specific document.
+ * Q5: what a trusted document (the default) is given, which the locked mode a user can switch one document to is not.
  *
  * `connect-src` is not optional here. Tailwind's Play CDN initializes, then fetches its engine over
  * `fetch()`, so without it the script runs and still generates no CSS. Verified in Chromium: with
@@ -103,6 +115,31 @@ export interface PreviewDocumentOptions {
   assets?: HeadAssets;
 }
 
+/**
+ * What the trusted page's frame sends the app when Escape is pressed in it: a key pressed in a frame never reaches the page
+ * around it, so a reader that closes with Escape would otherwise stop doing so once the keyboard is in the page (and a page can
+ * take the keyboard by itself). The app accepts it only from the frame it drew (BoardReader), and it closes the reader: nothing
+ * more. It is the one message the script below sends, and it says nothing about the page.
+ */
+export const ESCAPE_MESSAGE = 'contextspace:escape';
+
+/**
+ * Two things for a trusted page, as a script, because the app cannot reach into a sandboxed frame without `allow-same-origin`.
+ *
+ * Fit: a page that is wider than the frame is scaled down to the frame's width, so a page made for 1280 px is read whole
+ * instead of scrolled sideways. CSS `zoom` rather than a transform: it changes the layout too, so the page is not left with a
+ * tall empty strip. The zoom is taken off before every measure (no frame is drawn in between). The page is measured again when
+ * the frame is resized, when something loads, when its fonts arrive, when <html>, <body> or a child of <body> changes size
+ * (a ResizeObserver, which is not set off by the zoom itself once it has settled), and a few times soon after it opens, for a
+ * page that builds itself. A page that already fits is not touched. A page that is wider than twice the frame is scaled to half
+ * and left to scroll sideways: text any smaller cannot be read.
+ *
+ * Escape: pressed in the page, and not already used by it, it sends ESCAPE_MESSAGE to the app.
+ *
+ * Trusted documents only: it is a script.
+ */
+export const FIT_SCRIPT = `(function(){var frame=0,seen=new WeakSet(),watcher=window.ResizeObserver?new ResizeObserver(later):null;function watch(el){if(watcher&&!seen.has(el)){seen.add(el);watcher.observe(el)}}function fit(){var body=document.body,root=document.documentElement;if(!body)return;watch(root);watch(body);for(var i=0;i<body.children.length&&i<40;i++)watch(body.children[i]);body.style.zoom='';var room=root.clientWidth,wide=Math.max(root.scrollWidth,body.scrollWidth);if(room>0&&wide>room+1)body.style.zoom=String(Math.max(0.5,room/wide))}function later(){cancelAnimationFrame(frame);frame=requestAnimationFrame(fit)}addEventListener('resize',later);addEventListener('load',later,true);document.addEventListener('DOMContentLoaded',later);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(later);[150,600,1800].forEach(function(ms){setTimeout(later,ms)});addEventListener('keydown',function(event){if(event.key==='Escape'&&!event.defaultPrevented)parent.postMessage('${ESCAPE_MESSAGE}','*')})})()`;
+
 const EMPTY_ASSETS: HeadAssets = { stylesheets: [], scripts: [], styles: [], htmlAttributes: [], bodyAttributes: [] };
 
 /** Only presentational, non-executable attributes. `style` is excluded on purpose. */
@@ -153,7 +190,8 @@ export function buildPreviewDocument({ body, trusted, assets }: PreviewDocumentO
   const styles = merged.styles.filter(isHoistableStyle).map(css => `<style>${css}</style>`).join('');
   const stylesheets = merged.stylesheets.map(href => `<link rel="stylesheet" href="${escapeAttribute(href)}">`).join('');
   const scripts = (trusted ? merged.scripts : []).map(src => `<script src="${escapeAttribute(src)}"></script>`).join('');
-  return `<!doctype html><html${renderAttributes(merged.htmlAttributes)}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${previewCsp(trusted)}">${styles}${stylesheets}${scripts}</head><body${renderAttributes(merged.bodyAttributes)}>${body}</body></html>`;
+  const fit = trusted ? `<script>${FIT_SCRIPT}</script>` : '';
+  return `<!doctype html><html${renderAttributes(merged.htmlAttributes)}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${previewCsp(trusted)}">${styles}${stylesheets}${scripts}${fit}</head><body${renderAttributes(merged.bodyAttributes)}>${body}</body></html>`;
 }
 
 const EXTERNAL_SCRIPT = /<script\b[^>]*\bsrc\s*=/i;

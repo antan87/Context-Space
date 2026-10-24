@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { DocumentViewer } from './DocumentViewer.js';
 import type { DocumentPreviewData } from './DocumentPreview.js';
 
+// DOMPurify needs a DOM, which these server renders do not have; what it strips is asserted in the browser (root-documents.spec.ts).
+vi.mock('dompurify', () => ({ default: { sanitize: (html: string) => html } }));
+
 describe('DocumentViewer', () => {
   const samplePreview: DocumentPreviewData = {
     name: 'test.md',
@@ -121,5 +124,24 @@ describe('DocumentViewer', () => {
     expect(html).toContain('aria-label="Save document"');
     expect(html).not.toContain('aria-label="Edit document"');
   });
-});
 
+  describe('scripts of an HTML document', () => {
+    const page: DocumentPreviewData = { name: 'page.html', kind: 'html', content: '<h1>A page</h1>', size: 16, modifiedAt: '2026-10-18T12:00:00.000Z' };
+
+    it('run by default, in a frame that never shares the app\'s origin, with a button to stop them', () => {
+      for (const fill of [false, true]) {
+        const html = renderToStaticMarkup(createElement(DocumentViewer, { title: 'page.html', preview: page, raw: false, fill }));
+        expect(html).toContain('sandbox="allow-scripts"');
+        expect(html).not.toContain('allow-same-origin');
+        expect(html).toContain('Stop scripts');
+        expect(html).not.toContain('Trust this document');
+        expect(html).not.toContain('Stop trusting');
+      }
+    });
+
+    it('offer no scripts button for a document that is not shown as a page', () => {
+      expect(renderToStaticMarkup(createElement(DocumentViewer, { title: 'page.html', preview: page, raw: true }))).not.toContain('scripts');
+      expect(renderToStaticMarkup(createElement(DocumentViewer, { title: 'test.md', preview: samplePreview, raw: false }))).not.toContain('scripts');
+    });
+  });
+});

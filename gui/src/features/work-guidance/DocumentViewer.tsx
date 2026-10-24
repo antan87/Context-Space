@@ -39,6 +39,12 @@ export interface DocumentViewerProps {
    * takes the panel's whole height. `leading` goes at the start of that row (navigation, Back).
    */
   fill?: boolean;
+  /**
+   * With `fill`: the frame of an HTML page (or a PDF) takes the whole height of the body, which then does not scroll, so the
+   * page scrolls on its own and nothing scrolls twice. Other documents still scroll in the body. Without it the frame is a
+   * fixed share of the screen's height and the body scrolls around it.
+   */
+  fillFrame?: boolean;
   leading?: ReactNode;
   notice?: ReactNode;
   className?: string;
@@ -54,29 +60,34 @@ export interface DocumentViewerProps {
   initialEditing?: boolean;
 }
 
-/** Trust is per document and never persisted: it lapses as soon as the document is closed. */
-function TrustControl({ trusted, onToggle, compact }: { trusted: boolean; onToggle: () => void; compact: boolean }) {
+/**
+ * An HTML document's scripts run by default (in the sandboxed frame, with no way to the app: see previewPolicy). This puts
+ * one document back in the locked mode, and back again. It is per document and never persisted: it lapses as soon as another
+ * document is opened.
+ */
+function ScriptsControl({ running, onToggle, compact }: { running: boolean; onToggle: () => void; compact: boolean }) {
   return <Button
     size={compact ? 'xs' : 'sm'}
-    variant={trusted ? 'destructive-outline' : 'outline'}
-    aria-pressed={trusted}
-    title={trusted ? 'Stop running scripts from this document' : 'Run scripts in this document so its styling can load'}
+    variant="outline"
+    title={running ? 'Block the scripts of this document: it shows without them' : 'Run the scripts of this document again, so its styling can load'}
     onClick={onToggle}
   >
     <ShieldAlert size={compact ? 12 : 14} />
-    {trusted ? 'Stop trusting' : 'Trust this document'}
+    {running ? 'Stop scripts' : 'Run scripts'}
   </Button>;
 }
 
 /**
  * Owns the maximize affordance for every document surface. Expanding fills the app viewport inside
  * the app's own borders — `fixed inset-0` portaled to `document.body` above the app shell, never the
- * browser Fullscreen API — so Download, the raw toggle and the trust control all stay reachable, and
+ * browser Fullscreen API — so Download, the raw toggle and the scripts control all stay reachable, and
  * docked side panels like the chat cannot overlap it.
  */
-export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['Raw text', 'Rendered view'], onClose, compact = false, fill = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false }: DocumentViewerProps) {
+export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['Raw text', 'Rendered view'], onClose, compact = false, fill = false, fillFrame = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false }: DocumentViewerProps) {
   const [expanded, setExpanded] = useState(false);
-  const [trusted, setTrusted] = useState(false);
+  // HTML is trusted by default: only a user can switch one document to the locked mode.
+  const [scriptsStopped, setScriptsStopped] = useState(false);
+  const trusted = !scriptsStopped;
   const [editing, setEditing] = useState(initialEditing);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -126,13 +137,13 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     }
   };
 
-  // Trust and edit state lapse when a different document is opened.
+  // Stopped scripts and edit state lapse when a different document is opened.
   const currentDocName = preview?.name ?? title;
   const previousDocName = useRef(currentDocName);
   useEffect(() => {
     if (currentDocName && previousDocName.current !== currentDocName) {
       previousDocName.current = currentDocName;
-      setTrusted(false);
+      setScriptsStopped(false);
       setExpanded(false);
       setEditing(false);
       setEditContent(preview?.content ?? '');
@@ -265,16 +276,16 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     () => preview?.kind === 'html' && !raw && dependsOnExternalScript(preview.content ?? ''),
     [preview, raw],
   );
-  const trustControl = preview?.kind === 'html' && !raw
-    ? <TrustControl trusted={trusted} onToggle={() => setTrusted(value => !value)} compact={compact} />
+  const scriptsControl = preview?.kind === 'html' && !raw
+    ? <ScriptsControl running={trusted} onToggle={() => setScriptsStopped(value => !value)} compact={compact} />
     : null;
   const guidance = <>
     {notice}
     {scriptBound && <p role="status" className={cn('flex items-start gap-1.5 text-xs text-muted-foreground', compact ? 'mb-2' : 'mb-3')}>
       <ShieldAlert size={12} className="mt-0.5 shrink-0" />
       {trusted
-        ? 'This document can run scripts from the internet, so remote code is running in a sandboxed frame.'
-        : 'This page loads styling from an external script, which is blocked. Trust the document to load it.'}
+        ? 'This page runs scripts from the internet in a sandboxed frame, apart from the app. Stop scripts to block them.'
+        : 'Scripts are stopped, so the styling this page loads from an external script is blocked. Run scripts to load it.'}
     </p>}
   </>;
   const editorView = (
@@ -293,10 +304,12 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     </div>
   );
 
+  // The frame of a page or a PDF that has the body to itself, in a body that does not scroll.
+  const framed = fill && fillFrame && !editing && !raw && (preview?.kind === 'html' || (preview?.kind === 'pdf' && preview.content === undefined));
   const body = (expandedNow: boolean) => editing
     ? editorView
     : preview
-      ? <DocumentPreview preview={preview} fileUrl={fileUrl} raw={raw} expanded={expandedNow} trusted={trusted} links={links} />
+      ? <DocumentPreview preview={preview} fileUrl={fileUrl} raw={raw} expanded={expandedNow} fillFrame={framed && !expandedNow} trusted={trusted} links={links} />
       : <>{status}</>;
 
   const folder = (preview?.name ?? title).includes('/') ? (preview?.name ?? title).slice(0, (preview?.name ?? title).lastIndexOf('/') + 1) : '';
@@ -335,7 +348,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         </Button>
       )}
       {onToggleRaw && !editing && <Button size="xs" variant="ghost" className="shrink-0" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
-      {!editing && trustControl}
+      {!editing && scriptsControl}
       <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label={copiedPath ? 'Path copied' : `Copy path ${pathToCopy}`} title={copiedPath ? 'Path copied to clipboard' : 'Copy path'} onClick={handleCopyPath}>
         {copiedPath ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
       </Button>
@@ -442,7 +455,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
             </Button>
           )}
           {onToggleRaw && !editing && <Button size={buttonSize} variant="outline" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
-          {!editing && trustControl}
+          {!editing && scriptsControl}
           {downloadHref && (
             <a
               className={cn(buttonVariants({ variant: 'outline', size: buttonSize }), 'gap-1.5')}
@@ -489,7 +502,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       {fill ? (
         <div className={cn('flex h-full min-h-0 flex-col', expanded && 'hidden', className)}>
           {fillChrome(false)}
-          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+          <div className={cn('min-h-0 flex-1 px-5 py-4', framed ? 'flex flex-col overflow-hidden' : 'overflow-auto')}>
             {guidance}
             {body(false)}
           </div>

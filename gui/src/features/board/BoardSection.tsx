@@ -26,6 +26,7 @@ import { fileTitle, readerDock, readerReveal } from './boardDock.js';
 import { openingNodeId, openingView, type Viewport } from './boardView.js';
 import { BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardLane, BoardNote, BoardPlaceholder } from './BoardNodes.js';
 import { BoardReader } from './BoardReader.js';
+import { useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 
 const NODE_TYPES: NodeTypes = { lane: BoardLane, checkpoint: BoardCheckpoint, document: BoardDocument, commit: BoardCommit, placeholder: BoardPlaceholder, note: BoardNote, file: BoardFile };
 
@@ -137,9 +138,11 @@ function SourceProblem({ what, error, onRetry }: { what: string; error: unknown;
  * in view" shows the lot. It shows the big picture first: each group (a checkpoint, the documents, a repository's commits)
  * is one summary, only the work under way is open, and pressing a summary opens that group where it stands (boardFolds
  * remembers what was opened or folded). Cards can be dragged where you want them (out of their lane too), or moved with
- * Shift and the arrow keys, and the place is kept in the board file (boardMoves). A document or a file opens in a reader docked
- * to the right of the canvas (it covers the canvas where the section is too narrow for both), and so does a link in a note to a
- * file of the workspace; the view moves only as far as it takes to keep the card that was opened in sight. It uses the queries
+ * Shift and the arrow keys, and the place is kept in the board file (boardMoves). A document or a file opens in a large window over
+ * the board (about 92% of the section wide and 88% high, the board dimmed but in sight all round it), which Escape, "Back to board"
+ * and a click on the board behind it close; or, as the viewer chooses ("Side by side", kept in this browser), in a reader docked to the
+ * right of the canvas (it covers the canvas where the section is too narrow for both). A link in a note to a file of the workspace
+ * opens the same way; docked, the view moves only as far as it takes to keep the card that was opened in sight. It uses the queries
  * the other parts already use, so a part that fails says so and the rest still draws. `active` is whether the board is the part on show: it stays
  * mounted behind the others.
  */
@@ -199,6 +202,8 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   const section = useElementSize(row);
   const dock = readerDock(section.width);
   const [reader, setReader] = useState<{ target: ReaderTarget; request: number } | null>(null);
+  // A large window over the board, or docked beside it: the viewer's choice, kept in this browser.
+  const [layout, setLayout] = useReaderLayout();
   const requests = useRef(0);
   const opener = useRef<HTMLElement | null>(null);
   /** The link that was pressed last: a file that a link opens does not say which link it was, and the keyboard goes back to it. */
@@ -214,6 +219,11 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   }, []);
   const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from, true), [show]);
   const closeReader = useCallback(() => setReader(null), []);
+  // Docking the reader may put it over the card that was opened: the view moves to keep that card in sight, as it does when the reader opens docked.
+  const changeLayout = useCallback((next: ReaderLayout) => {
+    if (next === 'side') revealing.current = opener.current?.closest('.react-flow__node')?.getAttribute('data-id') ?? null;
+    setLayout(next);
+  }, [setLayout]);
   const openLinked = useCallback((path: string) => show({ path, title: fileTitle(path) }, opener.current, false), [show]);
   const openInDocs = useCallback((name: string) => { documentRequests.open(workspaceId, { name }); goToWorkspace(navigateTo, workspaceId, 'documents'); }, [workspaceId, navigateTo]);
 
@@ -238,16 +248,18 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     },
   }), [workspaceId, workspacePath, openInReader, setFold]);
 
-  // The card that was opened would be under the reader, or cut off by it: the view moves, smoothly, just far enough to show it.
+  // Docked, the card that was opened would be under the reader, or cut off by it: the view moves, smoothly, just far enough to show it.
+  // In the large window the board is in sight all round it and the view stays.
   useEffect(() => {
     const id = revealing.current;
     const instance = flow.current;
     if (!reader || id === null || !instance || section.width === 0) return;
     revealing.current = null;
+    if (layout === 'large') return;
     const rect = nodeRects(moves.shown).get(id);
     const view = rect && readerReveal(rect, instance.getViewport(), section, OPEN_MARGIN);
     if (view) void instance.setViewport(view, { duration: moveMs(300) });
-  }, [reader, moves.shown, section]);
+  }, [reader, layout, moves.shown, section]);
 
   // When the reader has closed the keyboard goes back to what opened it, or to the canvas when that is gone. The view stays.
   // Escape closes the reader, from the reader or from the board, and from nowhere in particular (the keyboard drops to the page when the
@@ -329,8 +341,8 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   let body;
   if (nodes.length > 0) {
     body = <div ref={setRow} className="relative flex min-h-0 flex-1">
-      {/* While the reader covers the canvas the canvas waits under it, out of the keyboard's reach. */}
-      <div className="relative min-w-0 flex-1" inert={Boolean(reader) && dock.covers}>
+      {/* While the reader covers the canvas (the large window always does) the canvas waits under it, out of the keyboard's reach. */}
+      <div className="relative min-w-0 flex-1" inert={Boolean(reader) && (layout === 'large' || dock.covers)}>
         <div
           ref={setContainer} className="absolute inset-0"
           onPointerDownCapture={(event) => { takenBefore.current = taken.current; if (isViewGesture(container, event.target)) taken.current = true; }}
@@ -403,7 +415,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
       </div>
       {reader && <BoardReader
         workspaceId={workspaceId} workspacePath={workspacePath} target={reader.target} request={reader.request}
-        covers={dock.covers} width={dock.width} onClose={closeReader} onOpenInDocs={openInDocs} onOpenFile={openLinked}
+        layout={layout} onLayout={changeLayout} covers={dock.covers} width={dock.width} onClose={closeReader} onOpenInDocs={openInDocs} onOpenFile={openLinked}
       />}
     </div>;
   } else if (loading) {
