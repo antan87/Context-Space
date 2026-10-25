@@ -277,7 +277,7 @@ export async function tuiCommand(options: { workspace?: string }): Promise<void>
   };
 
   // Keyboard Event Handlers
-  const keypressHandler = async (str: any, key: any) => {
+  const keypressHandler = async (str: string | undefined, key: readline.Key) => {
     if (key.ctrl && key.name === 'c') {
       cleanup();
       process.exit(0);

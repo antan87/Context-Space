@@ -215,7 +215,7 @@ export async function skillCreateCommand(
 
     console.log(chalk.green(`\n✔ Skill "${saved.title || saved.id}" created successfully!`));
     console.log(chalk.dim(`  Scope:   ${scope === 'workspace' ? 'Workspace-local' : 'Global'}`));
-    console.log(chalk.dim(`  Path:    ${(saved as any).path}`));
+    console.log(chalk.dim(`  Path:    ${saved.path}`));
     if (saved.tags?.length) {
       console.log(chalk.dim(`  Tags:    ${saved.tags.join(', ')}`));
     }

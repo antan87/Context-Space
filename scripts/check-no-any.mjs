@@ -156,38 +156,16 @@ export function findViolationsInContent(content, relPath, checkTypes = false) {
 export function runChecks(rootDir = repoRoot) {
   const violations = [];
 
-  // Check 1 & 2: catch (...: any) and null as any across all source directories
+  // Full type checking across all production source trees
   const allSourceFiles = [
     ...collectSourceFiles(path.join(rootDir, 'src')),
     ...collectSourceFiles(path.join(rootDir, 'gui/src')),
     ...collectSourceFiles(path.join(rootDir, 'extension/src')),
   ];
 
-  for (const relPath of allSourceFiles) {
-    const fullPath = path.join(rootDir, relPath);
-    if (!fs.existsSync(fullPath)) continue;
-    const content = fs.readFileSync(fullPath, 'utf8');
-    const fileViolations = findViolationsInContent(content, relPath, false);
-    violations.push(...fileViolations);
-  }
-
-  // Check 3: Full type any check in gui/src production files
   const guiSourceFiles = collectSourceFiles(path.join(rootDir, 'gui/src'));
-  for (const relPath of guiSourceFiles) {
-    const fullPath = path.join(rootDir, relPath);
-    if (!fs.existsSync(fullPath)) continue;
-    const content = fs.readFileSync(fullPath, 'utf8');
-    const fileViolations = findViolationsInContent(content, relPath, true);
-    // Filter out duplicates already caught by rule 1 or 2
-    for (const v of fileViolations) {
-      if (!violations.some((existing) => existing.file === v.file && existing.line === v.line)) {
-        violations.push(v);
-      }
-    }
-  }
 
-  // Check 4: Full type any check in migrated backend files
-  for (const relPath of MIGRATED_BACKEND_FILES) {
+  for (const relPath of allSourceFiles) {
     const fullPath = path.join(rootDir, relPath);
     if (!fs.existsSync(fullPath)) continue;
     const content = fs.readFileSync(fullPath, 'utf8');
@@ -200,7 +178,7 @@ export function runChecks(rootDir = repoRoot) {
   }
 
   return {
-    scannedCount: allSourceFiles.length + MIGRATED_BACKEND_FILES.length,
+    scannedCount: allSourceFiles.length,
     guiCount: guiSourceFiles.length,
     violations,
   };

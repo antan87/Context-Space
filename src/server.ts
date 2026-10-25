@@ -188,6 +188,7 @@ import {
   WorkroomValidationError,
   documentNameSchema,
   workflowStepSchema,
+  type WorkroomSnapshotV1,
 } from './workrooms/contracts.js';
 import { listWorkroomNetworkInterfaces } from './workrooms/host.js';
 import * as workroomManagerModule from './workrooms/manager.js';
@@ -1080,6 +1081,22 @@ interface JobStep {
   message: string;
 }
 
+export interface CreationJobProgressData {
+  id: string;
+  status: 'running' | 'completed' | 'failed';
+  progress: number;
+  error?: string;
+  steps: JobStep[];
+  workspacePath?: string;
+  feature?: Feature;
+  [key: string]: unknown;
+}
+
+export interface CreationJobEvent {
+  type: string;
+  data: CreationJobProgressData;
+}
+
 interface CreationJob {
   id: string;
   status: 'running' | 'completed' | 'failed';
@@ -1088,7 +1105,7 @@ interface CreationJob {
   steps: JobStep[];
   workspacePath?: string;
   feature?: Feature;
-  listeners: Set<(event: { type: string; data: any }) => void>;
+  listeners: Set<(event: CreationJobEvent) => void>;
   cleanupTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -1110,7 +1127,7 @@ function updateJobStep(
   stepId: string,
   status: 'running' | 'completed' | 'failed',
   message: string,
-  extraData?: any
+  extraData?: Record<string, unknown>
 ) {
   const job = creationJobs.get(jobId);
   if (!job) return;
@@ -1374,7 +1391,7 @@ app.get('/api/workspace/create-stream/:jobId', async (c) => {
     // Keep the connection open until the job finishes, driven by job events
     // rather than polling.
     await new Promise<void>((resolve) => {
-      const listener = async (event: { type: string; data: any }) => {
+      const listener = async (event: CreationJobEvent) => {
         try {
           await stream.writeSSE({
             event: event.type,
@@ -1385,7 +1402,7 @@ app.get('/api/workspace/create-stream/:jobId', async (c) => {
           resolve();
           return;
         }
-        if (event.data?.status === 'completed' || event.data?.status === 'failed') {
+        if (event.data.status === 'completed' || event.data.status === 'failed') {
           job.listeners.delete(listener);
           resolve();
         }
@@ -2056,7 +2073,12 @@ app.get('/api/workspace/:id/changes', async (c) => {
       return c.json({ error: 'Workspace configuration not found.' }, 404);
     }
 
-    const results: any[] = [];
+    const results: Array<{
+      repoName: string;
+      repoPath: string;
+      files: Awaited<ReturnType<typeof listRepositoryChangesWithFingerprint>>['files'];
+      error?: string;
+    }> = [];
     const fingerprints: string[] = [];
 
     // Check git status in each repo (worktree, or source repo for in-place)
@@ -2888,8 +2910,8 @@ app.get('/api/workspace/:id/stream', async (c) => {
     const { messages, ledgerInfo } = await readWorkspaceChatMessages(workspacePath);
 
     let isRemoteActive = false;
-    let remoteStatus: any = null;
-    let workflowProgress: any = null;
+    let remoteStatus: { roomId?: string; name?: string; url?: string } | null = null;
+    let workflowProgress: WorkroomSnapshotV1['workflowProgress'] | null = null;
 
     try {
       const client = await workroomManagerModule.loadPinnedWorkroomClientForWorkspace(id);
@@ -2911,7 +2933,7 @@ app.get('/api/workspace/:id/stream', async (c) => {
             remoteStatus = {
               roomId: status.roomId,
               url: status.url,
-              name: (status as any).name,
+              name: status.name,
             };
           }
         }
@@ -2921,7 +2943,7 @@ app.get('/api/workspace/:id/stream', async (c) => {
     }
 
     // Reconcile messages with live authoritative workflow progress by stepId
-    const stepMap = new Map<string, any>();
+    const stepMap = new Map<string, NonNullable<WorkroomSnapshotV1['workflowProgress']>['steps'][number]>();
     if (workflowProgress?.steps) {
       for (const step of workflowProgress.steps) {
         stepMap.set(step.stepId, step);
@@ -2929,7 +2951,7 @@ app.get('/api/workspace/:id/stream', async (c) => {
     }
 
     const reconciledMessages = messages.map((msg) => {
-      if (!msg.stepId) return msg;
+      if (!msg.stepId || typeof msg.stepId !== 'string') return msg;
       const liveStep = stepMap.get(msg.stepId);
       if (!liveStep) return msg;
       return {

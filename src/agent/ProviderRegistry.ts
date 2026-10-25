@@ -59,22 +59,11 @@ export interface ToolApprovalRequest {
   description?: string;
 }
 
-export interface AgentHarness {
+export interface AgentHarness extends NodeJS.EventEmitter {
   start(cwd: string, session?: AgentSession): Promise<void>;
   send(data: string, executionProfile?: AgentExecutionProfile): Promise<void>;
   stop(): void;
   respondToApproval?(requestId: string, decision: 'allow' | 'deny', message?: string): void;
-  on(event: AgentEvent, listener: (...args: any[]) => void): this;
-  /**
-   * Detaches a listener, so a caller that attaches per operation on a long-lived
-   * harness can clean up rather than accumulating listener sets. Satisfied for
-   * free by EventEmitter, which every adapter extends.
-   *
-   * Nothing in this package calls it today — the caller it was added for was the
-   * workflow engine — but it belongs on the interface: `on` without `off` makes
-   * any repeated use of a harness a leak.
-   */
-  off(event: AgentEvent, listener: (...args: any[]) => void): this;
 }
 
 export interface ProviderAdapter {

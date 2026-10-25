@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type ServerResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -135,10 +136,7 @@ export async function startMcpServer(optionsOrWorkspacePath?: string | McpServer
     };
   });
 
-  // Return type is annotated `any` because the SDK's ServerResult union now
-  // includes a task-augmented variant; a plain `{ content, isError }` result is
-  // valid but does not narrow cleanly against it.
-  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<any> => {
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const config = await loadConfig();
 
@@ -162,7 +160,7 @@ export async function startMcpServer(optionsOrWorkspacePath?: string | McpServer
     }
 
     const ctx: ToolContext = { config, workspacePath: resolvedWorkspacePath, ...(workspacePath ? { boundWorkspacePath: workspacePath } : {}) };
-    return tool.handler((args ?? {}) as Record<string, unknown>, ctx);
+    return tool.handler((args ?? {}) as Record<string, unknown>, ctx) as unknown as ServerResult;
   });
 
   const transport = new StdioServerTransport();

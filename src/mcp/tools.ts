@@ -43,6 +43,7 @@ import {
   type ParsedKnowledgeEntry,
 } from '../core/knowledge.js';
 import { loadPinnedWorkroomClientForWorkspace } from '../workrooms/manager.js';
+import type { WorkroomSnapshotV1 } from '../workrooms/contracts.js';
 import {
   INPUT_REQUEST_DISPLAY_LIMIT,
   INPUT_REQUEST_OPTIONS_MAX,
@@ -954,7 +955,7 @@ export const tools: NexusFlowTool[] = [
         const { messages: localMessages, ledgerInfo } = await readWorkspaceChatMessages(ctx.workspacePath, limit);
 
         // 2. Check if a pinned remote Workroom is connected
-        let remoteSnapshot: any = null;
+        let remoteSnapshot: WorkroomSnapshotV1 | null = null;
         let remoteError: string | null = null;
         try {
           const client = await loadPinnedWorkroomClientForWorkspace(feature.id);
@@ -967,15 +968,15 @@ export const tools: NexusFlowTool[] = [
         }
 
         if (remoteSnapshot) {
-          const stepMap = new Map<string, any>();
+          const stepMap = new Map<string, NonNullable<WorkroomSnapshotV1['workflowProgress']>['steps'][number]>();
           if (remoteSnapshot.workflowProgress?.steps) {
             for (const step of remoteSnapshot.workflowProgress.steps) {
               stepMap.set(step.stepId, step);
             }
           }
 
-          const reconciledMessages = localMessages.map((msg: any) => {
-            if (!msg.stepId) return msg;
+          const reconciledMessages = localMessages.map((msg) => {
+            if (!msg.stepId || typeof msg.stepId !== 'string') return msg;
             const liveStep = stepMap.get(msg.stepId);
             if (!liveStep) return msg;
             return {
@@ -986,8 +987,8 @@ export const tools: NexusFlowTool[] = [
 
           const activeStep =
             remoteSnapshot.workflowProgress?.steps.find(
-              (s: any) => s.status === 'in_progress' || s.status === 'completion_proposed',
-            ) ?? remoteSnapshot.workflowProgress?.steps.find((s: any) => s.status === 'pending');
+              (s) => s.status === 'in_progress' || s.status === 'completion_proposed',
+            ) ?? remoteSnapshot.workflowProgress?.steps.find((s) => s.status === 'pending');
 
           return json({
             status: 'connected',
@@ -1009,14 +1010,14 @@ export const tools: NexusFlowTool[] = [
                 }
               : null,
             latestHandoff: remoteSnapshot.documents?.handoff?.content ?? null,
-            recentActivity: remoteSnapshot.activity.slice(-limit).map((e: any) => ({
+            recentActivity: remoteSnapshot.activity.slice(-limit).map((e) => ({
               sequence: e.sequence,
               type: e.type,
               actorId: e.actorId,
               summary: e.summary,
               createdAt: e.createdAt,
             })),
-            remoteActivity: remoteSnapshot.activity.slice(-limit).map((e: any) => ({
+            remoteActivity: remoteSnapshot.activity.slice(-limit).map((e) => ({
               sequence: e.sequence,
               type: e.type,
               actorId: e.actorId,
@@ -1089,9 +1090,9 @@ export const tools: NexusFlowTool[] = [
 
         // 1. If connected to a Workroom and stepId is provided, propose workflow step completion
         let workroomSynced = false;
-        let stepResult: any = null;
+        let stepResult: unknown = null;
         let syncError: string | null = null;
-        let client: any = null;
+        let client: Awaited<ReturnType<typeof loadPinnedWorkroomClientForWorkspace>> | null = null;
 
         try {
           client = await loadPinnedWorkroomClientForWorkspace(feature.id);
@@ -1107,7 +1108,7 @@ export const tools: NexusFlowTool[] = [
               if (!progress) {
                 syncError = 'Connected Workroom has no shared structured workflow selected.';
               } else {
-                const step = progress.steps.find((s: any) => s.stepId === stepId);
+                const step = progress.steps.find((s) => s.stepId === stepId);
                 if (!step) {
                   syncError = `Workflow step "${stepId}" was not found in the shared room workflow.`;
                 } else {
@@ -1299,7 +1300,7 @@ export const tools: NexusFlowTool[] = [
             scope: saved.scope,
             description: saved.description,
             tags: saved.tags,
-            path: (saved as any).path,
+            path: saved.path,
           },
           message: `Skill "${saved.title || saved.id}" created successfully (${scope} scope).`,
         });

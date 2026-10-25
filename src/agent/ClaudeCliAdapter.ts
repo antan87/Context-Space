@@ -158,8 +158,8 @@ export function decodeClaudeLine(line: string): ClaudeOutputEvent[] {
       const totalCostUsd =
         typeof value.total_cost_usd === 'number'
           ? value.total_cost_usd
-          : typeof (value as any).totalCostUsd === 'number'
-            ? (value as any).totalCostUsd
+          : typeof value.totalCostUsd === 'number'
+            ? value.totalCostUsd
             : undefined;
 
       const completeEvent: ClaudeOutputEvent = {

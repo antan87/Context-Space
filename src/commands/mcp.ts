@@ -73,7 +73,7 @@ async function configureEditors(): Promise<{ updated: number; unchanged: number 
   for (const configPath of configPaths) {
     if (!configPath) continue;
     try {
-      let configData: any = { mcpServers: {} };
+      let configData: { mcpServers: Record<string, unknown>; [key: string]: unknown } = { mcpServers: {} };
 
       try {
         const raw = await fs.readFile(configPath, 'utf8');
