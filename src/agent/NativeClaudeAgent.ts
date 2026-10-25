@@ -9,10 +9,16 @@ import {
 } from './nativeTools.js';
 import { toErrorMessage } from '../utils/errors.js';
 
+interface PendingToolCall {
+  id: string;
+  name: string;
+  input: string;
+}
+
 export class NativeClaudeAgent extends NativeAgentBase {
   protected readonly label = 'NativeClaudeAgent';
   private anthropic: Anthropic | null = null;
-  private messages: any[] = [];
+  private messages: Anthropic.MessageParam[] = [];
   private modelName: string;
 
   constructor() {
@@ -61,8 +67,8 @@ export class NativeClaudeAgent extends NativeAgentBase {
       }, { signal });
 
       let content = '';
-      const toolCalls: any[] = [];
-      let currentToolCall: any = null;
+      const toolCalls: PendingToolCall[] = [];
+      let currentToolCall: PendingToolCall | null = null;
 
       for await (const chunk of stream) {
         if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
@@ -85,9 +91,9 @@ export class NativeClaudeAgent extends NativeAgentBase {
       // must be paired: if the JSON is malformed we drop BOTH, otherwise the
       // Anthropic API rejects the next request with a dangling tool_result and
       // the whole session is wedged.
-      const assistantContent: any[] = [];
+      const assistantContent: Anthropic.ContentBlockParam[] = [];
       if (content) assistantContent.push({ type: 'text', text: content });
-      const validCalls: { id: string; name: string; args: any }[] = [];
+      const validCalls: { id: string; name: string; args: unknown }[] = [];
       for (const tc of toolCalls) {
         try {
           const args = JSON.parse(tc.input || '{}');
@@ -112,7 +118,7 @@ export class NativeClaudeAgent extends NativeAgentBase {
         break;
       }
 
-      const toolResultContent: any[] = [];
+      const toolResultContent: Anthropic.ToolResultBlockParam[] = [];
       for (const call of validCalls) {
         try {
           const result = await executeNativeTool(this.cwd, call.name, call.args);

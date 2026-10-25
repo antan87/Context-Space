@@ -3,7 +3,14 @@ import {
   query,
   type CanUseTool,
   type Options,
+  type SDKAPIRetryMessage,
+  type SDKAssistantMessage,
   type SDKMessage,
+  type SDKPartialAssistantMessage,
+  type SDKRateLimitEvent,
+  type SDKResultMessage,
+  type SDKUserMessage,
+  type SessionStore,
 } from "@anthropic-ai/claude-agent-sdk";
 import { detectClaudeCliStatus } from "../agent/cliAvailability.js";
 import {
@@ -27,15 +34,6 @@ import type {
   WorkspaceRef,
 } from "./types.js";
 import { toErrorMessage } from "../utils/errors.js";
-
-interface SDKUserMessage {
-  type: "user";
-  message: {
-    role: "user";
-    content: Array<{ type: "text"; text: string } | string> | string;
-  };
-  parent_tool_use_id?: string | null;
-}
 
 type BaseSpec = Omit<StartSpec, "prompt"> & { prompt?: string };
 
@@ -64,7 +62,7 @@ function serializeError(err: unknown): SerializedError {
   return { message: String(err) };
 }
 
-function extractFileChangedEvent(toolName: string, input: any): HarnessEvent | null {
+function extractFileChangedEvent(toolName: string, input: unknown): HarnessEvent | null {
   const name = toolName.replace(/^(mcp__nexusflow__|nexusflow__)/, "");
   let kind: PatchKind | null = null;
   if (name === "Write" || name === "FileWrite") {
@@ -76,21 +74,28 @@ function extractFileChangedEvent(toolName: string, input: any): HarnessEvent | n
 
   const paths: string[] = [];
   if (typeof input === "object" && input !== null) {
-    if (typeof input.file_path === "string") {
-      paths.push(input.file_path);
-    } else if (typeof input.path === "string") {
-      paths.push(input.path);
-    } else if (typeof input.filePath === "string") {
-      paths.push(input.filePath);
+    const rec = input as Record<string, unknown>;
+    if (typeof rec.file_path === "string") {
+      paths.push(rec.file_path);
+    } else if (typeof rec.path === "string") {
+      paths.push(rec.path);
+    } else if (typeof rec.filePath === "string") {
+      paths.push(rec.filePath);
     }
-    if (Array.isArray(input.paths)) {
-      for (const p of input.paths) {
+    if (Array.isArray(rec.paths)) {
+      for (const p of rec.paths) {
         if (typeof p === "string" && !paths.includes(p)) paths.push(p);
       }
     }
-    if (Array.isArray(input.files)) {
-      for (const f of input.files) {
-        const p = typeof f === "string" ? f : f?.path || f?.file_path;
+    if (Array.isArray(rec.files)) {
+      for (const f of rec.files) {
+        let p: unknown;
+        if (typeof f === "string") {
+          p = f;
+        } else if (typeof f === "object" && f !== null) {
+          const fileObj = f as Record<string, unknown>;
+          p = fileObj.path || fileObj.file_path;
+        }
         if (typeof p === "string" && !paths.includes(p)) paths.push(p);
       }
     }
@@ -103,23 +108,25 @@ function extractFileChangedEvent(toolName: string, input: any): HarnessEvent | n
   };
 }
 
-function extractClaudeErrorMessage(msg: any, subtype?: string): string {
-  if (Array.isArray(msg?.errors) && msg.errors.length > 0) {
-    const errorStrings = msg.errors
+function extractClaudeErrorMessage(msg: unknown, subtype?: string): string {
+  const rec = typeof msg === "object" && msg !== null ? (msg as Record<string, unknown>) : undefined;
+  if (Array.isArray(rec?.errors) && rec.errors.length > 0) {
+    const errorStrings = rec.errors
       .map((e: unknown) => toErrorMessage(e))
       .filter((s: string) => typeof s === "string" && s.trim().length > 0);
     if (errorStrings.length > 0) {
       return errorStrings.join("; ").slice(0, 2000);
     }
   }
-  if (typeof msg?.error === "string" && msg.error.trim().length > 0) {
-    return msg.error.trim().slice(0, 2000);
+  if (typeof rec?.error === "string" && rec.error.trim().length > 0) {
+    return rec.error.trim().slice(0, 2000);
   }
-  if (typeof msg?.error?.message === "string" && msg.error.message.trim().length > 0) {
-    return msg.error.message.trim().slice(0, 2000);
+  const errObj = typeof rec?.error === "object" && rec.error !== null ? (rec.error as Record<string, unknown>) : undefined;
+  if (typeof errObj?.message === "string" && errObj.message.trim().length > 0) {
+    return errObj.message.trim().slice(0, 2000);
   }
-  if (typeof msg?.result === "string" && msg.result.trim().length > 0) {
-    return msg.result.trim().slice(0, 2000);
+  if (typeof rec?.result === "string" && rec.result.trim().length > 0) {
+    return rec.result.trim().slice(0, 2000);
   }
   return subtype ? `claude turn failed: ${subtype}` : "claude turn failed";
 }
@@ -129,7 +136,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   private readonly queryFn: typeof query;
 
   constructor(
-    private readonly sessionStore?: unknown,
+    private readonly sessionStore?: SessionStore,
     queryFn?: typeof query,
   ) {
     this.queryFn = queryFn ?? query;
@@ -406,7 +413,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
         mcpServers: spec.mcpServers,
         canUseTool,
         includePartialMessages: true, // enables stream_event deltas below
-        sessionStore: this.sessionStore as any,
+        sessionStore: this.sessionStore,
         abortController,
         ...overrides,
         // ESCAPE HATCH — deliberately last, wins over everything above.
@@ -414,7 +421,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       };
 
       const queryHandle = this.queryFn({
-        prompt: userInput as any,
+        prompt: userInput,
         options,
       });
 
@@ -452,11 +459,14 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
           args.resolveId(msg.session_id);
           push({ type: "session_started", sessionId: msg.session_id });
         } else if (msg.subtype === "api_retry") {
-          const attempt = Number.isInteger((msg as any).attempt) ? (msg as any).attempt : null;
-          const maxRetries = Number.isInteger((msg as any).max_retries) ? (msg as any).max_retries : null;
-          const retryDelayMs = typeof (msg as any).retry_delay_ms === 'number' ? (msg as any).retry_delay_ms : undefined;
-          const errorStatus = typeof (msg as any).error_status === 'number' ? (msg as any).error_status : undefined;
-          const isRateLimit = errorStatus === 429 || (msg as any).error_type === 'rate_limit';
+          const retryMsg = msg as Partial<SDKAPIRetryMessage>;
+          const attempt = Number.isInteger(retryMsg.attempt) ? retryMsg.attempt! : null;
+          const maxRetries = Number.isInteger(retryMsg.max_retries) ? retryMsg.max_retries! : null;
+          const retryDelayMs = typeof retryMsg.retry_delay_ms === 'number' ? retryMsg.retry_delay_ms : undefined;
+          const errorStatus = typeof retryMsg.error_status === 'number' ? retryMsg.error_status : undefined;
+          const isRateLimit = errorStatus === 429
+            || retryMsg.error === 'rate_limit'
+            || (retryMsg as Record<string, unknown>).error_type === 'rate_limit';
           if (isRateLimit || retryDelayMs !== undefined) {
             const resetInSeconds = typeof retryDelayMs === 'number' && Number.isFinite(retryDelayMs)
               ? Math.ceil(retryDelayMs / 1000)
@@ -482,8 +492,8 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
         }
         break;
 
-      case "rate_limit_event" as any: {
-        const info = (msg as any).rate_limit_info;
+      case "rate_limit_event": {
+        const info = (msg as SDKRateLimitEvent).rate_limit_info;
         if (info && typeof info === 'object') {
           const status: 'ok' | 'approaching_limit' | 'exceeded' =
             info.status === 'rejected' ? 'exceeded' :
@@ -513,15 +523,16 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
 
       case "stream_event": {
         // Partial assistant text deltas (requires includePartialMessages).
-        const event = (msg as any).event;
+        const event = (msg as SDKPartialAssistantMessage).event;
         if (event?.type === "content_block_delta" && event?.delta?.type === "text_delta" && event.delta.text) {
           push({ type: "text_delta", text: event.delta.text });
         }
         break;
       }
 
-      case "assistant":
-        for (const block of (msg as any).message?.content ?? []) {
+      case "assistant": {
+        const assistantMsg = msg as SDKAssistantMessage;
+        for (const block of assistantMsg.message?.content ?? []) {
           if (block.type === "text") {
             push({ type: "assistant_message", text: block.text });
           } else if (block.type === "tool_use") {
@@ -529,7 +540,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
               type: "tool_requested",
               callId: block.id,
               tool: block.name,
-              input: block.input,
+              input: block.input as Record<string, unknown>,
             });
             const fileChanged = extractFileChangedEvent(block.name, block.input);
             if (fileChanged) {
@@ -538,13 +549,15 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
           }
         }
         break;
+      }
 
       case "user": {
         // Tool results arrive as user messages.
-        const content = (msg as any).message?.content;
+        const userMsg = msg as SDKUserMessage;
+        const content = userMsg.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
-            if (block.type === "tool_result") {
+            if (typeof block === "object" && block !== null && "type" in block && block.type === "tool_result") {
               push({
                 type: "tool_completed",
                 callId: block.tool_use_id,
@@ -557,16 +570,17 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       }
 
       case "result": {
-        if (msg.subtype === "success") {
+        const resultMsg = msg as SDKResultMessage;
+        if (resultMsg.subtype === "success") {
           push({
             type: "turn_completed",
-            usage: this.normalizeUsage((msg as any).usage, (msg as any).total_cost_usd, args.quotaState?.current),
+            usage: this.normalizeUsage(resultMsg.usage, resultMsg.total_cost_usd, args.quotaState?.current),
           });
         } else {
           push({
             type: "turn_failed",
-            error: { message: extractClaudeErrorMessage(msg, msg.subtype) },
-            fatal: msg.subtype === "error_during_execution",
+            error: { message: extractClaudeErrorMessage(resultMsg, resultMsg.subtype) },
+            fatal: resultMsg.subtype === "error_during_execution",
           });
         }
         break;
@@ -578,14 +592,15 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     }
   }
 
-  private normalizeUsage(u: any, costUsdEstimate?: number, quota?: NormalizedRemainingQuota): NormalizedUsage {
-    const inputTokens = typeof u?.input_tokens === 'number' ? u.input_tokens : 0;
-    const outputTokens = typeof u?.output_tokens === 'number' ? u.output_tokens : 0;
-    const cacheRead = typeof u?.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : undefined;
-    const cacheWrite = typeof u?.cache_creation_input_tokens === 'number' ? u.cache_creation_input_tokens : undefined;
+  private normalizeUsage(u: unknown, costUsdEstimate?: number, quota?: NormalizedRemainingQuota): NormalizedUsage {
+    const raw = typeof u === 'object' && u !== null ? (u as Record<string, unknown>) : undefined;
+    const inputTokens = typeof raw?.input_tokens === 'number' ? raw.input_tokens : 0;
+    const outputTokens = typeof raw?.output_tokens === 'number' ? raw.output_tokens : 0;
+    const cacheRead = typeof raw?.cache_read_input_tokens === 'number' ? raw.cache_read_input_tokens : undefined;
+    const cacheWrite = typeof raw?.cache_creation_input_tokens === 'number' ? raw.cache_creation_input_tokens : undefined;
     const cachedInput = (cacheRead !== undefined || cacheWrite !== undefined)
       ? (cacheRead ?? 0) + (cacheWrite ?? 0)
-      : (typeof u?.cached_input_tokens === 'number' ? u.cached_input_tokens : undefined);
+      : (typeof raw?.cached_input_tokens === 'number' ? raw.cached_input_tokens : undefined);
 
     return {
       inputTokens,
@@ -593,7 +608,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       cachedInputTokens: cachedInput,
       cacheReadInputTokens: cacheRead,
       cacheWriteInputTokens: cacheWrite,
-      totalTokens: typeof u?.total_tokens === 'number' ? u.total_tokens : (inputTokens + outputTokens),
+      totalTokens: typeof raw?.total_tokens === 'number' ? raw.total_tokens : (inputTokens + outputTokens),
       costUsdEstimate,
       costConfidence: costUsdEstimate !== undefined ? 'estimated' : 'absent',
       remainingQuota: quota,

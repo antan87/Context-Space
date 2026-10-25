@@ -80,7 +80,7 @@ export interface TeamworkResult {
 export class MultiAgentOrchestrator extends EventEmitter {
   private readonly workspacePath: string;
   private readonly options?: MultiAgentOrchestratorOptions;
-  private readonly runningHandles: Map<string, SessionHandle | any> = new Map();
+  private readonly runningHandles: Map<string, SessionHandle | AgentHarness> = new Map();
   private isInterrupted = false;
 
   constructor(workspacePath: string, options?: MultiAgentOrchestratorOptions) {
@@ -226,9 +226,9 @@ export class MultiAgentOrchestrator extends EventEmitter {
     this.isInterrupted = true;
     const interrupts: Promise<void>[] = [];
     for (const handle of this.runningHandles.values()) {
-      if (typeof handle.interrupt === 'function') {
+      if ('interrupt' in handle && typeof handle.interrupt === 'function') {
         interrupts.push(handle.interrupt());
-      } else if (typeof handle.stop === 'function') {
+      } else if ('stop' in handle && typeof handle.stop === 'function') {
         handle.stop();
       }
     }

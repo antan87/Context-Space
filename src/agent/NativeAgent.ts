@@ -12,7 +12,7 @@ import { toErrorMessage } from '../utils/errors.js';
 export class NativeAgent extends NativeAgentBase {
   protected readonly label = 'NativeAgent';
   private openai: OpenAI | null = null;
-  private messages: any[] = [];
+  private messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   private modelName: string;
 
   constructor() {
@@ -37,7 +37,7 @@ export class NativeAgent extends NativeAgentBase {
   protected async runLoop(userInput: string, signal: AbortSignal) {
     this.messages.push({ role: 'user', content: userInput });
 
-    const tools = NATIVE_TOOLS.map((t) => ({
+    const tools: OpenAI.Chat.ChatCompletionTool[] = NATIVE_TOOLS.map((t) => ({
       type: 'function',
       function: {
         name: t.name,
@@ -55,18 +55,18 @@ export class NativeAgent extends NativeAgentBase {
     for (let step = 0; step < NATIVE_STEP_LIMIT; step++) {
       if (signal.aborted) break;
 
-      const stream: any = await this.client().chat.completions.create({
+      const stream = await this.client().chat.completions.create({
         model: this.modelName,
         messages: this.messages,
-        tools: tools as any,
+        tools,
         stream: true,
       }, { signal });
 
       let content = '';
-      const toolCalls: any[] = [];
+      const toolCalls: OpenAI.Chat.ChatCompletionMessageFunctionToolCall[] = [];
 
       for await (const chunk of stream) {
-        const delta: any = (chunk as any).choices[0]?.delta;
+        const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
 
         if (delta.content) {
@@ -75,15 +75,17 @@ export class NativeAgent extends NativeAgentBase {
         }
 
         if (delta.tool_calls) {
-          for (const toolCall of (delta.tool_calls as any)) {
+          for (const toolCall of delta.tool_calls) {
             const index = toolCall.index;
             if (!toolCalls[index]) {
               toolCalls[index] = {
-                id: toolCall.id,
+                id: toolCall.id ?? '',
                 type: 'function',
-                function: { name: toolCall.function?.name, arguments: '' },
+                function: { name: toolCall.function?.name ?? '', arguments: '' },
               };
-              this.emit('data', `\n\n*Running tool: ${toolCall.function?.name}*\n`);
+              if (toolCall.function?.name) {
+                this.emit('data', `\n\n*Running tool: ${toolCall.function.name}*\n`);
+              }
             }
             if (toolCall.function?.arguments) {
               toolCalls[index].function.arguments += toolCall.function.arguments;
@@ -92,14 +94,20 @@ export class NativeAgent extends NativeAgentBase {
         }
       }
 
-      this.messages.push({ role: 'assistant', content, tool_calls: toolCalls.length > 0 ? toolCalls : undefined });
+      const activeToolCalls = toolCalls.filter((tc): tc is OpenAI.Chat.ChatCompletionMessageFunctionToolCall => Boolean(tc));
 
-      if (toolCalls.length === 0) {
+      this.messages.push({
+        role: 'assistant',
+        content,
+        tool_calls: activeToolCalls.length > 0 ? activeToolCalls : undefined,
+      });
+
+      if (activeToolCalls.length === 0) {
         completed = true;
         break;
       }
 
-      for (const tc of toolCalls) {
+      for (const tc of activeToolCalls) {
         let result: string;
         try {
           const args = JSON.parse(tc.function.arguments || '{}');
@@ -107,7 +115,7 @@ export class NativeAgent extends NativeAgentBase {
         } catch (err) {
           result = `Error: ${toErrorMessage(err)}`;
         }
-        this.messages.push({ role: 'tool', tool_call_id: tc.id, name: tc.function.name, content: result });
+        this.messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
       }
     }
 

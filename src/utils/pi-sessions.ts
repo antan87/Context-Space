@@ -50,19 +50,26 @@ async function matchingFiles(predicate: (record: PiHeader) => boolean, roots?: s
   return matches.filter((match): match is { file: string; meta: PiHeader } => !!match);
 }
 
-function textOf(message: any): string {
-  const content = message?.content;
+function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null;
+}
+
+function textOf(message: unknown): string {
+  if (!isRecord(message)) return '';
+  const content = message.content;
   if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join(' ');
+  if (Array.isArray(content)) return content.filter(part => isRecord(part) && part.type === 'text' && typeof part.text === 'string').map(part => (part as { text: string }).text).join(' ');
   return '';
 }
 
-function usageOf(message: any): NormalizedUsage | undefined {
-  const raw = message?.usage;
-  if (!raw || typeof raw !== 'object') return undefined;
+function usageOf(message: unknown): NormalizedUsage | undefined {
+  if (!isRecord(message)) return undefined;
+  const raw = message.usage;
+  if (!isRecord(raw)) return undefined;
   const input = Number(raw.input) || 0, output = Number(raw.output) || 0;
   const cacheRead = Number(raw.cacheRead) || 0, cacheWrite = Number(raw.cacheWrite) || 0;
-  const cost = Number(raw.cost?.total);
+  const rawCost = isRecord(raw.cost) ? raw.cost.total : undefined;
+  const cost = Number(rawCost);
   if (!input && !output && !cacheRead && !cacheWrite && !Number.isFinite(cost)) return undefined;
   return { inputTokens: input, outputTokens: output, cachedInputTokens: cacheRead + cacheWrite,
     cacheReadInputTokens: cacheRead, cacheWriteInputTokens: cacheWrite, totalTokens: input + output,
@@ -75,17 +82,19 @@ function parse(fileContent: string): { title: string; messages: ChatMessage[]; u
   const messages: ChatMessage[] = [];
   for (const line of fileContent.split('\n')) {
     if (!line) continue;
-    let record: any;
+    let record: unknown;
     try { record = JSON.parse(line); } catch { continue; }
+    if (!isRecord(record)) continue;
     if (typeof record.timestamp === 'string' && !Number.isNaN(Date.parse(record.timestamp)) && record.timestamp > updatedAt) updatedAt = record.timestamp;
     if (record.type === 'session_info' && typeof record.name === 'string' && record.name.trim()) title = record.name;
     if (record.type !== 'message') continue;
-    const role = record.message?.role;
+    const msg = isRecord(record.message) ? record.message : undefined;
+    const role = msg?.role;
     if (role !== 'user' && role !== 'assistant') continue;
-    const content = textOf(record.message).trim();
+    const content = textOf(msg).trim();
     if (!content) continue;
     if (role === 'user' && !title) title = content;
-    const turnUsage = role === 'assistant' ? usageOf(record.message) : undefined;
+    const turnUsage = role === 'assistant' ? usageOf(msg) : undefined;
     if (turnUsage) {
       usage = { inputTokens: (usage?.inputTokens ?? 0) + turnUsage.inputTokens, outputTokens: (usage?.outputTokens ?? 0) + turnUsage.outputTokens,
         cachedInputTokens: (usage?.cachedInputTokens ?? 0) + (turnUsage.cachedInputTokens ?? 0),
@@ -95,7 +104,9 @@ function parse(fileContent: string): { title: string; messages: ChatMessage[]; u
         ...(turnUsage.costUsdEstimate !== undefined || usage?.costUsdEstimate !== undefined
           ? { costUsdEstimate: (usage?.costUsdEstimate ?? 0) + (turnUsage.costUsdEstimate ?? 0) } : {}) };
     }
-    messages.push({ role, content, timestamp: record.message?.timestamp || record.timestamp, ...(turnUsage ? { usage: turnUsage } : {}) });
+    const timestamp = (typeof msg?.timestamp === 'string' ? msg.timestamp : undefined)
+      ?? (typeof record.timestamp === 'string' ? record.timestamp : undefined);
+    messages.push({ role, content, ...(timestamp ? { timestamp } : {}), ...(turnUsage ? { usage: turnUsage } : {}) });
   }
   return { title, messages, updatedAt, usage };
 }
