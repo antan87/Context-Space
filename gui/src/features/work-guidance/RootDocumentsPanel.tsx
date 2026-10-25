@@ -254,7 +254,9 @@ export function RootDocumentsPanel({ workspaceId, workspacePath, panelActions }:
 
   // Live reload polling when watching is active
   const previewRef = useRef<DocumentPreviewData | null>(preview);
-  previewRef.current = preview;
+  useEffect(() => {
+    previewRef.current = preview;
+  });
 
   useEffect(() => {
     if (!watching || !selected) return;

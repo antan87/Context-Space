@@ -336,7 +336,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
 
   const fetchDomainData = useCallback(async (wsId: string, signal?: AbortSignal) => {
     try {
-      const res = await apiFetch<any>(`/api/workspace/${encodeURIComponent(wsId)}/domain-packs`, { signal });
+      const res = await apiFetch<ResolvedCategoryRules>(`/api/workspace/${encodeURIComponent(wsId)}/domain-packs`, { signal });
       // A response for a workspace the user already left must not replace the current one.
       if (res && !signal?.aborted) setDomainData(res);
     } catch {
@@ -385,7 +385,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     if (!selected || !specInput.trim()) return;
     setSavingSpec(true);
     try {
-      const res = await apiFetch<any>(`/api/workspace/${encodeURIComponent(selected.branchName)}/update-spec`, {
+      const res = await apiFetch<{ newlyMatched?: string[] }>(`/api/workspace/${encodeURIComponent(selected.branchName)}/update-spec`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -396,7 +396,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       setEditingSpec(false);
       await fetchDomainData(selected.branchName);
       if (props.fetchWorkspaces) await props.fetchWorkspaces();
-      if (res?.newlyMatched?.length > 0) {
+      if (res?.newlyMatched && res.newlyMatched.length > 0) {
         showToast?.(`Specification saved! Auto-attached domain packs: ${res.newlyMatched.join(', ')}`, 'success');
       } else {
         showToast?.('Specification updated and context refreshed', 'success');

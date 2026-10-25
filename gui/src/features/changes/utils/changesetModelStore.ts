@@ -19,8 +19,8 @@ function resolveMonaco(monacoApi?: typeof monaco): typeof monaco | undefined {
     return monacoApi;
   }
   if (knownMonaco?.editor) return knownMonaco;
-  if (typeof window !== 'undefined' && (window as any).monaco?.editor) {
-    return (window as any).monaco;
+  if (typeof window !== 'undefined' && (window as unknown as { monaco?: typeof monaco }).monaco?.editor) {
+    return (window as unknown as { monaco?: typeof monaco }).monaco;
   }
   return undefined;
 }
@@ -75,7 +75,7 @@ export function getModifiedFileUri(repoName: string, filePath: string, monacoApi
     query: '',
     fragment: '',
     fsPath: pathString,
-    with: () => ({} as any),
+    with: () => ({} as unknown as monaco.Uri),
     toString: () => uriString,
     toJSON: () => uriString,
   } as unknown as monaco.Uri;
@@ -100,7 +100,7 @@ export function getOriginalFileUri(repoName: string, filePath: string, monacoApi
     query: '',
     fragment: '',
     fsPath: pathString,
-    with: () => ({} as any),
+    with: () => ({} as unknown as monaco.Uri),
     toString: () => uriString,
     toJSON: () => uriString,
   } as unknown as monaco.Uri;
@@ -114,9 +114,9 @@ export function getOrCreateTextModel(
   content: string,
   language: string,
   monacoApi?: typeof monaco
-): monaco.editor.ITextModel {
+): monaco.editor.ITextModel | null {
   const m = resolveMonaco(monacoApi);
-  if (!m?.editor) return null as any;
+  if (!m?.editor) return null;
 
   try {
     let model = m.editor.getModel(uri);
@@ -131,7 +131,7 @@ export function getOrCreateTextModel(
     try {
       return m.editor.getModel(uri) || m.editor.createModel(content, language);
     } catch {
-      return null as any;
+      return null;
     }
   }
 }
@@ -228,7 +228,7 @@ export function registerCrossFileEditorOpener(
 
   try {
     return m.editor.registerEditorOpener({
-      openCodeEditor(_source: any, resource: monaco.Uri, selectionOrPosition: any) {
+      openCodeEditor(_source: unknown, resource: monaco.Uri, selectionOrPosition: unknown) {
         if (!resource || resource.scheme !== 'file') return false;
 
         // Extract repoName and relative filePath from URI path: /repoName/path/to/file.ts
@@ -240,11 +240,12 @@ export function registerCrossFileEditorOpener(
         const filePath = normalizedPath.substring(slashIndex + 1);
 
         let targetLine: number | undefined;
-        if (selectionOrPosition) {
-          if ('lineNumber' in selectionOrPosition && typeof selectionOrPosition.lineNumber === 'number') {
-            targetLine = selectionOrPosition.lineNumber;
-          } else if ('startLineNumber' in selectionOrPosition && typeof selectionOrPosition.startLineNumber === 'number') {
-            targetLine = selectionOrPosition.startLineNumber;
+        if (selectionOrPosition && typeof selectionOrPosition === 'object') {
+          const pos = selectionOrPosition as { lineNumber?: unknown; startLineNumber?: unknown };
+          if (typeof pos.lineNumber === 'number') {
+            targetLine = pos.lineNumber;
+          } else if (typeof pos.startLineNumber === 'number') {
+            targetLine = pos.startLineNumber;
           }
         }
 
