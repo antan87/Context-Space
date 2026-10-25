@@ -138,19 +138,24 @@ function cleanPayload(event: ScreenEventName, raw: unknown): ScreenEvent['payloa
   }
 }
 
+function isScreenEventName(event: unknown): event is ScreenEventName {
+  return typeof event === 'string' && ['show', 'annotate', 'next', 'milestone', 'milestone_proposal'].includes(event);
+}
+
 /** The screen event a ledger line holds, or null when it is not one or is not usable. */
-export function parseScreenEntry(entry: any, now: number): ScreenEvent | null {
-  if (!entry || typeof entry !== 'object' || entry.kind !== SCREEN_EVENT_KIND) return null;
+export function parseScreenEntry(entry: unknown, now: number): ScreenEvent | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const raw = entry as Record<string, unknown>;
+  if (raw.kind !== SCREEN_EVENT_KIND) return null;
   const time = ledgerEntryTime(entry, now);
-  const names: readonly string[] = ['show', 'annotate', 'next', 'milestone', 'milestone_proposal'];
-  if (time === null || typeof entry.id !== 'string' || !entry.id || !names.includes(entry.event)) return null;
-  const payload = cleanPayload(entry.event, entry.payload);
+  if (time === null || typeof raw.id !== 'string' || !raw.id || !isScreenEventName(raw.event)) return null;
+  const payload = cleanPayload(raw.event, raw.payload);
   if (!payload) return null;
   return {
-    id: entry.id,
-    timestamp: entry.timestamp,
-    harness: cleanInputRequestText(entry.harness).slice(0, INPUT_REQUEST_HARNESS_LIMIT) || 'agent',
-    event: entry.event,
+    id: raw.id,
+    timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : '',
+    harness: cleanInputRequestText(raw.harness).slice(0, INPUT_REQUEST_HARNESS_LIMIT) || 'agent',
+    event: raw.event,
     payload,
   } as ScreenEvent;
 }

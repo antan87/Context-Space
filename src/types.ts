@@ -512,6 +512,9 @@ export interface ProjectAnalysis {
   runConfig?: RunConfig;
 }
 
+/** Full analysis result for a single project/repo (alias: WorkspaceAnalysis). */
+export type WorkspaceAnalysis = ProjectAnalysis;
+
 // ApiEndpoint, MessagePublisher, MessageSubscriber and MessagingTopology are
 // gone with detect-apis and messaging-analyzer, which reported header reads as
 // HTTP routes and Set insertions as queue publishers. Nothing populated them

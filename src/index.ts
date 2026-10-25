@@ -12,7 +12,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 
-import { createCommand } from './commands/create.js';
+import { createCommand, type CreateCommandOptions } from './commands/create.js';
 import { listCommand } from './commands/list.js';
 import { openCommand } from './commands/open.js';
 import { initCommand } from './commands/init.js';
@@ -20,8 +20,8 @@ import { startCommand } from './commands/start.js';
 import { stopCommand } from './commands/stop.js';
 import { logsCommand } from './commands/logs.js';
 import { statusCommand } from './commands/status.js';
-import { verifyCommand } from './commands/verify.js';
-import { flowCommand } from './commands/flow.js';
+import { verifyCommand, type VerifyCommandOptions } from './commands/verify.js';
+import { flowCommand, type FlowCommandOptions } from './commands/flow.js';
 import { registerPlanCommand } from './commands/plan.js';
 import { askCommand, type AskOptions } from './commands/ask.js';
 import { newsCommand, type NewsOptions } from './commands/news.js';
@@ -38,10 +38,10 @@ import { debugLog } from './utils/debug.js';
 import { loadPlugins } from './core/plugins/loader.js';
 import { addRepoCommand } from './commands/add-repo.js';
 import { isolateCommand } from './commands/isolate.js';
-import { mcpRunCommand, mcpSetupCommand } from './commands/mcp.js';
+import { mcpRunCommand, mcpSetupCommand, type McpRunOptions } from './commands/mcp.js';
 import { handoffCommand } from './commands/handoff.js';
-import { tagListCommand, tagAddCommand, tagRemoveCommand, tagShowCommand } from './commands/tag.js';
-import { skillListCommand, skillLintCommand, skillCreateCommand, skillDeleteCommand, skillShowCommand, skillQuarantineCommand, skillRestoreCommand, skillQuarantinedCommand } from './commands/skill.js';
+import { tagListCommand, tagAddCommand, tagRemoveCommand, tagShowCommand, type TagCommandOptions } from './commands/tag.js';
+import { skillListCommand, skillLintCommand, skillCreateCommand, skillDeleteCommand, skillShowCommand, skillQuarantineCommand, skillRestoreCommand, skillQuarantinedCommand, type SkillListOptions, type SkillLintOptions, type SkillCreateOptions, type SkillShowOptions } from './commands/skill.js';
 import { refreshCommand } from './commands/refresh.js';
 import { progressCommand } from './commands/progress.js';
 import { remoteAddCommand, remotePullCommand, remotePushCommand } from './commands/remote.js';
@@ -148,7 +148,7 @@ program
   .option('-m, --mode <mode>', 'Workspace mode: in-place (default) or worktree', 'in-place')
   .option('-t, --tag <tags...>', 'Category or domain tags to attach (mounts associated skill bundles)')
   .option('--org <orgId>', 'Organization profile to inherit company standards from')
-  .action(runAction((options: any) => createCommand({ quick: true, ...options })));
+  .action(runAction((options: CreateCommandOptions) => createCommand({ quick: true, ...options })));
 
 program
   .command('list')
@@ -216,7 +216,7 @@ program
   .option('--timeout <seconds>', 'Watchdog timeout per test run in seconds', '300')
   .option('--allow-dirty', 'Permit progress even if working tree has uncommitted edits')
   .option('--json', 'Output report in JSON format')
-  .action(runAction(async (workspace: string | undefined, options: any) => {
+  .action(runAction(async (workspace: string | undefined, options: VerifyCommandOptions) => {
     await verifyCommand(workspace, options);
   }));
 
@@ -229,7 +229,7 @@ program
   .option('--assignment', 'Read the current AI assignment, source documents, and milestone plan')
   .option('--action <action>', 'Transition action: start, verify, or complete')
   .option('--json', 'Output lifecycle in JSON format')
-  .action(runAction(async (workspace: string | undefined, options: any) => {
+  .action(runAction(async (workspace: string | undefined, options: FlowCommandOptions) => {
     await flowCommand(workspace, options);
   }));
 
@@ -341,8 +341,9 @@ tagCmd
   .description('List all available categories, vertical subsystems, and horizontal traits')
   .argument('[workspace]', 'Path to workspace (auto-detects from CWD)')
   .option('--json', 'Output in JSON format')
-  .action(runAction(async (workspace: string | undefined, options: any) => {
-    await tagListCommand(workspace, options);
+  .action(runAction(async (workspace: string | undefined, options: TagCommandOptions, cmd: Command) => {
+    const merged = resolveCliOptions(cmd, options);
+    await tagListCommand(workspace, merged);
   }));
 
 tagCmd
@@ -366,8 +367,8 @@ tagCmd
   .command('show <id>')
   .description('Show details, parent tree, microservices, and rules for a category or trait')
   .option('--json', 'Output in JSON format')
-  .action(runAction(async (id: string, options: any, cmd: any) => {
-    const merged = cmd?.optsWithGlobals ? { ...cmd.optsWithGlobals(), ...options } : options;
+  .action(runAction(async (id: string, options: TagCommandOptions, cmd: Command) => {
+    const merged = resolveCliOptions(cmd, options);
     await tagShowCommand(id, merged);
   }));
 
@@ -375,29 +376,13 @@ tagCmd
 tagCmd
   .argument('[workspace]', 'Path to workspace (auto-detects from CWD)')
   .option('--json', 'Output in JSON format')
-  .action(runAction(async (workspace: string | undefined, options: any, cmd: any) => {
-    const merged = cmd?.optsWithGlobals ? { ...cmd.optsWithGlobals(), ...options } : options;
+  .action(runAction(async (workspace: string | undefined, options: TagCommandOptions, cmd: Command) => {
+    const merged = resolveCliOptions(cmd, options);
     await tagListCommand(workspace, merged);
   }));
 
-function resolveCliOptions(cmd: any, options: any): any {
-  const result: Record<string, any> = { ...options };
-  if (!cmd) return result;
-  const parent = cmd.parent;
-  if (parent) {
-    for (const [key, val] of Object.entries(parent.opts() || {})) {
-      if (parent.getOptionValueSource?.(key) === 'cli') {
-        result[key] = val;
-      }
-    }
-  }
-  for (const [key, val] of Object.entries(cmd.opts() || {})) {
-    if (cmd.getOptionValueSource?.(key) === 'cli') {
-      result[key] = val;
-    }
-  }
-  return result;
-}
+import { resolveCliOptions } from './utils/cli-options.js';
+export { resolveCliOptions };
 
 const skillCmd = program
   .command('skill')
@@ -410,7 +395,7 @@ skillCmd
   .argument('[workspace]', 'Path to workspace (auto-detects from CWD)')
   .option('--strict', 'Also fail when a skill loads but has something to review')
   .option('--json', 'Output in JSON format')
-  .action(runAction(async (workspace: string | undefined, options: any, cmd: any) => {
+  .action(runAction(async (workspace: string | undefined, options: SkillLintOptions, cmd: Command) => {
     const merged = resolveCliOptions(cmd, options);
     await skillLintCommand(workspace, merged);
   }));
@@ -446,7 +431,7 @@ skillCmd
   .option('--scope <scope>', 'Filter by scope: workspace, global, or all', 'all')
   .option('-t, --tag <tags...>', 'Filter skills by tags')
   .option('--json', 'Output in JSON format')
-  .action(runAction(async (workspace: string | undefined, options: any, cmd: any) => {
+  .action(runAction(async (workspace: string | undefined, options: SkillListOptions, cmd: Command) => {
     const merged = resolveCliOptions(cmd, options);
     await skillListCommand(workspace, merged);
   }));
@@ -462,7 +447,7 @@ skillCmd
   .option('-f, --file <path>', 'File path to read skill markdown instructions from')
   .option('-t, --tag <tags...>', 'Tags to attach to the skill')
   .option('--scope <scope>', 'Skill scope: workspace (local) or global', 'workspace')
-  .action(runAction(async (id: string, workspace: string | undefined, options: any, cmd: any) => {
+  .action(runAction(async (id: string, workspace: string | undefined, options: SkillCreateOptions, cmd: Command) => {
     const merged = resolveCliOptions(cmd, options);
     await skillCreateCommand(id, workspace, merged);
   }));
@@ -474,7 +459,7 @@ skillCmd
   .argument('<id>', 'Skill identifier to inspect')
   .argument('[workspace]', 'Path to workspace (auto-detects from CWD)')
   .option('--json', 'Output in JSON format')
-  .action(runAction(async (id: string, workspace: string | undefined, options: any, cmd: any) => {
+  .action(runAction(async (id: string, workspace: string | undefined, options: SkillShowOptions, cmd: Command) => {
     const merged = resolveCliOptions(cmd, options);
     await skillShowCommand(id, workspace, merged);
   }));
@@ -486,7 +471,7 @@ skillCmd
   .argument('<id>', 'Skill identifier to remove')
   .argument('[workspace]', 'Path to workspace')
   .option('--scope <scope>', 'Scope to delete from: workspace or global')
-  .action(runAction(async (id: string, workspace: string | undefined, options: any, cmd: any) => {
+  .action(runAction(async (id: string, workspace: string | undefined, options: { scope?: 'workspace' | 'global' }, cmd: Command) => {
     const merged = resolveCliOptions(cmd, options);
     await skillDeleteCommand(id, workspace, merged);
   }));
@@ -497,7 +482,7 @@ skillCmd
   .option('--scope <scope>', 'Filter by scope: workspace, global, or all', 'all')
   .option('-t, --tag <tags...>', 'Filter skills by tags')
   .option('--json', 'Output in JSON format')
-  .action(runAction(async (workspace: string | undefined, options: any, cmd: any) => {
+  .action(runAction(async (workspace: string | undefined, options: SkillListOptions, cmd: Command) => {
     const merged = resolveCliOptions(cmd, options);
     await skillListCommand(workspace, merged);
   }));
@@ -919,7 +904,7 @@ mcp
   .option('-r, --role <role>', 'Agent execution role for scoped tool surfaces (e.g. readonly, review, ci, developer, full)')
   .option('--allow <tools...>', 'Explicit list of allowed tool names')
   .option('--deny <tools...>', 'Explicit list of denied tool names')
-  .action(runAction((workspace, options) => mcpRunCommand(workspace, options)));
+  .action(runAction((workspace: string | undefined, options: McpRunOptions) => mcpRunCommand(workspace, options)));
 
 mcp
   .command('setup')

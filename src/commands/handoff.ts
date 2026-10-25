@@ -13,6 +13,7 @@ import { buildDependencyGraph } from '../generators/plan-generator.js';
 import { BRAND_NAME, PRIMARY_KNOWLEDGE_FILE, PRIMARY_MANIFEST_FILE, resolveWorkspaceFilePath } from '../core/constants.js';
 import { getConventionalTestCommands } from '../utils/test-command.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
+import type { WorkspaceAnalysis } from '../types.js';
 
 /**
  * Runs the handoff command.
@@ -163,7 +164,7 @@ async function getRepoBranch(repoPath: string): Promise<string> {
 /**
  * Determines a candidate list of files to read first.
  */
-function getSuggestedFiles(repoPath: string, dirtyFiles: string[], analysis?: any): string[] {
+function getSuggestedFiles(repoPath: string, dirtyFiles: string[], analysis?: WorkspaceAnalysis): string[] {
   if (dirtyFiles.length > 0) {
     return dirtyFiles.slice(0, 3).map(f => f.replace(/\\/g, '/'));
   }
@@ -184,7 +185,7 @@ function getSuggestedFiles(repoPath: string, dirtyFiles: string[], analysis?: an
 /**
  * Resolves correct test command.
  */
-function getTestCommand(repoPath: string, analysis?: any): string {
+function getTestCommand(repoPath: string, analysis?: WorkspaceAnalysis): string {
   if (analysis) {
     const commands = getConventionalTestCommands(analysis);
     return commands.map((c) => '`' + c + '`').join(', ');
