@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import {
   loadWorkspaceState,
   saveWorkspaceState,
@@ -203,8 +204,8 @@ describe('workspace-state', () => {
 
       // Verify unlinking attempted for legacy state files
       const unlinked = vi.mocked(fs.unlink).mock.calls.map((c) => String(c[0]));
-      expect(unlinked).toContain('/ws/.contextspace-state.json');
-      expect(unlinked).toContain('/ws/.nexusflow-state.json');
+      expect(unlinked).toContain(path.join('/ws', '.contextspace-state.json'));
+      expect(unlinked).toContain(path.join('/ws', '.nexusflow-state.json'));
     });
   });
 });

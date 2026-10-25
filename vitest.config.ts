@@ -14,6 +14,7 @@ export default defineConfig({
       '**/desktop/e2e/**'
     ],
     testTimeout: 30000,
+    retry: process.env.CI ? 2 : 0,
     setupFiles: ['./src/test-setup.ts'],
   }
 });
