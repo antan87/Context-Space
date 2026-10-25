@@ -15,8 +15,9 @@ export class NativeAgent extends NativeAgentBase {
   private messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   private modelName: string;
 
-  constructor() {
+  constructor(client?: OpenAI) {
     super();
+    this.openai = client ?? null;
     this.modelName = process.env.OPENAI_MODEL || 'gpt-4o';
   }
 
@@ -27,6 +28,7 @@ export class NativeAgent extends NativeAgentBase {
   }
 
   protected configError(): string | null {
+    if (this.openai) return null;
     return process.env.OPENAI_API_KEY ? null : 'OpenAI API key is not configured (set OPENAI_API_KEY).';
   }
 
@@ -85,6 +87,17 @@ export class NativeAgent extends NativeAgentBase {
               };
               if (toolCall.function?.name) {
                 this.emit('data', `\n\n*Running tool: ${toolCall.function.name}*\n`);
+              }
+            } else {
+              if (toolCall.id && !toolCalls[index].id) {
+                toolCalls[index].id = toolCall.id;
+              }
+              if (toolCall.function?.name) {
+                const hadName = Boolean(toolCalls[index].function.name);
+                toolCalls[index].function.name += toolCall.function.name;
+                if (!hadName && toolCalls[index].function.name) {
+                  this.emit('data', `\n\n*Running tool: ${toolCalls[index].function.name}*\n`);
+                }
               }
             }
             if (toolCall.function?.arguments) {

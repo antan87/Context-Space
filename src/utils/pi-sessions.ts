@@ -104,8 +104,13 @@ function parse(fileContent: string): { title: string; messages: ChatMessage[]; u
         ...(turnUsage.costUsdEstimate !== undefined || usage?.costUsdEstimate !== undefined
           ? { costUsdEstimate: (usage?.costUsdEstimate ?? 0) + (turnUsage.costUsdEstimate ?? 0) } : {}) };
     }
-    const timestamp = (typeof msg?.timestamp === 'string' ? msg.timestamp : undefined)
-      ?? (typeof record.timestamp === 'string' ? record.timestamp : undefined);
+    const rawTs = (isRecord(record.message) ? record.message.timestamp : undefined) ?? record.timestamp;
+    let timestamp: string | undefined;
+    if (typeof rawTs === 'string' && rawTs.trim()) {
+      timestamp = rawTs;
+    } else if (typeof rawTs === 'number' && Number.isFinite(rawTs)) {
+      try { timestamp = new Date(rawTs).toISOString(); } catch {}
+    }
     messages.push({ role, content, ...(timestamp ? { timestamp } : {}), ...(turnUsage ? { usage: turnUsage } : {}) });
   }
   return { title, messages, updatedAt, usage };

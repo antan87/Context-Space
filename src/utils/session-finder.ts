@@ -69,7 +69,13 @@ export function extractRecordUsage(record: unknown): { usage?: NormalizedUsage; 
       ? rawUsage.costUsdEstimate
       : (typeof rawUsage.cost_usd_estimate === 'number'
           ? rawUsage.cost_usd_estimate
-          : (typeof record.totalCostUsd === 'number' ? record.totalCostUsd : undefined));
+          : (typeof rawUsage.total_cost_usd === 'number'
+              ? rawUsage.total_cost_usd
+              : (typeof record.totalCostUsd === 'number'
+                  ? record.totalCostUsd
+                  : (typeof record.total_cost_usd === 'number'
+                      ? record.total_cost_usd
+                      : undefined))));
 
     if (input > 0 || output > 0 || (cached !== undefined && cached > 0) || cost !== undefined) {
       usage = {
@@ -83,12 +89,15 @@ export function extractRecordUsage(record: unknown): { usage?: NormalizedUsage; 
         ...(cost !== undefined ? { costUsdEstimate: cost } : {}),
       };
     }
-  } else if (typeof record.totalCostUsd === 'number') {
+  } else if (typeof record.totalCostUsd === 'number' || typeof record.total_cost_usd === 'number') {
+    const cost = typeof record.totalCostUsd === 'number'
+      ? record.totalCostUsd
+      : (record.total_cost_usd as number);
     usage = {
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      costUsdEstimate: record.totalCostUsd,
+      costUsdEstimate: cost,
     };
   }
 
@@ -1387,7 +1396,7 @@ export async function getSessionTranscript(assistant: string, sessionId: string)
       if (!cleanText) continue;
 
       const rawTs = record.timestamp || record.created_at;
-      const timestamp = typeof rawTs === 'string' ? rawTs : undefined;
+      const timestamp = sessionTimestamp(rawTs);
 
       if (isUser) {
         messages.push({
@@ -1459,12 +1468,12 @@ export async function getSessionTranscript(assistant: string, sessionId: string)
         if (role === 'user' && isInjectedContextText(text)) continue;
         if (!text) continue;
         const rawTs = record.timestamp || payload.timestamp;
-        const ts = typeof rawTs === 'string' || typeof rawTs === 'number' ? rawTs : undefined;
+        const timestamp = sessionTimestamp(rawTs);
         const { usage } = extractRecordUsage(record);
         messages.push({
           role: role as 'user' | 'assistant',
           content: text,
-          timestamp: ts ? new Date(ts).toISOString() : undefined,
+          timestamp,
           ...(role === 'assistant' && usage ? { usage } : {}),
         });
       }

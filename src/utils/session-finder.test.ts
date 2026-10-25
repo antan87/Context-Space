@@ -19,6 +19,7 @@ import {
   findActiveAssistants,
   clearSessionFinderCache,
   openCopilotDb,
+  extractRecordUsage,
   type CopilotSessionRow,
   type CopilotTurnCountRow,
   type CopilotTranscriptTurnRow,
@@ -805,6 +806,57 @@ describe('JSON error boundaries and malformed lines resilience', () => {
         expect(transcript[0].content).toBe('Implement typed store');
         expect(transcript[1].role).toBe('assistant');
         expect(transcript[1].content).toBe('Done with strong typing');
+      } finally {
+        vi.unstubAllEnvs();
+        clearSessionFinderCache();
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('extractRecordUsage cost formats', () => {
+    it('extracts total_cost_usd from snake_case record or rawUsage', () => {
+      // Record-level total_cost_usd without usage object
+      const r1 = extractRecordUsage({ type: 'result', total_cost_usd: 0.042 });
+      expect(r1.usage?.costUsdEstimate).toBe(0.042);
+
+      // rawUsage total_cost_usd
+      const r2 = extractRecordUsage({ usage: { input_tokens: 100, output_tokens: 50, total_cost_usd: 0.015 } });
+      expect(r2.usage?.inputTokens).toBe(100);
+      expect(r2.usage?.outputTokens).toBe(50);
+      expect(r2.usage?.costUsdEstimate).toBe(0.015);
+    });
+  });
+
+  describe('getSessionTranscript robustness on corrupted transcripts', () => {
+    it('handles invalid timestamp strings in Codex transcript without crashing with RangeError', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-corrupted-ts-'));
+      const codexSessionsDir = path.join(tempDir, 'sessions');
+      await fs.mkdir(codexSessionsDir, { recursive: true });
+
+      const sessionId = '018f1234-abcd-7000-8000-000000000001';
+      const rolloutFile = path.join(codexSessionsDir, `session-${sessionId}.jsonl`);
+      const lines = [
+        JSON.stringify({ type: 'session_meta', payload: { id: sessionId, cwd: tempDir } }),
+        // Unparseable timestamp that would throw RangeError in new Date(ts).toISOString()
+        JSON.stringify({ type: 'response_item', timestamp: 'not-a-valid-date-string', payload: { type: 'message', role: 'user', content: 'hello' } }),
+        // Numeric NaN or out of range timestamp
+        JSON.stringify({ type: 'response_item', timestamp: NaN, payload: { type: 'message', role: 'assistant', content: 'hi' } }),
+      ];
+      await fs.writeFile(rolloutFile, lines.join('\n'), 'utf-8');
+
+      try {
+        vi.stubEnv('CODEX_HOME', tempDir);
+        clearSessionFinderCache();
+
+        const transcript = await getSessionTranscript('codex', sessionId);
+        expect(transcript).toHaveLength(2);
+        expect(transcript[0].role).toBe('user');
+        expect(transcript[0].content).toBe('hello');
+        expect(transcript[0].timestamp).toBeUndefined();
+        expect(transcript[1].role).toBe('assistant');
+        expect(transcript[1].content).toBe('hi');
+        expect(transcript[1].timestamp).toBeUndefined();
       } finally {
         vi.unstubAllEnvs();
         clearSessionFinderCache();

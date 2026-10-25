@@ -22,8 +22,9 @@ export class NativeGoogleAgent extends NativeAgentBase {
   private history: Content[] = [];
   private modelName: string;
 
-  constructor() {
+  constructor(client?: GoogleGenAI) {
     super();
+    this.ai = client ?? null;
     // Allow users to override the model via env var, fallback to gemini-2.0-flash
     this.modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   }
@@ -33,6 +34,7 @@ export class NativeGoogleAgent extends NativeAgentBase {
   }
 
   protected configError(): string | null {
+    if (this.ai) return null;
     return process.env.GEMINI_API_KEY ? null : 'Google API key is not configured (set GEMINI_API_KEY).';
   }
 
@@ -103,7 +105,13 @@ export class NativeGoogleAgent extends NativeAgentBase {
         } catch (e) {
           result = `Error: ${toErrorMessage(e)}`;
         }
-        functionResponses.push({ functionResponse: { name: call.name || '', response: { result } } });
+        functionResponses.push({
+          functionResponse: {
+            name: call.name || '',
+            response: { result },
+            ...(call.id ? { id: call.id } : {}),
+          },
+        });
       }
 
       this.history.push({ role: 'user', parts: functionResponses });

@@ -229,7 +229,7 @@ export class MultiAgentOrchestrator extends EventEmitter {
       if ('interrupt' in handle && typeof handle.interrupt === 'function') {
         interrupts.push(handle.interrupt());
       } else if ('stop' in handle && typeof handle.stop === 'function') {
-        handle.stop();
+        interrupts.push(Promise.resolve(handle.stop()));
       }
     }
     await Promise.allSettled(interrupts);

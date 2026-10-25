@@ -21,8 +21,9 @@ export class NativeClaudeAgent extends NativeAgentBase {
   private messages: Anthropic.MessageParam[] = [];
   private modelName: string;
 
-  constructor() {
+  constructor(client?: Anthropic) {
     super();
+    this.anthropic = client ?? null;
     this.modelName = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
   }
 
@@ -31,6 +32,7 @@ export class NativeClaudeAgent extends NativeAgentBase {
   }
 
   protected configError(): string | null {
+    if (this.anthropic) return null;
     return process.env.ANTHROPIC_API_KEY ? null : 'Anthropic API key is not configured (set ANTHROPIC_API_KEY).';
   }
 
@@ -68,24 +70,38 @@ export class NativeClaudeAgent extends NativeAgentBase {
 
       let content = '';
       const toolCalls: PendingToolCall[] = [];
-      let currentToolCall: PendingToolCall | null = null;
+      const pendingTools = new Map<number, PendingToolCall>();
 
       for await (const chunk of stream) {
         if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
           content += chunk.delta.text;
           this.emit('data', chunk.delta.text);
         } else if (chunk.type === 'content_block_start' && chunk.content_block.type === 'tool_use') {
-          currentToolCall = { id: chunk.content_block.id, name: chunk.content_block.name, input: '' };
-          this.emit('data', `\n\n*Running tool: ${currentToolCall.name}*\n`);
-        } else if (chunk.type === 'content_block_delta' && chunk.delta.type === 'input_json_delta' && currentToolCall) {
-          currentToolCall.input += chunk.delta.partial_json;
+          const call: PendingToolCall = {
+            id: chunk.content_block.id,
+            name: chunk.content_block.name,
+            input: '',
+          };
+          pendingTools.set(chunk.index, call);
+          this.emit('data', `\n\n*Running tool: ${call.name}*\n`);
+        } else if (chunk.type === 'content_block_delta' && chunk.delta.type === 'input_json_delta') {
+          const call = pendingTools.get(chunk.index);
+          if (call) {
+            call.input += chunk.delta.partial_json;
+          }
         } else if (chunk.type === 'content_block_stop') {
-          if (currentToolCall) {
-            toolCalls.push(currentToolCall);
-            currentToolCall = null;
+          const call = pendingTools.get(chunk.index);
+          if (call) {
+            toolCalls.push(call);
+            pendingTools.delete(chunk.index);
           }
         }
       }
+
+      for (const call of pendingTools.values()) {
+        toolCalls.push(call);
+      }
+      pendingTools.clear();
 
       // Parse tool inputs up front. A tool_use block and its later tool_result
       // must be paired: if the JSON is malformed we drop BOTH, otherwise the
