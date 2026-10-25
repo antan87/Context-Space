@@ -21,6 +21,8 @@ export interface FileNamingPair {
   readonly primary: string;
   /** Legacy fallback filename for backward compatibility. */
   readonly legacy: string;
+  /** Additional legacy fallback filenames, if any. */
+  readonly fallbacks?: readonly string[];
 }
 
 export interface BrandConfigSchema {
@@ -47,6 +49,7 @@ export interface BrandConfigSchema {
     readonly analysisCache: FileNamingPair;
     readonly logsDir: FileNamingPair;
     readonly mutationLock: FileNamingPair;
+    readonly stateLock: FileNamingPair;
   };
   readonly env: {
     readonly home: readonly string[];
@@ -240,24 +243,38 @@ export const BRAND_CONFIG: BrandConfigSchema = {
       legacy: '.nexusflow/chat.jsonl',
     },
     state: {
-      primary: '.contextspace-state.json',
-      legacy: '.nexusflow-state.json',
+      primary: '.contextspace/state.json',
+      legacy: '.contextspace-state.json',
+      fallbacks: [
+        '.nexusflow-state.json',
+        '.contextspace/workspace-state.json',
+        '.nexusflow/workspace-state.json',
+        '.nexusflow/state.json',
+      ],
     },
     runningState: {
-      primary: '.contextspace-running.json',
-      legacy: '.nexusflow-running.json',
+      primary: '.contextspace/running.json',
+      legacy: '.contextspace-running.json',
+      fallbacks: ['.nexusflow-running.json', '.nexusflow/running.json'],
     },
     analysisCache: {
-      primary: '.contextspace-analysis-cache.json',
-      legacy: '.nexusflow-analysis-cache.json',
+      primary: '.contextspace/analysis-cache.json',
+      legacy: '.contextspace-analysis-cache.json',
+      fallbacks: ['.nexusflow-analysis-cache.json', '.nexusflow/analysis-cache.json'],
     },
     logsDir: {
       primary: '.contextspace-logs',
       legacy: '.nexusflow-logs',
     },
     mutationLock: {
-      primary: '.contextspace-mutation.lock',
-      legacy: '.nexusflow-mutation.lock',
+      primary: '.contextspace/mutation.lock',
+      legacy: '.contextspace-mutation.lock',
+      fallbacks: ['.nexusflow-mutation.lock', '.nexusflow/mutation.lock'],
+    },
+    stateLock: {
+      primary: '.contextspace/state.lock',
+      legacy: '.contextspace-state.lock',
+      fallbacks: ['.nexusflow-state.lock', '.nexusflow/state.lock'],
     },
   },
   env: {
@@ -461,6 +478,15 @@ export async function resolveWorkspaceFilePath(
       await fs.access(legacyPath);
       return { path: legacyPath, isLegacy: true, exists: true };
     } catch {
+      if (pair.fallbacks && pair.fallbacks.length > 0) {
+        for (const fallback of pair.fallbacks) {
+          const fallbackPath = path.join(workspaceDir, fallback);
+          try {
+            await fs.access(fallbackPath);
+            return { path: fallbackPath, isLegacy: true, exists: true };
+          } catch {}
+        }
+      }
       return { path: primaryPath, isLegacy: false, exists: false };
     }
   }
@@ -481,6 +507,14 @@ export function resolveWorkspaceFilePathSync(
   const legacyPath = path.join(workspaceDir, pair.legacy);
   if (existsSync(legacyPath)) {
     return { path: legacyPath, isLegacy: true, exists: true };
+  }
+  if (pair.fallbacks && pair.fallbacks.length > 0) {
+    for (const fallback of pair.fallbacks) {
+      const fallbackPath = path.join(workspaceDir, fallback);
+      if (existsSync(fallbackPath)) {
+        return { path: fallbackPath, isLegacy: true, exists: true };
+      }
+    }
   }
   return { path: primaryPath, isLegacy: false, exists: false };
 }
