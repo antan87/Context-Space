@@ -235,15 +235,18 @@ Open this folder in your editor → your AI assistant picks up the context and s
 
 ## 🤖 Supported AI Assistants
 
-ContextSpace auto-detects which assistants are available on your machine and generates the right context files and skills for each:
+ContextSpace auto-detects which assistants are available on your machine and generates the right context files for each. Every workspace skill is written to both `.agents/skills/` and `.claude/skills/`, so any assistant opened in the workspace finds it:
 
-| Assistant | Config File & Skills Target | How It's Detected |
-|:---|:---|:---|
-| **Google Antigravity** | `AGENTS.md` & `.agents/skills/` | `antigravity` in PATH |
-| **Claude Code** | `CLAUDE.md` & `.claude/skills/` | `claude` in PATH |
-| **OpenAI Codex** | `AGENTS.md`, `.agents/skills/` & `.codex/agents/` | `codex` in PATH |
-| **GitHub Copilot** | `.github/copilot-instructions.md` & `.agents/skills/` | Always available |
-| **Cursor** | `.cursor/rules/contextspace.mdc` & `.agents/skills/` | `cursor` in PATH |
+| Assistant | Instructions | Reads skills from | How It's Detected |
+|:---|:---|:---|:---|
+| **Claude Code** | `CLAUDE.md` | `.claude/skills/` | `claude` in PATH |
+| **Google Antigravity** | `AGENTS.md` | `.agents/skills/` | `agy` in PATH |
+| **OpenAI Codex** | `AGENTS.md` (+ `.codex/agents/`) | `.agents/skills/` | `codex` in PATH |
+| **GitHub Copilot** | `.github/copilot-instructions.md` | `.agents/skills/` | `copilot` in PATH |
+| **Cursor** | `.cursor/rules/contextspace.mdc` | `.agents/skills/` | `cursor` in PATH |
+| **Pi** | `AGENTS.md` | `.agents/skills/` | `pi` in PATH |
+
+Each assistant is one entry in `src/harnesses/registry.ts`; see [docs/adding-a-harness.md](docs/adding-a-harness.md) to add another.
 
 
 ## 🔁 The Feature Loop: create → work → learn → finish
@@ -343,7 +346,7 @@ A milestone gate (`ctxspace flow --step <id> --action complete`) runs that miles
 - **Dangerous Operator Rejection**: Command strings containing shell operators (`&&`, `||`, `;`, `|`, `` ` ``, `$()`) are rejected to eliminate command injection risks and ensure deterministic status reporting.
 - **Cryptographic SHA Anchoring**: Results are pinned to the exact Git commit SHA of each repository.
 - **Dirty Tree Detection (`pass_dirty`)**: If tests pass but uncommitted changes remain in the repository working tree, ContextSpace reports `pass_dirty` with warnings to commit before finishing, ensuring that verification proof is anchored to immutable Git history.
-- **Durable State Recording**: Test results, timings, commands, and SHA fingerprints are persisted in `.contextspace-state.json`. Subsequent checks or agents can inspect recorded verification evidence without redundant test re-runs.
+- **Durable State Recording**: Test results, timings, commands, and SHA fingerprints are persisted in `.contextspace/state.json`. Subsequent checks or agents can inspect recorded verification evidence without redundant test re-runs.
 
 ## 🔌 MCP Server & Tools
 
@@ -497,7 +500,7 @@ The Codex Agent Library supports creating, editing, importing, and deleting basi
 
 When a workspace is refreshed, ContextSpace reconciles enabled resources through `.contextspace/resources.lock.json` (fallback: `.nexusflow/resources.lock.json`). It refuses unmanaged target collisions, removes only unchanged ContextSpace-owned outputs, and reports modified-file conflicts instead of overwriting them. Redundant `.codex/skills/` and `.cursor/skills/` mirror directories are retired in favor of universal discovery under `.agents/skills/`.
 
-| Assistant Harness | Deployment Path | Format |
+| Assistant Harness | Reads skills from | Format |
 |:---|:---|:---|
 | **Google Antigravity** | `.agents/skills/<name>/SKILL.md` | Universal `agentskills.io` standard (playbook + `references/` + `scripts/`) |
 | **Claude Code** | `.claude/skills/<name>/SKILL.md` | Compatibility projection for Claude Code |
@@ -505,11 +508,15 @@ When a workspace is refreshed, ContextSpace reconciles enabled resources through
 | **Cursor** | `.agents/skills/<name>/SKILL.md` | Complete portable Agent Skill directory |
 | **GitHub Copilot** | `.agents/skills/<name>/SKILL.md` | Complete portable Agent Skill directory |
 
-Codex custom agents are separate resources and deploy to `.codex/agents/<name>.toml`.
+Every skill is copied to both `.agents/skills/` and `.claude/skills/`, whichever assistants the workspace chose, so any tool can be opened on the workspace later. A skill written inside the workspace already lives in `.agents/skills/`, so it gets only the Claude copy.
+
+A workspace turns skills on by category (every skill whose `SKILL.md` names a subscribed category, including skills added later) or one by one, and can switch one skill off inside a subscribed category. See [Choose and diagnose workspace skills](docs/work-guidance.md#choose-and-diagnose-workspace-skills).
+
+Codex custom agents are separate resources and deploy to `.codex/agents/<name>.toml`, for workspaces that chose Codex.
 
 ### Skills Your Harnesses Already Have
 
-The skills list also shows the skills each assistant loads from its own global folders, for example `~/.claude/skills` (including skills synced from claude.ai), `~/.codex/skills`, and Antigravity's built-in and plugin skills. They are labelled with their harness and are read-only here: edit or delete them in the harness, or use **Create editable copy** to bring one into the ContextSpace catalog.
+The skills list also shows the skills each assistant loads from its own global folders, for example `~/.claude/skills` (including skills synced from claude.ai), `~/.codex/skills`, and Antigravity's built-in and plugin skills. They are labelled with their harness and are read-only here: edit or delete them in the harness. The harness loads them in every workspace, so a workspace never copies them. Use **Add to my library** to bring a copy into the ContextSpace catalog, where it can be turned on for every tool.
 
 - A skill in the ContextSpace catalog (`~/.contextspace/skills`) always wins over a harness skill with the same ID. When two harnesses ship the same ID, the first one registered is shown and the other is reported as a warning.
 - A harness skill that does not follow the `SKILL.md` rules (for example an underscore in `name`) is not listed, and the Skills page says why. `ctxspace skill lint` ignores these, since the files are not yours.

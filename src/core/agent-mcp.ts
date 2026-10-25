@@ -22,10 +22,12 @@ import { parse as parseToml } from 'smol-toml';
 
 import { BRAND_CONFIG, CLI_NAME, ENGINE_NPM_PACKAGE } from './constants.js';
 import { lastingLauncherPath } from './lasting-runtime.js';
+import { HARNESSES, type McpHarnessId } from '../harnesses/registry.js';
 import { atomicWriteJson } from '../resources/fs-safety.js';
 import { findExecutable, getAugmentedPath } from '../utils/user-paths.js';
 
-export type McpAgentId = 'claude' | 'codex' | 'antigravity' | 'pi';
+/** The harnesses with `mcp: true` in the registry. TARGETS below has exactly one target for each. */
+export type McpAgentId = McpHarnessId;
 
 export interface McpServerDefinition {
   command: string;
@@ -162,6 +164,8 @@ interface AgentTarget {
   /** What a named server is set to run, when the config says. Used to spot a registration that runs the npm package. */
   readDefinition?(ctx: Context, name: string): Promise<{ command?: unknown; args?: unknown } | undefined>;
   register(ctx: Context, binaryPath: string, definition: McpServerDefinition): Promise<{ how: string }>;
+  /** What registering would do, for a dry run. Defaults to the agent's own `mcp add`. */
+  plan?(ctx: Context): string;
 }
 
 async function readJsonServers(file: string, keys: readonly string[]): Promise<string[]> {
@@ -199,8 +203,8 @@ async function runAdd(ctx: Context, binaryPath: string, args: string[], label: s
 const TARGETS: readonly AgentTarget[] = [
   {
     id: 'claude',
-    name: 'Claude Code',
-    binary: 'claude',
+    name: HARNESSES.claude.name,
+    binary: HARNESSES.claude.binary,
     configPath: (ctx) => ctx.env.CLAUDE_CONFIG_DIR
       ? path.join(ctx.env.CLAUDE_CONFIG_DIR, '.claude.json')
       : path.join(ctx.home, '.claude.json'),
@@ -212,8 +216,8 @@ const TARGETS: readonly AgentTarget[] = [
   },
   {
     id: 'codex',
-    name: 'Codex',
-    binary: 'codex',
+    name: HARNESSES.codex.name,
+    binary: HARNESSES.codex.binary,
     configPath: (ctx) => path.join(ctx.env.CODEX_HOME || path.join(ctx.home, '.codex'), 'config.toml'),
     async readServers(ctx) {
       let raw: string;
@@ -236,8 +240,8 @@ const TARGETS: readonly AgentTarget[] = [
   },
   {
     id: 'antigravity',
-    name: 'Antigravity (agy)',
-    binary: 'agy',
+    name: HARNESSES.antigravity.name,
+    binary: HARNESSES.antigravity.binary,
     configPath: (ctx) => path.join(ctx.home, '.gemini', 'config', 'mcp_config.json'),
     readServers(ctx) { return readJsonServers(this.configPath(ctx), ['mcpServers']); },
     readDefinition(ctx, name) { return readJsonDefinition(this.configPath(ctx), name); },
@@ -248,9 +252,10 @@ const TARGETS: readonly AgentTarget[] = [
   {
     // Pi has no MCP of its own; the pi-mcp-adapter package adds it and reads this shared file.
     id: 'pi',
-    name: 'Pi',
-    binary: 'pi',
+    name: HARNESSES.pi.name,
+    binary: HARNESSES.pi.binary,
     configPath: (ctx) => path.join(ctx.home, '.config', 'mcp', 'mcp.json'),
+    plan(ctx) { return `write ${this.configPath(ctx)}`; },
     async readServers(ctx) {
       // The adapter also reads these tool-agnostic locations.
       const files = [
@@ -357,7 +362,7 @@ export async function registerAgentMcp(options: AgentMcpOptions = {}): Promise<A
 
     const binaryPath = ctx.find(target.binary)!;
     if (options.dryRun) {
-      done({ result: 'would-add', how: target.id === 'pi' ? `write ${target.configPath(ctx)}` : `${target.binary} mcp add` });
+      done({ result: 'would-add', how: target.plan?.(ctx) ?? `${target.binary} mcp add` });
       continue;
     }
     try {

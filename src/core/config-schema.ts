@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import type { NexusFlowConfig } from '../types.js';
+import { HARNESS_IDS } from '../harnesses/registry.js';
 
 const absDir = z
   .string()
@@ -25,7 +26,7 @@ export const configPatchSchema = z
   .object({
     devDir: absDir.optional(),
     workspacesDir: absDir.optional(),
-    defaultAssistant: z.enum(['claude', 'antigravity', 'codex', 'copilot', 'cursor', 'pi']).nullable().optional(),
+    defaultAssistant: z.enum(HARNESS_IDS).nullable().optional(),
     defaultEditor: z.string().nullable().optional(),
     scanDepth: z.number().int().min(1).max(10).optional(),
     storageProvider: z.string().min(1).optional(),

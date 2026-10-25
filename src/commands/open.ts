@@ -14,6 +14,7 @@ import { openInEditor } from '../utils/open-editor.js';
 import { promptSelectEditor } from '../utils/prompts.js';
 import { findSessions } from '../utils/session-finder.js';
 import { CLI_NAME } from '../core/constants.js';
+import { HARNESSES, isHarnessId } from '../harnesses/registry.js';
 
 /**
  * Lets the user pick an existing workspace and open it in an editor.
@@ -83,14 +84,8 @@ export async function openCommand(): Promise<void> {
       console.log(chalk.cyan(`\n🚀 Starting ${assistant} session inside workspace...\n`));
 
       const sessions = await findSessions(selected, loadedFeature.repos);
-      let cmdName = assistant.toLowerCase();
-      let cmdArgs: string[] = [];
-
-      if (assistant === 'antigravity') {
-        cmdName = 'agy';
-      } else if (assistant === 'cursor') {
-        cmdName = 'cursor-agent';
-      }
+      const harness = isHarnessId(assistant) ? HARNESSES[assistant] : undefined;
+      const cmdName = harness?.binary ?? assistant.toLowerCase();
 
       const matchingSessions = sessions.filter((s) => s.assistant === assistant);
       let targetSessionId: string | undefined;
@@ -131,24 +126,8 @@ export async function openCommand(): Promise<void> {
         }
       }
 
-      if (targetSessionId) {
-        if (assistant === 'antigravity') {
-          cmdArgs = ['--conversation', targetSessionId];
-        } else if (assistant === 'claude') {
-          cmdArgs = ['--resume', targetSessionId];
-        } else if (assistant === 'codex') {
-          cmdArgs = ['resume', targetSessionId];
-        } else if (assistant === 'copilot') {
-          cmdArgs = ['--resume', targetSessionId];
-        } else if (assistant === 'cursor') {
-          cmdArgs = ['--resume', targetSessionId];
-        } else if (assistant === 'pi') {
-          cmdArgs = ['--session', targetSessionId];
-        }
-      } else {
-        // No existing session for this assistant (or user chose new session): start fresh
-        cmdArgs = [];
-      }
+      // No existing session for this assistant (or user chose new session): start fresh
+      const cmdArgs = targetSessionId ? harness?.resumeArgs(targetSessionId) ?? [] : [];
 
       try {
         const result = await execa(cmdName, cmdArgs, {

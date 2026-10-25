@@ -340,6 +340,74 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     expect(payload.enabledSkills).toEqual(['work-lifecycle']);
   });
 
+  test('offers categories as switches and library skills one by one, and leaves the skills a tool ships out', async ({ page }) => {
+    await mockRunningCreationStream(page);
+    const lib = (id: string, title: string, category: string) => ({ id, name: id, title, category, description: `Use when ${title}.`, content: '', custom: true });
+    await page.route('**/api/skills', (route) => route.fulfill({ json: { skills: [
+      lib('review', 'Review PRs', 'git'),
+      lib('commit', 'Commit helper', 'git'),
+      lib('lint', 'Lint fixer', 'quality'),
+      { id: 'pdf', name: 'pdf', title: 'pdf', category: 'documents', description: 'Read PDFs', content: '', custom: false, source: { harness: 'claude', label: 'Claude Code', root: '~/.claude/skills' } },
+    ] } }));
+    await page.route('**/api/skills/categories', (route) => route.fulfill({ json: { categories: [
+      { id: 'git', name: 'Git', description: '', custom: true },
+      { id: 'quality', name: 'Quality', description: '', custom: true },
+    ] } }));
+    let previewRequest: any;
+    await page.route('**/api/resources/preview', (route) => {
+      previewRequest = route.request().postDataJSON();
+      return route.fulfill({ json: { resources: [] } });
+    });
+    let payload: any;
+    await page.route('**/api/workspace', async (route) => {
+      payload = route.request().postDataJSON();
+      await route.fulfill({ json: { success: true, jobId: 'category-start' } });
+    });
+    await page.goto('/#/new');
+    await page.getByRole('checkbox', { name: 'nexus-frontend' }).click();
+    await page.getByLabel('Workspace name').fill('Category start');
+    await page.getByLabel('What do you want to do?').fill('Start with a category');
+    await openMoreOptions(page);
+
+    // What a tool ships is always on in that tool: mentioned, never offered.
+    await expect(page.getByRole('checkbox', { name: 'Select pdf' })).toHaveCount(0);
+    await expect(page.getByText('Your tools also have 1 built-in skill, always on in every folder.')).toBeVisible();
+
+    await page.getByRole('switch', { name: 'Turn on the Git category' }).click();
+    // The skills of an on category come with it.
+    await expect(page.getByRole('checkbox', { name: 'Select Review PRs' })).toHaveCount(0);
+    await page.getByRole('checkbox', { name: 'Select Lint fixer' }).check();
+    await expect.poll(() => previewRequest).toMatchObject({ skills: ['lint'], categories: ['git'] });
+    await page.getByRole('button', { name: 'Create workspace' }).click();
+
+    await expect.poll(() => payload?.name).toBe('Category start');
+    expect(payload.enabledCategories).toEqual(['git']);
+    expect(payload.enabledSkills).toEqual(['lint']);
+  });
+
+  test('Select All picks only the skills of My library', async ({ page }) => {
+    await mockRunningCreationStream(page);
+    await page.route('**/api/skills', (route) => route.fulfill({ json: { skills: [
+      { id: 'lint', name: 'lint', title: 'Lint fixer', category: 'quality', description: 'Fix lint', content: '', custom: true },
+      { id: 'pdf', name: 'pdf', title: 'pdf', category: 'documents', description: 'Read PDFs', content: '', custom: false, source: { harness: 'claude', label: 'Claude Code', root: '~/.claude/skills' } },
+    ] } }));
+    let payload: any;
+    await page.route('**/api/workspace', async (route) => {
+      payload = route.request().postDataJSON();
+      await route.fulfill({ json: { success: true, jobId: 'select-all' } });
+    });
+    await page.goto('/#/new');
+    await page.getByRole('checkbox', { name: 'nexus-frontend' }).click();
+    await page.getByLabel('Workspace name').fill('Select all');
+    await page.getByLabel('What do you want to do?').fill('Pick everything');
+    await openMoreOptions(page);
+    await page.getByRole('button', { name: 'Select All' }).click();
+    await page.getByRole('button', { name: 'Create workspace' }).click();
+
+    await expect.poll(() => payload?.name).toBe('Select all');
+    expect(payload.enabledSkills).toEqual(['lint']);
+  });
+
   test('creates worktrees from an existing branch with a suggested workspace branch', async ({ page }) => {
     await mockRunningCreationStream(page);
     await page.route('**/api/skills', (route) => route.fulfill({ json: { skills: [] } }));

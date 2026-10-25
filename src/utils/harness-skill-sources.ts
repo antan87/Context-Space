@@ -3,15 +3,15 @@
  * Where each CLI harness (Claude Code, Codex, ...) keeps the skills it loads globally, so the
  * skills list can show them next to the ContextSpace catalog.
  *
- * To support a new harness: add it to `CLI_HARNESSES`, then add one entry to
- * `HARNESS_SKILL_SOURCES` below. A missing entry is a compile error. Use `roots: []` when the
- * harness has no global skills folder. Nothing else needs to change.
+ * The folders are declared per harness in `src/harnesses/registry.ts` (`skills.globalRoots`),
+ * so a new harness needs nothing here. See docs/adding-a-harness.md.
  */
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { CLI_HARNESSES, isCliHarnessId, type CliHarnessId } from './cli-harnesses.js';
+import { HARNESSES, harnessSkillSources } from '../harnesses/registry.js';
+import { isCliHarnessId, type CliHarnessId } from './cli-harnesses.js';
 
 export interface HarnessSkillSource {
   /** Folders holding the harness's global skills. A leading `~/` is the home directory; absent folders are skipped. */
@@ -24,24 +24,10 @@ export interface HarnessSkillSource {
 }
 
 /**
- * Registration order is precedence: when two harnesses ship a skill with the same id, the first one listed is shown.
+ * Registry order is precedence: when two harnesses ship a skill with the same id, the first one listed is shown.
  * Skills in the ContextSpace catalog (`~/.contextspace/skills`) always win over these.
  */
-export const HARNESS_SKILL_SOURCES: Record<CliHarnessId, HarnessSkillSource> = {
-  // skills/<skill>, plus claude.ai-synced skills at skills/synced/<bucket>/<skill>.
-  // Plugin skills under ~/.claude/plugins use a layout that varies per marketplace and are not covered yet.
-  claude: { roots: ['~/.claude/skills'] },
-  // skills/.system/<skill> holds the skills bundled with Codex.
-  codex: { roots: ['~/.codex/skills'] },
-  // builtin/skills/<skill>, and config/plugins/<plugin>/skills/<skill>.
-  antigravity: {
-    roots: ['~/.gemini/antigravity/builtin/skills', '~/.gemini/antigravity-cli/builtin/skills', '~/.gemini/config/plugins'],
-  },
-  // No global skills folder is known for these yet.
-  copilot: { roots: [] },
-  cursor: { roots: [] },
-  pi: { roots: [] },
-};
+export const HARNESS_SKILL_SOURCES: Record<CliHarnessId, HarnessSkillSource> = harnessSkillSources(HARNESSES);
 
 export interface HarnessSkillDir {
   harness: string;
@@ -89,7 +75,7 @@ export async function findHarnessSkillDirs(
   const result: HarnessSkillDir[] = [];
   const searchedRoots = new Set<string>();
   for (const [harness, source] of Object.entries(sources)) {
-    const label = isCliHarnessId(harness) ? CLI_HARNESSES[harness].name : harness;
+    const label = isCliHarnessId(harness) ? HARNESSES[harness].name : harness;
     for (const configured of source.roots) {
       // A root may itself be a symlink (dotfile managers do this), so resolve it once and treat the result as the root.
       const root = await fs.realpath(expandHome(configured, homeDir)).catch(() => null);

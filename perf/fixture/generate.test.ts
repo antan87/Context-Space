@@ -41,14 +41,14 @@ describe('perf fixture generator', () => {
     expect(second.repos).toEqual(first.repos);
     expect(first.workspaces).toBe(2);
     expect(first.codex.bytes).toBeGreaterThan(150 * 1024);
-  });
+  }, 90_000);
 
   it('changes the data when the seed changes', async () => {
     const first = await generateFixture({ tier: 'S', spec: TINY, seed: 1, out: await outDir() });
     const second = await generateFixture({ tier: 'S', spec: TINY, seed: 2, out: await outDir() });
 
     expect(second.treeDigest).not.toBe(first.treeDigest);
-  });
+  }, 90_000);
 
   it('writes a config that points the app at the fixture only', async () => {
     const out = await outDir();

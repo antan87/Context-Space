@@ -15,6 +15,7 @@ import {
 } from './agent-mcp.js';
 import { BRAND_CONFIG, ENGINE_NPM_PACKAGE } from './constants.js';
 import { lastingRuntimeRoot } from './lasting-runtime.js';
+import { HARNESSES, HARNESS_IDS } from '../harnesses/registry.js';
 
 let home: string;
 let calls: Array<{ file: string; args: string[] }>;
@@ -182,6 +183,13 @@ describe('with a lasting copy of the app\'s CLI', () => {
 });
 
 describe('inspectAgentMcp', () => {
+  it('has a target for every harness the registry marks mcp, named and launched like the registry says', async () => {
+    const result = await inspectAgentMcp(options());
+    const marked = HARNESS_IDS.filter((id) => HARNESSES[id].mcp);
+    expect(result.map((r) => r.id).sort()).toEqual([...marked].sort());
+    for (const { id, name } of result) expect(name).toBe(HARNESSES[id].name);
+  });
+
   it('reports agents that are not installed', async () => {
     const result = await inspectAgentMcp(options());
     expect(result.map((r) => r.status.state)).toEqual(['not-installed', 'not-installed', 'not-installed', 'not-installed']);

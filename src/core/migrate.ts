@@ -54,8 +54,15 @@ const WORKSPACE_FILE_MAPPINGS: Array<{ legacy: string; primary: string }> = [
   { legacy: BRAND_CONFIG.files.handoff.legacy, primary: BRAND_CONFIG.files.handoff.primary },
   { legacy: BRAND_CONFIG.files.overview.legacy, primary: BRAND_CONFIG.files.overview.primary },
   { legacy: BRAND_CONFIG.files.state.legacy, primary: BRAND_CONFIG.files.state.primary },
+  { legacy: '.nexusflow-state.json', primary: BRAND_CONFIG.files.state.primary },
   { legacy: BRAND_CONFIG.files.runningState.legacy, primary: BRAND_CONFIG.files.runningState.primary },
+  { legacy: '.nexusflow-running.json', primary: BRAND_CONFIG.files.runningState.primary },
   { legacy: BRAND_CONFIG.files.analysisCache.legacy, primary: BRAND_CONFIG.files.analysisCache.primary },
+  { legacy: '.nexusflow-analysis-cache.json', primary: BRAND_CONFIG.files.analysisCache.primary },
+  { legacy: BRAND_CONFIG.files.mutationLock.legacy, primary: BRAND_CONFIG.files.mutationLock.primary },
+  { legacy: '.nexusflow-mutation.lock', primary: BRAND_CONFIG.files.mutationLock.primary },
+  { legacy: BRAND_CONFIG.files.stateLock.legacy, primary: BRAND_CONFIG.files.stateLock.primary },
+  { legacy: '.nexusflow-state.lock', primary: BRAND_CONFIG.files.stateLock.primary },
   { legacy: BRAND_CONFIG.files.cursorRule.legacy, primary: BRAND_CONFIG.files.cursorRule.primary },
 ];
 
@@ -377,8 +384,19 @@ export async function migrateWorkspace(
   // We only ignore ephemeral state (analysis cache, runtime workspace state, locks, staging, logs).
   const gitignorePath = path.join(resolvedPath, '.gitignore');
   try {
-    const gitignore = await fs.readFile(gitignorePath, 'utf-8');
-    const lines = gitignore.split('\n');
+    let lines: string[] = [];
+    try {
+      const gitignore = await fs.readFile(gitignorePath, 'utf-8');
+      lines = gitignore.split('\n');
+    } catch (err: unknown) {
+      if (getErrorCode(err) === 'ENOENT') {
+        if (!existsSync(path.join(resolvedPath, '.git'))) {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
 
     const durablePatterns = [
       /^(\/)?contextspace\.json$/,
@@ -410,10 +428,16 @@ export async function migrateWorkspace(
 
     const ephemeralRules = [
       `/${BRAND_CONFIG.files.analysisCache.primary}`,
+      `/${BRAND_CONFIG.files.state.primary}`,
       `/${BRAND_CONFIG.files.configDir.primary}/workspace-state.json`,
+      `/${BRAND_CONFIG.files.runningState.primary}`,
       `/${BRAND_CONFIG.files.configDir.primary}/*.lock`,
       `/${BRAND_CONFIG.files.configDir.primary}/resource-staging-*`,
       `/${BRAND_CONFIG.files.configDir.primary}/logs/`,
+      '/.contextspace-analysis-cache.json',
+      '/.contextspace-state.json',
+      '/.contextspace-running.json',
+      '/.contextspace-*.lock',
     ];
 
     const hasRule = (rule: string) => {

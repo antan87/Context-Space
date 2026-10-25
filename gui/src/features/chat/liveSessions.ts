@@ -65,7 +65,7 @@ export function liveSessions(terminals: readonly RunningTerminal[], waiting: Rea
 }
 
 const names = (targets: readonly string[]) => {
-  const all = targets.map(harnessName);
+  const all = targets.map((target) => harnessName(target));
   return all.length <= 1 ? (all[0] ?? 'A terminal') : `${all.slice(0, -1).join(', ')} and ${all.at(-1)}`;
 };
 

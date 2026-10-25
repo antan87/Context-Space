@@ -14,6 +14,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import type { AIAssistant, Feature, NexusFlowConfig } from '../types.js';
+import { defaultWorkspaceHarnesses } from '../harnesses/registry.js';
 import {
   loadFeatureConfig,
   isolateWorkspaceRepo,
@@ -815,7 +816,7 @@ export const tools: NexusFlowTool[] = [
         const description = args.description ? String(args.description) : branchName;
         const assistants = (Array.isArray(args.assistants)
           ? args.assistants
-          : ['antigravity', 'claude', 'codex']) as AIAssistant[];
+          : defaultWorkspaceHarnesses()) as AIAssistant[];
 
         // Resolve repos against devDir
         const resolvedRepoPaths: string[] = [];

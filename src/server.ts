@@ -81,6 +81,7 @@ import {
 } from './core/domain-packs.js';
 
 import { detectAIAssistants } from './utils/detect-ai.js';
+import { harnessSummaries, isHarnessId } from './harnesses/registry.js';
 import { detectEditors } from './utils/detect-editors.js';
 import {
   buildWorkspaceLaunchPrompt,
@@ -162,6 +163,9 @@ import {
   deleteSkill,
   getWorkspaceSkillsConfig,
   saveWorkspaceSkillsConfig,
+  importHarnessSkill,
+  listInstalledSkillIds,
+  SkillImportError,
   WorkspaceResourceRevisionError,
 } from './utils/skills-catalog.js';
 import { listQuarantinedHarnessSkills, quarantineHarnessSkill, restoreHarnessSkill } from './utils/harness-skill-quarantine.js';
@@ -173,6 +177,7 @@ import {
   saveAgent,
 } from './resources/agents-catalog.js';
 import { ResourceConflictError } from './resources/materializer.js';
+import { resolveWorkspaceSkills, workspaceOnlySkillIds } from './resources/selection.js';
 import {
   ResourceSelectionError,
   previewResourceSelections,
@@ -1041,6 +1046,9 @@ app.get('/api/ai-detect', async (c) => {
   }
 });
 
+// What the app knows about each harness, for the screens that name them or their folders.
+app.get('/api/harnesses', (c) => c.json({ harnesses: harnessSummaries() }));
+
 // 6. Detect available editors
 app.get('/api/editor-detect', async (c) => {
   try {
@@ -1065,6 +1073,8 @@ export interface WorkspaceCreationPayload {
   enabledSkills?: string[];
   enabledAgents?: string[];
   enabledCategories?: string[];
+  /** Skills left out of a chosen category. */
+  disabledSkills?: string[];
   flowType?: 'quick' | 'feature' | 'epic';
   workType?: Feature['workType'];
   domainPacks?: string[];
@@ -1236,6 +1246,7 @@ async function runCreationJob(jobId: string, body: WorkspaceCreationPayload, con
         enabledSkills: Array.isArray(body.enabledSkills) ? body.enabledSkills : [],
         enabledAgents: Array.isArray(body.enabledAgents) ? body.enabledAgents : [],
         enabledCategories: Array.isArray(body.enabledCategories) ? body.enabledCategories : [],
+        disabledSkills: Array.isArray(body.disabledSkills) ? body.disabledSkills : [],
       });
     }
 
@@ -3640,17 +3651,18 @@ const resourcePreviewInput = z.object({
   skills: z.array(z.string().max(200)).max(200).default([]),
   agents: z.array(z.string().max(200)).max(200).default([]),
   assistants: z.array(z.string().max(40)).max(20).default([]),
+  categories: z.array(z.string().max(200)).max(200).default([]),
+  disabledSkills: z.array(z.string().max(200)).max(200).default([]),
 });
-const RESOURCE_ASSISTANTS = new Set(['claude', 'antigravity', 'codex', 'copilot', 'cursor']);
 
-// What a new workspace would receive for the chosen skills and agents.
+// What a new workspace would receive for the chosen skills, categories and agents.
 app.post('/api/resources/preview', async (c) => {
   const parsed = resourcePreviewInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: 'Invalid resource selection' }, 400);
   try {
-    // Assistants without resource support (e.g. a CLI-only tool) simply get no files.
-    const assistants = parsed.data.assistants.filter((name) => RESOURCE_ASSISTANTS.has(name)) as AIAssistant[];
-    return c.json({ resources: await previewResourceSelections(parsed.data.skills, parsed.data.agents, assistants) });
+    // Names that are not harnesses simply get no files.
+    const assistants = parsed.data.assistants.filter(isHarnessId);
+    return c.json({ resources: await previewResourceSelections(parsed.data.skills, parsed.data.agents, assistants, parsed.data.categories, parsed.data.disabledSkills) });
   } catch (error) {
     if (error instanceof ResourceSelectionError) return c.json({ error: error.message }, 400);
     return errorResponse(c, error);
@@ -3712,6 +3724,23 @@ app.get('/api/harness-skills/quarantine', async (c) => {
   try {
     return c.json({ entries: await listQuarantinedHarnessSkills() });
   } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// Adds a copy of a skill a harness ships to My library, so a workspace can turn it on for every tool.
+app.post('/api/skills/import', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.harness !== 'string' || !body.harness || typeof body.id !== 'string' || !body.id) {
+      return c.json({ error: 'harness and id are required.' }, 400);
+    }
+    const skill = await importHarnessSkill(body.harness, body.id);
+    return c.json({ skill });
+  } catch (error) {
+    if (error instanceof SkillImportError) {
+      return c.json({ error: error.message }, error.code === 'exists' ? 409 : 404);
+    }
     return errorResponse(c, error);
   }
 });
@@ -3852,7 +3881,14 @@ app.get('/api/skills/workspace/:id', async (c) => {
     const wsPath = await resolveExactWorkspaceById(config.workspacesDir, id);
     if (!wsPath) return c.json({ error: 'Workspace not found.' }, 404);
     const skillsConfig = await getWorkspaceSkillsConfig(wsPath);
-    return c.json({ config: skillsConfig });
+    const catalog = await getAllSkills(wsPath);
+    const resolved = resolveWorkspaceSkills(skillsConfig, catalog, { ids: workspaceOnlySkillIds(skillsConfig, catalog) });
+    return c.json({
+      config: skillsConfig,
+      // What the saved selection turns on, and what the workspace holds right now (a refresh brings them together).
+      resolvedSkills: resolved.skills.map((skill) => skill.id),
+      installedSkills: await listInstalledSkillIds(wsPath),
+    });
   } catch (error) {
     return errorResponse(c, error);
   }
@@ -3869,17 +3905,26 @@ app.post('/api/skills/workspace/:id/assign', async (c) => {
     if (!Number.isInteger(body.expectedRevision) || body.expectedRevision < 0) {
       return c.json({ error: 'A nonnegative integer expectedRevision is required.' }, 400);
     }
+    for (const optional of [body.enabledCategories, body.disabledSkills]) {
+      if (optional !== undefined && !Array.isArray(optional)) {
+        return c.json({ error: 'enabledCategories and disabledSkills must be arrays.' }, 400);
+      }
+    }
     const config = await loadConfig();
     const wsPath = await resolveExactWorkspaceById(config.workspacesDir, id);
     if (!wsPath) return c.json({ error: 'Workspace not found.' }, 404);
     const saved = await withResourceAdministrationLock(async () => {
-      await validateResourceSelections(body.enabledSkills, body.enabledAgents, wsPath);
+      // A harness loads its own skills everywhere, so an old config's pick of one is dropped, not copied.
+      const builtIn = new Set((await getAllSkills(wsPath)).filter((skill) => skill.source).map((skill) => skill.id));
+      const enabledSkills = (body.enabledSkills as string[]).filter((skillId) => !builtIn.has(skillId));
+      await validateResourceSelections(enabledSkills, body.enabledAgents, wsPath);
       return saveWorkspaceSkillsConfig(
         wsPath,
         {
-          enabledSkills: body.enabledSkills,
+          enabledSkills,
           enabledAgents: body.enabledAgents,
-          enabledCategories: Array.isArray(body.enabledCategories) ? body.enabledCategories : [],
+          enabledCategories: body.enabledCategories ?? [],
+          disabledSkills: body.disabledSkills ?? [],
         },
         body.expectedRevision,
       );

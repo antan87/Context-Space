@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import {
   loadWorkspaceState,
+  saveWorkspaceState,
   recordRepoSync,
   markValidated,
   recordVerificationReport,
@@ -180,6 +182,30 @@ describe('workspace-state', () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(existing) as any);
       const report = await getLastVerificationReport('/ws');
       expect(report?.overallStatus).toBe('pass');
+    });
+  });
+
+  describe('saveWorkspaceState', () => {
+    it('writes to .contextspace/state.json and unlinks legacy state files', async () => {
+      vi.mocked(fs.unlink).mockResolvedValue(undefined);
+      const state: WorkspaceState = {
+        workspacePath: '/ws',
+        repos: { api: { repoName: 'api', lastSyncStatus: 'up-to-date' } },
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      };
+
+      await saveWorkspaceState(state);
+
+      // Verify write occurred to primary location
+      const calls = vi.mocked(fs.writeFile).mock.calls;
+      const targetPath = calls[calls.length - 1][0] as string;
+      expect(targetPath).toContain('.contextspace');
+      expect(targetPath).toContain('state.json');
+
+      // Verify unlinking attempted for legacy state files
+      const unlinked = vi.mocked(fs.unlink).mock.calls.map((c) => String(c[0]));
+      expect(unlinked).toContain(path.join('/ws', '.contextspace-state.json'));
+      expect(unlinked).toContain(path.join('/ws', '.nexusflow-state.json'));
     });
   });
 });

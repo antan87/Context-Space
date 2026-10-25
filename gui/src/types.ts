@@ -39,6 +39,19 @@ export interface DetectedAI {
   command?: string;
 }
 
+/** One harness of the registry in src/harnesses/registry.ts, as GET /api/harnesses describes it. */
+export interface HarnessInfo {
+  id: string;
+  name: string;
+  /** The folder inside a workspace this tool reads skills from, e.g. `.claude/skills`. */
+  workspaceSkillFolder: string;
+  /** Folders it loads skills from in every workspace. A leading `~/` is the home directory. */
+  globalSkillRoots: string[];
+  history: boolean;
+  /** The instruction file ContextSpace writes for this tool, or null when it reads AGENTS.md. */
+  instructionsFile: string | null;
+}
+
 export interface DetectedEditor {
   name: string;
   command: string;
@@ -74,8 +87,9 @@ export interface WorkspaceLaunchTarget {
   unavailableReason?: string;
 }
 
-export type AIAssistant = 'claude' | 'antigravity' | 'codex' | 'copilot' | 'cursor';
-export type SessionAssistant = AIAssistant | 'pi';
+export type AIAssistant = 'claude' | 'antigravity' | 'codex' | 'copilot' | 'cursor' | 'pi';
+/** Kept for callers that predate Pi becoming a full assistant. */
+export type SessionAssistant = AIAssistant;
 
 export interface QuotaWindow {
   unit: 'tokens' | 'requests' | 'percent';
@@ -466,11 +480,24 @@ export interface CodexAgentItem {
 }
 
 export interface WorkspaceSkillsConfig {
-  schemaVersion?: 1;
+  schemaVersion?: 1 | 2;
   revision?: number;
+  /** Skills picked one by one. */
   enabledSkills: string[];
+  /** Skills switched off inside a category that is on. */
+  disabledSkills?: string[];
   enabledAgents?: string[];
+  /** Categories the workspace subscribes to. Only meaningful in a version 2 file: a version 1 file listed every category. */
   enabledCategories?: string[];
+}
+
+/** What the server says about one workspace's skills: the saved choice, what it turns on, and what the tools can read now. */
+export interface WorkspaceSkillsState {
+  config: WorkspaceSkillsConfig;
+  /** Ids the saved selection turns on (categories + single picks - exceptions). Built-in tool skills are never in it. */
+  resolvedSkills: string[];
+  /** Ids that have a SKILL.md in the workspace's .agents/skills or .claude/skills right now. */
+  installedSkills: string[];
 }
 
 // ─── Workrooms ────────────────────────────────────────────────────────────

@@ -103,11 +103,13 @@ async function readReleasePr(ctx) {
   const files = lines(await ctx.git(['diff', '--name-only', `origin/main...${sha}`]));
   const patch = await ctx.git(['diff', `origin/main...${sha}`]);
   const version = JSON.parse(await ctx.git(['show', `${sha}:package.json`])).version;
+  const baseSha = (await ctx.git(['merge-base', sha, 'origin/main'])).trim();
   return {
     number: pr.number,
     // A branch of the same name in a fork is not ours; make that visible to the safety check.
     headRef: pr.isCrossRepository ? `fork:${pr.headRefName}` : pr.headRefName,
     headSha: sha,
+    baseSha,
     title: pr.title,
     version,
     files,

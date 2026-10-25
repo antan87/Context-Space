@@ -22,6 +22,15 @@ describe('HARNESS_SKILL_SOURCES', () => {
     expect(HARNESS_SKILL_SOURCES.claude.roots).toContain('~/.claude/skills');
     expect(HARNESS_SKILL_SOURCES.codex.roots).toContain('~/.codex/skills');
     expect(HARNESS_SKILL_SOURCES.antigravity.roots).toContain('~/.gemini/antigravity/builtin/skills');
+    expect(HARNESS_SKILL_SOURCES.antigravity.roots).toContain('~/.gemini/config/skills');
+    expect(HARNESS_SKILL_SOURCES.pi.roots).toEqual(['~/.pi/agent/skills', '~/.agents/skills']);
+  });
+
+  it('reads the folders from the registry, in registry order', () => {
+    expect(Object.keys(HARNESS_SKILL_SOURCES)).toEqual(Object.keys(CLI_HARNESSES));
+    for (const [id, harness] of Object.entries(CLI_HARNESSES)) {
+      expect(HARNESS_SKILL_SOURCES[id as keyof typeof CLI_HARNESSES].roots).toEqual(harness.skills.globalRoots);
+    }
   });
 });
 
@@ -133,6 +142,17 @@ describe('findHarnessSkillDirs', () => {
     const found = await findHarnessSkillDirs(home, { claude: { roots: ['~/.c'] }, brand_new: { roots: ['~/.x'] } });
 
     expect(found.map((f) => f.label)).toEqual([CLI_HARNESSES.claude.name, 'brand_new']);
+  });
+
+  it('finds what Pi loads from its own folder and the shared ~/.agents/skills, and what Antigravity loads from config/skills', async () => {
+    await skill('.pi', 'agent', 'skills', 'pi-own');
+    await skill('.agents', 'skills', 'shared');
+    await skill('.gemini', 'config', 'skills', 'agy-config');
+
+    const found = await findHarnessSkillDirs(home);
+
+    expect(found.map((f) => `${f.harness}:${path.basename(f.skillDir)}`)).toEqual(['antigravity:agy-config', 'pi:pi-own', 'pi:shared']);
+    expect(found.find((f) => f.harness === 'pi')?.label).toBe('Pi');
   });
 
   it('returns nothing for a harness with no roots', async () => {

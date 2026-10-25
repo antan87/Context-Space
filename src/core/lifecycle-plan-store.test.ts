@@ -6,7 +6,7 @@ import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 import { advanceLifecycleStep, loadWorkspaceLifecycle, planFromLifecycle, readWorkspaceLifecycle } from './lifecycle.js';
 import { PLAN_STORE_FILE, readPlan } from './plan.js';
-import { loadWorkspaceState, saveWorkspaceState } from './workspace-state.js';
+import { getStatePath, loadWorkspaceState, saveWorkspaceState } from './workspace-state.js';
 import { getWorkContext } from './work-guidance.js';
 import { managedWorkspaceArtifacts } from './workspace-git.js';
 import type { LifecycleStep, WorkspaceLifecycle } from '../types.js';
@@ -86,11 +86,11 @@ describe('moving an older lifecycle into the plan store', () => {
 
   it('lets read-only readers see the milestones without writing anything', async () => {
     await seed();
-    const before = await fs.readFile(path.join(root, '.contextspace-state.json'), 'utf8');
+    const before = await fs.readFile(getStatePath(root), 'utf8');
     expect((await readWorkspaceLifecycle(root)).steps).toHaveLength(4);
     expect((await getWorkContext(root)).lifecycle?.steps).toHaveLength(4);
     await expect(fs.access(storePath())).rejects.toThrow();
-    expect(await fs.readFile(path.join(root, '.contextspace-state.json'), 'utf8')).toBe(before);
+    expect(await fs.readFile(getStatePath(root), 'utf8')).toBe(before);
   });
 
   it('fails closed on a damaged plan store instead of importing over it', async () => {

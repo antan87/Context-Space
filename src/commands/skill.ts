@@ -14,6 +14,7 @@ import { resolveWorkspaceInteractive, resolveWorkspaceQuiet } from '../utils/res
 import { refreshWorkspace } from '../core/refresh.js';
 import { BRAND_NAME } from '../core/constants.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { LOCAL_SKILLS_FOLDER } from '../harnesses/registry.js';
 
 export interface SkillListOptions {
   json?: boolean;
@@ -254,7 +255,7 @@ export async function skillDeleteCommand(
   } else {
     workspacePath = await resolveWorkspaceQuiet(workspaceArg).catch(() => null);
     if (workspacePath) {
-      const wsSkillDir = path.join(workspacePath, '.agents', 'skills', cleanId);
+      const wsSkillDir = path.join(workspacePath, ...LOCAL_SKILLS_FOLDER.split('/'), cleanId);
       const existsLocally = await fse.pathExists(wsSkillDir);
       scope = existsLocally ? 'workspace' : 'global';
     } else {

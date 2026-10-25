@@ -71,9 +71,13 @@ export const codexAgentTomlSchema = z
   })
   .strict();
 
+/**
+ * Version 2 is the first whose `enabledCategories` the app means: the categories a workspace subscribes to.
+ * Version 1 files hold every category the old app registered, so a reader must ignore them.
+ */
 export const workspaceResourcesConfigSchema = z
   .object({
-    schemaVersion: z.literal(1).default(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]).default(1),
     revision: z.number().int().nonnegative().default(0),
     enabledSkills: z.array(resourceIdSchema).max(1000).default([]),
     disabledSkills: z.array(resourceIdSchema).max(1000).default([]),

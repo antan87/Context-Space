@@ -20,6 +20,7 @@ import { useChatAttention, useWindowAttentive } from './useChatAttention.js';
 import { useChatDockSlot, useDockRect } from './dockPlacement.js';
 import { browserPath, goToWorkspace, parseWorkspacePath, showsChatFor } from './chatRoute.js';
 import { RUNNING_TERMINALS_KEY } from './useLiveSessions.js';
+import { computeMountedWorkspaces } from './chatMountedWorkspaces.js';
 
 interface ChatDockProps {
   workspaces: Feature[];
@@ -62,6 +63,23 @@ export function ChatDock({ workspaces }: ChatDockProps) {
   // A second workspace beside the first needs room for two terminals.
   const wideEnough = (rect?.width ?? 0) >= CHAT_GEOMETRY.splitBreakpointPx;
   const showSplit = Boolean(splitTab && activeTab && splitTab !== activeTab && wideEnough);
+
+  // Bounded pool of mounted workspaces: keep active and most recently active terminals mounted
+  // in the DOM so switching is instant without reattaching, while older inactive workspaces
+  // unmount synchronously to prevent unbounded element growth and transient multi-pane spikes.
+  const [recentWorkspaces, setRecentWorkspaces] = useState<string[]>([]);
+  const mountedWorkspaces = useMemo(() => {
+    return computeMountedWorkspaces(openTabs, activeTab, splitTab, showSplit, recentWorkspaces);
+  }, [openTabs, activeTab, splitTab, showSplit, recentWorkspaces]);
+
+  useEffect(() => {
+    setRecentWorkspaces((prev) => {
+      if (prev.length === mountedWorkspaces.length && prev.every((v, i) => v === mountedWorkspaces[i])) {
+        return prev;
+      }
+      return mountedWorkspaces;
+    });
+  }, [mountedWorkspaces]);
 
   // Anything in the app can ask to see a chat (a waiting alert, "resume in chat", a session link).
   // The dock answers by going to that workspace's chat. The first value is the one at load, so a reload stays put.
@@ -232,6 +250,9 @@ export function ChatDock({ workspaces }: ChatDockProps) {
             const isPrimary = branchName === activeTab;
             const isSecondary = showSplit && branchName === splitTab;
             const shown = isPrimary || isSecondary;
+            const isMounted = shown || mountedWorkspaces.includes(branchName);
+
+            if (!isMounted) return null;
 
             return (
               <div

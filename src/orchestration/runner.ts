@@ -11,7 +11,7 @@ import chalk from 'chalk';
 import { execa } from 'execa';
 
 import type { ServiceConfig, RunningService, RunningState, ServiceFailure, ServiceStartResult } from '../types.js';
-import { BRAND_CONFIG, getPm2ProcessPrefix } from '../core/constants.js';
+import { BRAND_CONFIG, getPm2ProcessPrefix, resolveWorkspaceFilePathSync } from '../core/constants.js';
 import { findExecutable } from '../utils/user-paths.js';
 import { isLocalPortListening } from '../utils/ports.js';
 import { toErrorMessage, getErrorCode } from '../utils/errors.js';
@@ -32,16 +32,6 @@ export interface Pm2Process {
   [key: string]: unknown;
 }
 
-/** Name of the state file that tracks running services. */
-const PRIMARY_STATE_FILE = BRAND_CONFIG.files.runningState.primary;
-const LEGACY_STATE_FILE = BRAND_CONFIG.files.runningState.legacy;
-
-/**
- * Returns the path to the running-state file for a workspace.
- */
-function getStatePath(workspacePath: string): string {
-  return path.join(workspacePath, PRIMARY_STATE_FILE);
-}
 
 /** Stable, collision-free 8-char hash of the absolute workspace path. */
 export function workspaceHash(workspacePath: string): string {
@@ -153,15 +143,24 @@ export async function getPm2List(): Promise<Pm2Process[]> {
  * @param workspacePath - Workspace root path.
  */
 export async function readRawRunningState(workspacePath: string): Promise<RunningState | null> {
-  try {
-    return JSON.parse(await fs.readFile(path.join(workspacePath, PRIMARY_STATE_FILE), 'utf-8')) as RunningState;
-  } catch {
+  const resolved = resolveWorkspaceFilePathSync(workspacePath, 'runningState');
+  const candidatePaths = [
+    resolved.path,
+    path.join(workspacePath, BRAND_CONFIG.files.runningState.primary),
+    ...(BRAND_CONFIG.files.runningState.fallbacks ?? []).map((f) => path.join(workspacePath, f)),
+    path.join(workspacePath, BRAND_CONFIG.files.runningState.legacy),
+  ];
+  const seen = new Set<string>();
+  for (const candidate of candidatePaths) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
     try {
-      return JSON.parse(await fs.readFile(path.join(workspacePath, LEGACY_STATE_FILE), 'utf-8')) as RunningState;
+      return JSON.parse(await fs.readFile(candidate, 'utf-8')) as RunningState;
     } catch {
-      return null;
+      // try next candidate
     }
   }
+  return null;
 }
 
 /**
@@ -261,21 +260,60 @@ export async function mutateRunningState(
 ): Promise<void> {
   const previous = stateQueues.get(workspacePath) ?? Promise.resolve();
   const next = previous.then(async () => {
-    let state: RunningState;
-    try {
-      state = JSON.parse(await fs.readFile(getStatePath(workspacePath), 'utf-8')) as RunningState;
-    } catch {
+    let state: RunningState | null = null;
+    const resolved = resolveWorkspaceFilePathSync(workspacePath, 'runningState');
+    const candidatePaths = [
+      resolved.path,
+      path.join(workspacePath, BRAND_CONFIG.files.runningState.primary),
+      ...(BRAND_CONFIG.files.runningState.fallbacks ?? []).map((f) => path.join(workspacePath, f)),
+      path.join(workspacePath, BRAND_CONFIG.files.runningState.legacy),
+    ];
+    for (const candidate of candidatePaths) {
+      try {
+        state = JSON.parse(await fs.readFile(candidate, 'utf-8')) as RunningState;
+        break;
+      } catch {
+        // try next
+      }
+    }
+    if (!state) {
       state = { workspacePath, services: [], updatedAt: new Date().toISOString() };
     }
 
     const updated = mutator(state);
     updated.updatedAt = new Date().toISOString();
 
+    const primaryPath = path.join(workspacePath, BRAND_CONFIG.files.runningState.primary);
+    const legacyCandidates = [
+      BRAND_CONFIG.files.runningState.legacy,
+      ...(BRAND_CONFIG.files.runningState.fallbacks ?? []),
+    ];
     if (updated.services.length === 0 && (updated.orchestrators?.length ?? 0) === 0 && (updated.failures?.length ?? 0) === 0) {
-      await fs.unlink(getStatePath(workspacePath)).catch(() => {});
+      try {
+        await fs.unlink(primaryPath);
+      } catch {}
+      for (const file of legacyCandidates) {
+        const candidate = path.join(workspacePath, file);
+        if (candidate !== primaryPath) {
+          try {
+            await fs.unlink(candidate);
+          } catch {}
+        }
+      }
       return;
     }
-    await fs.writeFile(getStatePath(workspacePath), JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+    try {
+      await fs.mkdir(path.dirname(primaryPath), { recursive: true });
+    } catch {}
+    await fs.writeFile(primaryPath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+    for (const file of legacyCandidates) {
+      const candidate = path.join(workspacePath, file);
+      if (candidate !== primaryPath) {
+        try {
+          await fs.unlink(candidate);
+        } catch {}
+      }
+    }
   });
   // Keep the chain alive even when a link fails.
   stateQueues.set(workspacePath, next.catch(() => {}));

@@ -20,6 +20,7 @@ import * as agentsCatalog from './resources/agents-catalog.js';
 import * as resourceService from './resources/service.js';
 import * as detectAi from './utils/detect-ai.js';
 import { clearCustomDomainRegistrations, registerSampleDomainPacks } from './core/domain-packs.js';
+import { HARNESSES } from './harnesses/registry.js';
 
 import * as newRepo from './core/new-repo.js';
 import * as orchestration from './orchestration/index.js';
@@ -61,6 +62,7 @@ vi.mock('./resources/service.js', async (importOriginal) => {
     ...actual,
     withResourceAdministrationLock: vi.fn((operation: () => Promise<unknown>) => operation()),
     validateResourceSelections: vi.fn().mockResolvedValue(undefined),
+    previewResourceSelections: vi.fn(actual.previewResourceSelections),
   };
 });
 vi.mock('./utils/detect-ai.js', () => ({
@@ -1169,6 +1171,25 @@ describe('Server API Endpoints Unit Tests', () => {
     });
   });
 
+  describe('GET /api/harnesses', () => {
+    it('describes every harness in the registry for the GUI, without launch details', async () => {
+      const response = await app.request('/api/harnesses');
+      expect(response.status).toBe(200);
+      const { harnesses } = await response.json() as { harnesses: Array<Record<string, unknown>> };
+      expect(harnesses.map((h) => h.id)).toEqual(Object.keys(HARNESSES));
+      expect(harnesses.find((h) => h.id === 'pi')).toEqual({
+        id: 'pi',
+        name: 'Pi',
+        workspaceSkillFolder: '.agents/skills',
+        globalSkillRoots: ['~/.pi/agent/skills', '~/.agents/skills'],
+        history: true,
+        instructionsFile: null,
+      });
+      expect(harnesses.find((h) => h.id === 'claude')).toMatchObject({ workspaceSkillFolder: '.claude/skills', instructionsFile: 'CLAUDE.md' });
+      for (const harness of harnesses) expect(Object.keys(harness).sort()).toEqual(['globalSkillRoots', 'history', 'id', 'instructionsFile', 'name', 'workspaceSkillFolder']);
+    });
+  });
+
   describe('GET /api/repos/branches', () => {
     it('should return 400 when the path parameter is missing', async () => {
       const response = await app.request('/api/repos/branches');
@@ -1569,7 +1590,43 @@ describe('Server API Endpoints Unit Tests', () => {
           enabledSkills: ['pr-review-toolkit', 'unit-test-coverage'],
           enabledAgents: ['my-agent'],
           enabledCategories: [],
+          disabledSkills: [],
         }
+      );
+    });
+
+    it('saves the subscribed categories, and the skills left out of them, during workspace creation', async () => {
+      vi.spyOn(config, 'loadConfig').mockResolvedValue({
+        devDir: '/mock',
+        workspacesDir: '/mock/workspaces',
+        storageProvider: 'local'
+      } as any);
+
+      vi.spyOn(workspace, 'createWorkspace').mockResolvedValue('/mock/workspaces/categories-ws');
+      vi.spyOn(analyzers, 'analyzeAllRepos').mockResolvedValue(new Map());
+      vi.spyOn(generators, 'generateContextFiles').mockResolvedValue(undefined);
+      vi.spyOn(skillsCatalog, 'saveWorkspaceSkillsConfig').mockResolvedValue(undefined as any);
+
+      const response = await app.request('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          branchName: 'categories-ws',
+          description: 'Categories workspace',
+          repos: [{ name: 'repo-1', path: '/mock/repo-1' }],
+          assistants: [],
+          enabledSkills: ['standup'],
+          enabledCategories: ['pull-requests'],
+          disabledSkills: ['write-description'],
+        })
+      });
+
+      expect(response.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(skillsCatalog.saveWorkspaceSkillsConfig).toHaveBeenCalledWith(
+        expect.stringContaining('categories-ws'),
+        { enabledSkills: ['standup'], enabledAgents: [], enabledCategories: ['pull-requests'], disabledSkills: ['write-description'] },
       );
     });
 
@@ -2608,8 +2665,9 @@ describe('Server API Endpoints Unit Tests', () => {
       vi.mocked(config.loadConfig).mockResolvedValue({ workspacesDir: path.resolve('/workspaces') } as any);
       vi.mocked(fs.realpath).mockImplementation(async (candidate) => path.resolve(String(candidate)));
       vi.mocked(workspace.loadWorkspaceManifest).mockResolvedValue({ workspacePath } as any);
+      vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([]);
       vi.mocked(skillsCatalog.saveWorkspaceSkillsConfig).mockResolvedValue({
-        schemaVersion: 1,
+        schemaVersion: 2,
         revision: 4,
         enabledSkills: ['pr-review-toolkit'],
         enabledAgents: ['reviewer'],
@@ -2631,9 +2689,197 @@ describe('Server API Endpoints Unit Tests', () => {
       expect(resourceService.validateResourceSelections).toHaveBeenCalledWith(['pr-review-toolkit'], ['reviewer'], workspacePath);
       expect(skillsCatalog.saveWorkspaceSkillsConfig).toHaveBeenCalledWith(
         workspacePath,
-        expect.objectContaining({ enabledSkills: ['pr-review-toolkit'], enabledAgents: ['reviewer'] }),
+        { enabledSkills: ['pr-review-toolkit'], enabledAgents: ['reviewer'], enabledCategories: [], disabledSkills: [] },
         3,
       );
+    });
+
+    it('saves the subscribed categories and the skills switched off, and drops skills a harness ships', async () => {
+      const workspacePath = path.resolve('/workspaces/example');
+      vi.mocked(config.loadConfig).mockResolvedValue({ workspacesDir: path.resolve('/workspaces') } as any);
+      vi.mocked(fs.realpath).mockImplementation(async (candidate) => path.resolve(String(candidate)));
+      vi.mocked(workspace.loadWorkspaceManifest).mockResolvedValue({ workspacePath } as any);
+      vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([
+        { id: 'standup', name: 'standup', category: 'notes', description: 'Notes', content: '# Notes', custom: true },
+        { id: 'pdf', name: 'pdf', category: 'documents', description: 'PDFs', content: '# PDF', custom: false, scope: 'global', source: { harness: 'claude', label: 'Claude Code', root: '/home/me/.claude/skills' } },
+      ]);
+      vi.mocked(skillsCatalog.saveWorkspaceSkillsConfig).mockResolvedValue({ schemaVersion: 2, revision: 5, enabledSkills: ['standup'] });
+
+      const response = await app.request('/api/skills/workspace/example/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expectedRevision: 4,
+          enabledSkills: ['pdf', 'standup'],
+          enabledAgents: [],
+          enabledCategories: ['pull-requests'],
+          disabledSkills: ['write-description'],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ success: true, config: { revision: 5 } });
+      expect(resourceService.validateResourceSelections).toHaveBeenCalledWith(['standup'], [], workspacePath);
+      expect(skillsCatalog.saveWorkspaceSkillsConfig).toHaveBeenCalledWith(
+        workspacePath,
+        { enabledSkills: ['standup'], enabledAgents: [], enabledCategories: ['pull-requests'], disabledSkills: ['write-description'] },
+        4,
+      );
+    });
+
+    it.each([
+      [{ enabledCategories: 'pull-requests' }],
+      [{ disabledSkills: 'standup' }],
+    ])('rejects categories or exceptions that are not lists (%j)', async (extra) => {
+      const response = await app.request('/api/skills/workspace/example/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedRevision: 0, enabledSkills: [], enabledAgents: [], ...extra }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(skillsCatalog.saveWorkspaceSkillsConfig).not.toHaveBeenCalled();
+    });
+
+    it('returns what the saved selection turns on and what the workspace holds', async () => {
+      const workspacePath = path.resolve('/workspaces/example');
+      vi.mocked(config.loadConfig).mockResolvedValue({ workspacesDir: path.resolve('/workspaces') } as any);
+      vi.mocked(fs.realpath).mockImplementation(async (candidate) => path.resolve(String(candidate)));
+      vi.mocked(workspace.loadWorkspaceManifest).mockResolvedValue({ workspacePath } as any);
+      const library = (id: string, category: string) => ({ id, name: id, category, description: id, content: `# ${id}`, custom: true });
+      vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([
+        library('review-pr', 'pull-requests'),
+        library('write-description', 'pull-requests'),
+        library('standup', 'notes'),
+        library('run-e2e', 'testing'),
+        { ...library('local-plan', 'general'), scope: 'workspace' as const },
+        { ...library('pdf', 'pull-requests'), custom: false, scope: 'global' as const, source: { harness: 'claude', label: 'Claude Code', root: '/home/me/.claude/skills' } },
+      ]);
+      vi.mocked(skillsCatalog.getWorkspaceSkillsConfig).mockResolvedValue({
+        schemaVersion: 2,
+        revision: 3,
+        enabledSkills: ['standup', 'pdf'],
+        disabledSkills: ['write-description'],
+        enabledAgents: [],
+        enabledCategories: ['pull-requests'],
+      });
+      vi.mocked(skillsCatalog.listInstalledSkillIds).mockResolvedValue(['review-pr', 'stale-copy']);
+
+      const response = await app.request('/api/skills/workspace/example');
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.config).toMatchObject({ revision: 3, enabledCategories: ['pull-requests'], disabledSkills: ['write-description'] });
+      // Single picks, then the category, minus the exception; nothing a harness ships; no workspace-only skill once a selection is saved.
+      expect(body.resolvedSkills).toEqual(['standup', 'review-pr']);
+      expect(body.installedSkills).toEqual(['review-pr', 'stale-copy']);
+      expect(skillsCatalog.getAllSkills).toHaveBeenCalledWith(workspacePath);
+      expect(skillsCatalog.listInstalledSkillIds).toHaveBeenCalledWith(workspacePath);
+    });
+
+    it('turns on the skills written inside a workspace that has no saved selection yet', async () => {
+      const workspacePath = path.resolve('/workspaces/example');
+      vi.mocked(config.loadConfig).mockResolvedValue({ workspacesDir: path.resolve('/workspaces') } as any);
+      vi.mocked(fs.realpath).mockImplementation(async (candidate) => path.resolve(String(candidate)));
+      vi.mocked(workspace.loadWorkspaceManifest).mockResolvedValue({ workspacePath } as any);
+      vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([
+        { id: 'local-plan', name: 'local-plan', category: 'general', description: 'Plan', content: '# Plan', custom: true, scope: 'workspace' },
+        { id: 'standup', name: 'standup', category: 'notes', description: 'Notes', content: '# Notes', custom: true },
+      ]);
+      vi.mocked(skillsCatalog.getWorkspaceSkillsConfig).mockResolvedValue({
+        schemaVersion: 2, revision: 0, enabledSkills: [], disabledSkills: [], enabledAgents: [], enabledCategories: [],
+      });
+      vi.mocked(skillsCatalog.listInstalledSkillIds).mockResolvedValue([]);
+
+      const response = await app.request('/api/skills/workspace/example');
+
+      await expect(response.json()).resolves.toMatchObject({ resolvedSkills: ['local-plan'], installedSkills: [] });
+    });
+
+    it('POST /api/skills/import adds a harness skill to My library', async () => {
+      const skill = { id: 'pdf', name: 'pdf', category: 'documents', description: 'PDFs', content: '# PDF', custom: true, scope: 'global' as const };
+      vi.mocked(skillsCatalog.importHarnessSkill).mockResolvedValue(skill);
+
+      const response = await app.request('/api/skills/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ harness: 'claude', id: 'pdf' }),
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ skill });
+      expect(skillsCatalog.importHarnessSkill).toHaveBeenCalledWith('claude', 'pdf');
+    });
+
+    it.each([
+      ['not-found', 404, 'No skill named "pdf" is built into claude.'],
+      ['exists', 409, 'My library already has a skill named "pdf".'],
+    ] as const)('POST /api/skills/import answers %s with %i', async (code, status, message) => {
+      // The catalog module is mocked here, so the error carries its fields by hand.
+      vi.mocked(skillsCatalog.importHarnessSkill).mockRejectedValueOnce(
+        Object.assign(new skillsCatalog.SkillImportError(code, message), { code, message }),
+      );
+
+      const response = await app.request('/api/skills/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ harness: 'claude', id: 'pdf' }),
+      });
+
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toEqual({ error: message });
+    });
+
+    it('POST /api/skills/import needs a harness and an id', async () => {
+      for (const body of [{}, { harness: 'claude' }, { id: 'pdf' }, { harness: 1, id: 'pdf' }]) {
+        const response = await app.request('/api/skills/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(skillsCatalog.importHarnessSkill).not.toHaveBeenCalled();
+    });
+
+    it('POST /api/resources/preview passes the chosen categories on', async () => {
+      // What the preview contains is covered where it is computed (resources/service.test.ts).
+      vi.mocked(resourceService.previewResourceSelections).mockResolvedValueOnce([]);
+
+      const response = await app.request('/api/resources/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: ['standup'], agents: [], assistants: ['claude', 'unknown-tool'], categories: ['pull-requests'] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(resourceService.previewResourceSelections).toHaveBeenCalledWith(['standup'], [], ['claude'], ['pull-requests'], []);
+    });
+
+    it('POST /api/resources/preview treats Pi as an assistant and drops names that are not harnesses', async () => {
+      vi.mocked(resourceService.previewResourceSelections).mockResolvedValueOnce([]);
+
+      const response = await app.request('/api/resources/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: [], assistants: ['pi', 'cursor', 'toString'] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(resourceService.previewResourceSelections).toHaveBeenCalledWith([], [], ['pi', 'cursor'], [], []);
+    });
+
+    it('POST /api/resources/preview works without categories', async () => {
+      vi.mocked(resourceService.previewResourceSelections).mockResolvedValueOnce([]);
+
+      const response = await app.request('/api/resources/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: ['standup'] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(resourceService.previewResourceSelections).toHaveBeenCalledWith(['standup'], [], [], [], []);
     });
 
     it('rejects workspace assignments that reference missing catalog resources', async () => {
@@ -2641,6 +2887,7 @@ describe('Server API Endpoints Unit Tests', () => {
       vi.mocked(config.loadConfig).mockResolvedValue({ workspacesDir: path.resolve('/workspaces') } as any);
       vi.mocked(fs.realpath).mockImplementation(async (candidate) => path.resolve(String(candidate)));
       vi.mocked(workspace.loadWorkspaceManifest).mockResolvedValue({ workspacePath } as any);
+      vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([]);
       vi.mocked(resourceService.validateResourceSelections).mockRejectedValueOnce(
         new resourceService.ResourceSelectionError(['missing-skill'], ['missing_agent']),
       );
@@ -2677,6 +2924,7 @@ describe('Server API Endpoints Unit Tests', () => {
       vi.mocked(config.loadConfig).mockResolvedValue({ workspacesDir: path.resolve('/workspaces') } as any);
       vi.mocked(fs.realpath).mockImplementation(async (candidate) => path.resolve(String(candidate)));
       vi.mocked(workspace.loadWorkspaceManifest).mockResolvedValue({ workspacePath } as any);
+      vi.mocked(skillsCatalog.getAllSkills).mockResolvedValue([]);
       const revisionError = new skillsCatalog.WorkspaceResourceRevisionError(2, 3);
       revisionError.message = 'Workspace resource configuration changed (expected revision 2, current 3).';
       vi.mocked(skillsCatalog.saveWorkspaceSkillsConfig).mockRejectedValueOnce(revisionError);

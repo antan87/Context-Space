@@ -135,7 +135,7 @@ This is the instructions content.`;
       ws = await createTestWorkspace();
       const config = await getWorkspaceSkillsConfig(ws.workspacePath);
 
-      expect(config.schemaVersion).toBe(1);
+      expect(config.schemaVersion).toBe(2);
       expect(Array.isArray(config.enabledSkills)).toBe(true);
       expect(Array.isArray(config.disabledSkills)).toBe(true);
     });
