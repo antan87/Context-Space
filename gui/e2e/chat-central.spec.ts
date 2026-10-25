@@ -187,14 +187,16 @@ test.describe('the chat can be hidden for a while, and given more or less room',
     await expect(divider).toHaveAttribute('aria-valuenow', '62');
     // A terminal takes focus once it has attached, so let it, then move to the divider.
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+    const initialWidth = (await boxOf(chatOf(page))).width;
     await divider.focus();
     await page.keyboard.press('ArrowLeft');
     await expect(divider).toHaveAttribute('aria-valuenow', '59');
+    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeLessThan(initialWidth);
     const narrower = await boxOf(chatOf(page));
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowRight');
     await expect(divider).toHaveAttribute('aria-valuenow', '65');
-    expect((await boxOf(chatOf(page))).width).toBeGreaterThan(narrower.width);
+    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeGreaterThan(narrower.width);
     for (let i = 0; i < 10; i += 1) await page.keyboard.press('ArrowRight');
     await expect(divider).toHaveAttribute('aria-valuenow', '80');
     await page.reload();
@@ -236,18 +238,18 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     const rail = await boxOf(destinations(page));
     expect(rail.x + rail.width).toBeGreaterThan(1440 - 2);
     expect(rail.width).toBeLessThanOrEqual(RAIL + 1);
-    // What can open beside the chat; the chat itself and the overview have no place on it.
-    // Knowledge is read in Docs, with the other files ContextSpace keeps.
-    await expect(destinations(page).getByRole('link')).toHaveText(['Plan', 'Code', 'Docs', 'Services']);
+    // What can open beside the chat: Overview, Plan, Sessions, Code, Docs, Skills, Services.
+    await expect(destinations(page).getByRole('link')).toHaveText(['Overview', 'Plan', /^Sessions/, 'Code', 'Docs', 'Skills', 'Services']);
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/workspace-chat.png` });
   });
 
-  test('has no item for the sessions or the skills: the history opens from the chat, the skills from the Skill Library', async ({ page }) => {
+  test('has items for sessions and skills on the rail so they are directly accessible', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
-    await expect(destinations(page).getByRole('link')).toHaveCount(4);
-    await expect(destinations(page).getByRole('link', { name: /Sessions|Skills/ })).toHaveCount(0);
-    // The way in is in the chat's own toolbar, named for what it opens.
+    await expect(destinations(page).getByRole('link')).toHaveCount(7);
+    await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toBeVisible();
+    await expect(destinations(page).getByRole('link', { name: /^Skills/ })).toBeVisible();
+    // The way in is also in the chat's own toolbar, named for what it opens.
     await expect(chatOf(page).getByRole('button', { name: 'Session history' })).toBeVisible();
   });
 
@@ -266,8 +268,8 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     await expect(history).toHaveAttribute('aria-pressed', 'true');
     await expect(history).toBeFocused();
-    // It is not a part of the rail, so nothing there is marked.
-    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
+    // Sessions is on the rail, so its link is marked.
+    await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toHaveAttribute('aria-current', 'page');
 
     await history.click();
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
@@ -293,7 +295,7 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(page.getByRole('heading', { name: 'AI Sessions & History' })).toBeVisible();
     await expect(chatOf(page)).toBeVisible();
     await expect(chatOf(page).getByRole('button', { name: 'Session history' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toHaveAttribute('aria-current', 'page');
   });
 
   test('marks the part that is open, names it above the panel, and closes it when chosen again', async ({ page }) => {
@@ -310,9 +312,9 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(destinations(page).getByRole('link', { name: 'Docs' })).not.toHaveAttribute('aria-current', 'page');
   });
 
-  test('still opens an old address that has no place on the rail', async ({ page }) => {
+  test('opens the overview section with its rail destination marked', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/overview');
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible();
-    await expect(destinations(page).locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(destinations(page).getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
   });
 });

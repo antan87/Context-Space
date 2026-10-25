@@ -21,6 +21,7 @@ import { hasKnowledgeEntry, readWorkspaceKnowledge } from './knowledge.js';
 import { inspectAgentMcp } from './agent-mcp.js';
 import { describeWorkspaceBackup } from './workspace-backup.js';
 import { CLI_NAME } from './constants.js';
+import { HARNESSES, isHarnessId } from '../harnesses/registry.js';
 
 import type { ProjectAnalysis } from '../types.js';
 
@@ -366,17 +367,10 @@ export async function runDoctor(workspacePath: string): Promise<DoctorReport> {
   }
 
   // ── 7. AI Assistant CLIs ────────────────────────────────────────────────
-  const astMap: Record<string, string> = {
-    claude: 'claude',
-    codex: 'codex',
-    antigravity: 'agy',
-    copilot: 'copilot',
-    cursor: 'cursor-agent',
-  };
-
   if (feature.assistants && feature.assistants.length > 0) {
     for (const a of feature.assistants) {
-      const bin = astMap[a.toLowerCase()] ?? a.toLowerCase();
+      const id = a.toLowerCase();
+      const bin = isHarnessId(id) ? HARNESSES[id].binary : id;
       const resolved = findExecutable(bin);
       if (!resolved) {
         warnings.push(`Workspace assistant "${a}" (${bin}) is not on system PATH.`);

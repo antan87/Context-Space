@@ -1,35 +1,38 @@
 import type { Page, Request } from '@playwright/test';
 import { test, expect } from './fixtures';
 
-const base = { repos: [], assistants: [], mode: 'in-place', createdAt: '2026-08-16T00:00:00.000Z' };
-const workspaces = [
-  { ...base, id: 'example', branchName: 'example', name: 'Example work', description: 'Skills test', workspacePath: '/ws/example' },
-  { ...base, id: 'retired', branchName: 'retired', name: 'Retired work', description: 'Done', workspacePath: '/ws/retired', archivedAt: '2026-09-28T10:00:00.000Z' },
-];
-
-const skill = (id: string, title: string, scope: 'global' | 'workspace') => ({
-  id, name: id, title, category: 'general', description: `Use when testing ${title}.`, content: `# ${title}`, custom: true, scope,
+const skill = (id: string, title: string, category = 'general') => ({
+  id, name: id, title, category, description: `Use when testing ${title}.`, content: `# ${title}`, custom: true, scope: 'global',
 });
-const shared = skill('shared-skill', 'Shared Skill', 'global');
-const local = skill('local-skill', 'Local Skill', 'workspace');
+const shared = skill('shared-skill', 'Shared Skill');
+const ops = skill('ops-skill', 'Ops Skill', 'ops');
+const pdf = {
+  id: 'pdf', name: 'pdf', title: 'pdf', category: 'documents', description: 'Read and fill PDFs.', content: '# pdf', custom: false,
+  source: { harness: 'claude', label: 'Claude Code', root: '/home/me/.claude/skills' },
+};
+
+const workspaces = [
+  { repos: [], assistants: [], mode: 'in-place', createdAt: '2026-08-16T00:00:00.000Z', id: 'example', branchName: 'example', name: 'Example work', description: 'Skills test', workspacePath: '/ws/example' },
+];
 
 test.use({ workspacesData: [workspaces, { option: true }] });
 
-interface Seen { deletes: Request[]; saves: unknown[] }
+interface Seen { deletes: Request[]; saves: any[]; imports: unknown[] }
 
-/** The skills API for one workspace ("example") whose own package sits beside a global one. Saves can be made to fail. */
+/** The skills API: My library skills in two categories and one skill a tool ships. Saves can be made to fail. */
 async function mockSkills(page: Page, { failSaves = false } = {}): Promise<Seen> {
-  const seen: Seen = { deletes: [], saves: [] };
+  const seen: Seen = { deletes: [], saves: [], imports: [] };
   await page.route('**/api/skills**', async (route, request) => {
     const url = new URL(request.url());
     if (url.pathname === '/api/skills/categories') {
       return route.fulfill({ json: { categories: [{ id: 'general', name: 'General', custom: true }, { id: 'ops', name: 'Operations', custom: true }] } });
     }
-    if (url.pathname === '/api/skills/workspace/example') {
-      return route.fulfill({ json: { config: { schemaVersion: 1, revision: 1, enabledSkills: [], enabledAgents: [], enabledCategories: ['general'] } } });
+    if (url.pathname === '/api/skills/import') {
+      seen.imports.push(request.postDataJSON());
+      return route.fulfill({ json: { skill: { ...skill('pdf', 'pdf', 'documents') } } });
     }
     if (url.pathname === '/api/skills' && request.method() === 'GET') {
-      return route.fulfill({ json: { skills: url.searchParams.get('workspace') === 'example' ? [shared, local] : [shared] } });
+      return route.fulfill({ json: { skills: [shared, ops, pdf] } });
     }
     if (url.pathname === '/api/skills' && request.method() === 'POST') {
       seen.saves.push(request.postDataJSON());
@@ -45,41 +48,64 @@ async function mockSkills(page: Page, { failSaves = false } = {}): Promise<Seen>
 }
 
 test.describe('Skill Library', () => {
-  test('deletes a global skill from the catalog even after a workspace skill was opened', async ({ page }) => {
+  test('is My library only: no workspace picker, and it points to a workspace\'s Skills tab', async ({ page }) => {
+    await mockSkills(page);
+    await page.goto('/#/skills');
+    await expect(page.getByRole('heading', { name: 'Skill Library' })).toBeVisible();
+
+    await expect(page.getByLabel('Scope:')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Save selection' })).toHaveCount(0);
+    await expect(page.getByText('open that workspace and use its Skills tab', { exact: false })).toBeVisible();
+    // No skill is called "global" here.
+    await expect(page.getByText('Global', { exact: false })).toHaveCount(0);
+  });
+
+  test('lists My library by category and, per tool, the skills it has built in', async ({ page }) => {
+    await mockSkills(page);
+    await page.goto('/#/skills');
+
+    const list = page.getByRole('complementary', { name: 'Skill list' });
+    await expect(list.getByText('My library', { exact: true })).toBeVisible();
+    await expect(list.getByRole('listitem', { name: 'General category' })).toContainText('Shared Skill');
+    await expect(list.getByRole('listitem', { name: 'Operations category' })).toContainText('Ops Skill');
+    await expect(list.getByText('Built into Claude Code', { exact: true })).toBeVisible();
+  });
+
+  test('copies a skill a tool ships into My library', async ({ page }) => {
+    const seen = await mockSkills(page);
+    await page.goto('/#/skills');
+    await page.getByRole('button', { name: /^pdf\b/ }).click();
+    await expect(page.getByText('Built into Claude Code · read-only')).toBeVisible();
+    await page.getByRole('button', { name: 'Add pdf to my library' }).click();
+
+    await expect.poll(() => seen.imports).toEqual([{ harness: 'claude', id: 'pdf' }]);
+  });
+
+  test('moves a skill to another category by dragging it there', async ({ page }) => {
+    const seen = await mockSkills(page);
+    await page.goto('/#/skills');
+
+    await page.getByRole('button', { name: /Shared Skill/ }).dragTo(page.getByRole('listitem', { name: 'Operations category' }));
+    await expect.poll(() => seen.saves.length).toBe(1);
+    expect(seen.saves[0]).toMatchObject({ id: 'shared-skill', category: 'ops' });
+  });
+
+  test('deletes a skill from My library', async ({ page }) => {
     const seen = await mockSkills(page);
     await page.goto('/#/skills');
     await expect(page.getByRole('heading', { name: 'Skill Library' })).toBeVisible();
 
-    // Opening a workspace's own skill leaves the editor on that workspace's scope.
-    await page.getByLabel('Scope:').selectOption('example');
-    await page.getByText('Local Skill', { exact: true }).click();
-    await expect(page.getByRole('dialog').getByText('Edit Skill Package')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-
-    await page.getByLabel('Scope:').selectOption('global');
     // The explorer acts on the skill that is selected in its list.
     await page.getByText('Shared Skill', { exact: true }).click();
     await page.getByRole('button', { name: 'Delete skill' }).click();
-    await expect(page.getByRole('dialog').getByText('Delete Global Skill')).toBeVisible();
+    await expect(page.getByRole('dialog').getByText('Delete Skill', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Delete Permanently' }).click();
 
-    // The global package is deleted as a global one. Naming a workspace made the server look only there: "Skill not found".
+    // The library skill is deleted as a library one: no workspace is named.
     await expect.poll(() => seen.deletes.length).toBe(1);
     const url = new URL(seen.deletes[0]!.url());
     expect(url.pathname).toBe('/api/skills/shared-skill');
     expect(url.searchParams.has('workspace')).toBe(false);
-  });
-
-  test('offers delete in a workspace\'s view only for that workspace\'s own skills', async ({ page }) => {
-    await mockSkills(page);
-    await page.goto('/#/skills');
-    await page.getByLabel('Scope:').selectOption('example');
-    await expect(page.getByText('Shared Skill', { exact: true })).toBeVisible();
-    await expect(page.getByText('Local Skill', { exact: true })).toBeVisible();
-
-    // One trash button for two custom skills: the global one is not deleted from here.
-    await expect(page.getByRole('button', { name: 'Delete skill' })).toHaveCount(1);
   });
 
   test('a key pressed on a card\'s button acts on that button, not on the card', async ({ page }) => {
@@ -106,60 +132,44 @@ test.describe('Skill Library', () => {
     expect(seen.saves).toHaveLength(1);
   });
 
-  test('typing a letter in the scope picker picks an option and does not collapse the sidebar', async ({ page }) => {
-    await mockSkills(page);
+  test('a skill made here is saved to My library, with no workspace to choose', async ({ page }) => {
+    const seen = await mockSkills(page);
     await page.goto('/#/skills');
-    const sidebar = page.locator('aside.context-sidebar');
-    await expect(sidebar.getByRole('button', { name: /^Collapse/ })).toBeVisible();
+    await page.getByRole('button', { name: 'New Skill' }).click();
 
-    // "z" is the sidebar's own key, but a letter pressed in a select belongs to the select.
-    await page.getByLabel('Scope:').focus();
-    await page.keyboard.press('z');
-    await page.waitForTimeout(300);
-    await expect(sidebar.getByRole('button', { name: /^Collapse/ })).toBeVisible();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Workspace-Local')).toHaveCount(0);
+    await expect(dialog.getByText('Target Workspace')).toHaveCount(0);
+    await dialog.getByLabel('Display Title').fill('Fresh Skill');
+    await dialog.getByLabel('Trigger Description (for AI Autonomous Discovery)').fill('Use when testing.');
+    await dialog.getByRole('button', { name: 'Save Skill' }).click();
 
-    // Anywhere else on the page it still collapses it.
-    await page.locator('body').click({ position: { x: 600, y: 300 } });
-    await page.keyboard.press('z');
-    await expect(sidebar.getByRole('button', { name: /^Collapse/ })).toHaveCount(0);
-  });
-
-  test('names workspaces in the scope list and marks an archived one', async ({ page }) => {
-    await mockSkills(page);
-    await page.goto('/#/skills');
-    const scope = page.getByLabel('Scope:');
-    await expect(scope.locator('option', { hasText: 'Example work' })).toHaveCount(1);
-    await expect(scope.locator('option', { hasText: 'Retired work (retired) · archived' })).toHaveCount(1);
+    await expect.poll(() => seen.saves.length).toBe(1);
+    expect(seen.saves[0]).toMatchObject({ name: 'fresh-skill', scope: 'global' });
+    expect(seen.saves[0].workspaceId).toBeUndefined();
   });
 });
 
 test.describe('Skills of one workspace', () => {
-  test('are reached from the Skill Library, since the workspace rail has no Skills item', async ({ page }) => {
+  test('are reached from the workspace rail, where the Skills item is marked', async ({ page }) => {
     await mockSkills(page);
     await page.route('**/api/agents', (route) => route.fulfill({ json: { agents: [] } }));
-    await page.goto('/#/skills');
-    await expect(page.getByRole('heading', { name: 'Skill Library' })).toBeVisible();
-    const link = page.getByRole('link', { name: "This workspace's skills" });
-    // The global catalog belongs to no workspace, and an archived workspace has no skills view to open.
-    await expect(link).toHaveCount(0);
-    await page.getByLabel('Scope:').selectOption('retired');
-    await expect(link).toHaveCount(0);
-
-    await page.getByLabel('Scope:').selectOption('example');
-    await link.click();
+    await page.route('**/api/skills/workspace/example', (route) => route.fulfill({ json: { config: { schemaVersion: 2, revision: 1, enabledSkills: [], enabledAgents: [], enabledCategories: [] }, resolvedSkills: [], installedSkills: [] } }));
+    await page.goto('/#/workspaces/example');
+    const rail = page.getByRole('navigation', { name: 'Workspace' });
+    await rail.getByRole('link', { name: 'Skills' }).click();
     await expect(page).toHaveURL(/#\/workspaces\/example\/skills$/);
     await expect(page.getByRole('heading', { name: 'Workspace Skills & Agents' })).toBeVisible();
-    // Skills are not on the rail, so nothing there is marked.
-    const rail = page.getByRole('navigation', { name: 'Workspace' });
-    await expect(rail.getByRole('link')).toHaveText(['Plan', 'Code', 'Docs', 'Services']);
-    await expect(rail.locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(rail.getByRole('link')).toHaveText(['Overview', 'Plan', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']);
+    await expect(rail.getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
   });
 
   test('still open at the old workspace address', async ({ page }) => {
     await mockSkills(page);
     await page.route('**/api/agents', (route) => route.fulfill({ json: { agents: [] } }));
+    await page.route('**/api/skills/workspace/example', (route) => route.fulfill({ json: { config: { schemaVersion: 2, revision: 1, enabledSkills: [], enabledAgents: [], enabledCategories: [] }, resolvedSkills: [], installedSkills: [] } }));
     await page.goto('/#/workspaces/example/skills');
     await expect(page.getByRole('heading', { name: 'Workspace Skills & Agents' })).toBeVisible();
-    await expect(page.getByText('Local Skill', { exact: true })).toBeVisible();
+    await expect(page.getByText('Shared Skill', { exact: true })).toBeVisible();
   });
 });

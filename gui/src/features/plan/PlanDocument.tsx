@@ -8,6 +8,7 @@ import { Input } from '../../components/ui/input.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
 import { ChatMarkdown, type MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
+import { handleDelegatedRowClick } from '../../lib/delegatedRowClick.js';
 import { API_BASE } from '../../lib/apiBase.js';
 import { cn } from '../../lib/utils.js';
 import { goToWorkspace } from '../chat/chatRoute.js';
@@ -21,10 +22,20 @@ const TONE = { done: 'text-[var(--state-done)]', failed: 'text-[var(--state-reop
 type Apply = (change: PlanFileChangeInput) => Promise<boolean>;
 
 function StepRow({ step, busy, readOnly, onApply }: { step: PlanFileStep; busy: boolean; readOnly: boolean; onApply: Apply }) {
-  return <li className="flex items-start gap-2.5 py-1">
-    <Checkbox className="mt-0.5" checked={step.done} disabled={busy || readOnly} aria-label={step.text}
+  const toggle = () => {
+    if (busy || readOnly) return;
+    void onApply({ type: 'tick', key: step.key, done: !step.done, expected: step.text });
+  };
+  return <li
+    className={cn(
+      'group flex items-start gap-2.5 py-1 px-1.5 -mx-1.5 rounded transition-colors',
+      !readOnly && !busy && 'cursor-pointer hover:bg-accent/40'
+    )}
+    onClick={(e) => handleDelegatedRowClick(e, toggle)}
+  >
+    <Checkbox className="mt-0.5 shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" checked={step.done} disabled={busy || readOnly} aria-label={step.text}
       onCheckedChange={(done) => void onApply({ type: 'tick', key: step.key, done, expected: step.text })} />
-    <span className={cn('min-w-0 flex-1 break-words text-sm leading-snug', step.done ? 'text-muted-foreground line-through decoration-muted-foreground/40' : 'text-foreground')}>
+    <span className={cn('min-w-0 flex-1 break-words text-sm leading-snug select-text', step.done ? 'text-muted-foreground line-through decoration-muted-foreground/40' : 'text-foreground')}>
       <InlinePlanMarkdown content={step.text} />
     </span>
   </li>;
@@ -62,7 +73,7 @@ function AddStep({ checkpoint, busy, onApply }: { checkpoint?: string; busy: boo
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   if (!open) {
-    return <button type="button" className="mt-1 inline-flex items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => setOpen(true)}>
+    return <button type="button" className="mt-1 inline-flex items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" onClick={() => setOpen(true)}>
       <Plus aria-hidden="true" className="size-3.5" />Add a step
     </button>;
   }
@@ -88,7 +99,7 @@ function CheckpointCard({ checkpoint, busy, checking, readOnly, onApply, onCheck
   const proof = proofLook(checkpoint);
   return <li className={cn('rounded-xl border px-3.5 py-3', checkpoint.done ? 'border-border/40 bg-card/40' : 'border-border bg-card shadow-2xs')}>
     <div className="flex items-start gap-2.5">
-      <Checkbox className="mt-0.5" checked={checkpoint.done} disabled={busy || readOnly || checking} aria-label={checkpoint.title}
+      <Checkbox className="mt-0.5 shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" checked={checkpoint.done} disabled={busy || readOnly || checking} aria-label={checkpoint.title}
         title={checkpoint.check !== undefined && !checkpoint.done ? 'Runs its check first: ticked only when it passes' : undefined}
         onCheckedChange={(done) => void onApply({ type: 'tick', key: checkpoint.key, done, expected: checkpoint.title })} />
       <div className="min-w-0 flex-1 space-y-1">
@@ -101,12 +112,12 @@ function CheckpointCard({ checkpoint, busy, checking, readOnly, onApply, onCheck
         {(proof || checking) && <p className="flex flex-wrap items-center gap-1.5 text-xs">
           <ShieldCheck aria-hidden="true" className={cn('size-3.5', checking ? 'animate-pulse text-muted-foreground' : TONE[proof!.tone])} />
           <span className={checking ? 'text-muted-foreground' : TONE[proof!.tone]}>{checking ? 'Running the check…' : proof!.text}</span>
-          {!readOnly && !checking && checkpoint.check !== undefined && <button type="button" className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" onClick={onCheck}>Run it now</button>}
+          {!readOnly && !checking && checkpoint.check !== undefined && <button type="button" className="rounded text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" onClick={onCheck}>Run it now</button>}
         </p>}
         {checkpoint.done && checkpoint.outcome && <p className="break-words text-xs text-muted-foreground"><InlinePlanMarkdown content={checkpoint.outcome} /></p>}
         {open && checkpoint.detail && <p className="line-clamp-3 whitespace-pre-wrap break-words text-xs text-muted-foreground" title={checkpoint.detail}>{checkpoint.detail}</p>}
         {checkpoint.done && (checkpoint.steps.length > 0 || checkpoint.decisions.length > 0) && <button type="button" aria-expanded={unfolded}
-          className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => setUnfolded(!unfolded)}>
+          className="inline-flex items-center gap-0.5 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" onClick={() => setUnfolded(!unfolded)}>
           <ChevronRight aria-hidden="true" className={cn('size-3.5 transition-transform', unfolded && 'rotate-90')} />{unfolded ? 'Hide its steps' : 'Show its steps'}
         </button>}
         {open && (checkpoint.steps.length > 0 || checkpoint.decisions.length > 0) && <ul className="pt-1">
@@ -174,7 +185,7 @@ export function PlanDocument({ workspaceId, workspacePath, readOnly = false, onC
   if (!view) {
     return <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
       The plan could not be read: {plan.error instanceof Error ? plan.error.message : 'unknown error'}
-      <Button size="xs" variant="outline" onClick={() => void plan.refetch()}><RefreshCw />Retry</Button>
+      <Button size="xs" variant="outline" className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" onClick={() => void plan.refetch()}><RefreshCw />Retry</Button>
     </div>;
   }
 
@@ -227,7 +238,7 @@ export function PlanDocument({ workspaceId, workspacePath, readOnly = false, onC
       </ul>
     </Section>}
 
-    {(view.steps.length > 0) && <Section title={view.checkpoints.length ? 'Other steps' : 'Steps'} hint={doneSteps.length ? <button type="button" className="underline-offset-2 hover:underline" onClick={() => setShowDoneSteps(!showDoneSteps)}>
+    {(view.steps.length > 0) && <Section title={view.checkpoints.length ? 'Other steps' : 'Steps'} hint={doneSteps.length ? <button type="button" className="rounded underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" onClick={() => setShowDoneSteps(!showDoneSteps)}>
       {doneSteps.length} done · {showDoneSteps ? 'hide' : 'show'}
     </button> : undefined}>
       <ul className="px-1">
@@ -249,7 +260,7 @@ export function PlanDocument({ workspaceId, workspacePath, readOnly = false, onC
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={changeLine(entry)}>{changeLine(entry)}</span>
         <span className="shrink-0 text-xs text-muted-foreground">{whenText(entry.at)}</span>
       </li>)}</ul>
-      {view.changes.length > 5 && <button type="button" className="px-1 text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setAllChanges(!allChanges)}>
+      {view.changes.length > 5 && <button type="button" className="rounded px-1 text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1" onClick={() => setAllChanges(!allChanges)}>
         {allChanges ? 'Show fewer' : 'Show more'}
       </button>}
     </Section>}

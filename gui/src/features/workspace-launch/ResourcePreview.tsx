@@ -14,6 +14,7 @@ interface ResourcePreviewItem {
 }
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+const pluralCategories = (count: number) => `${count} ${count === 1 ? 'category' : 'categories'}`;
 
 /**
  * Before creating a workspace, shows every file the chosen skills and agents
@@ -23,9 +24,9 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
  * The listing can be long, so it stays collapsed behind a one-line summary and
  * never crowds the Create workspace button.
  */
-export function ResourcePreview({ skills, agents, assistants, tagCount }: { skills: string[]; agents: string[]; assistants: string[]; tagCount: number }) {
+export function ResourcePreview({ skills, categories, exceptions = [], agents, assistants, tagCount }: { skills: string[]; categories: string[]; exceptions?: string[]; agents: string[]; assistants: string[]; tagCount: number }) {
   const [open, setOpen] = useState(false);
-  const selection = { skills: [...skills].sort(), agents: [...agents].sort(), assistants: [...assistants].sort() };
+  const selection = { skills: [...skills].sort(), categories: [...categories].sort(), disabledSkills: [...exceptions].sort(), agents: [...agents].sort(), assistants: [...assistants].sort() };
   const preview = useQuery({
     queryKey: ['resource-preview', selection],
     queryFn: async ({ signal }) => (await apiFetch<{ resources: ResourcePreviewItem[] }>('/api/resources/preview', {
@@ -33,17 +34,20 @@ export function ResourcePreview({ skills, agents, assistants, tagCount }: { skil
       method: 'POST',
       body: JSON.stringify(selection),
     })).resources,
-    enabled: skills.length + agents.length > 0,
+    enabled: skills.length + categories.length + agents.length > 0,
   });
 
-  if (skills.length + agents.length === 0 && tagCount === 0) {
+  if (skills.length + categories.length + agents.length === 0 && tagCount === 0) {
     return <p className="text-xs text-muted-foreground">No skills or agents selected: the workspace gets only its generated assistant context.</p>;
   }
 
+  // A category brings in skills of its own, so once the server has worked them out they are what is counted.
+  const skillCount = preview.data ? preview.data.filter((item) => item.kind === 'skill').length : skills.length;
   const counts = [
-    skills.length > 0 ? plural(skills.length, 'skill') : null,
+    skillCount > 0 ? plural(skillCount, 'skill') : null,
+    categories.length > 0 ? pluralCategories(categories.length) : null,
     agents.length > 0 ? plural(agents.length, 'agent') : null,
-    skills.length + agents.length === 0 ? plural(tagCount, 'tag') : null,
+    skills.length + categories.length + agents.length === 0 ? plural(tagCount, 'tag') : null,
   ].filter(Boolean).join(', ');
   const fileCount = preview.data?.reduce((total, item) => total + item.files.length, 0);
   const summary = preview.isLoading ? `${counts} · working out the files…` : fileCount === undefined ? counts : `${counts} · ${plural(fileCount, 'file')}`;

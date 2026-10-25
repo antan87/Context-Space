@@ -208,6 +208,7 @@ describe('summarizeOptionChanges', () => {
         workType: 'bug',
         autoUpdateBase: true,
         startHarness: 'Codex',
+        categories: 2,
         skills: 2,
         tags: 1,
         extraAssistants: 3,
@@ -220,12 +221,18 @@ describe('summarizeOptionChanges', () => {
       'Bug fix',
       'Fast-forward first',
       'Starts with Codex',
+      '2 categories',
       '2 skills',
       '1 tag',
       '3 more AI tools',
       'Teamwork notes',
       '1 agent',
     ]);
+  });
+
+  it('says "1 category" for one category, and nothing for none', () => {
+    expect(summarizeOptionChanges({ ...defaults, categories: 1 })).toEqual(['1 category']);
+    expect(summarizeOptionChanges({ ...defaults, categories: 0 })).toEqual([]);
   });
 
   it('ignores existing branches when no worktrees are created', () => {

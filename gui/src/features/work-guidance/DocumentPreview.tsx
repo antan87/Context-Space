@@ -12,7 +12,13 @@ import {
 } from './previewPolicy.js';
 
 export type DocumentKind = 'markdown' | 'text' | 'html' | 'pdf' | 'image' | 'download';
-export interface DocumentPreviewData { name: string; kind: DocumentKind; content?: string }
+export interface DocumentPreviewData {
+  name: string;
+  kind: DocumentKind;
+  content?: string;
+  size?: number;
+  modifiedAt?: string;
+}
 
 /**
  * Reads back everything a real AI-authored page needs that DOMPurify's body-only output throws

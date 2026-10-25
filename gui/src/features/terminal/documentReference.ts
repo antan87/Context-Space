@@ -23,9 +23,13 @@ export function workspaceDocumentName(reference: { path: string; line?: number }
   // Compared case-insensitively for Windows. On POSIX a folder differing from a repo only by case
   // is treated as the repo, and the code panel says it is not found.
   const lower = name.toLowerCase();
+  const isHtml = lower.endsWith('.html') || lower.endsWith('.htm');
   for (const repoPath of repoPaths) {
     const folder = toWorkspaceRelative(repoPath, workspaceRoot)?.toLowerCase();
-    if (folder && (lower === folder || lower.startsWith(`${folder}/`))) return null;
+    if (folder && (lower === folder || lower.startsWith(`${folder}/`))) {
+      if (isHtml) return name;
+      return null;
+    }
   }
   return name;
 }

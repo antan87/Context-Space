@@ -561,7 +561,7 @@ test.describe('Workrooms', () => {
     await expect(page.getByRole('button', { name: 'Set workflow' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Invite' })).toHaveCount(0);
     await openRoomTool(page, 'Workflow');
-    await expect(page.getByText('No shared workflow yet')).toBeVisible();
+    await expect(page.getByRole('tabpanel', { name: 'Workflow' }).getByText('No shared workflow yet')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Start workflow' })).toHaveCount(0);
   });
 

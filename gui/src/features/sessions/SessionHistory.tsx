@@ -29,6 +29,8 @@ import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
 import { formatCompact, formatHeaderQuota } from './usageFormat.js';
+import { handleDelegatedRowClick } from '../../lib/delegatedRowClick.js';
+import { isTypingTarget } from '../../app/typingTarget.js';
 
 export type SessionSortOption =
   | 'created-desc'
@@ -169,19 +171,40 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
   const [openingDesktopId, setOpeningDesktopId] = useState<string | null>(null);
   const [resumingTerminalId, setResumingTerminalId] = useState<string | null>(null);
   const [launchedInfo, setLaunchedInfo] = useState<{ assistant: string; cmd: string; timestamp: Date } | null>(null);
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
+  const [hudCopied, setHudCopied] = useState(false);
+  const hudTimeoutRef = useRef<number | null>(null);
 
   // Sorting & Filtering state
   const [sortBy, setSortBy] = useState<SessionSortOption>('updated-desc');
   const [viewMode, setViewMode] = useState<SessionViewMode>(initialViewMode);
   const [searchQuery, setSearchQuery] = useState(initialSearch);
   const [selectedAssistantFilter, setSelectedAssistantFilter] = useState<string>('all');
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Collapsed / expanded state per harness (default to false / collapsed)
+  // Preserve user harness expansion state across search queries
   const [expandedHarnesses, setExpandedHarnesses] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    setExpandedHarnesses({});
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && !isTypingTarget(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      } else if (e.key === 'Escape' && !isTypingTarget(e.target) && searchQuery) {
+        e.preventDefault();
+        setSearchQuery('');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [searchQuery]);
+
+  useEffect(() => {
+    return () => {
+      if (hudTimeoutRef.current) clearTimeout(hudTimeoutRef.current);
+    };
+  }, []);
 
   const toggleHarness = (id: string, currentlyExpanded: boolean) => {
     setExpandedHarnesses((prev) => ({ ...prev, [id]: !currentlyExpanded }));
@@ -426,17 +449,29 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
           <div className="relative w-full sm:w-56">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3 text-muted-foreground pointer-events-none z-10" />
             <input
+              ref={searchInputRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search chat sessions..."
-              className="w-full pl-7 pr-6 py-1 text-xs rounded border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  if (searchQuery) {
+                    setSearchQuery('');
+                  } else {
+                    searchInputRef.current?.blur();
+                  }
+                }
+              }}
+              placeholder="Search chat sessions... (/)"
+              className="w-full pl-7 pr-6 py-1 text-xs rounded border border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
             />
             {searchQuery && (
               <button
                 type="button"
+                aria-label="Clear search"
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-[10px] cursor-pointer"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-[10px] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 ✕
               </button>
@@ -449,7 +484,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
               type="button"
               onClick={() => setSelectedAssistantFilter('all')}
               className={cn(
-                'px-2 py-0.5 text-[11px] rounded font-medium transition-colors cursor-pointer',
+                'px-2 py-0.5 text-[11px] rounded font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
                 selectedAssistantFilter === 'all'
                   ? 'bg-primary text-primary-foreground font-semibold shadow-2xs'
                   : 'bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -467,7 +502,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                   key={harness.id}
                   onClick={() => setSelectedAssistantFilter(selectedAssistantFilter === harness.id ? 'all' : harness.id)}
                   className={cn(
-                    'px-2 py-0.5 text-[11px] rounded font-medium capitalize transition-colors cursor-pointer',
+                    'px-2 py-0.5 text-[11px] rounded font-medium capitalize transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
                     selectedAssistantFilter === harness.id
                       ? 'bg-primary text-primary-foreground font-semibold shadow-2xs'
                       : 'bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -489,7 +524,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
         <div className="flex items-center gap-2 shrink-0">
           {/* Order / Sort Dropdown Menu with Base UI */}
           <Menu>
-            <MenuTrigger className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded border border-border bg-card text-foreground hover:bg-accent cursor-pointer shadow-2xs transition-colors">
+            <MenuTrigger className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded border border-border bg-card text-foreground hover:bg-accent cursor-pointer shadow-2xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1">
               <ArrowUpDown size={11} className="text-muted-foreground" />
               <span>{sortLabelMap[sortBy]}</span>
               <ChevronDown size={10} className="text-muted-foreground opacity-70" />
@@ -528,7 +563,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
               onClick={() => setViewMode('harness')}
               title="Group chats by AI Harness"
               className={cn(
-                'px-2 py-0.5 text-xs rounded font-medium transition-colors cursor-pointer',
+                'px-2 py-0.5 text-xs rounded font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
                 viewMode === 'harness' ? 'bg-primary text-primary-foreground font-semibold shadow-2xs' : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -539,7 +574,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
               onClick={() => setViewMode('timeline')}
               title="Unified Chronological Timeline"
               className={cn(
-                'px-2 py-0.5 text-xs rounded font-medium transition-colors cursor-pointer',
+                'px-2 py-0.5 text-xs rounded font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
                 viewMode === 'timeline' ? 'bg-primary text-primary-foreground font-semibold shadow-2xs' : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -571,16 +606,20 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
               type="button"
               onClick={async () => {
                 await safeCopyToClipboard(launchedInfo.cmd);
+                setHudCopied(true);
+                if (hudTimeoutRef.current) clearTimeout(hudTimeoutRef.current);
+                hudTimeoutRef.current = window.setTimeout(() => setHudCopied(false), 1500);
                 showToast?.('Command copied to clipboard!', 'success');
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded border border-emerald-500/40 bg-emerald-500/15 text-success-foreground hover:bg-emerald-500/25 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded border border-emerald-500/40 bg-emerald-500/15 text-success-foreground hover:bg-emerald-500/25 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
             >
-              <Copy size={11} /> Copy
+              {hudCopied ? <Check size={11} className="text-success" /> : <Copy size={11} />} {hudCopied ? 'Copied' : 'Copy'}
             </button>
             <button
               type="button"
+              aria-label="Dismiss banner"
               onClick={() => setLaunchedInfo(null)}
-              className="text-muted-foreground hover:text-foreground cursor-pointer text-xs px-1"
+              className="rounded-sm p-1 -m-1 text-muted-foreground hover:text-foreground cursor-pointer text-xs px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
               title="Dismiss banner"
             >
               ✕
@@ -597,107 +636,123 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
               {searchQuery ? 'No chat sessions match your search filter.' : 'No chat sessions recorded yet.'}
             </div>
           ) : (
-            filteredSessions.map((sess) => (
-              <div
-                key={sess.id}
-                className="group flex flex-col gap-2 p-3 hover:bg-accent/40 transition-colors sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  {renderAssistantIcon(sess.assistant)}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mb-0.5">
-                      <span className="font-semibold capitalize text-foreground">
-                        {sess.assistant === 'antigravity' ? 'Antigravity' : sess.assistant === 'claude' ? 'Claude' : sess.assistant === 'codex' ? 'Codex' : sess.assistant === 'pi' ? 'Pi' : sess.assistant === 'cursor' ? 'Cursor' : 'Copilot'}
-                      </span>
-                      <span>•</span>
-                      <span className="font-mono text-muted-foreground">{sess.id.slice(0, 8)}</span><SessionKind session={sess} />
-                      <span>•</span>
-                      <SessionActivity session={sess} />
-                      <span>•</span>
-                      <span className="font-mono">
-                        {sess.messageCount} {sess.messageCount === 1 ? 'turn' : 'turns'}
-                      </span>
-                      {sess.usage && ((sess.usage.totalTokens ?? 0) > 0 || (sess.usage.inputTokens ?? 0) + (sess.usage.outputTokens ?? 0) > 0) && (
-                        <>
-                          <span>•</span>
-                          <span
-                            className="font-mono text-muted-foreground"
-                            title={`Input: ${(sess.usage.inputTokens ?? 0).toLocaleString()} (${(sess.usage.cachedInputTokens ?? 0).toLocaleString()} cached) · Output: ${(sess.usage.outputTokens ?? 0).toLocaleString()}`}
-                          >
-                            {formatCompact(sess.usage.totalTokens ?? ((sess.usage.inputTokens ?? 0) + (sess.usage.outputTokens ?? 0)))} tokens
-                          </span>
-                        </>
-                      )}
-                      {sess.quota && (
-                        <>
-                          <span>•</span>
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted/60 text-muted-foreground border border-border/40">
-                            {formatHeaderQuota(sess.quota)}
-                          </span>
-                        </>
-                      )}
+            filteredSessions.map((sess) => {
+              const main = mainSessionFor(sess, allSessions);
+              const canResume = Boolean(main && !resumingTerminalId);
+              const handleResume = () => {
+                if (main && !resumingTerminalId) {
+                  void resumeTerminalSession(main.id, main.assistant, main.workspacePath);
+                }
+              };
+              return (
+                <div
+                  key={sess.id}
+                  onClick={(e) => canResume && handleDelegatedRowClick(e, handleResume)}
+                  className={cn(
+                    'group flex flex-col gap-2 p-3 transition-colors sm:flex-row sm:items-center sm:justify-between select-text',
+                    canResume && 'hover:bg-accent/40 cursor-pointer'
+                  )}
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    {renderAssistantIcon(sess.assistant)}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mb-0.5">
+                        <span className="font-semibold capitalize text-foreground">
+                          {sess.assistant === 'antigravity' ? 'Antigravity' : sess.assistant === 'claude' ? 'Claude' : sess.assistant === 'codex' ? 'Codex' : sess.assistant === 'pi' ? 'Pi' : sess.assistant === 'cursor' ? 'Cursor' : 'Copilot'}
+                        </span>
+                        <span>•</span>
+                        <span className="font-mono text-muted-foreground">{sess.id.slice(0, 8)}</span><SessionKind session={sess} />
+                        <span>•</span>
+                        <SessionActivity session={sess} />
+                        <span>•</span>
+                        <span className="font-mono">
+                          {sess.messageCount} {sess.messageCount === 1 ? 'turn' : 'turns'}
+                        </span>
+                        {sess.usage && ((sess.usage.totalTokens ?? 0) > 0 || (sess.usage.inputTokens ?? 0) + (sess.usage.outputTokens ?? 0) > 0) && (
+                          <>
+                            <span>•</span>
+                            <span
+                              className="font-mono text-muted-foreground"
+                              title={`Input: ${(sess.usage.inputTokens ?? 0).toLocaleString()} (${(sess.usage.cachedInputTokens ?? 0).toLocaleString()} cached) · Output: ${(sess.usage.outputTokens ?? 0).toLocaleString()}`}
+                            >
+                              {formatCompact(sess.usage.totalTokens ?? ((sess.usage.inputTokens ?? 0) + (sess.usage.outputTokens ?? 0)))} tokens
+                            </span>
+                          </>
+                        )}
+                        {sess.quota && (
+                          <>
+                            <span>•</span>
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted/60 text-muted-foreground border border-border/40">
+                              {formatHeaderQuota(sess.quota)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <p className="text-xs font-semibold text-foreground truncate" title={sess.title}>
+                        {sess.title}
+                      </p>
                     </div>
-                    <p className="text-xs font-semibold text-foreground truncate" title={sess.title}>
-                      {sess.title}
-                    </p>
                   </div>
-                </div>
 
-                {/* Sleek Balanced Action Toolbar */}
-                <div className="flex items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
-                  <Button
-                    size="xs"
-                    variant="default"
-                    disabled={resumingTerminalId === sess.id || !mainSessionFor(sess, allSessions)}
-                    onClick={() => { const main = mainSessionFor(sess, allSessions); if (main) void resumeTerminalSession(main.id, main.assistant, main.workspacePath); }}
-                    title={sess.threadKind === 'subagent' ? 'Resume the main conversation instead of the delegated task' : `Resume session in terminal (${sess.id})`}
-                  >
-                    {resumingTerminalId === sess.id ? <Spinner className="size-3" /> : <Terminal size={12} />}
-                    <span>{sess.threadKind === 'subagent' ? 'Main thread' : 'Resume'}</span>
-                  </Button>
+                  {/* Sleek Balanced Action Toolbar */}
+                  <div className="flex items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
+                    <Button
+                      size="xs"
+                      variant="default"
+                      disabled={resumingTerminalId === sess.id || !mainSessionFor(sess, allSessions)}
+                      onClick={() => { const main = mainSessionFor(sess, allSessions); if (main) void resumeTerminalSession(main.id, main.assistant, main.workspacePath); }}
+                      title={sess.threadKind === 'subagent' ? 'Resume the main conversation instead of the delegated task' : `Resume session in terminal (${sess.id})`}
+                    >
+                      {resumingTerminalId === sess.id ? <Spinner className="size-3" /> : <Terminal size={12} />}
+                      <span>{sess.threadKind === 'subagent' ? 'Main thread' : 'Resume'}</span>
+                    </Button>
 
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => {
-                      setActiveSession(sess);
-                      setTranscript([]);
-                      fetchSessionTranscript(sess.assistant, sess.id);
-                    }}
-                    title="Inspect transcript log"
-                  >
-                    <MessageSquare size={12} />
-                    <span>Logs</span>
-                  </Button>
-
-                  {sess.assistant === 'codex' && hasCodexDesktop && (
                     <Button
                       size="xs"
                       variant="outline"
-                      disabled={openingDesktopId === sess.id}
-                      onClick={() => void openCodexDesktop(sess.id)}
-                      title="Open in Codex Desktop"
+                      onClick={() => {
+                        setActiveSession(sess);
+                        setTranscript([]);
+                        fetchSessionTranscript(sess.assistant, sess.id);
+                      }}
+                      title="Inspect transcript log"
                     >
-                      {openingDesktopId === sess.id ? <Spinner className="size-3" /> : <ExternalLink size={12} />}
-                      <span>Desktop</span>
+                      <MessageSquare size={12} />
+                      <span>Logs</span>
                     </Button>
-                  )}
 
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={async () => {
-                      const cmd = getResumeCliCommand(sess.assistant, sess.id);
-                      await safeCopyToClipboard(cmd);
-                      showToast?.(`Copied: ${cmd}`, 'success');
-                    }}
-                    title="Copy CLI resume command"
-                  >
-                    <Copy size={12} />
-                  </Button>
+                    {sess.assistant === 'codex' && hasCodexDesktop && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={openingDesktopId === sess.id}
+                        onClick={() => void openCodexDesktop(sess.id)}
+                        title="Open in Codex Desktop"
+                      >
+                        {openingDesktopId === sess.id ? <Spinner className="size-3" /> : <ExternalLink size={12} />}
+                        <span>Desktop</span>
+                      </Button>
+                    )}
+
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const cmd = getResumeCliCommand(sess.assistant, sess.id);
+                        await safeCopyToClipboard(cmd);
+                        setCopiedSessionId(sess.id);
+                        setTimeout(() => setCopiedSessionId((id) => (id === sess.id ? null : id)), 1500);
+                        showToast?.(`Copied: ${cmd}`, 'success');
+                      }}
+                      title={copiedSessionId === sess.id ? 'Copied CLI resume command' : 'Copy CLI resume command'}
+                    >
+                      {copiedSessionId === sess.id ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </Card>
       ) : (
@@ -727,9 +782,17 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                   <Card key={harness.id} className="overflow-hidden surface-card">
                     {/* Sleek Minimal Harness Header Bar */}
                     <div
-                      className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between bg-muted/20 hover:bg-muted/35 transition-colors cursor-pointer select-none"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => toggleHarness(harness.id, isExpanded)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          toggleHarness(harness.id, isExpanded);
+                        }
+                      }}
                       aria-expanded={isExpanded}
+                      className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between bg-muted/20 hover:bg-muted/35 transition-colors cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                     >
                       <div className="flex flex-1 items-center gap-2.5 min-w-0">
                         <span className="text-muted-foreground transition-transform">
@@ -784,10 +847,22 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                             </span>
                           </div>
                         ) : (
-                      harnessSessions.map((sess) => (
+                      harnessSessions.map((sess) => {
+                        const main = mainSessionFor(sess, allSessions);
+                        const canResume = Boolean(main && !resumingTerminalId);
+                        const handleResume = () => {
+                          if (main && !resumingTerminalId) {
+                            void resumeTerminalSession(main.id, main.assistant, main.workspacePath);
+                          }
+                        };
+                        return (
                         <div
                           key={sess.id}
-                          className="group flex flex-col gap-1.5 px-3.5 py-2.5 hover:bg-accent/40 transition-colors sm:flex-row sm:items-center sm:justify-between"
+                          onClick={(e) => canResume && handleDelegatedRowClick(e, handleResume)}
+                          className={cn(
+                            'group flex flex-col gap-1.5 px-3.5 py-2.5 transition-colors sm:flex-row sm:items-center sm:justify-between select-text',
+                            canResume && 'hover:bg-accent/40 cursor-pointer'
+                          )}
                         >
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-1.5 mb-0.5 text-[11px] text-muted-foreground font-mono">
@@ -866,18 +941,21 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                             <Button
                               size="icon-xs"
                               variant="ghost"
-                              onClick={async () => {
+                              onClick={async (e) => {
+                                e.stopPropagation();
                                 const cmd = getResumeCliCommand(sess.assistant, sess.id);
                                 await safeCopyToClipboard(cmd);
+                                setCopiedSessionId(sess.id);
+                                setTimeout(() => setCopiedSessionId((id) => (id === sess.id ? null : id)), 1500);
                                 showToast?.(`Copied: ${cmd}`, 'success');
                               }}
-                              title="Copy CLI resume command"
+                              title={copiedSessionId === sess.id ? 'Copied CLI resume command' : 'Copy CLI resume command'}
                             >
-                              <Copy size={12} />
+                              {copiedSessionId === sess.id ? <Check size={12} className="text-success" /> : <Copy size={12} />}
                             </Button>
                           </div>
                         </div>
-                      ))
+                      ); })
                     )}
                   </div>
                 )}

@@ -35,6 +35,7 @@ import {
   useUpdateProject,
   useWorkspaces,
 } from '../lib/api/queries.js';
+import { handleDelegatedRowClick } from '../lib/delegatedRowClick.js';
 import type { Project, RepoInfo } from '../types.js';
 
 interface ProjectFormState {
@@ -171,7 +172,8 @@ export function ProjectsPage() {
           {(projects.data ?? []).map((project) => (
             <li
               key={project.id}
-              className="rounded-xl border border-border/80 bg-card/70 backdrop-blur-md p-4 transition-all duration-200 hover:border-primary/40 hover:shadow-xs"
+              onClick={(e) => handleDelegatedRowClick(e, () => navigate(`/new?project=${encodeURIComponent(project.id)}`))}
+              className="rounded-xl border border-border/80 bg-card/70 backdrop-blur-md p-4 transition-all duration-200 hover:border-primary/40 hover:bg-accent/30 hover:shadow-xs cursor-pointer select-text"
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">

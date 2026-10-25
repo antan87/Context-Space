@@ -1,7 +1,7 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Search, X } from 'lucide-react';
+import { Edit2, Search, Trash2, X } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -12,17 +12,26 @@ import {
   useRestoreHarnessSkill,
   type QuarantineEntryItem,
 } from '../../lib/api/queries.js';
-import type { SkillItem } from '../../types.js';
+import type { SkillCategory, SkillItem } from '../../types.js';
+import { AddToLibraryButton } from './BuiltInSkills.js';
+import { isLibrarySkill } from './skillSelection.js';
+import { useAddToLibrary } from './useAddToLibrary.js';
 
 type Selection = { kind: 'skill'; key: string } | { kind: 'quarantine'; key: string } | null;
 
 interface SkillsExplorerProps {
   skills: SkillItem[];
+  /** The registered categories, in the order My library lists them. */
+  categories: SkillCategory[];
   showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
   onEdit: (skill: SkillItem) => void;
   onDelete: (skill: SkillItem) => void;
   /** Opens the "move to a category" dialog for one of the catalog's own skills. */
   onMove: (skill: SkillItem, event: React.MouseEvent) => void;
+  /** A skill of the library was dropped on a category. */
+  onMoveToCategory: (skill: SkillItem, categoryId: string) => void;
+  onEditCategory: (category: SkillCategory) => void;
+  onDeleteCategory: (category: SkillCategory, event: React.MouseEvent) => void;
 }
 
 const LIST_MIN_WIDTH = 240;
@@ -55,12 +64,14 @@ function writeStoredWidth(width: number): void {
 /** Keys identify one row: the same skill id can exist in two tools, so an id alone is not enough. */
 const skillKey = (skill: SkillItem) => `${skill.source?.harness ?? 'catalog'}:${skill.id}`;
 
+const titleCase = (id: string) => id.split(/[-_]/).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+
 /**
- * Global skills page: a list grouped by where each skill comes from (your catalog, each tool, and
- * quarantine), with a detail pane. Your catalog skills are edited and deleted; a tool's skills are
- * read-only here and can only be moved to quarantine and back.
+ * The skills page: a list grouped by who loads each skill (My library, by category; what each tool has built in; and
+ * quarantine), with a detail pane. My library skills are edited, deleted and dragged between categories; a tool's skills
+ * are read-only here: they can be copied into My library, or moved to quarantine and back.
  */
-export function SkillsExplorer({ skills, showToast, onEdit, onDelete, onMove }: SkillsExplorerProps) {
+export function SkillsExplorer({ skills, categories, showToast, onEdit, onDelete, onMove, onMoveToCategory, onEditCategory, onDeleteCategory }: SkillsExplorerProps) {
   const [query, setQuery] = useState('');
   const [selection, setSelection] = useState<Selection>(null);
   const [listWidth, setListWidth] = useState(() => readStoredWidth());
@@ -69,13 +80,16 @@ export function SkillsExplorer({ skills, showToast, onEdit, onDelete, onMove }: 
   const quarantineSkill = useQuarantineHarnessSkill();
   const restoreSkill = useRestoreHarnessSkill();
   const revealSkill = useRevealSkillFolder();
+  const { add: addToLibrary, pending: addingToLibrary } = useAddToLibrary(showToast);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropCategory, setDropCategory] = useState<string | null>(null);
   const entries = quarantine.data?.entries ?? [];
 
   const matches = (text: string) => !query.trim() || text.toLowerCase().includes(query.trim().toLowerCase());
   const visible = (skill: SkillItem) =>
     matches(`${skill.id} ${skill.title ?? ''} ${skill.description} ${skill.tags?.join(' ') ?? ''} ${skill.source?.label ?? ''}`);
 
-  const catalog = skills.filter((s) => !s.source && visible(s));
+  const catalog = skills.filter((s) => isLibrarySkill(s) && visible(s));
   const toolGroups = new Map<string, { label: string; root: string; skills: SkillItem[] }>();
   for (const skill of skills) {
     if (!skill.source || !visible(skill)) continue;
@@ -84,6 +98,21 @@ export function SkillsExplorer({ skills, showToast, onEdit, onDelete, onMove }: 
     toolGroups.set(skill.source.harness, group);
   }
   const tools = [...toolGroups.values()];
+
+  // My library by category: the registered ones first, then any a skill names. Empty ones show only while dragging.
+  const byCategory = new Map<string, SkillItem[]>();
+  for (const skill of catalog) byCategory.set(skill.category || 'general', [...(byCategory.get(skill.category || 'general') ?? []), skill]);
+  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+  const categoryOrder = [
+    ...categories.map((category) => category.id),
+    ...[...byCategory.keys()].filter((id) => !categoryNames.has(id)).sort(),
+  ].filter((id, index, all) => all.indexOf(id) === index && (byCategory.has(id) || draggingId !== null));
+  const dropOn = (categoryId: string) => {
+    const dragged = catalog.find((skill) => skill.id === draggingId);
+    setDraggingId(null);
+    setDropCategory(null);
+    if (dragged && dragged.custom && dragged.category !== categoryId) onMoveToCategory(dragged, categoryId);
+  };
 
   const shownEntries = entries.filter((entry) => matches(`${entry.id} ${entry.label}`));
   const selectedSkill = selection?.kind === 'skill' ? skills.find((s) => skillKey(s) === selection.key) : undefined;
@@ -150,20 +179,91 @@ export function SkillsExplorer({ skills, showToast, onEdit, onDelete, onMove }: 
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-4">
-          <Section title="Your catalog" count={catalog.length}>
-            {catalog.map((skill) => (
-              <Row
-                key={skillKey(skill)}
-                title={skill.title || skill.id}
-                subtitle={skill.id}
-                active={selection?.kind === 'skill' && selection.key === skillKey(skill)}
-                onClick={() => setSelection({ kind: 'skill', key: skillKey(skill) })}
-              />
-            ))}
+          <Section title="My library" count={catalog.length}>
+            {catalog.length === 0 && (
+              <li className="px-2 py-1 text-[11px] text-muted-foreground">
+                {query.trim() ? 'None match.' : 'No skills yet. Use New Skill, or copy one from a tool below.'}
+              </li>
+            )}
+            {categoryOrder.map((categoryId) => {
+              const members = byCategory.get(categoryId) ?? [];
+              const category = categories.find((candidate) => candidate.id === categoryId);
+              const isDropTarget = dropCategory === categoryId && draggingId !== null;
+              return (
+                <li
+                  key={categoryId}
+                  aria-label={`${categoryNames.get(categoryId) ?? titleCase(categoryId)} category`}
+                  onDragOver={(event) => {
+                    if (draggingId === null) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    if (dropCategory !== categoryId) setDropCategory(categoryId);
+                  }}
+                  onDragLeave={() => setDropCategory((current) => (current === categoryId ? null : current))}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    dropOn(categoryId);
+                  }}
+                  className={`rounded-md ${isDropTarget ? 'bg-primary/5 ring-2 ring-primary/30' : ''}`}
+                >
+                  <div className="flex items-center justify-between gap-1 px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                    <span className="truncate">{categoryNames.get(categoryId) ?? titleCase(categoryId)}</span>
+                    <span className="flex shrink-0 items-center gap-0.5">
+                      {category && (
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => onEditCategory(category)}
+                          aria-label={`Edit the ${category.name} category`}
+                          title="Edit category"
+                        >
+                          <Edit2 className="size-3" />
+                        </Button>
+                      )}
+                      {category?.custom && (
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={(event) => onDeleteCategory(category, event)}
+                          aria-label={`Delete the ${category.name} category`}
+                          title="Delete category"
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      )}
+                      <span className="ml-1 font-mono">{members.length}</span>
+                    </span>
+                  </div>
+                  <ul className="space-y-0.5">
+                    {members.map((skill) => (
+                      <Row
+                        key={skillKey(skill)}
+                        title={skill.title || skill.id}
+                        subtitle={skill.id}
+                        active={selection?.kind === 'skill' && selection.key === skillKey(skill)}
+                        onClick={() => setSelection({ kind: 'skill', key: skillKey(skill) })}
+                        draggable={skill.custom}
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData('text/plain', skill.id);
+                          event.dataTransfer.effectAllowed = 'move';
+                          setDraggingId(skill.id);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingId(null);
+                          setDropCategory(null);
+                        }}
+                      />
+                    ))}
+                    {members.length === 0 && <li className="px-2 py-1 text-[11px] italic text-muted-foreground">Drop a skill here</li>}
+                  </ul>
+                </li>
+              );
+            })}
           </Section>
 
           {tools.map((tool) => (
-            <Section key={tool.label} title={tool.label} count={tool.skills.length}>
+            <Section key={tool.label} title={`Built into ${tool.label}`} count={tool.skills.length}>
               {tool.skills.map((skill) => (
                 <Row
                   key={skillKey(skill)}
@@ -240,6 +340,8 @@ export function SkillsExplorer({ skills, showToast, onEdit, onDelete, onMove }: 
             onOpenFolder={() => runReveal(selectedSkill)}
             openingFolder={revealSkill.isPending}
             onMove={(event) => onMove(selectedSkill, event)}
+            onAddToLibrary={() => addToLibrary(selectedSkill)}
+            addingToLibrary={addingToLibrary?.harness === selectedSkill.source?.harness && addingToLibrary?.id === selectedSkill.id}
           />
         )}
         {selectedEntry && (
@@ -287,17 +389,28 @@ function Row({
   active,
   onClick,
   tone,
+  draggable,
+  onDragStart,
+  onDragEnd,
 }: {
   title: string;
   subtitle?: string;
   active: boolean;
   onClick: () => void;
   tone?: 'warning';
+  /** A skill of the library can be dragged onto a category to move it there. */
+  draggable?: boolean;
+  onDragStart?: (event: React.DragEvent) => void;
+  onDragEnd?: () => void;
 }) {
   return (
     <li>
       <button
         onClick={onClick}
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        title={draggable ? 'Drag onto a category to move it there' : undefined}
         aria-current={active ? 'true' : undefined}
         className={`w-full text-left rounded-md px-2 py-1.5 transition-colors ${
           active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
@@ -319,6 +432,8 @@ function SkillDetail({
   onOpenFolder,
   openingFolder,
   onMove,
+  onAddToLibrary,
+  addingToLibrary,
 }: {
   skill: SkillItem;
   onEdit: () => void;
@@ -328,6 +443,8 @@ function SkillDetail({
   onOpenFolder: () => void;
   openingFolder: boolean;
   onMove: (event: React.MouseEvent) => void;
+  onAddToLibrary: () => void;
+  addingToLibrary: boolean;
 }) {
   const fromTool = Boolean(skill.source);
   return (
@@ -342,9 +459,12 @@ function SkillDetail({
             Open folder
           </Button>
           {fromTool ? (
-            <Button variant="outline" onClick={onQuarantine} disabled={busy}>
-              Move to quarantine
-            </Button>
+            <>
+              <AddToLibraryButton skill={skill} add={onAddToLibrary} busy={addingToLibrary} />
+              <Button variant="outline" onClick={onQuarantine} disabled={busy}>
+                Move to quarantine
+              </Button>
+            </>
           ) : (
             <>
               <Button variant="outline" onClick={onMove} title="Move to another category" aria-label="Move to another category">
@@ -358,7 +478,7 @@ function SkillDetail({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Badge variant="outline" className="text-[10px]">{fromTool ? `Read-only · ${skill.source!.label}` : 'Your catalog · editable'}</Badge>
+        <Badge variant="outline" className="text-[10px]">{fromTool ? `Built into ${skill.source!.label} · read-only` : 'My library · editable'}</Badge>
         {skill.category && <Badge variant="secondary" className="text-[10px]">{skill.category}</Badge>}
         {skill.tags?.map((tag) => (
           <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>

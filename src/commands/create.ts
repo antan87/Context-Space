@@ -303,7 +303,8 @@ export async function createCommand(options: CreateCommandOptions = {}): Promise
   // ── 5.6. Select Agent Skills to deploy ──────────────────────────────
   let selectedSkills: string[] = [];
   if (!isQuick) {
-    const catalogSkills = await getAllSkills();
+    // A skill a harness ships is loaded by that harness everywhere; a workspace never copies it.
+    const catalogSkills = (await getAllSkills()).filter((skill) => !skill.source);
     selectedSkills = await promptSelectSkills(catalogSkills);
     if (selectedSkills.length > 0) {
       console.log(chalk.green(`  ✔ Selected ${selectedSkills.length} skill(s) to deploy: ${selectedSkills.join(', ')}`));

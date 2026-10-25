@@ -274,13 +274,13 @@ function createWindow() {
     // links are handed to the system browser instead.
     if (isAppShellNavigation(url, assignedPort)) return;
     event.preventDefault();
-    const external = externalLinkTarget(url);
+    const external = externalLinkTarget(url, assignedPort);
     if (external) void shell.openExternal(external);
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     // New windows are never opened in-app. Release pages and web/mail links
     // the user clicked open in the system handler.
-    const external = externalLinkTarget(url);
+    const external = externalLinkTarget(url, assignedPort);
     if (external) void shell.openExternal(external);
     return { action: 'deny' };
   });

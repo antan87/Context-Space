@@ -14,6 +14,11 @@
       "id": "GHSA-hp3w-g68c-fv3c",
       "expires": "2026-11-02",
       "reason": "sprintf-js: no patched release exists (all versions affected). It is reached only through electron-builder, a devDependency of desktop (app-builder-lib -> @electron/get -> global-agent -> roarr -> sprintf-js, during packaging), so none of it ships in the app. Re-check when sprintf-js or electron-builder publishes a fix."
+    },
+    {
+      "id": "GHSA-xcx6-jx8p-x3h5",
+      "expires": "2026-11-02",
+      "reason": "@azure/msal-node: no upstream release of @vscode/vsce or @azure/identity resolves to the patched 7.1.0 release. It is reached only through @vscode/vsce, a devDependency of extension (@vscode/vsce -> @azure/identity -> @azure/msal-node), so none of it ships in the app. Re-check when @vscode/vsce or @azure/identity updates."
     }
   ]
 }

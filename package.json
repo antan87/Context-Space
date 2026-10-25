@@ -1,6 +1,6 @@
 {
   "name": "@mrpatronz/nexusflow",
-  "version": "2.44.0",
+  "version": "2.47.0",
   "description": "Combine multiple repos into a workspace with rich AI assistant context",
   "type": "module",
   "repository": {
@@ -103,7 +103,7 @@
     "@types/node": "^26.1.0",
     "rimraf": "^6.1.3",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.12"
   },
   "optionalDependencies": {
     "node-pty": "1.1.0"

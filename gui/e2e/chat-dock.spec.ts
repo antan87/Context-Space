@@ -267,7 +267,7 @@ test.describe('the address says which chat is showing', () => {
     await page.goto('/#/workspaces/alpha/diff');
     await expect(chatOf(page)).toBeHidden();
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible();
-    await expect(workspaceNav(page).locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(workspaceNav(page).getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
   });
 });
 

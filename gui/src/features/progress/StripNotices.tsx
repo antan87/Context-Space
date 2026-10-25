@@ -34,7 +34,7 @@ export function PlanQuestionBar({ item, more, busy, error, onAnswer, onShowAll }
         {why && <p className="line-clamp-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{why}</p>}
         <AnswerBox question={item.title} detail={item.detail} busy={busy} error={error} onAnswer={onAnswer} />
         {more > 0 && (
-          <button type="button" onClick={onShowAll} className="cursor-pointer text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground">
+          <button type="button" onClick={onShowAll} className="cursor-pointer text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded">
             {more === 1 ? '1 more waits for you' : `${more} more wait for you`}
           </button>
         )}

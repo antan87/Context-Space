@@ -273,7 +273,7 @@ export function ChatDock({ workspaces }: ChatDockProps) {
           })
         )}
         {showSplit && <div role="separator" aria-label="Resize workspace panes" aria-orientation="vertical" aria-valuemin={25} aria-valuemax={75} aria-valuenow={Math.round(splitRatio)} tabIndex={0}
-          className="order-2 z-10 w-1.5 shrink-0 cursor-col-resize bg-border/70 hover:bg-primary/40 focus-visible:bg-primary/40"
+          className="relative order-2 z-10 w-1.5 shrink-0 cursor-col-resize touch-none bg-border/70 transition-colors hover:bg-primary/50 focus-visible:outline-none focus-visible:bg-primary/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 before:absolute before:inset-y-0 before:-left-1.5 before:w-[18px] before:content-['']"
           onPointerDown={event => { splitDragRef.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
           onPointerMove={moveSplit}
           onPointerUp={event => { splitDragRef.current = false; event.currentTarget.releasePointerCapture(event.pointerId); }}
