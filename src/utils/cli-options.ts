@@ -6,14 +6,19 @@ import type { Command } from 'commander';
  */
 export function resolveCliOptions<T extends object = Record<string, unknown>>(
   cmd: Command | undefined,
-  options: T,
+  options?: T,
 ): T {
-  const result: Record<string, unknown> = { ...(options as Record<string, unknown>) };
+  const result: Record<string, unknown> = { ...(options as Record<string, unknown> | undefined) };
   if (!cmd) return result as T;
-  const parent = cmd.parent;
-  if (parent) {
-    for (const [key, val] of Object.entries(parent.opts() || {})) {
-      if (parent.getOptionValueSource?.(key) === 'cli') {
+  const ancestors: Command[] = [];
+  let curr = cmd.parent;
+  while (curr) {
+    ancestors.unshift(curr);
+    curr = curr.parent;
+  }
+  for (const ancestor of ancestors) {
+    for (const [key, val] of Object.entries(ancestor.opts() || {})) {
+      if (ancestor.getOptionValueSource?.(key) === 'cli') {
         result[key] = val;
       }
     }
@@ -25,3 +30,4 @@ export function resolveCliOptions<T extends object = Record<string, unknown>>(
   }
   return result as T;
 }
+

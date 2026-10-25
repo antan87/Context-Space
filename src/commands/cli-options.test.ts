@@ -60,4 +60,53 @@ describe('resolveCliOptions', () => {
     const result = resolveCliOptions(sub, { base: 'data' });
     expect(result).toEqual({ base: 'data' });
   });
+
+  it('inherits CLI options across 3+ levels of nested commands', () => {
+    const root = new Command();
+    root.option('--json', 'global json');
+    root.setOptionValueWithSource('json', true, 'cli');
+
+    const group = root.command('group');
+    group.option('--group-opt <val>', 'group opt');
+    group.setOptionValueWithSource('groupOpt', 'from-group', 'cli');
+
+    const child = group.command('child');
+    child.option('--child-opt <val>', 'child opt');
+    child.setOptionValueWithSource('childOpt', 'from-child', 'cli');
+
+    const result = resolveCliOptions(child, { base: 123 });
+    expect(result).toEqual({
+      base: 123,
+      json: true,
+      groupOpt: 'from-group',
+      childOpt: 'from-child',
+    });
+  });
+
+  it('lets leaf command override intermediate and root ancestor options', () => {
+    const root = new Command();
+    root.option('--scope <scope>', 'scope');
+    root.setOptionValueWithSource('scope', 'root-scope', 'cli');
+
+    const group = root.command('group');
+    group.option('--scope <scope>', 'scope');
+    group.setOptionValueWithSource('scope', 'group-scope', 'cli');
+
+    const child = group.command('child');
+    child.option('--scope <scope>', 'scope');
+    child.setOptionValueWithSource('scope', 'child-scope', 'cli');
+
+    const result = resolveCliOptions(child, {});
+    expect(result).toEqual({ scope: 'child-scope' });
+  });
+
+  it('handles undefined or omitted options argument gracefully', () => {
+    const root = new Command();
+    root.option('--debug', 'debug flag');
+    root.setOptionValueWithSource('debug', true, 'cli');
+
+    const result = resolveCliOptions(root);
+    expect(result).toEqual({ debug: true });
+  });
 });
+

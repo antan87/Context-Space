@@ -63,6 +63,9 @@ import {
 import { adapterListCommand, adapterUseCommand, adapterInfoCommand, adapterInitCommand } from './commands/adapter.js';
 import { getCurrentVersion, checkForUpdates, printUpdateBanner } from './utils/update-check.js';
 import { BRAND_NAME, BRAND_TAGLINE, CLI_NAME, CLI_ALIASES } from './core/constants.js';
+import { resolveCliOptions } from './utils/cli-options.js';
+
+export { resolveCliOptions };
 
 const program = new Command();
 
@@ -380,9 +383,6 @@ tagCmd
     const merged = resolveCliOptions(cmd, options);
     await tagListCommand(workspace, merged);
   }));
-
-import { resolveCliOptions } from './utils/cli-options.js';
-export { resolveCliOptions };
 
 const skillCmd = program
   .command('skill')
