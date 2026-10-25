@@ -343,7 +343,7 @@ A milestone gate (`ctxspace flow --step <id> --action complete`) runs that miles
 - **Dangerous Operator Rejection**: Command strings containing shell operators (`&&`, `||`, `;`, `|`, `` ` ``, `$()`) are rejected to eliminate command injection risks and ensure deterministic status reporting.
 - **Cryptographic SHA Anchoring**: Results are pinned to the exact Git commit SHA of each repository.
 - **Dirty Tree Detection (`pass_dirty`)**: If tests pass but uncommitted changes remain in the repository working tree, ContextSpace reports `pass_dirty` with warnings to commit before finishing, ensuring that verification proof is anchored to immutable Git history.
-- **Durable State Recording**: Test results, timings, commands, and SHA fingerprints are persisted in `.contextspace-state.json`. Subsequent checks or agents can inspect recorded verification evidence without redundant test re-runs.
+- **Durable State Recording**: Test results, timings, commands, and SHA fingerprints are persisted in `.contextspace/state.json`. Subsequent checks or agents can inspect recorded verification evidence without redundant test re-runs.
 
 ## 🔌 MCP Server & Tools
 

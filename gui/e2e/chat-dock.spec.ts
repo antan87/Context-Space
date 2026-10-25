@@ -141,6 +141,25 @@ test.describe('the chat is the centre of a workspace', () => {
     await expect(showing).toHaveText('Running');
     expect(attaches).toEqual({ alpha: 1, beta: 1 });
   });
+
+  test('unmounts inactive workspace DOM nodes beyond recent limit when visiting a third workspace', async ({ page }) => {
+    await page.goto('/#/workspaces/alpha/chat');
+    await expect(shownState(page)).toHaveText('Running');
+    await addChat(page, 'beta');
+    await expect(shownState(page)).toHaveText('Running');
+    await addChat(page, 'gamma');
+    await expect(shownState(page)).toHaveText('Running');
+
+    // alpha, beta, gamma all in openTabs, but alpha (oldest) has been unmounted from DOM
+    await expect(sessions(page)).toHaveCount(3);
+    const mountedPanes = chatOf(page).getByTestId('terminal-pane');
+    await expect(mountedPanes).toHaveCount(2);
+
+    // Switching back to alpha remounts it
+    await session(page, 'alpha').click();
+    await expect(shownState(page)).toHaveText('Running');
+    await expect(mountedPanes).toHaveCount(2);
+  });
 });
 
 test.describe('the address says which chat is showing', () => {

@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type { HarnessAdapter, SessionHandle } from '../harness/interface.js';
 import type { NormalizedUsage } from '../harness/types.js';
 import type { AgentExecutionProfile, AgentHarness } from './ProviderRegistry.js';
@@ -136,6 +138,7 @@ export class MultiAgentOrchestrator extends EventEmitter {
     if (isSharedWorktree) {
       const lockRes = await resolveWorkspaceFilePath(this.workspacePath, 'mutationLock');
       const lockPath = lockRes.path;
+      await fs.mkdir(path.dirname(lockPath), { recursive: true });
       try {
         releaseMutationLock = await acquireLock(lockPath, {
           staleMs: 60_000,
