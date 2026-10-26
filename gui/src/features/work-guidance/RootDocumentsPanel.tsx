@@ -256,7 +256,7 @@ export function RootDocumentsPanel({ workspaceId, workspacePath, panelActions }:
   const previewRef = useRef<DocumentPreviewData | null>(preview);
   useEffect(() => {
     previewRef.current = preview;
-  });
+  }, [preview]);
 
   useEffect(() => {
     if (!watching || !selected) return;

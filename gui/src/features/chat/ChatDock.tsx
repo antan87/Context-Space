@@ -19,8 +19,17 @@ import { focusSessionLink } from '../workspace-shell/sessionFocus.js';
 import { useChatAttention, useWindowAttentive } from './useChatAttention.js';
 import { useChatDockSlot, useDockRect } from './dockPlacement.js';
 import { browserPath, goToWorkspace, parseWorkspacePath, showsChatFor } from './chatRoute.js';
-import { RUNNING_TERMINALS_KEY } from './useLiveSessions.js';
+import { useRunningTerminals, RUNNING_TERMINALS_KEY } from './useRunningTerminals.js';
 import { computeMountedWorkspaces } from './chatMountedWorkspaces.js';
+
+function shallowEqualArrays(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 interface ChatDockProps {
   workspaces: Feature[];
@@ -64,22 +73,48 @@ export function ChatDock({ workspaces }: ChatDockProps) {
   const wideEnough = (rect?.width ?? 0) >= CHAT_GEOMETRY.splitBreakpointPx;
   const showSplit = Boolean(splitTab && activeTab && splitTab !== activeTab && wideEnough);
 
+  const running = useRunningTerminals();
+  const runningWorkspaces = useMemo(() => {
+    const unique = new Set<string>();
+    for (const s of running.data ?? []) {
+      if (s.state === 'running') unique.add(s.workspace);
+    }
+    return Array.from(unique);
+  }, [running.data]);
+
   // Bounded pool of mounted workspaces: keep active and most recently active terminals mounted
   // in the DOM so switching is instant without reattaching, while older inactive workspaces
   // unmount synchronously to prevent unbounded element growth and transient multi-pane spikes.
-  const [recentWorkspaces, setRecentWorkspaces] = useState<string[]>([]);
-  const mountedWorkspaces = useMemo(() => {
-    return computeMountedWorkspaces(openTabs, activeTab, splitTab, showSplit, recentWorkspaces);
-  }, [openTabs, activeTab, splitTab, showSplit, recentWorkspaces]);
+  // Workspaces with active running sessions also remain mounted so background tasks do not die.
+  const [mountState, setMountState] = useState(() => ({
+    openTabs,
+    activeTab,
+    splitTab,
+    showSplit,
+    runningWorkspaces,
+    mounted: computeMountedWorkspaces(openTabs, activeTab, splitTab, showSplit, [], 2, runningWorkspaces),
+  }));
 
-  useEffect(() => {
-    setRecentWorkspaces((prev) => {
-      if (prev.length === mountedWorkspaces.length && prev.every((v, i) => v === mountedWorkspaces[i])) {
-        return prev;
-      }
-      return mountedWorkspaces;
+  const inputsChanged =
+    mountState.activeTab !== activeTab ||
+    mountState.splitTab !== splitTab ||
+    mountState.showSplit !== showSplit ||
+    !shallowEqualArrays(mountState.openTabs, openTabs) ||
+    !shallowEqualArrays(mountState.runningWorkspaces, runningWorkspaces);
+
+  let mountedWorkspaces = mountState.mounted;
+  if (inputsChanged) {
+    const next = computeMountedWorkspaces(openTabs, activeTab, splitTab, showSplit, mountState.mounted, 2, runningWorkspaces);
+    mountedWorkspaces = next;
+    setMountState({
+      openTabs,
+      activeTab,
+      splitTab,
+      showSplit,
+      runningWorkspaces,
+      mounted: next,
     });
-  }, [mountedWorkspaces]);
+  }
 
   // Anything in the app can ask to see a chat (a waiting alert, "resume in chat", a session link).
   // The dock answers by going to that workspace's chat. The first value is the one at load, so a reload stays put.
@@ -257,6 +292,7 @@ export function ChatDock({ workspaces }: ChatDockProps) {
             return (
               <div
                 key={branchName}
+                data-workspace-pane={branchName}
                 className={cn('h-full min-h-0 min-w-0 flex-col', shown ? 'flex' : 'hidden', isSecondary && 'border-l border-border')}
                 style={shown ? { order: isPrimary ? 1 : 3, flex: showSplit ? isPrimary ? `0 0 ${splitRatio}%` : '1 1 0%' : '1 1 100%' } : undefined}
               >
