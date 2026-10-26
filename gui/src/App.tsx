@@ -24,6 +24,7 @@ import { ArchiveWorkspaceDialog } from './components/ArchiveWorkspaceDialog.js';
 import { Spinner } from './components/ui/spinner.js';
 import { safeCopyToClipboard } from './lib/clipboard.js';
 import { cn } from './lib/utils.js';
+import { toErrorMessage } from './lib/errors.js';
 import { perfMark, perfMarkOnce } from './lib/perfMarks.js';
 import { changesFromResponse } from './features/changes/utils/changesResponse.js';
 import { parseSection, type WorkspaceSection } from './features/workspace-shell/destinations.js';
@@ -69,6 +70,9 @@ import type {
   TranscriptMessage,
   WorkspaceStatus,
   CommitRepoResult,
+  RepoChangeListing,
+  WorkspaceSyncResult,
+  ToolStatus,
 } from './types.js';
 import {
   BRAND_NAME,
@@ -95,7 +99,7 @@ function beginWorkspaceLoad(loads: Map<string, AbortController>, kind: string): 
 }
 
 /** The last changes, sessions and plan shown for a workspace. */
-interface RecentWorkspaceData { changes?: any[]; sessions?: AISession[] }
+interface RecentWorkspaceData { changes?: RepoChangeListing[]; sessions?: AISession[] }
 const RECENT_WORKSPACE_DATA_LIMIT = 16;
 
 function rememberWorkspaceData(recent: Map<string, RecentWorkspaceData>, wsId: string, data: RecentWorkspaceData): void {
@@ -231,7 +235,7 @@ function AppInner() {
   const [activeSession, setActiveSession] = useState<AISession | null>(null);
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
-  const [gitChanges, setGitChanges] = useState<any[]>([]);
+  const [gitChanges, setGitChanges] = useState<RepoChangeListing[]>([]);
   const [knowledgeContent, setKnowledgeContent] = useState<string>('');
   const [knowledgeLoading, setKnowledgeLoading] = useState<boolean>(false);
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
@@ -250,7 +254,7 @@ function AppInner() {
   const editedKnowledgeRef = useRef('');
   const isEditingKnowledgeRef = useRef(false);
   const [syncLoading, setSyncLoading] = useState<boolean>(false);
-  const [syncResults, setSyncResults] = useState<any[] | null>(null);
+  const [syncResults, setSyncResults] = useState<WorkspaceSyncResult[] | null>(null);
   const [commitMessage, setCommitMessage] = useState<string>('');
   const [showCommitModal, setShowCommitModal] = useState<boolean>(false);
   const [commitResults, setCommitResults] = useState<CommitRepoResult[] | null>(null);
@@ -269,7 +273,7 @@ function AppInner() {
   };
 
   // AI toolchain update states
-  const [toolsStatus, setToolsStatus] = useState<any[]>([]);
+  const [toolsStatus, setToolsStatus] = useState<ToolStatus[]>([]);
   const [toolsLoading, setToolsLoading] = useState(false);
   const [updatingToolId, setUpdatingToolId] = useState<string | null>(null);
 
@@ -488,8 +492,8 @@ function AppInner() {
         const err = await res.json();
         showToast(err.error || 'Failed to save template', 'error');
       }
-    } catch (e: any) {
-      showToast(e.message || 'Error saving template', 'error');
+    } catch (e) {
+      showToast(toErrorMessage(e, 'Error saving template'), 'error');
     } finally {
       setSavingTemplate(false);
     }
@@ -513,8 +517,8 @@ function AppInner() {
         const err = await res.json();
         showToast(err.error || 'Failed to delete template', 'error');
       }
-    } catch (e: any) {
-      showToast(e.message || 'Error deleting template', 'error');
+    } catch (e) {
+      showToast(toErrorMessage(e, 'Error deleting template'), 'error');
     } finally {
       setDeletingTemplate(false);
     }
@@ -539,8 +543,8 @@ function AppInner() {
         const err = await res.json();
         showToast(err.error || 'Failed to analyze template using the selected assistant harness.', 'error');
       }
-    } catch (e: any) {
-      showToast(e.message || 'Error analyzing template', 'error');
+    } catch (e) {
+      showToast(toErrorMessage(e, 'Error analyzing template'), 'error');
     } finally {
       setAnalyzingTemplate(false);
     }
@@ -556,7 +560,7 @@ function AppInner() {
       perfMark('cs:ws-data', { id: wsId, kind: 'changes', applied: isCurrent() });
       if (!isCurrent()) return;
       // A failed reply keeps the list on screen; it must not read as "no changes".
-      const changes = changesFromResponse<any>(res, data);
+      const changes = changesFromResponse<RepoChangeListing>(res, data);
       setGitChanges(changes);
       rememberWorkspaceData(recentWorkspaceDataRef.current, wsId, { changes });
     } catch (e) {

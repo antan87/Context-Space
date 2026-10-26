@@ -670,6 +670,15 @@ export async function resolveWorkspaceChatLedger(
   };
 }
 
+export interface WorkspaceLedgerMessage {
+  id?: string;
+  role?: string;
+  content?: string;
+  message?: string;
+  timestamp?: string;
+  [key: string]: unknown;
+}
+
 /**
  * Reads all messages from the workspace chat ledger, combining historical legacy messages
  * and primary messages if both exist, deduplicating by ID, and sorting chronologically.
@@ -677,11 +686,11 @@ export async function resolveWorkspaceChatLedger(
 export async function readWorkspaceChatMessages(
   workspaceDir: string,
   limit?: number,
-): Promise<{ messages: any[]; ledgerInfo: WorkspaceChatLedgerInfo }> {
+): Promise<{ messages: WorkspaceLedgerMessage[]; ledgerInfo: WorkspaceChatLedgerInfo }> {
   const ledgerInfo = await resolveWorkspaceChatLedger(workspaceDir);
   const pathsToRead = ledgerInfo.readPaths.length > 0 ? ledgerInfo.readPaths : (ledgerInfo.exists ? [ledgerInfo.chatPath] : []);
 
-  const allMessages: any[] = [];
+  const allMessages: WorkspaceLedgerMessage[] = [];
   const seenIds = new Set<string>();
 
   for (const filePath of pathsToRead) {

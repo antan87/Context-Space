@@ -12,9 +12,11 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../
 import { Spinner } from '../components/ui/spinner.js';
 import { Textarea } from '../components/ui/textarea.js';
 import { cn } from '../lib/utils.js';
+import type { DetectedAI } from '../types.js';
+import type { WorkflowTemplate } from '../lib/api/queries.js';
 
 interface StrategiesPageProps {
-  workflowTemplates: any[];
+  workflowTemplates: WorkflowTemplate[];
   isEditingTemplate: boolean;
   setIsEditingTemplate: React.Dispatch<React.SetStateAction<boolean>>;
   mgtTemplateName: string;
@@ -23,13 +25,13 @@ interface StrategiesPageProps {
   setMgtTemplateContent: React.Dispatch<React.SetStateAction<string>>;
   selectedMgtTemplateId: string | null;
   setSelectedMgtTemplateId: React.Dispatch<React.SetStateAction<string | null>>;
-  analysisResult: any;
-  setAnalysisResult: React.Dispatch<React.SetStateAction<any>>;
+  analysisResult: string | null;
+  setAnalysisResult: React.Dispatch<React.SetStateAction<string | null>>;
   showToast: (msg: string, type?: 'success' | 'error' | 'info', dur?: number) => void;
   handleAnalyzeTemplate: (id: string, content: string, harness: string) => Promise<void>;
   handleSaveTemplate: () => Promise<void>;
   handleDeleteTemplate: (id: string) => Promise<void>;
-  aiAssistants: any[];
+  aiAssistants: DetectedAI[];
   analyzingTemplate: boolean;
   mgtAnalysisComment: string;
   setMgtAnalysisComment: React.Dispatch<React.SetStateAction<string>>;

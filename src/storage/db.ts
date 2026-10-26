@@ -11,15 +11,52 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { getConfigDir } from '../core/config.js';
+import { getErrorCode } from '../utils/errors.js';
+
+export interface IPreparedStatement<Row = Record<string, unknown>> {
+  run(...args: unknown[]): { changes?: number | bigint; lastInsertRowid?: number | bigint };
+  get(...args: unknown[]): Row | undefined;
+  all(...args: unknown[]): Row[];
+}
 
 export interface IDatabaseSync {
   exec(sql: string): void;
-  prepare(sql: string): {
-    run(...args: any[]): any;
-    get(...args: any[]): any;
-    all(...args: any[]): any[];
-  };
+  prepare<Row = Record<string, unknown>>(sql: string): IPreparedStatement<Row>;
   close(): void;
+}
+
+export interface ChatThreadRow {
+  workspace_id: string;
+  provider_id: string | null;
+  sessions_json: string;
+  profiles_json: string;
+  models_json: string;
+  efforts_json: string;
+  updated_at: number;
+}
+
+export interface ChatTurnRow {
+  id: string;
+  workspace_id: string;
+  turn_index: number;
+  role: string;
+  content: string;
+  kind: string | null;
+  execution_profile: string | null;
+  images_json: string | null;
+  files_changed_json?: string | null;
+  created_at: number;
+}
+
+export interface ToolApprovalRow {
+  id: string;
+  workspace_id: string;
+  tool: string;
+  input_json: string;
+  description: string | null;
+  decision: string;
+  created_at: number;
+  resolved_at: number | null;
 }
 
 export interface StoredChatMessage {
@@ -71,14 +108,14 @@ try {
  */
 export class FallbackDatabase implements IDatabaseSync {
   private targetPath: string;
-  private threads = new Map<string, any>();
-  private turns = new Map<string, any[]>();
-  private approvals = new Map<string, any>();
+  private threads = new Map<string, ChatThreadRow>();
+  private turns = new Map<string, ChatTurnRow[]>();
+  private approvals = new Map<string, ToolApprovalRow>();
 
   private inTransaction = false;
-  private stagingThreads = new Map<string, any>();
-  private stagingTurns = new Map<string, any[]>();
-  private stagingApprovals = new Map<string, any>();
+  private stagingThreads = new Map<string, ChatThreadRow>();
+  private stagingTurns = new Map<string, ChatTurnRow[]>();
+  private stagingApprovals = new Map<string, ToolApprovalRow>();
 
   constructor(targetPath: string) {
     this.targetPath = targetPath;
@@ -93,15 +130,15 @@ export class FallbackDatabase implements IDatabaseSync {
     return { jsonPath, bakPath };
   }
 
-  private getActiveThreads(): Map<string, any> {
+  private getActiveThreads(): Map<string, ChatThreadRow> {
     return this.inTransaction ? this.stagingThreads : this.threads;
   }
 
-  private getActiveTurns(): Map<string, any[]> {
+  private getActiveTurns(): Map<string, ChatTurnRow[]> {
     return this.inTransaction ? this.stagingTurns : this.turns;
   }
 
-  private getActiveApprovals(): Map<string, any> {
+  private getActiveApprovals(): Map<string, ToolApprovalRow> {
     return this.inTransaction ? this.stagingApprovals : this.approvals;
   }
 
@@ -115,13 +152,17 @@ export class FallbackDatabase implements IDatabaseSync {
     if (this.targetPath === ':memory:') return;
     const { jsonPath, bakPath } = this.getJsonPaths();
 
-    let parsedData: any = null;
+    let parsedData: {
+      threads?: Record<string, ChatThreadRow>;
+      turns?: Record<string, ChatTurnRow[]>;
+      approvals?: Record<string, ToolApprovalRow>;
+    } | null = null;
 
     try {
       const raw = fs.readFileSync(jsonPath, 'utf8');
       parsedData = JSON.parse(raw);
-    } catch (err: any) {
-      if (err?.code !== 'ENOENT') {
+    } catch (err) {
+      if (getErrorCode(err) !== 'ENOENT') {
         console.warn(`[FallbackDatabase] Failed to read or parse ${jsonPath}, attempting backup recovery:`, err);
       }
       parsedData = null;
@@ -131,8 +172,8 @@ export class FallbackDatabase implements IDatabaseSync {
       try {
         const raw = fs.readFileSync(bakPath, 'utf8');
         parsedData = JSON.parse(raw);
-      } catch (bakErr: any) {
-        if (bakErr?.code !== 'ENOENT') {
+      } catch (bakErr) {
+        if (getErrorCode(bakErr) !== 'ENOENT') {
           console.warn(`[FallbackDatabase] Failed to read or parse backup ${bakPath}:`, bakErr);
         }
         parsedData = null;
@@ -147,7 +188,7 @@ export class FallbackDatabase implements IDatabaseSync {
       }
       if (parsedData.turns) {
         for (const [k, v] of Object.entries(parsedData.turns)) {
-          this.turns.set(k, v as any[]);
+          this.turns.set(k, v);
         }
       }
       if (parsedData.approvals) {
@@ -159,9 +200,9 @@ export class FallbackDatabase implements IDatabaseSync {
   }
 
   private saveToDisk(
-    threadsMap: Map<string, any> = this.threads,
-    turnsMap: Map<string, any[]> = this.turns,
-    approvalsMap: Map<string, any> = this.approvals,
+    threadsMap: Map<string, ChatThreadRow> = this.threads,
+    turnsMap: Map<string, ChatTurnRow[]> = this.turns,
+    approvalsMap: Map<string, ToolApprovalRow> = this.approvals,
   ): void {
     if (this.targetPath === ':memory:') return;
     const { jsonPath, bakPath } = this.getJsonPaths();
@@ -241,34 +282,49 @@ export class FallbackDatabase implements IDatabaseSync {
     }
   }
 
-  prepare(sql: string): {
-    run(...args: any[]): any;
-    get(...args: any[]): any;
-    all(...args: any[]): any[];
-  } {
+  prepare<Row = Record<string, unknown>>(sql: string): IPreparedStatement<Row> {
     const normalized = sql.trim().replace(/\s+/g, ' ');
     const self = this;
 
     if (normalized.startsWith('INSERT INTO chat_threads')) {
+      const colMatch = normalized.match(/INSERT INTO chat_threads\s*\(([^)]+)\)/i);
+      const cols = colMatch ? colMatch[1].split(',').map((c) => c.trim().toLowerCase()) : null;
+
       return {
-        run(
-          workspace_id: string,
-          provider_id: string | null,
-          sessions_json: string,
-          profiles_json: string,
-          models_json: string,
-          efforts_json: string,
-          updated_at: number,
-        ) {
-          self.getActiveThreads().set(workspace_id, {
-            workspace_id,
-            provider_id,
-            sessions_json,
-            profiles_json,
-            models_json,
-            efforts_json,
-            updated_at,
-          });
+        run(...args: unknown[]) {
+          const row: ChatThreadRow = {
+            workspace_id: '',
+            provider_id: null,
+            sessions_json: '{}',
+            profiles_json: '{}',
+            models_json: '{}',
+            efforts_json: '{}',
+            updated_at: Date.now(),
+          };
+
+          if (cols) {
+            for (let i = 0; i < cols.length; i++) {
+              const col = cols[i];
+              const val = args[i];
+              if (col === 'workspace_id') row.workspace_id = String(val ?? '');
+              else if (col === 'provider_id') row.provider_id = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'sessions_json') row.sessions_json = String(val ?? '{}');
+              else if (col === 'profiles_json') row.profiles_json = String(val ?? '{}');
+              else if (col === 'models_json') row.models_json = String(val ?? '{}');
+              else if (col === 'efforts_json') row.efforts_json = String(val ?? '{}');
+              else if (col === 'updated_at') row.updated_at = Number(val ?? Date.now());
+            }
+          } else {
+            row.workspace_id = String(args[0] ?? '');
+            row.provider_id = args[1] !== null && args[1] !== undefined ? String(args[1]) : null;
+            row.sessions_json = String(args[2] ?? '{}');
+            row.profiles_json = String(args[3] ?? '{}');
+            row.models_json = String(args[4] ?? '{}');
+            row.efforts_json = String(args[5] ?? '{}');
+            row.updated_at = Number(args[6] ?? Date.now());
+          }
+
+          self.getActiveThreads().set(row.workspace_id, row);
           self.onMutation();
           return { changes: 1 };
         },
@@ -279,10 +335,12 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('DELETE FROM chat_turns WHERE workspace_id = ?')) {
       return {
-        run(workspace_id: string) {
-          self.getActiveTurns().delete(workspace_id);
-          self.onMutation();
-          return { changes: 1 };
+        run(workspace_id: unknown) {
+          const existed = self.getActiveTurns().delete(String(workspace_id));
+          if (existed) {
+            self.onMutation();
+          }
+          return { changes: existed ? 1 : 0 };
         },
         get() { return undefined; },
         all() { return []; },
@@ -290,37 +348,60 @@ export class FallbackDatabase implements IDatabaseSync {
     }
 
     if (normalized.startsWith('INSERT INTO chat_turns')) {
+      const colMatch = normalized.match(/INSERT INTO chat_turns\s*\(([^)]+)\)/i);
+      const cols = colMatch ? colMatch[1].split(',').map((c) => c.trim().toLowerCase()) : null;
+
       return {
-        run(
-          id: string,
-          workspace_id: string,
-          turn_index: number,
-          role: string,
-          content: string,
-          kind: string | null,
-          execution_profile: string | null,
-          images_json: string | null,
-          files_changed_json: string | null,
-          created_at: number,
-        ) {
+        run(...args: unknown[]) {
+          const row: ChatTurnRow = {
+            id: '',
+            workspace_id: '',
+            turn_index: 0,
+            role: 'user',
+            content: '',
+            kind: null,
+            execution_profile: null,
+            images_json: null,
+            files_changed_json: null,
+            created_at: Date.now(),
+          };
+
+          if (cols) {
+            for (let i = 0; i < cols.length; i++) {
+              const col = cols[i];
+              const val = args[i];
+              if (col === 'id') row.id = String(val ?? '');
+              else if (col === 'workspace_id') row.workspace_id = String(val ?? '');
+              else if (col === 'turn_index') row.turn_index = Number(val ?? 0);
+              else if (col === 'role') row.role = String(val ?? '');
+              else if (col === 'content') row.content = String(val ?? '');
+              else if (col === 'kind') row.kind = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'execution_profile') row.execution_profile = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'images_json') row.images_json = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'files_changed_json') row.files_changed_json = val !== null && val !== undefined ? String(val) : null;
+              else if (col === 'created_at') row.created_at = Number(val ?? Date.now());
+            }
+          } else {
+            row.id = String(args[0] ?? '');
+            row.workspace_id = String(args[1] ?? '');
+            row.turn_index = Number(args[2] ?? 0);
+            row.role = String(args[3] ?? '');
+            row.content = String(args[4] ?? '');
+            row.kind = args[5] !== null && args[5] !== undefined ? String(args[5]) : null;
+            row.execution_profile = args[6] !== null && args[6] !== undefined ? String(args[6]) : null;
+            row.images_json = args[7] !== null && args[7] !== undefined ? String(args[7]) : null;
+            row.files_changed_json = args[8] !== null && args[8] !== undefined ? String(args[8]) : null;
+            row.created_at = Number(args[9] ?? Date.now());
+          }
+
+          const wsId = row.workspace_id;
           const map = self.getActiveTurns();
-          let list = map.get(workspace_id);
+          let list = map.get(wsId);
           if (!list) {
             list = [];
-            map.set(workspace_id, list);
+            map.set(wsId, list);
           }
-          list.push({
-            id,
-            workspace_id,
-            turn_index,
-            role,
-            content,
-            kind,
-            execution_profile,
-            images_json,
-            files_changed_json,
-            created_at,
-          });
+          list.push(row);
           self.onMutation();
           return { changes: 1 };
         },
@@ -331,38 +412,41 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('SELECT * FROM chat_threads WHERE workspace_id = ?')) {
       return {
-        run() { return {}; },
-        get(workspace_id: string) {
-          return self.getActiveThreads().get(workspace_id);
+        run() { return { changes: 0 }; },
+        get(workspace_id: unknown) {
+          return self.getActiveThreads().get(String(workspace_id)) as Row | undefined;
         },
-        all(workspace_id: string) {
-          const item = self.getActiveThreads().get(workspace_id);
-          return item ? [item] : [];
+        all(workspace_id: unknown) {
+          const item = self.getActiveThreads().get(String(workspace_id));
+          return (item ? [item] : []) as Row[];
         },
       };
     }
 
     if (normalized.startsWith('SELECT * FROM chat_turns WHERE workspace_id = ?')) {
       return {
-        run() { return {}; },
-        get(workspace_id: string) {
-          const list = self.getActiveTurns().get(workspace_id) || [];
-          return list[0];
+        run() { return { changes: 0 }; },
+        get(workspace_id: unknown) {
+          const list = self.getActiveTurns().get(String(workspace_id)) || [];
+          return list[0] as Row | undefined;
         },
-        all(workspace_id: string) {
-          const list = self.getActiveTurns().get(workspace_id) || [];
-          return [...list].sort((a, b) => a.turn_index - b.turn_index);
+        all(workspace_id: unknown) {
+          const list = self.getActiveTurns().get(String(workspace_id)) || [];
+          return [...list].sort((a, b) => a.turn_index - b.turn_index) as Row[];
         },
       };
     }
 
     if (normalized.startsWith('DELETE FROM chat_threads WHERE workspace_id = ?')) {
       return {
-        run(workspace_id: string) {
-          self.getActiveThreads().delete(workspace_id);
-          self.getActiveTurns().delete(workspace_id);
-          self.onMutation();
-          return { changes: 1 };
+        run(workspace_id: unknown) {
+          const wsId = String(workspace_id);
+          const deletedThread = self.getActiveThreads().delete(wsId);
+          const deletedTurns = self.getActiveTurns().delete(wsId);
+          if (deletedThread || deletedTurns) {
+            self.onMutation();
+          }
+          return { changes: deletedThread ? 1 : 0 };
         },
         get() { return undefined; },
         all() { return []; },
@@ -371,24 +455,38 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('INSERT INTO tool_approvals')) {
       return {
-        run(
-          id: string,
-          workspace_id: string,
-          tool: string,
-          input_json: string,
-          description: string | null,
-          created_at: number,
-        ) {
+        run(...args: unknown[]) {
+          const appId = String(args[0] ?? '');
+          const wsId = String(args[1] ?? '');
+          const tool = String(args[2] ?? '');
+          const inputJson = String(args[3] ?? '{}');
+          const desc = args[4] !== null && args[4] !== undefined ? String(args[4]) : null;
+          let decision = 'pending';
+          let createdAt = Date.now();
+
+          if (args.length >= 7) {
+            decision = String(args[5] ?? 'pending');
+            createdAt = Number(args[6] ?? Date.now());
+          } else if (args.length === 6) {
+            if (typeof args[5] === 'number') {
+              createdAt = args[5];
+            } else if (!Number.isNaN(Number(args[5])) && String(args[5]).trim() !== '' && !['pending', 'allow', 'deny'].includes(String(args[5]))) {
+              createdAt = Number(args[5]);
+            } else {
+              decision = String(args[5] ?? 'pending');
+            }
+          }
+
           const map = self.getActiveApprovals();
-          const existing = map.get(id);
-          map.set(id, {
-            id,
-            workspace_id,
+          const existing = map.get(appId);
+          map.set(appId, {
+            id: appId,
+            workspace_id: wsId,
             tool,
-            input_json,
-            description,
-            decision: existing ? existing.decision : 'pending',
-            created_at,
+            input_json: inputJson,
+            description: desc,
+            decision: existing ? existing.decision : decision,
+            created_at: createdAt,
             resolved_at: existing?.resolved_at ?? null,
           });
           self.onMutation();
@@ -401,15 +499,17 @@ export class FallbackDatabase implements IDatabaseSync {
 
     if (normalized.startsWith('UPDATE tool_approvals SET decision = ?, resolved_at = ? WHERE id = ?')) {
       return {
-        run(decision: string, resolved_at: number, id: string) {
+        run(decision: unknown, resolved_at: unknown, id: unknown) {
+          const appId = String(id);
           const map = self.getActiveApprovals();
-          const existing = map.get(id);
+          const existing = map.get(appId);
           if (existing) {
-            existing.decision = decision;
-            existing.resolved_at = resolved_at;
+            existing.decision = String(decision);
+            existing.resolved_at = Number(resolved_at);
             self.onMutation();
+            return { changes: 1 };
           }
-          return { changes: 1 };
+          return { changes: 0 };
         },
         get() { return undefined; },
         all() { return []; },
@@ -417,19 +517,33 @@ export class FallbackDatabase implements IDatabaseSync {
     }
 
     if (normalized.startsWith('SELECT * FROM tool_approvals WHERE workspace_id = ?')) {
+      const pendingOnly = normalized.includes("decision = 'pending'");
       return {
-        run() { return {}; },
-        get(workspace_id: string) {
+        run() { return { changes: 0 }; },
+        get(workspace_id: unknown) {
           const list = Array.from(self.getActiveApprovals().values()).filter(
-            (a) => a.workspace_id === workspace_id && a.decision === 'pending',
+            (a) => a.workspace_id === String(workspace_id) && (!pendingOnly || a.decision === 'pending'),
           );
-          return list[0];
+          return list[0] as Row | undefined;
         },
-        all(workspace_id: string) {
+        all(workspace_id: unknown) {
           const list = Array.from(self.getActiveApprovals().values()).filter(
-            (a) => a.workspace_id === workspace_id && a.decision === 'pending',
+            (a) => a.workspace_id === String(workspace_id) && (!pendingOnly || a.decision === 'pending'),
           );
-          return list.sort((a, b) => a.created_at - b.created_at);
+          return list.sort((a, b) => a.created_at - b.created_at) as Row[];
+        },
+      };
+    }
+
+    if (normalized.startsWith('SELECT * FROM tool_approvals WHERE id = ?')) {
+      return {
+        run() { return { changes: 0 }; },
+        get(id: unknown) {
+          return self.getActiveApprovals().get(String(id)) as Row | undefined;
+        },
+        all(id: unknown) {
+          const item = self.getActiveApprovals().get(String(id));
+          return (item ? [item] : []) as Row[];
         },
       };
     }
@@ -494,10 +608,10 @@ export function initDatabase(dbPath?: string): IDatabaseSync {
 
     let db: IDatabaseSync;
     try {
-      db = new NodeDatabaseSyncClass(targetPath);
+      db = new NodeDatabaseSyncClass(targetPath) as unknown as IDatabaseSync;
     } catch {
       targetPath = ':memory:';
-      db = new NodeDatabaseSyncClass(targetPath);
+      db = new NodeDatabaseSyncClass(targetPath) as unknown as IDatabaseSync;
     }
 
     activeDb = db;
@@ -644,12 +758,12 @@ export function loadChatThread(
   workspaceId: string,
   db = initDatabase(),
 ): StoredChatThread | null {
-  const threadStmt = db.prepare('SELECT * FROM chat_threads WHERE workspace_id = ?');
-  const threadRow = threadStmt.get(workspaceId) as any;
+  const threadStmt = db.prepare<ChatThreadRow>('SELECT * FROM chat_threads WHERE workspace_id = ?');
+  const threadRow = threadStmt.get(workspaceId);
   if (!threadRow) return null;
 
-  const turnsStmt = db.prepare('SELECT * FROM chat_turns WHERE workspace_id = ? ORDER BY turn_index ASC');
-  const turnRows = turnsStmt.all(workspaceId) as any[];
+  const turnsStmt = db.prepare<ChatTurnRow>('SELECT * FROM chat_turns WHERE workspace_id = ? ORDER BY turn_index ASC');
+  const turnRows = turnsStmt.all(workspaceId);
 
   const messages: StoredChatMessage[] = turnRows.map((row) => {
     let images: string[] | undefined;
@@ -679,10 +793,10 @@ export function loadChatThread(
     };
   });
 
-  let sessions = {};
-  let profilesByProvider = {};
-  let modelsByProvider = {};
-  let effortsByProvider = {};
+  let sessions: Record<string, { id: string; started: boolean; model?: string; effort?: string }> = {};
+  let profilesByProvider: Record<string, string> = {};
+  let modelsByProvider: Record<string, string> = {};
+  let effortsByProvider: Record<string, string> = {};
 
   try { sessions = JSON.parse(threadRow.sessions_json || '{}'); } catch { /* ignore */ }
   try { profilesByProvider = JSON.parse(threadRow.profiles_json || '{}'); } catch { /* ignore */ }
@@ -750,20 +864,28 @@ export function getPendingApprovals(
   workspaceId: string,
   db = initDatabase(),
 ): StoredApproval[] {
-  const stmt = db.prepare(`
+  const stmt = db.prepare<ToolApprovalRow>(`
     SELECT * FROM tool_approvals
     WHERE workspace_id = ? AND decision = 'pending'
     ORDER BY created_at ASC
   `);
-  const rows = stmt.all(workspaceId) as any[];
-  return rows.map((row) => ({
-    id: row.id,
-    workspaceId: row.workspace_id,
-    tool: row.tool,
-    input: JSON.parse(row.input_json || '{}'),
-    description: row.description || undefined,
-    decision: row.decision as 'pending' | 'allow' | 'deny',
-    createdAt: Number(row.created_at),
-    resolvedAt: row.resolved_at ? Number(row.resolved_at) : undefined,
-  }));
+  const rows = stmt.all(workspaceId);
+  return rows.map((row) => {
+    let input: Record<string, unknown> = {};
+    try {
+      input = JSON.parse(row.input_json || '{}');
+    } catch {
+      input = {};
+    }
+    return {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      tool: row.tool,
+      input,
+      description: row.description || undefined,
+      decision: row.decision as 'pending' | 'allow' | 'deny',
+      createdAt: Number(row.created_at),
+      resolvedAt: row.resolved_at ? Number(row.resolved_at) : undefined,
+    };
+  });
 }

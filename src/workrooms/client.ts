@@ -140,13 +140,14 @@ export class PinnedWorkroomClient {
         });
         response.on('end', () => {
           const raw = Buffer.concat(chunks).toString('utf8');
-          let data: any = null;
+          let data: unknown = null;
           try { data = raw ? JSON.parse(raw) : null; } catch {}
           const status = response.statusCode ?? 500;
           if (status < 200 || status >= 300) {
-            const message = typeof data?.error === 'string' ? data.error : `Workroom request failed (${status}).`;
+            const dataObj = (data && typeof data === 'object') ? (data as Record<string, unknown>) : null;
+            const message = typeof dataObj?.error === 'string' ? dataObj.error : `Workroom request failed (${status}).`;
             if (status === 401 || status === 403) return reject(new WorkroomAuthorizationError(message));
-            if (status === 409) return reject(new WorkroomRevisionError(Number(data.expectedRevision), Number(data.actualRevision)));
+            if (status === 409) return reject(new WorkroomRevisionError(Number(dataObj?.expectedRevision), Number(dataObj?.actualRevision)));
             return reject(new WorkroomValidationError(message));
           }
           resolve(data as T);

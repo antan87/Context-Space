@@ -1,10 +1,20 @@
 // Types matched with src/types.ts
 
+export interface AdapterConfigField {
+  name?: string;
+  key: string;
+  label?: string;
+  type?: string;
+  required?: boolean;
+  default?: unknown;
+  description?: string;
+}
+
 export interface StorageAdapterMeta {
   name: string;
   displayName: string;
   description: string;
-  configFields?: any[];
+  configFields?: AdapterConfigField[];
 }
 
 export interface ContextSpaceConfig {
@@ -15,7 +25,7 @@ export interface ContextSpaceConfig {
   defaultEditor?: string | null;
   scanDepth: number;
   storageProvider?: string;
-  adapterConfig?: Record<string, Record<string, any>>;
+  adapterConfig?: Record<string, Record<string, unknown>>;
   plugins?: string[];
 }
 
@@ -415,7 +425,7 @@ export interface SkillParameter {
   type: 'string' | 'number' | 'boolean' | 'array';
   description?: string;
   required?: boolean;
-  default?: any;
+  default?: unknown;
 }
 
 export interface SkillSupportingFile {
@@ -526,6 +536,7 @@ export interface WorkroomResourceManifest {
   compatibility?: {
     platforms?: Array<'win32' | 'linux' | 'darwin'>;
     nexusflow?: string;
+    contextspace?: string;
   };
   quarantinedAt?: string;
 }
@@ -600,10 +611,40 @@ export interface WorkspaceStreamMessage {
   content?: string;
   stepId?: string;
   evidence?: string;
+  status?: string;
+  confirmedBy?: string;
+  confirmedAt?: string;
+  stepProposal?: {
+    stepId?: string;
+    status?: string;
+    evidence?: string;
+    revision?: number;
+    updatedAt?: string;
+    [key: string]: unknown;
+  } | null;
+  syncError?: string | null;
   type?: string;
   artifacts?: Array<{ title: string; path: string; summary?: string }>;
   targetHarness?: string;
-  [key: string]: any;
+  [key: string]: unknown;
+}
+
+export interface WorkspaceSyncResult {
+  repoName: string;
+  success: boolean;
+  message: string;
+  status?: string;
+  conflict?: unknown;
+}
+
+export interface ToolStatus {
+  id: string;
+  name: string;
+  installed: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  updateCmd: string;
 }
 
 /** An agent asked for the user's attention through the MCP `request_user_input` tool. */

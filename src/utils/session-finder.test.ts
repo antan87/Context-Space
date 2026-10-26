@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -18,6 +18,11 @@ import {
   findSessions,
   findActiveAssistants,
   clearSessionFinderCache,
+  openCopilotDb,
+  extractRecordUsage,
+  type CopilotSessionRow,
+  type CopilotTurnCountRow,
+  type CopilotTranscriptTurnRow,
 } from './session-finder.js';
 
 describe('getClaudeProjectFolderName', () => {
@@ -661,6 +666,202 @@ describe('JSON error boundaries and malformed lines resilience', () => {
       const sessions = await findSessions(workspaceDir, [], 'codex');
       expect(sessions.map((s) => s.id)).toEqual(['0199a213-81c0-7800-8aa1-bbab2a035a52']);
       expect(await findSessions(workspaceDir, [], 'codex')).toEqual(sessions);
+    });
+  });
+
+  describe('Copilot SQLite session store queries', () => {
+    it('returns null when copilot db path does not exist', async () => {
+      const db = await openCopilotDb('/non/existent/path/session-store.db');
+      expect(db).toBeNull();
+    });
+
+    it('queries strongly typed session and turn rows from a Copilot SQLite store', async () => {
+      const { DatabaseSync } = await import('node:sqlite');
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-test-'));
+      const dbPath = path.join(tempDir, 'session-store.db');
+
+      try {
+        const sqlite = new DatabaseSync(dbPath);
+        sqlite.exec(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            cwd TEXT,
+            summary TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          );
+          CREATE TABLE turns (
+            session_id TEXT,
+            turn_index INTEGER,
+            user_message TEXT,
+            assistant_response TEXT,
+            timestamp TEXT
+          );
+        `);
+
+        sqlite.prepare(`
+          INSERT INTO sessions (id, cwd, summary, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run('copilot-sess-1', '/repo/path', 'Copilot test session', '2026-10-24T12:00:00Z', '2026-10-24T12:05:00Z');
+
+        sqlite.prepare(`
+          INSERT INTO turns (session_id, turn_index, user_message, assistant_response, timestamp)
+          VALUES (?, ?, ?, ?, ?)
+        `).run('copilot-sess-1', 0, 'how do I test this?', 'Use vitest', '2026-10-24T12:01:00Z');
+
+        sqlite.close();
+
+        const copilotDb = await openCopilotDb(dbPath);
+        expect(copilotDb).not.toBeNull();
+        if (!copilotDb) return;
+
+        try {
+          const sessions = copilotDb.prepare<CopilotSessionRow>(
+            'SELECT id, cwd, summary, created_at, updated_at FROM sessions'
+          ).all();
+          expect(sessions).toHaveLength(1);
+          expect(sessions[0].id).toBe('copilot-sess-1');
+          expect(sessions[0].cwd).toBe('/repo/path');
+          expect(sessions[0].summary).toBe('Copilot test session');
+
+          const counted = copilotDb.prepare<CopilotTurnCountRow>(
+            `SELECT
+               SUM(CASE WHEN TRIM(COALESCE(user_message, '')) != '' THEN 1 ELSE 0 END)
+               + SUM(CASE WHEN TRIM(COALESCE(assistant_response, '')) != '' THEN 1 ELSE 0 END) AS n
+             FROM turns WHERE session_id = ?`
+          ).get('copilot-sess-1');
+          expect(counted?.n).toBe(2);
+
+          const turns = copilotDb.prepare<CopilotTranscriptTurnRow>(
+            'SELECT user_message, assistant_response, timestamp FROM turns WHERE session_id = ? ORDER BY turn_index'
+          ).all('copilot-sess-1');
+          expect(turns).toHaveLength(1);
+          expect(turns[0].user_message).toBe('how do I test this?');
+          expect(turns[0].assistant_response).toBe('Use vitest');
+        } finally {
+          copilotDb.close();
+        }
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('discovers Copilot sessions, active assistants, and loads transcripts via COPILOT_DB_PATH', async () => {
+      const { DatabaseSync } = await import('node:sqlite');
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-discovery-'));
+      const dbPath = path.join(tempDir, 'session-store.db');
+      const workspaceDir = path.join(tempDir, 'repo');
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      try {
+        const sqlite = new DatabaseSync(dbPath);
+        sqlite.exec(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            cwd TEXT,
+            summary TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          );
+          CREATE TABLE turns (
+            session_id TEXT,
+            turn_index INTEGER,
+            user_message TEXT,
+            assistant_response TEXT,
+            timestamp TEXT
+          );
+        `);
+
+        sqlite.prepare(`
+          INSERT INTO sessions (id, cwd, summary, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run('c0011002-1234-4000-8000-123456789abc', workspaceDir, 'Copilot Feature Discussion', '2026-10-24T10:00:00Z', '2026-10-24T10:30:00Z');
+
+        sqlite.prepare(`
+          INSERT INTO turns (session_id, turn_index, user_message, assistant_response, timestamp)
+          VALUES (?, ?, ?, ?, ?)
+        `).run('c0011002-1234-4000-8000-123456789abc', 0, 'Implement typed store', 'Done with strong typing', '2026-10-24T10:01:00Z');
+
+        sqlite.close();
+
+        vi.stubEnv('COPILOT_DB_PATH', dbPath);
+        clearSessionFinderCache();
+
+        // 1. findSessions
+        const sessions = await findSessions(workspaceDir, [], 'copilot');
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0].id).toBe('c0011002-1234-4000-8000-123456789abc');
+        expect(sessions[0].assistant).toBe('copilot');
+        expect(sessions[0].title).toBe('Copilot Feature Discussion');
+        expect(sessions[0].messageCount).toBe(2);
+
+        // 2. findActiveAssistants
+        const assistants = await findActiveAssistants(workspaceDir);
+        expect(assistants).toContain('copilot');
+
+        // 3. getSessionTranscript
+        const transcript = await getSessionTranscript('copilot', 'c0011002-1234-4000-8000-123456789abc');
+        expect(transcript).toHaveLength(2);
+        expect(transcript[0].role).toBe('user');
+        expect(transcript[0].content).toBe('Implement typed store');
+        expect(transcript[1].role).toBe('assistant');
+        expect(transcript[1].content).toBe('Done with strong typing');
+      } finally {
+        vi.unstubAllEnvs();
+        clearSessionFinderCache();
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('extractRecordUsage cost formats', () => {
+    it('extracts total_cost_usd from snake_case record or rawUsage', () => {
+      // Record-level total_cost_usd without usage object
+      const r1 = extractRecordUsage({ type: 'result', total_cost_usd: 0.042 });
+      expect(r1.usage?.costUsdEstimate).toBe(0.042);
+
+      // rawUsage total_cost_usd
+      const r2 = extractRecordUsage({ usage: { input_tokens: 100, output_tokens: 50, total_cost_usd: 0.015 } });
+      expect(r2.usage?.inputTokens).toBe(100);
+      expect(r2.usage?.outputTokens).toBe(50);
+      expect(r2.usage?.costUsdEstimate).toBe(0.015);
+    });
+  });
+
+  describe('getSessionTranscript robustness on corrupted transcripts', () => {
+    it('handles invalid timestamp strings in Codex transcript without crashing with RangeError', async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-corrupted-ts-'));
+      const codexSessionsDir = path.join(tempDir, 'sessions');
+      await fs.mkdir(codexSessionsDir, { recursive: true });
+
+      const sessionId = '018f1234-abcd-7000-8000-000000000001';
+      const rolloutFile = path.join(codexSessionsDir, `session-${sessionId}.jsonl`);
+      const lines = [
+        JSON.stringify({ type: 'session_meta', payload: { id: sessionId, cwd: tempDir } }),
+        // Unparseable timestamp that would throw RangeError in new Date(ts).toISOString()
+        JSON.stringify({ type: 'response_item', timestamp: 'not-a-valid-date-string', payload: { type: 'message', role: 'user', content: 'hello' } }),
+        // Numeric NaN or out of range timestamp
+        JSON.stringify({ type: 'response_item', timestamp: NaN, payload: { type: 'message', role: 'assistant', content: 'hi' } }),
+      ];
+      await fs.writeFile(rolloutFile, lines.join('\n'), 'utf-8');
+
+      try {
+        vi.stubEnv('CODEX_HOME', tempDir);
+        clearSessionFinderCache();
+
+        const transcript = await getSessionTranscript('codex', sessionId);
+        expect(transcript).toHaveLength(2);
+        expect(transcript[0].role).toBe('user');
+        expect(transcript[0].content).toBe('hello');
+        expect(transcript[0].timestamp).toBeUndefined();
+        expect(transcript[1].role).toBe('assistant');
+        expect(transcript[1].content).toBe('hi');
+        expect(transcript[1].timestamp).toBeUndefined();
+      } finally {
+        vi.unstubAllEnvs();
+        clearSessionFinderCache();
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { AgentExecutionProfile } from './ProviderRegistry.js';
 import { getAugmentedPath } from '../utils/user-paths.js';
+import { getErrorCode } from '../utils/errors.js';
 
 /**
  * Shared lifecycle for CLI-backed agents (claude, codex, agy). Each turn spawns the
@@ -233,8 +234,8 @@ export function killTree(child: ChildProcess | null, options?: KillTreeOptions) 
       try {
         process.kill(pid, 0);
         alive = true;
-      } catch (e: any) {
-        alive = e?.code === 'EPERM';
+      } catch (e) {
+        alive = getErrorCode(e) === 'EPERM';
       }
       if (!alive) return;
 

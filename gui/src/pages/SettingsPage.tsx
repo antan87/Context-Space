@@ -12,19 +12,9 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../
 import { Separator } from '../components/ui/separator.js';
 import { Spinner } from '../components/ui/spinner.js';
 import { Switch } from '../components/ui/switch.js';
-import type { DetectedEditor, ContextSpaceConfig, StorageAdapterMeta } from '../types.js';
+import type { DetectedEditor, ContextSpaceConfig, StorageAdapterMeta, ToolStatus } from '../types.js';
 import { FolderField } from '../features/setup/FolderField.js';
 import { checkFolders, repoSummary, type ConfigPathsReport, type FolderKey } from '../features/setup/setupApi.js';
-
-interface ToolStatus {
-  id: string;
-  name: string;
-  installed: boolean;
-  currentVersion: string;
-  latestVersion: string;
-  updateAvailable: boolean;
-  updateCmd: string;
-}
 
 interface SettingsPageProps {
   workspaces: { id: string; branchName: string }[];
@@ -288,7 +278,7 @@ export function SettingsPage({
                   </h4>
                   {activeAdapter.configFields.map((field) => {
                     const value = config.adapterConfig?.[activeProv]?.[field.key] ?? field.default ?? '';
-                    const updateField = (val: any) => {
+                    const updateField = (val: unknown) => {
                       const newAdapterConfig = {
                         ...(config.adapterConfig || {}),
                         [activeProv]: {
@@ -320,7 +310,7 @@ export function SettingsPage({
                         <Label className="text-sm">{field.label}</Label>
                         <Input
                           type={field.type === 'number' ? 'number' : 'text'}
-                          value={value}
+                          value={typeof value === 'string' || typeof value === 'number' ? value : String(value ?? '')}
                           onChange={(e) => {
                             const val = field.type === 'number' ? Number(e.target.value) : e.target.value;
                             updateField(val);

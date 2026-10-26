@@ -2089,6 +2089,43 @@ describe('Server API Endpoints Unit Tests', () => {
       expect(fs.writeFile).toHaveBeenCalled();
     });
 
+    it('POST /api/schedules/:id/enabled should update job enabled status', async () => {
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({
+        version: 1,
+        jobs: [{
+          id: 'job-1',
+          workspacePath: '/mock/ws',
+          task: 'sync',
+          intervalMinutes: 60,
+          enabled: true,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }],
+      }) as any);
+
+      const response = await app.request('/api/schedules/job-1/enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      });
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.job.enabled).toBe(false);
+      expect(fs.writeFile).toHaveBeenCalled();
+    });
+
+    it('POST /api/schedules/:id/enabled should reject invalid enabled type', async () => {
+      const response = await app.request('/api/schedules/job-1/enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: 'not-a-boolean' }),
+      });
+
+      expect(response.status).toBe(400);
+      const data = await response.json();
+      expect(data.error).toContain('enabled must be a boolean');
+    });
+
     it('DELETE /api/schedules/:id should 404 for an unknown job', async () => {
       vi.mocked(fs.readFile).mockRejectedValue(new Error('ENOENT'));
 

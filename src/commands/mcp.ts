@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import { startMcpServer, type McpServerOptions } from '../mcp/server.js';
 import { BRAND_NAME, BRAND_CONFIG, CLI_NAME } from '../core/constants.js';
 import { registerAgentMcp, unboundMcpServer, type AgentMcpResult } from '../core/agent-mcp.js';
+import { toErrorMessage, getErrorCode } from '../utils/errors.js';
 
 export interface McpRunOptions {
   role?: string;
@@ -72,7 +73,7 @@ async function configureEditors(): Promise<{ updated: number; unchanged: number 
   for (const configPath of configPaths) {
     if (!configPath) continue;
     try {
-      let configData: any = { mcpServers: {} };
+      let configData: { mcpServers: Record<string, unknown>; [key: string]: unknown } = { mcpServers: {} };
 
       try {
         const raw = await fs.readFile(configPath, 'utf8');
@@ -81,8 +82,8 @@ async function configureEditors(): Promise<{ updated: number; unchanged: number 
             configData = JSON.parse(raw);
         }
         if (!configData.mcpServers) configData.mcpServers = {};
-      } catch (e: any) {
-        if (e?.code === 'ENOENT') {
+      } catch (e) {
+        if (getErrorCode(e) === 'ENOENT') {
           // File doesn't exist, we will create it if the directory exists
           const dir = path.dirname(configPath);
           try {
@@ -106,8 +107,8 @@ async function configureEditors(): Promise<{ updated: number; unchanged: number 
       await fs.writeFile(configPath, JSON.stringify(configData, null, 2), 'utf8');
       console.log(chalk.green(`  ✓ Configured MCP in: ${configPath}`));
       updatedCount++;
-    } catch (e: any) {
-      console.log(chalk.gray(`  - Skipped ${configPath} (${e.message})`));
+    } catch (e) {
+      console.log(chalk.gray(`  - Skipped ${configPath} (${toErrorMessage(e)})`));
     }
   }
 

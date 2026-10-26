@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import * as path from 'node:path';
+import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import { getAdapter } from '../harness/index.js';
 import type { HarnessAdapter, SessionHandle } from '../harness/interface.js';
 import type { PermissionMode } from '../harness/types.js';
@@ -13,6 +14,7 @@ import {
   MCP_ADAPTER_SERVER_NAME,
   LEGACY_MCP_ADAPTER_SERVER_NAME,
 } from '../core/constants.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 const CORE_ALLOWED_TOOLS = new Set([
   'Edit', 'Write', 'MultiEdit', 'NotebookEdit',
@@ -49,7 +51,7 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
 
   private currentExecutionProfile: AgentExecutionProfile = 'review';
 
-  constructor(sessionStore?: unknown, adapterOverride?: HarnessAdapter) {
+  constructor(sessionStore?: SessionStore, adapterOverride?: HarnessAdapter) {
     super();
     this.adapter = adapterOverride ?? getAdapter('claude-code', { sessionStore });
   }
@@ -105,8 +107,8 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
         }
 
         this.bindEvents(this.handle);
-      } catch (err: any) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      } catch (err) {
+        this.emit('error', err instanceof Error ? err : new Error(toErrorMessage(err)));
         this.emit('idle');
       }
     } else {
@@ -175,16 +177,18 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
 
               // A plain `ctxspace plan …`, `ask …`, `knowledge search …` or `news …` only changes the plan, the chat's alerts or
               // the note of what the AI has looked at, as the AI, or reads, so it needs no prompt each time.
-              const aiCommand = toolName === 'Bash' && isPlainAiCommand(String((event as any).input?.command ?? ''));
+              const eventInput = typeof event.input === 'object' && event.input !== null ? (event.input as Record<string, unknown>) : undefined;
+              const aiCommand = toolName === 'Bash' && isPlainAiCommand(String(eventInput?.command ?? ''));
               if (this.currentExecutionProfile === 'workspace-write' && (CORE_ALLOWED_TOOLS.has(toolName) || READONLY_MCP_TOOLS.has(toolName) || WORKSPACE_EDIT_MCP_TOOLS.has(toolName) || aiCommand)) {
                 handle.respondToApproval(event.requestId, { behavior: 'allow' });
               } else if (this.listenerCount('approval_request') > 0) {
                 // Interactive human-in-the-loop approval: forward to UI client
+                const rawDesc = (event as Record<string, unknown>).description;
                 this.emit('approval_request', {
                   requestId: event.requestId,
                   tool: event.tool,
-                  input: (event as any).input ?? {},
-                  description: (event as any).description,
+                  input: eventInput ?? {},
+                  description: typeof rawDesc === 'string' ? rawDesc : undefined,
                 });
               } else if (this.currentExecutionProfile === 'workspace-write') {
                 if (MUTATING_LIFECYCLE_TOOLS.has(toolName)) {
@@ -227,8 +231,8 @@ export class ClaudeSdkAdapter extends EventEmitter implements AgentHarness {
               break;
           }
         }
-      } catch (err: any) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      } catch (err) {
+        this.emit('error', err instanceof Error ? err : new Error(toErrorMessage(err)));
       } finally {
         if (this.active) {
           this.emit('idle');

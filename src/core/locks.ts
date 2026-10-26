@@ -32,12 +32,8 @@ export interface LockOptions {
 /** Releases a held lock. Safe to call more than once. */
 export type ReleaseLock = () => Promise<void>;
 
-/** Reads a Node errno code off an unknown thrown value. */
-export function getErrorCode(error: unknown): string | undefined {
-  return typeof error === 'object' && error !== null && 'code' in error
-    ? String((error as NodeJS.ErrnoException).code)
-    : undefined;
-}
+import { getErrorCode } from '../utils/errors.js';
+export { getErrorCode };
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,8 +43,8 @@ function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (err: any) {
-    return err.code === 'EPERM'; // Process exists but belongs to another user
+  } catch (err) {
+    return getErrorCode(err) === 'EPERM'; // Process exists but belongs to another user
   }
 }
 

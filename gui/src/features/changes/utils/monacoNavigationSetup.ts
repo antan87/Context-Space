@@ -57,7 +57,7 @@ export interface CompilerOptions {
   moduleResolution?: number;
   noEmit?: boolean;
   target?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ModeConfiguration {
@@ -183,7 +183,13 @@ export function ensureMonacoNavigation(): void {
 
   // Attach to global monaco.languages.typescript for runtime parity
   if (typeof window !== 'undefined') {
-    const w = window as any;
+    const w = window as unknown as {
+      monaco?: {
+        languages?: {
+          typescript?: unknown;
+        };
+      };
+    };
     w.monaco = w.monaco || {};
     w.monaco.languages = w.monaco.languages || {};
     w.monaco.languages.typescript = {
