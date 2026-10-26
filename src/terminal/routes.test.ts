@@ -20,10 +20,25 @@ describe('terminal execution boundary', () => {
     vi.useFakeTimers(); const access = new TerminalAccess(); const a = access.bootstrap(), b = access.bootstrap();
     expect(access.validate(a.owner, a.token)).toBe(true); expect(access.validate(b.owner, a.token)).toBe(false);
     expect(access.bootstrap(a.owner).token).toBe(a.token);
+    expect(access.isActive(a.owner)).toBe(true);
+    expect(access.isActive(b.owner)).toBe(true);
+    expect(access.isActive('unknown')).toBe(false);
     vi.advanceTimersByTime(4 * 60_000);
     expect(access.bootstrap(a.owner).expiresAt).toBe(a.expiresAt);
+    expect(access.isActive(a.owner)).toBe(true);
     vi.advanceTimersByTime(60_000 + 1); expect(access.validate(a.owner, a.token)).toBe(false);
+    expect(access.isActive(a.owner)).toBe(true);
+    vi.advanceTimersByTime(4 * 60_000);
+    expect(access.isActive(a.owner)).toBe(false);
     const again = access.bootstrap(a.owner); expect(again.owner).toBe(a.owner); expect(again.token).not.toBe(a.token);
+    expect(access.isActive(a.owner)).toBe(true);
+    vi.advanceTimersByTime(4 * 60_000);
+    expect(access.isActive(a.owner)).toBe(true);
+    access.touch(a.owner);
+    vi.advanceTimersByTime(2 * 60_000);
+    expect(access.isActive(a.owner)).toBe(true);
+    vi.advanceTimersByTime(3 * 60_000 + 1);
+    expect(access.isActive(a.owner)).toBe(false);
   });
   it('rejects traversal and symlink launch directories', async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), 'cs-terminal-')); dirs.push(parent);

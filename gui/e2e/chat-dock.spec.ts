@@ -160,6 +160,37 @@ test.describe('the chat is the centre of a workspace', () => {
     await expect(shownState(page)).toHaveText('Running');
     await expect(mountedPanes).toHaveCount(2);
   });
+
+  test('keeps running workspace mounted even when visiting a third workspace', async ({ page }) => {
+    await page.route('**/api/terminals/running', (route) => {
+      const terminal = { id: 'term-alpha', workspace: 'alpha', target: 'shell', label: 'bash', cwd: '/tmp/alpha', state: 'running', attached: true };
+      return route.fulfill({ json: { sessions: [terminal] } });
+    });
+
+    await page.goto('/#/workspaces/alpha/chat');
+    await expect(shownState(page)).toHaveText('Running');
+    expect(attaches.alpha).toBe(1);
+
+    await addChat(page, 'beta');
+    await expect(shownState(page)).toHaveText('Running');
+    expect(attaches.beta).toBe(1);
+
+    await addChat(page, 'gamma');
+    await expect(shownState(page)).toHaveText('Running');
+    expect(attaches.gamma).toBe(1);
+
+    // alpha (running) and gamma (active) stayed mounted, while inactive beta was evicted
+    await expect(chatOf(page).locator('[data-workspace-pane="alpha"]')).toHaveCount(1);
+    await expect(chatOf(page).locator('[data-workspace-pane="gamma"]')).toHaveCount(1);
+    await expect(chatOf(page).locator('[data-workspace-pane="beta"]')).toHaveCount(0);
+
+    // Switching to beta mounts beta; alpha stays mounted because it is running, while gamma is evicted
+    await session(page, 'beta').click();
+    await expect(shownState(page)).toHaveText('Running');
+    await expect(chatOf(page).locator('[data-workspace-pane="beta"]')).toHaveCount(1);
+    await expect(chatOf(page).locator('[data-workspace-pane="alpha"]')).toHaveCount(1);
+    await expect(chatOf(page).locator('[data-workspace-pane="gamma"]')).toHaveCount(0);
+  });
 });
 
 test.describe('the address says which chat is showing', () => {

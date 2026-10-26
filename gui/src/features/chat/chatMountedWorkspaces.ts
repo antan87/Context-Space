@@ -9,6 +9,7 @@ export function computeMountedWorkspaces(
   showSplit: boolean,
   previousMounted: readonly string[] = [],
   maxMounted: number = 2,
+  runningWorkspaces: readonly string[] = [],
 ): string[] {
   const activeItems = [activeTab, showSplit ? splitTab : null].filter(
     (t): t is string => typeof t === 'string' && openTabs.includes(t),
@@ -22,8 +23,15 @@ export function computeMountedWorkspaces(
     }
   }
 
+  // Workspaces with active running sessions must also stay mounted so background tasks aren't killed or detached
+  for (const ws of runningWorkspaces) {
+    if (openTabs.includes(ws) && !result.includes(ws)) {
+      result.push(ws);
+    }
+  }
+
   // Next, keep the most recently mounted inactive workspaces up to the capacity
-  const effectiveMax = Math.max(result.length + 1, maxMounted);
+  const effectiveMax = Math.max(activeItems.length + 1, maxMounted);
   for (const ws of previousMounted) {
     if (result.length >= effectiveMax) break;
     if (openTabs.includes(ws) && !result.includes(ws)) {
