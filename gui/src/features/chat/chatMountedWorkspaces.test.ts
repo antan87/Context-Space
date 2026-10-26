@@ -94,4 +94,63 @@ describe('computeMountedWorkspaces', () => {
     const mounted = computeMountedWorkspaces(['alpha'], 'nonexistent', null, false, ['alpha']);
     expect(mounted).toEqual(['alpha']);
   });
+
+  it('keeps workspaces with running sessions mounted even when LRU capacity is exceeded', () => {
+    const all = ['ws1', 'ws2', 'ws3', 'ws4', 'ws5'];
+    // ws1 has a running session in background
+    let mounted = computeMountedWorkspaces(all, 'ws1', null, false, [], 2, ['ws1']);
+    expect(mounted).toEqual(['ws1']);
+
+    // Visit ws2
+    mounted = computeMountedWorkspaces(all, 'ws2', null, false, mounted, 2, ['ws1']);
+    expect(mounted).toEqual(['ws2', 'ws1']);
+
+    // Visit ws3: ws1 MUST stay mounted because it has a running session! ws2 drops out.
+    mounted = computeMountedWorkspaces(all, 'ws3', null, false, mounted, 2, ['ws1']);
+    expect(mounted).toContain('ws3');
+    expect(mounted).toContain('ws1');
+    expect(mounted).not.toContain('ws2');
+
+    // Visit ws4: ws1 still running, so it stays mounted
+    mounted = computeMountedWorkspaces(all, 'ws4', null, false, mounted, 2, ['ws1']);
+    expect(mounted).toContain('ws4');
+    expect(mounted).toContain('ws1');
+    expect(mounted).not.toContain('ws3');
+
+    // Visit ws5: ws1 still running, ws5 active
+    mounted = computeMountedWorkspaces(all, 'ws5', null, false, mounted, 2, ['ws1']);
+    expect(mounted).toContain('ws5');
+    expect(mounted).toContain('ws1');
+    expect(mounted).toHaveLength(2);
+  });
+
+  it('keeps multiple running workspaces mounted alongside the active workspace', () => {
+    const all = ['ws1', 'ws2', 'ws3', 'ws4'];
+    // ws1 and ws2 both have running sessions; ws3 is active
+    const mounted = computeMountedWorkspaces(all, 'ws3', null, false, ['ws4'], 2, ['ws1', 'ws2']);
+    expect(mounted).toContain('ws3');
+    expect(mounted).toContain('ws1');
+    expect(mounted).toContain('ws2');
+    // ws4 is inactive, so it is not mounted
+    expect(mounted).not.toContain('ws4');
+  });
+
+  it('does not mount running workspaces that are not in openTabs', () => {
+    const mounted = computeMountedWorkspaces(['ws1'], 'ws1', null, false, [], 2, ['ws2', 'ws3']);
+    expect(mounted).toEqual(['ws1']);
+    expect(mounted).not.toContain('ws2');
+    expect(mounted).not.toContain('ws3');
+  });
+
+  it('evicts previously running workspace once its session finishes', () => {
+    const all = ['ws1', 'ws2', 'ws3'];
+    // ws1 running, ws2 active
+    let mounted = computeMountedWorkspaces(all, 'ws2', null, false, ['ws1'], 2, ['ws1']);
+    expect(mounted).toEqual(['ws2', 'ws1']);
+
+    // ws1 finishes (no longer in runningWorkspaces), switch to ws3
+    mounted = computeMountedWorkspaces(all, 'ws3', null, false, mounted, 2, []);
+    expect(mounted).toEqual(['ws3', 'ws2']);
+    expect(mounted).not.toContain('ws1');
+  });
 });
