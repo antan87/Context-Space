@@ -69,11 +69,21 @@ export class TerminalAccess {
     if (!item || item.expires <= Date.now() || token !== item.token) return false;
     item.lastSeen = Date.now(); return true;
   }
+  touch(owner: string): void {
+    const item = this.owners.get(owner);
+    if (item) item.lastSeen = Date.now();
+  }
+  isActive(owner: string, maxInactiveMs = TOKEN_TTL): boolean {
+    const item = this.owners.get(owner);
+    if (!item) return false;
+    return Date.now() - item.lastSeen < maxInactiveMs;
+  }
 }
 
 export const terminalManager = new TerminalManager();
 export function registerTerminalRoutes(app: Hono, upgrade: UpgradeWebSocket<any, any>, resolveWorkspace: (id: string) => Promise<string | null>, manager = terminalManager) {
   const access = new TerminalAccess();
+  manager.setOwnerActiveChecker?.((owner) => access.isActive(owner) || manager.hasAttached(owner));
   const boundary = (c: Context) => {
     const origin = c.req.header('origin');
     // Same-origin fetch need not send Origin; Fetch Metadata plus our custom
@@ -171,7 +181,10 @@ export function registerTerminalRoutes(app: Hono, upgrade: UpgradeWebSocket<any,
             await rootFor(workspace);
             if (closed) return;
             manager.attach(owner, workspace, id, client!); attached = true; clearTimeout(deadline);
-          } else manager.control(owner, workspace, id, client!, message);
+          } else {
+            access.touch(owner);
+            manager.control(owner, workspace, id, client!, message);
+          }
         } catch (error) {
           ws.send(JSON.stringify({ type: 'error', message: error instanceof z.ZodError ? 'Invalid terminal attachment.' : (error as Error).message, ...(error instanceof TerminalNotFoundError ? { code: error.code } : {}) }));
           ws.close(1008);
