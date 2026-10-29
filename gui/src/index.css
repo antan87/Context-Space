@@ -705,6 +705,7 @@
 .board-flow:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .board-flow .react-flow__node:focus-visible { outline: none; }
 .board-flow .react-flow__node:focus-visible > article { outline: 2px solid var(--ring); outline-offset: 2px; }
+.board-flow .react-flow__node article:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* A group folded into one summary is a button, and shows its focus itself. */
 .board-flow .board-fold:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
@@ -726,6 +727,25 @@
 @keyframes board-fresh { from { opacity: 1; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .board-fresh { animation: board-fresh-still 3.2s steps(1, end) forwards; } }
 @keyframes board-fresh-still { from { opacity: 1; } to { opacity: 0; } }
+
+/* A node jumped to from the Board index pulses a highlight ring so it is immediately spotted. */
+.board-flow .react-flow__node[data-highlighted="true"] > :is(article, button, div, p) {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  animation: board-node-highlight 2.2s ease-out forwards;
+}
+@keyframes board-node-highlight {
+  0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 40%, transparent); }
+  60% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent); }
+  100% { outline-color: transparent; box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-flow .react-flow__node[data-highlighted="true"] > :is(article, button, div, p) {
+    animation: none;
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+  }
+}
 
 /* ─── Board Areas & Stepping In/Out (Level 0 and Level 1) ─────────────────── */
 .board-overview-plane {

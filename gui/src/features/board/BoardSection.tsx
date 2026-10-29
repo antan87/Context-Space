@@ -31,10 +31,22 @@ import {
 import { useBoard } from './boardData.js';
 import { fileTitle, readerDock, readerReveal } from './boardDock.js';
 import { boardEdges, nodeRects, type BoardNode } from './boardLayout.js';
-import { MOVE_HELP, useBoardMoves, withMoves, type MoveNotice } from './boardMoves.js';
+import { MOVE_HELP, revealed, useBoardMoves, withMoves, type MoveNotice } from './boardMoves.js';
+import {
+  buildBoardNav,
+  readNavMode,
+  readNavOpen,
+  sidebarDock,
+  totalBoardWaiting,
+  writeNavMode,
+  writeNavOpen,
+  type NavItem,
+  type NavMode,
+} from './boardNav.js';
 import { BoardArea, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardLane, BoardNote, BoardPlaceholder } from './BoardNodes.js';
 import { BoardReader } from './BoardReader.js';
 import { useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
+import { BoardSidebar } from './BoardSidebar.js';
 
 const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea };
 const AREA_NODE_TYPES: NodeTypes = {
@@ -52,6 +64,8 @@ const FIT = { padding: 0.12, maxZoom: 1 } as const;
 const PAN_STEP = 96;
 /** How far from the edge of the view a group or card is put, when the view moves to show it: clear of corners. */
 const OPEN_MARGIN = 40;
+/** How many frames a jump from the Board index waits for the card to be drawn in its Area, before it gives up. */
+const JUMP_FRAMES = 30;
 /** How long a move of the view takes, in ms: none for those who ask for less motion. */
 const moveMs = (ms: number) => (window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : ms);
 /** Lines point from the thing that was linked to the thing it was linked to. */
@@ -255,6 +269,58 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     goToWorkspace(navigateTo, workspaceId, 'documents');
   }, [workspaceId, navigateTo]);
 
+  // Board index sidebar state
+  const [boardRow, setBoardRow] = useState<HTMLDivElement | null>(null);
+  const boardRowSize = useLayoutElementSize(boardRow);
+  const navDock = sidebarDock(boardRowSize.width);
+  const [navOpen, setNavOpenState] = useState(readNavOpen);
+  const [narrowNavOpen, setNarrowNavOpen] = useState(false);
+  const navToggleRef = useRef<HTMLButtonElement>(null);
+  const navFocusDue = useRef(false);
+  const navExpanded = navDock.overlays ? narrowNavOpen : navOpen;
+  const onToggleNavOpen = useCallback(() => {
+    navFocusDue.current = true;
+    setNavOpenState((curr) => {
+      const next = !curr;
+      writeNavOpen(next);
+      return next;
+    });
+  }, []);
+  const openNarrowNav = useCallback(() => {
+    navFocusDue.current = true;
+    setNarrowNavOpen(true);
+  }, []);
+  const closeNarrowNav = useCallback(() => {
+    navFocusDue.current = true;
+    setNarrowNavOpen(false);
+  }, []);
+  const [navMode, setNavModeState] = useState<NavMode>(readNavMode);
+  const onNavModeChange = useCallback((next: NavMode) => {
+    setNavModeState(next);
+    writeNavMode(next);
+  }, []);
+  const [navQuery, setNavQuery] = useState('');
+  const navSections = useMemo(
+    () => buildBoardNav(areas, { mode: navMode, query: navQuery }),
+    [areas, navMode, navQuery],
+  );
+  const navWaitingCount = useMemo(() => totalBoardWaiting(areas), [areas]);
+
+  useEffect(() => {
+    if (!navDock.overlays && narrowNavOpen) {
+      setNarrowNavOpen(false);
+    }
+  }, [navDock.overlays, narrowNavOpen]);
+
+  // The rail and the header each have their own toggle, so the one that was pressed is gone when the index opens or
+  // closes: focus the one that is shown now (the narrow drawer's search box takes the focus when it opens)
+  useLayoutEffect(() => {
+    if (!navFocusDue.current) return;
+    navFocusDue.current = false;
+    if (navDock.overlays && narrowNavOpen) return;
+    navToggleRef.current?.focus({ preventScroll: true });
+  }, [navExpanded, navDock.overlays, narrowNavOpen]);
+
   // Stepping In and Out state
   const [stepped, setStepped] = useState<SteppedState>(null);
   const steppedRef = useRef<SteppedState>(null);
@@ -265,21 +331,86 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   const focusTarget = useRef<string | null>(null);
   const focusing = useRef(false);
 
+  // Pending jump to item or area
+  const [pendingJump, setPendingJump] = useState<{
+    areaId: string;
+    nodeId: string;
+    readerTarget?: ReaderTarget;
+    request: number;
+  } | null>(null);
+  const pendingJumpRef = useRef<typeof pendingJump>(null);
+  const jumpSeq = useRef(0);
+  const jumpFrames = useRef(0);
+  const [jumpTick, setJumpTick] = useState(0);
+
+  const clearJump = useCallback(() => {
+    pendingJumpRef.current = null;
+    jumpFrames.current = 0;
+    setPendingJump(null);
+  }, []);
+
+  const jumpToArea = useCallback((areaId: string) => {
+    clearJump();
+    setNarrowNavOpen(false);
+    if (reader) setReader(null);
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    setStepped((curr) =>
+      curr?.areaId === areaId && curr.phase === 'open'
+        ? curr
+        : { areaId, origin: '12% 50%', phase: 'open' },
+    );
+  }, [clearJump, reader, setReader, setNarrowNavOpen]);
+
+  const jumpToItem = useCallback((item: NavItem, openReader?: boolean) => {
+    if (item.nodeId === null) {
+      jumpToArea(item.areaId);
+      return;
+    }
+    setNarrowNavOpen(false);
+    // A jump that does not open the reader closes it, or the card would be behind it; one into another Area closes the old Area's reader too
+    const opensReader = Boolean(openReader && item.readerTarget);
+    if (!opensReader || stepped?.areaId !== item.areaId) setReader(null);
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    const nextJump = {
+      areaId: item.areaId,
+      nodeId: item.nodeId,
+      ...(opensReader && item.readerTarget ? { readerTarget: item.readerTarget } : {}),
+      request: ++jumpSeq.current,
+    };
+    jumpFrames.current = 0;
+    pendingJumpRef.current = nextJump;
+    setPendingJump(nextJump);
+    setStepped((curr) =>
+      curr?.areaId === item.areaId && curr.phase === 'open'
+        ? curr
+        : { areaId: item.areaId, origin: '12% 50%', phase: 'open' },
+    );
+  }, [jumpToArea, stepped, setReader, setNarrowNavOpen]);
+
   // Stepped fallback redirect if active area disappeared
   useEffect(() => {
     if (!stepped) return;
     if (!loading && areas.length === 0) {
+      clearJump();
       setReader(null);
       setStepped(null);
       return;
     }
     if (areas.length > 0 && !areas.some((a) => a.id === stepped.areaId)) {
       const fallback = areas.find((a) => a.data.current)?.id ?? areas[0]!.id;
+      clearJump();
       setStepped((s) => (s ? { ...s, areaId: fallback } : null));
     }
-  }, [stepped, loading, areas, setReader]);
+  }, [stepped, loading, areas, setReader, clearJump]);
 
   const stepInto = useCallback((areaId: string, buttonEl: HTMLElement) => {
+    clearJump();
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
@@ -289,12 +420,13 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     const xPct = stageRect && stageRect.width > 0 ? Math.round(((btnRect.left + btnRect.width / 2 - stageRect.left) / stageRect.width) * 100) : 50;
     const yPct = stageRect && stageRect.height > 0 ? Math.round(((btnRect.top + btnRect.height / 2 - stageRect.top) / stageRect.height) * 100) : 50;
     setStepped({ areaId, origin: `${xPct}% ${yPct}%`, phase: 'open' });
-  }, [stageContainer]);
+  }, [stageContainer, clearJump]);
 
   const stepOut = useCallback(() => {
     const curr = steppedRef.current;
     if (!curr || curr.phase === 'closing') return;
     focusTarget.current = curr.areaId;
+    clearJump();
     setReader(null);
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
@@ -309,7 +441,23 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
       closeTimer.current = null;
       setStepped(null);
     }, 210);
-  }, [setReader]);
+  }, [setReader, clearJump]);
+
+  const [areaCanvasContainer, setAreaCanvasContainer] = useState<HTMLDivElement | null>(null);
+  // Focus restoration when reader closes. Declared before the step-in/step-out focus effects below: when a jump closes the
+  // reader and changes the Area in one commit, the old opener is still connected here, so those later effects must run after
+  // it and win (otherwise focus ends on the opener, then falls to BODY when React Flow removes it).
+  const wasReaderOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (reader) { wasReaderOpen.current = true; return; }
+    if (!wasReaderOpen.current) return;
+    wasReaderOpen.current = false;
+    const from = opener.current;
+    opener.current = null;
+    focusing.current = true;
+    (from?.isConnected ? from : areaCanvasContainer?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
+    focusing.current = false;
+  }, [reader, areaCanvasContainer]);
 
   // Restore keyboard focus to Area button when stepping out
   useLayoutEffect(() => {
@@ -328,9 +476,10 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     }
   }, [stepped, stageContainer]);
 
-  // Focus Back button when stepped into an area
+  // Focus Back button when stepped into an area (skipping when a jump to an item is pending in this area)
   useLayoutEffect(() => {
     if (stepped?.phase === 'open') {
+      if (pendingJumpRef.current?.areaId === stepped.areaId) return;
       backButtonRef.current?.focus({ preventScroll: true });
     }
   }, [stepped?.phase, stepped?.areaId]);
@@ -354,7 +503,6 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   const [areaRow, setAreaRow] = useState<HTMLDivElement | null>(null);
   const areaSection = useLayoutElementSize(areaRow);
   const areaDock = readerDock(areaSection.width);
-  const [areaCanvasContainer, setAreaCanvasContainer] = useState<HTMLDivElement | null>(null);
   const areaCanvasSize = useLayoutElementSize(areaCanvasContainer);
   const areaFlow = useRef<ReactFlowInstance<BoardNode> | null>(null);
   const [areaInstance, setAreaInstance] = useState<ReactFlowInstance<BoardNode> | null>(null);
@@ -430,6 +578,104 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     }
   }, [activeAreaId, areaFitKey, areaViewport, areaInstance]);
 
+  // Highlight state for nodes jumped to from the Board index sidebar
+  const [highlightedNode, setHighlightedNode] = useState<{ id: string; request: number } | null>(null);
+
+  useEffect(() => {
+    if (!highlightedNode) return;
+    const timer = setTimeout(() => {
+      setHighlightedNode((curr) => (curr?.request === highlightedNode.request ? null : curr));
+    }, 2200);
+    return () => clearTimeout(timer);
+  }, [highlightedNode]);
+
+  useLayoutEffect(() => {
+    const nodes = areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [];
+    for (const el of Array.from(nodes)) {
+      if (highlightedNode && el.dataset.id === highlightedNode.id) {
+        el.setAttribute('data-highlighted', 'true');
+      } else if (el.hasAttribute('data-highlighted')) {
+        el.removeAttribute('data-highlighted');
+      }
+    }
+  }, [highlightedNode, areaCanvasContainer, moves.shown]);
+
+  // Executing pendingJump after areaFitKey effect so viewport fitting runs first
+  useEffect(() => {
+    if (
+      !pendingJump ||
+      stepped?.phase !== 'open' ||
+      activeAreaId !== pendingJump.areaId ||
+      !areaFitKey ||
+      !areaInstance ||
+      areaCanvasSize.width <= 0
+    ) {
+      return;
+    }
+
+    const nodeEl = Array.from(
+      areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [],
+    ).find((el) => el.dataset.id === pendingJump.nodeId);
+
+    if (!nodeEl) {
+      // The cards of an Area that was just chosen are drawn a frame or two later (and the old Area's are on the screen until then):
+      // look again each frame for a while, and give up at once on a card that this Area does not have
+      if (jumpFrames.current >= JUMP_FRAMES || !areaNodes.some((areaNode) => areaNode.id === pendingJump.nodeId)) {
+        clearJump();
+        backButtonRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      const frame = requestAnimationFrame(() => {
+        jumpFrames.current += 1;
+        setJumpTick((tick) => tick + 1);
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+
+    const jump = pendingJump;
+    clearJump();
+
+    // Pan only if needed via revealed
+    const rect = nodeRects(moves.shown).get(jump.nodeId);
+    const currentView = areaInstance.getViewport();
+    const nextView = rect && revealed(rect, currentView, areaCanvasSize, OPEN_MARGIN);
+    if (nextView) {
+      areaTaken.current = true;
+      void areaInstance.setViewport(nextView, { duration: moveMs(220) });
+    }
+
+    // Trigger node highlight
+    setHighlightedNode({ id: jump.nodeId, request: jump.request });
+
+    // Focus target inside nodeEl
+    const cardFocusEl =
+      nodeEl.tabIndex >= 0
+        ? nodeEl
+        : (nodeEl.querySelector<HTMLElement>('button, a[href], article') ?? nodeEl);
+
+    if (jump.readerTarget) {
+      const openerEl = nodeEl.querySelector<HTMLElement>('button') ?? cardFocusEl;
+      openInReader(jump.readerTarget, openerEl);
+    } else {
+      focusing.current = true;
+      cardFocusEl.focus({ preventScroll: true });
+      focusing.current = false;
+    }
+  }, [
+    pendingJump,
+    stepped?.phase,
+    activeAreaId,
+    areaFitKey,
+    areaInstance,
+    areaCanvasSize,
+    areaCanvasContainer,
+    areaNodes,
+    jumpTick,
+    moves.shown,
+    openInReader,
+    clearJump,
+  ]);
+
   // Docked reader reveal in Plane 1
   useEffect(() => {
     const id = revealing.current;
@@ -444,13 +690,30 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     }
   }, [reader, layout, moves.shown, areaSection]);
 
-  // Reader Escape handling
+  // Narrow sidebar Escape handling
   const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!navDock.overlays || !narrowNavOpen || !active) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      const target = event.target;
+      const inside = target instanceof Node && Boolean(root.current?.contains(target));
+      if (!inside && target !== document.body && target !== document.documentElement) return;
+      event.preventDefault();
+      closeNarrowNav();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [navDock.overlays, narrowNavOpen, active, closeNarrowNav]);
+
+  // Reader Escape handling
   useEffect(() => {
     if (!reader || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (document.querySelector('[role="dialog"]')) return;
+      if (navDock.overlays && narrowNavOpen) return;
       const target = event.target;
       const inside = target instanceof Node && Boolean(root.current?.contains(target));
       if (!inside && target !== document.body && target !== document.documentElement) return;
@@ -459,7 +722,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [reader, active, closeReader]);
+  }, [reader, active, closeReader, navDock.overlays, narrowNavOpen]);
 
   // Stepped Area Escape handling (only when reader is closed and no modal dialog is open)
   useEffect(() => {
@@ -467,6 +730,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (document.querySelector('[role="dialog"]')) return;
+      if (navDock.overlays && narrowNavOpen) return;
       const target = event.target;
       const inside = target instanceof Node && Boolean(root.current?.contains(target));
       if (!inside && target !== document.body && target !== document.documentElement) return;
@@ -475,20 +739,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [stepped, reader, active, stepOut]);
-
-  // Focus restoration when reader closes
-  const wasReaderOpen = useRef(false);
-  useLayoutEffect(() => {
-    if (reader) { wasReaderOpen.current = true; return; }
-    if (!wasReaderOpen.current) return;
-    wasReaderOpen.current = false;
-    const from = opener.current;
-    opener.current = null;
-    focusing.current = true;
-    (from?.isConnected ? from : areaCanvasContainer?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
-    focusing.current = false;
-  }, [reader, areaCanvasContainer]);
+  }, [stepped, reader, active, stepOut, navDock.overlays, narrowNavOpen]);
 
   // Actions for Plane 0 & Plane 1
   const overviewActions = useMemo<BoardActions>(() => ({
@@ -526,10 +777,32 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   let body;
   if (areas.length > 0) {
     body = (
-      <div className="relative flex min-h-0 flex-1">
-        {/* Plane 0 Overview: recedes behind scrim when stepped into */}
+      <div ref={setBoardRow} className="relative flex min-h-0 flex-1 overflow-hidden">
+        <BoardSidebar
+          dock={navDock}
+          open={navOpen}
+          onToggleOpen={onToggleNavOpen}
+          narrowOpen={narrowNavOpen}
+          onOpenNarrow={openNarrowNav}
+          onCloseNarrow={closeNarrowNav}
+          mode={navMode}
+          onModeChange={onNavModeChange}
+          query={navQuery}
+          onQueryChange={setNavQuery}
+          sections={navSections}
+          waitingCount={navWaitingCount}
+          steppedAreaId={stepped?.areaId ?? null}
+          onJumpToArea={jumpToArea}
+          onJumpToItem={jumpToItem}
+          toggleButtonRef={navToggleRef}
+        />
         <div
-          id="board-overview"
+          className="relative flex min-h-0 min-w-0 flex-1"
+          inert={navDock.overlays && narrowNavOpen ? true : undefined}
+        >
+          {/* Plane 0 Overview: recedes behind scrim when stepped into */}
+          <div
+            id="board-overview"
           className="board-overview-plane absolute inset-0"
           data-receded={stepped?.phase === 'open'}
           inert={stepped?.phase === 'open' ? true : undefined}
@@ -785,6 +1058,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
             </section>
           </div>
         )}
+        </div>
       </div>
     );
   } else if (loading) {

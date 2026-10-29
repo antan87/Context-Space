@@ -135,6 +135,7 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
     </FoldedGroup>;
   }
   return <article
+    tabIndex={-1}
     aria-labelledby={titleId}
     className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}
   >
@@ -187,6 +188,7 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
   const icon = <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />;
   const title = <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</span>;
   return <article
+    tabIndex={-1}
     aria-labelledby={titleId} aria-current={reading ? 'true' : undefined}
     className={cn('flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
       data.dimmed ? 'border-dashed border-border bg-muted text-muted-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
@@ -214,7 +216,7 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
 export function BoardCommit({ data }: NodeProps<CommitNode>) {
   const shaId = useId();
   const ago = agoText(data.at);
-  return <article aria-labelledby={shaId} className="flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs">
+  return <article tabIndex={-1} aria-labelledby={shaId} className="flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs">
     <Anchors />
     <div className="flex h-4 items-center gap-2 text-xs">
       <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
