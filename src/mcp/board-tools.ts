@@ -7,9 +7,10 @@
 
 import { z } from 'zod';
 
+import { planKey, type PlanFile } from '../core/plan-file.js';
 import { readPlanFile } from '../core/plan-file-store.js';
 import {
-  BOARD_LIMITS, BOARD_NODE_ID_FORMATS, boardActorName, boardFields, changeBoard, readBoard,
+  BOARD_LIMITS, BOARD_NODE_ID_FORMATS, boardActorName, boardFields, changeBoard, isBoardStepKey, readBoard,
   type Board, type BoardCard, type BoardChange,
 } from '../core/board.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
@@ -23,6 +24,9 @@ const y = x;
 const cardId = boardFields.uuid.describe('The id of a card, as board_read shows it.');
 const nodeId = boardFields.nodeId.describe(`A card id, or checkpoint:<plan key>, document:<document id> or commit:<repository>:<hash>, as board_read shows them.`);
 const area = boardFields.area.describe('Which area on the board this card belongs to: checkpoint:<plan key> or plan:own, from areas in board_read. Leave it out when unsure and the board places it in a linked area or the current checkpoint.');
+
+const step = z.string().trim().min(1).max(400);
+const look = boardFields.look;
 
 interface BoardToolContext { root: string; by: string }
 
@@ -78,9 +82,37 @@ function boardTool<T extends z.ZodObject>(
   };
 }
 
+/** The key of the plan step that `given` names: a step's key, or its text in key form (markdown and case do not matter), whole or (12 characters or more) the start of it. */
+async function resolveStep(root: string, given: string): Promise<string> {
+  const { plan } = await readPlanFile(root).catch((error) => { throw new Error(`The plan could not be read: ${friendly(error)}`); });
+  const steps = [...plan.steps, ...plan.checkpoints.flatMap((checkpoint) => checkpoint.steps)];
+  const byKey = steps.find((candidate) => candidate.key === given.trim().toLowerCase());
+  if (byKey) return byKey.key;
+  const wanted = planKey(given);
+  const formOf = (candidate: { text: string }) => planKey(candidate.text);
+  const exact = steps.filter((candidate) => formOf(candidate) === wanted);
+  const found = exact.length ? exact : wanted.length >= 12 ? steps.filter((candidate) => formOf(candidate).startsWith(wanted) || candidate.key.startsWith(wanted)) : [];
+  if (found.length === 0) throw new Error(`No plan step matches "${given}". Name it by its key or its full text, as PLAN.md has it.`);
+  if (found.length > 1) {
+    const list = found.slice(0, 5).map((candidate) => `${candidate.key} ("${candidate.text.slice(0, 40)}${candidate.text.length > 40 ? '…' : ''}")`).join(', ');
+    throw new Error(`More than one plan step matches "${given}": ${list}${found.length > 5 ? ', …' : ''}. Name one by its key.`);
+  }
+  return found[0]!.key;
+}
+
+/** The first step that is not done in `areaId` (or in the current area), when that area is a checkpoint or the plan's own. Never throws: no step is a fine answer. */
+async function defaultStep(root: string, areaId: string | undefined): Promise<string | undefined> {
+  const { plan } = await readPlanFile(root).catch(() => ({ plan: undefined }));
+  if (!plan) return undefined;
+  const target = areaId ?? areasOf(plan).current;
+  const steps = target === 'plan:own' ? plan.steps : plan.checkpoints.find((checkpoint) => `checkpoint:${checkpoint.key}` === target)?.steps;
+  const key = steps?.find((candidate) => !candidate.done)?.key;
+  return isBoardStepKey(key) ? key : undefined;
+}
+
 /** Makes one change and says what the board is now. */
-async function change(ctx: BoardToolContext, input: { revision?: number }, make: BoardChange) {
-  return changeBoard(ctx.root, [make], { by: ctx.by, revision: input.revision });
+async function change(ctx: BoardToolContext, input: { revision?: number; stepIsHint?: boolean }, make: BoardChange) {
+  return changeBoard(ctx.root, [make], { by: ctx.by, revision: input.revision, stepIsHint: input.stepIsHint });
 }
 
 const cardOf = (board: Board, id: string | undefined): BoardCard | undefined => board.cards.find((card) => card.id === id);
@@ -93,6 +125,8 @@ const addCardSchema = z.object({
   description: boardFields.description.optional().describe(`File cards only. One or two sentences on what the file is and what to look at, up to ${BOARD_LIMITS.description} characters.`),
   pinned: z.boolean().optional().describe('Keep the card in front of the user. Default false.'),
   area: area.optional(),
+  step: step.optional().describe('The plan step this card is about: its key or text (a unique start of 12+ characters will do). Left out, the first open step of its area.'),
+  look: look.optional().describe(`One line on why a person should look at this card, up to ${BOARD_LIMITS.look} characters.`),
   x: x.optional().describe('Where to put it on the canvas, with y. Leave both out and the board places it.'),
   y: y.optional(),
   revision,
@@ -106,7 +140,9 @@ const updateCardSchema = z.object({
   description: boardFields.description.optional().describe('File cards only. Replaces the description.'),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional().describe('true to put the card away without losing it, false to bring it back.'),
-  area: area.nullable().optional().describe('Move the card to another area (checkpoint:<plan key> or plan:own, from board_read), or null to clear its assigned area so it follows its links or the current checkpoint.'),
+  area: area.nullable().optional().describe('Move the card to another area (checkpoint:<plan key> or plan:own, from board_read; this drops a step not in it), or null to clear its assigned area so it follows its links or the current checkpoint.'),
+  step: step.nullable().optional().describe('The plan step this card is about (its key or text), or null to clear.'),
+  look: look.nullable().optional().describe('Why a person should look at this card, or null to clear.'),
   revision,
   harness,
 });
@@ -165,6 +201,21 @@ export interface BoardAreas {
   items: BoardAreaItem[];
 }
 
+/** The areas cards can belong to, and the one under way: the first checkpoint not done, else the last, else the plan's own. */
+function areasOf(plan: PlanFile): BoardAreas {
+  const rawItems: Array<{ id: string; title: string; done: boolean }> = [];
+  if (plan.steps.length > 0 || plan.decisions.some((decision) => !decision.done)) {
+    rawItems.push({ id: 'plan:own', title: 'Plan', done: false });
+  }
+  for (const checkpoint of plan.checkpoints) {
+    rawItems.push({ id: `checkpoint:${checkpoint.key}`, title: checkpoint.title, done: checkpoint.done });
+  }
+
+  const checkpointItems = rawItems.filter((entry) => entry.id.startsWith('checkpoint:'));
+  const current = (checkpointItems.find((entry) => !entry.done) ?? checkpointItems.at(-1) ?? rawItems[0])?.id ?? null;
+  return { current, items: rawItems.map((entry) => ({ ...entry, current: entry.id === current })) };
+}
+
 /** What a link or a position can name that is not a card: the plan's checkpoints and the source documents. */
 async function linkTargets(root: string) {
   const problems: string[] = [];
@@ -174,21 +225,7 @@ async function linkTargets(root: string) {
   try {
     const { plan } = await readPlanFile(root);
     checkpoints = plan.checkpoints.map((checkpoint) => ({ id: `checkpoint:${checkpoint.key}`, title: checkpoint.title }));
-
-    const rawItems: Array<{ id: string; title: string; done: boolean }> = [];
-    if (plan.steps.length > 0 || plan.decisions.some((decision) => !decision.done)) {
-      rawItems.push({ id: 'plan:own', title: 'Plan', done: false });
-    }
-    for (const checkpoint of plan.checkpoints) {
-      rawItems.push({ id: `checkpoint:${checkpoint.key}`, title: checkpoint.title, done: checkpoint.done });
-    }
-
-    const checkpointItems = rawItems.filter((entry) => entry.id.startsWith('checkpoint:'));
-    const current = (checkpointItems.find((entry) => !entry.done) ?? checkpointItems.at(-1) ?? rawItems[0])?.id ?? null;
-    areas = {
-      current,
-      items: rawItems.map((entry) => ({ ...entry, current: entry.id === current })),
-    };
+    areas = areasOf(plan);
   } catch (error) {
     problems.push(`The plan could not be read: ${friendly(error)}`);
   }
@@ -233,11 +270,14 @@ export const boardTools: NexusFlowTool[] = [
     'board_add_card',
     `Put a card on the board where the user sees it. Use kind "note" for something worth keeping in view: a finding, a question, a summary, a risk. Use kind "file" to SHOW something you made instead of describing it: a picture (png, jpg, gif or webp), an HTML page, a PDF, a Markdown document, a deck or a spreadsheet (an SVG opens as its source text, not as a picture). Write the file inside the workspace first, then give its path relative to the workspace folder; the card opens that file for the user. The file must exist, and only files the app can open are accepted (not links, hidden folders other than .claude, .agents and .github, or anything outside the workspace). Add a short description saying what to look at. Pass area (checkpoint:<plan key> or plan:own, from areas in board_read) to place it in that area, or leave it out when unsure so the board places it in a linked area or the current checkpoint. To tie the card to the plan or a document, call board_link next with the id this returns.`,
     addCardSchema,
-    async ({ kind, title, body, path, description, pinned, area, x, y, revision }, ctx) => {
+    async ({ kind, title, body, path, description, pinned, area, step, look, x, y, revision }, ctx) => {
       if ((x === undefined) !== (y === undefined)) throw new Error('Give both x and y to place the card, or neither.');
-      const { board, results } = await change(ctx, { revision }, {
+      const stepKey = step !== undefined ? await resolveStep(ctx.root, step) : await defaultStep(ctx.root, area);
+      const { board, results } = await change(ctx, { revision, stepIsHint: step === undefined }, {
         op: 'add_card', kind, title, body, path, description, pinned,
         ...(area !== undefined ? { area } : {}),
+        ...(stepKey ? { step: stepKey } : {}),
+        ...(look !== undefined ? { look } : {}),
         ...(x !== undefined && y !== undefined ? { position: { x, y } } : {}),
       });
       return { revision: board.revision, card: cardOf(board, results[0]?.id) };
@@ -246,12 +286,15 @@ export const boardTools: NexusFlowTool[] = [
 
   boardTool(
     'board_update_card',
-    `Change a card you or someone else put on the board: its title, the text of a note (body), the description of a file card, whether it is pinned, whether it is archived, or which area it belongs to (pass an area id from board_read, or null to clear it). Only what you give changes. Archive a card that is done but worth keeping; use board_remove_card only for a card that was a mistake.`,
+    `Change a card you or someone else put on the board: its title, the text of a note (body), the description of a file card, whether it is pinned, whether it is archived, or which area it belongs to (pass an area id from board_read, or null to clear it; moving it drops a step not in that area). Only what you give changes. Archive a card that is done but worth keeping; use board_remove_card only for a card that was a mistake.`,
     updateCardSchema,
-    async ({ id, title, body, description, pinned, archived, area, revision }, ctx) => {
+    async ({ id, title, body, description, pinned, archived, area, step, look, revision }, ctx) => {
+      const stepKey = typeof step === 'string' ? await resolveStep(ctx.root, step) : step;
       const { board } = await change(ctx, { revision }, {
         op: 'update_card', id, title, body, description, pinned, archived,
         ...(area !== undefined ? { area } : {}),
+        ...(stepKey !== undefined ? { step: stepKey } : {}),
+        ...(look !== undefined ? { look } : {}),
       });
       return { revision: board.revision, card: cardOf(board, id) };
     },

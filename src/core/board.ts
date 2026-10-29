@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
 import { assertWorkspaceActive } from './archive-guard.js';
 import { acquireLock, createMutationQueue } from './locks.js';
+import { readPlanFile } from './plan-file-store.js';
 import { openableDocumentName } from './root-documents.js';
 import { cleanScreenBlock, cleanScreenText } from './screen-clean.js';
 import { appendScreenEvent } from './screen-events.js';
@@ -45,6 +46,9 @@ export const BOARD_LIMITS = {
   path: 1000,
   /** A position is a number between minus and plus this much. */
   coordinate: 1_000_000,
+  /** The reason to look at a card. */
+  look: 140,
+  stepKey: 120,
 } as const;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -62,6 +66,11 @@ interface CardBase {
   title: string;
   /** The board area (`checkpoint:<plan key>` or `plan:own`) the card belongs to. Cards without one go to a linked area or the current checkpoint. */
   area?: string;
+  /** The key of the plan step (a `PlanLine.key` in PLAN.md) the card is about. */
+  step?: string;
+  /** One line on why a person should look at the card, and when it was set (set by the board, never by the caller). */
+  look?: string;
+  lookAt?: string;
 }
 export interface BoardNote extends CardBase { kind: 'note'; body: string }
 export interface BoardFile extends CardBase {
@@ -177,6 +186,11 @@ export function isBoardNodeId(value: unknown): value is string {
     && (UUID.test(value) || CHECKPOINT.test(value) || DOCUMENT.test(value) || COMMIT.test(value));
 }
 
+/** Whether `value` has the shape of a plan step key: the words of the step in lower case joined with dashes, which the plan may cut at a dash or number (`-2`). */
+export function isBoardStepKey(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= BOARD_LIMITS.stepKey && /^[\p{L}\p{N}][\p{L}\p{N}-]*$/u.test(value);
+}
+
 /** Whether `value` has the shape of an area id on the board: `checkpoint:<plan key>` or `plan:own`. */
 export function isBoardAreaId(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 400 && (CHECKPOINT.test(value) || value === 'plan:own');
@@ -225,10 +239,14 @@ function cleanCard(raw: unknown): BoardCard | null {
   const by = actor(raw.by);
   if (!title || !by || !validTime(raw.at)) return null;
   const area = isBoardAreaId(raw.area) ? raw.area : undefined;
+  const step = isBoardStepKey(raw.step) ? raw.step : undefined;
+  const look = typeof raw.look === 'string' && raw.look.length <= BOARD_LIMITS.look ? cleanScreenText(raw.look, BOARD_LIMITS.look) : undefined;
   const base = {
     id: raw.id, title, pinned: raw.pinned === true, archived: raw.archived === true, by, at: raw.at,
     updatedBy: actor(raw.updatedBy) ?? by, updatedAt: validTime(raw.updatedAt) ? raw.updatedAt : raw.at,
     ...(area ? { area } : {}),
+    ...(step ? { step } : {}),
+    ...(look ? { look, lookAt: validTime(raw.lookAt) ? raw.lookAt : validTime(raw.updatedAt) ? raw.updatedAt : raw.at } : {}),
   };
   if (raw.kind === 'note') return { ...base, kind: 'note', body: cleanScreenBlock(raw.body, BOARD_LIMITS.body) ?? '' };
   if (raw.kind === 'file') {
@@ -364,6 +382,8 @@ const uuid = z.string().refine(isBoardId, 'An id is a uuid, as board_read shows 
 const nodeId = z.string().refine(isBoardNodeId, NOT_A_NODE);
 const NOT_AN_AREA = `That is not a board area id. Use ${BOARD_NODE_ID_FORMATS.checkpoint} or plan:own, as board_read shows them.`;
 const areaId = z.string().refine(isBoardAreaId, NOT_AN_AREA);
+const stepKey = z.string().refine(isBoardStepKey, 'That is not a plan step key.');
+const look = z.string().trim().min(1).max(BOARD_LIMITS.look).refine((text) => !/[\r\n\u0085\u2028\u2029]/.test(text), 'The reason to look is one line.');
 
 /** The fields a change is made of, so another surface (the MCP tools) can offer the same limits. */
 export const boardFields = {
@@ -375,6 +395,8 @@ export const boardFields = {
   uuid,
   nodeId,
   area: areaId,
+  step: stepKey,
+  look,
 };
 
 const addCardSchema = z.object({
@@ -388,6 +410,8 @@ const addCardSchema = z.object({
   description: boardFields.description.optional(),
   pinned: z.boolean().optional(),
   area: boardFields.area.optional(),
+  step: boardFields.step.optional(),
+  look: boardFields.look.optional(),
   position: point.optional(),
 }).strict().superRefine((card, context) => {
   const refuse = (field: string, message: string) => context.addIssue({ code: 'custom', path: [field], message });
@@ -410,7 +434,9 @@ const updateCardSchema = z.object({
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
   area: boardFields.area.nullable().optional(),
-}).strict().refine((change) => ['title', 'body', 'description', 'pinned', 'archived', 'area'].some((field) => (change as Record<string, unknown>)[field] !== undefined), 'Give at least one thing to change.');
+  step: boardFields.step.nullable().optional(),
+  look: boardFields.look.nullable().optional(),
+}).strict().refine((change) => ['title', 'body', 'description', 'pinned', 'archived', 'area', 'step', 'look'].some((field) => (change as Record<string, unknown>)[field] !== undefined), 'Give at least one thing to change.');
 
 const removeCardSchema = z.object({ op: z.literal('remove_card'), id: uuid }).strict();
 
@@ -461,7 +487,7 @@ export function parseBoardChanges(input: unknown): BoardChange[] {
 }
 
 /** A change after the checks that need the disk, so the work under the lock is only the board itself. */
-type Prepared = { change: BoardChange; filePath?: string };
+type Prepared = { change: BoardChange; filePath?: string; stepAreas?: Map<string, string> };
 
 /** A file card names a file that exists inside the workspace and that the documents panel can open. */
 async function checkCardFile(root: string, given: string): Promise<string> {
@@ -489,15 +515,28 @@ async function checkCardFile(root: string, given: string): Promise<string> {
   return name;
 }
 
+/** The area each plan step is in (`checkpoint:<key>`, or `plan:own` for a loose step), by step key. Empty when the plan cannot be read. */
+async function stepAreasOf(root: string): Promise<Map<string, string>> {
+  const areas = new Map<string, string>();
+  const { plan } = await readPlanFile(root).catch(() => ({ plan: undefined }));
+  for (const step of plan?.steps ?? []) areas.set(step.key, 'plan:own');
+  for (const checkpoint of plan?.checkpoints ?? []) for (const step of checkpoint.steps) areas.set(step.key, `checkpoint:${checkpoint.key}`);
+  return areas;
+}
+
 async function prepare(root: string, changes: BoardChange[]): Promise<Prepared[]> {
   const prepared: Prepared[] = [];
+  // The plan is read once, and only when a card's step or area is being set.
+  let stepAreas: Map<string, string> | undefined;
   for (const change of changes) {
-    prepared.push(change.op === 'add_card' && change.kind === 'file' ? { change, filePath: await checkCardFile(root, change.path!) } : { change });
+    const touchesStep = (change.op === 'add_card' && change.step !== undefined) || (change.op === 'update_card' && (change.step != null || typeof change.area === 'string'));
+    if (touchesStep) stepAreas ??= await stepAreasOf(root);
+    prepared.push({ change, ...(change.op === 'add_card' && change.kind === 'file' ? { filePath: await checkCardFile(root, change.path!) } : {}), ...(touchesStep ? { stepAreas } : {}) });
   }
   return prepared;
 }
 
-interface Applying { board: Board; by: string; now: string; log: BoardLogEntry[] }
+interface Applying { board: Board; by: string; now: string; log: BoardLogEntry[]; stepIsHint: boolean }
 
 function findCard(board: Board, id: string): BoardCard {
   const card = board.cards.find((candidate) => candidate.id === id);
@@ -512,6 +551,20 @@ function setPosition(board: Board, id: string, at: BoardPoint): void {
   board.positions[id] = { x: at.x, y: at.y };
 }
 
+/** The reason to look at a card as it is stored: on one line, cleaned like a title. */
+function cleanLook(value: string): string {
+  const look = cleanScreenText(value, BOARD_LIMITS.look);
+  if (!look) throw new BoardChangeError('The reason to look cannot be empty.');
+  return look;
+}
+
+/** The area for a card with `step`, when the plan knows the step: its area, unless the caller named another. */
+function areaOfStep(stepAreas: Map<string, string> | undefined, step: string, given: string | undefined): string | undefined {
+  const own = stepAreas?.get(step);
+  if (own && given && given !== own) throw new BoardChangeError(`The step "${step}" is in ${own}, not ${given}. Leave the area out or use ${own}.`);
+  return own ?? given;
+}
+
 function cleanTitle(value: string): string {
   const title = cleanScreenText(value, BOARD_LIMITS.title);
   if (!title) throw new BoardChangeError('A title cannot be empty.');
@@ -519,16 +572,19 @@ function cleanTitle(value: string): string {
 }
 
 /** Changes the working copy of the board. Throws, leaving the stored board as it was, when a change cannot be made. */
-function apply({ board, by, now, log }: Applying, { change, filePath }: Prepared): BoardChangeResult {
+function apply({ board, by, now, log, stepIsHint }: Applying, { change, filePath, stepAreas }: Prepared): BoardChangeResult {
   const record = (id: string, text: string) => log.push({ at: now, by, revision: board.revision + 1, action: change.op, id, text });
   switch (change.op) {
     case 'add_card': {
       if (board.cards.length >= BOARD_LIMITS.cards) throw new BoardChangeError(`The board is full: it holds at most ${BOARD_LIMITS.cards} cards. Remove some first.`);
       const id = change.id ?? randomUUID();
       if (board.cards.some((card) => card.id === id)) throw new BoardChangeError(`A card with id ${id} is already on the board.`);
+      const area = change.step && !stepIsHint ? areaOfStep(stepAreas, change.step, change.area) : change.area;
       const base = {
         id, pinned: change.pinned === true, archived: false, by, at: now, updatedBy: by, updatedAt: now,
-        ...(change.area ? { area: change.area } : {}),
+        ...(area ? { area } : {}),
+        ...(change.step ? { step: change.step } : {}),
+        ...(change.look ? { look: cleanLook(change.look), lookAt: now } : {}),
       };
       const card: BoardCard = change.kind === 'note'
         ? { ...base, kind: 'note', title: cleanTitle(change.title!), body: cleanScreenBlock(change.body, BOARD_LIMITS.body) ?? '' }
@@ -547,8 +603,20 @@ function apply({ board, by, now, log }: Applying, { change, filePath }: Prepared
       if (change.description !== undefined && card.kind === 'file') card.description = cleanScreenBlock(change.description, BOARD_LIMITS.description) ?? '';
       if (change.pinned !== undefined) card.pinned = change.pinned;
       if (change.archived !== undefined) card.archived = change.archived;
-      if (change.area === null) delete card.area;
-      else if (change.area !== undefined) card.area = change.area;
+      // The step decides the area: setting a step moves the card to the step's area, and moving the card out of it drops the step.
+      // A step you give pins the card to its area. Clearing the area (null) of a card that has a step leaves the step as a hint.
+      const area = change.step ? (areaOfStep(stepAreas, change.step, change.area ?? undefined) ?? change.area) : change.area;
+      if (area === null) delete card.area;
+      else if (area !== undefined) card.area = area;
+      if (change.step === null) delete card.step;
+      else if (change.step !== undefined) card.step = change.step;
+      else if (change.area && card.step && stepAreas?.has(card.step) && stepAreas.get(card.step) !== change.area) delete card.step;
+      if (change.look === null) { delete card.look; delete card.lookAt; }
+      else if (change.look !== undefined) {
+        const look = cleanLook(change.look);
+        if (card.look !== look) card.lookAt = now;
+        card.look = look;
+      }
       card.updatedBy = by;
       card.updatedAt = now;
       record(card.id, card.title);
@@ -622,6 +690,8 @@ export interface BoardChangeOptions {
   by: string;
   /** The revision the caller read. When given and no longer the board's, nothing is changed. */
   revision?: number;
+  /** The step of an added card was filled in by the caller, not asked for: it is kept as a hint and does not pin the card to the step's area. Not part of any change a caller can send. */
+  stepIsHint?: boolean;
 }
 
 /**
@@ -650,7 +720,7 @@ export async function changeBoard(workspacePath: string, changes: unknown, optio
       }
       const log: BoardLogEntry[] = [];
       const now = new Date().toISOString();
-      const results = prepared.map((item) => apply({ board, by, now, log }, item));
+      const results = prepared.map((item) => apply({ board, by, now, log, stepIsHint: options.stepIsHint === true }, item));
       board.revision += 1;
       await writeWorkspaceFile(location.root, location.featureId, BOARD_FILE, `${JSON.stringify(board, null, 2)}\n`);
       // The board is saved; a log that cannot be written must not make the caller repeat a change that was made.

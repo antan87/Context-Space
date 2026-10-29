@@ -24,7 +24,7 @@ Everything the board keeps is in one file, `contextspace-board.json`, in the wor
 }
 ```
 
-- **Cards** are what someone put on the board. A `note` has a title (up to 200 characters) and a body (up to 4000). A `file` card shows a file in the workspace, with a title and a description (up to 4000); it is how an AI shows a picture, an HTML page, a PDF, a Markdown document or a deck it made. A card may name an `area` it belongs to (`checkpoint:<plan key>` or `plan:own`); cards without one or naming an area that is no longer on the board go to a linked area or the current checkpoint. `pinned` keeps a card in front; `archived` puts it away without losing it. `by` is `user` for a person at the app, or the name of the AI tool, written in lower case with letters, digits, `.`, `_` and `-` only (anything else becomes a dash, so no name can pass for `user`).
+- **Cards** are what someone put on the board. A `note` has a title (up to 200 characters) and a body (up to 4000). A `file` card shows a file in the workspace, with a title and a description (up to 4000); it is how an AI shows a picture, an HTML page, a PDF, a Markdown document or a deck it made. A card may name an `area` it belongs to (`checkpoint:<plan key>` or `plan:own`); cards without one or naming an area that is no longer on the board go to a linked area or the current checkpoint. A card may name the plan `step` it is about (the step's key in PLAN.md); a step you give puts the card in its step's Area (naming an `area` that does not hold the step is refused, and moving a card to another area drops its step), while a step filled in by default is only a hint, and the card is still placed by its links. The board shows a card on its step row only when its Area holds that step, and otherwise as loose. A card may also carry a `look`: one line, up to 140 characters, on why a person should look at it; the board stamps `lookAt` whenever `look` is set or changed, and a caller cannot set it. `pinned` keeps a card in front; `archived` puts it away without losing it. `by` is `user` for a person at the app, or the name of the AI tool, written in lower case with letters, digits, `.`, `_` and `-` only (anything else becomes a dash, so no name can pass for `user`).
 - **Links** are lines between two things, with an optional label (up to 200 characters). The same two ends can be linked once in each direction.
 - **Positions** remember where a card was put on the canvas. Each is a finite `x` and `y` between minus and plus 1,000,000. The board remembers at most 2000 places, so a place can be forgotten (see `move`). The file and the API still accept a place for a checkpoint, a document or a commit, but for now the app places those itself and **ignores** a saved place for them (see "In the app").
 - **`revision`** counts the change requests applied. A request of several changes counts once.
@@ -56,8 +56,8 @@ Changes are small operations. A request is a list of them, applied **in order, a
 
 | `op` | Fields | Does |
 | --- | --- | --- |
-| `add_card` | `kind` `note`: `title`, `body?`. `kind` `file`: `path`, `title?` (the file name by default), `description?`. Both: `area?`, `pinned?`, `position?` `{x, y}`, `id?` (a uuid of your own, so the same request can link or move it) | Adds a card |
-| `update_card` | `id`, and any of `title`, `body` (notes), `description` (file cards), `pinned`, `archived`, `area` (or `null` to clear) | Changes only what is given |
+| `add_card` | `kind` `note`: `title`, `body?`. `kind` `file`: `path`, `title?` (the file name by default), `description?`. Both: `area?`, `step?`, `look?`, `pinned?`, `position?` `{x, y}`, `id?` (a uuid of your own, so the same request can link or move it) | Adds a card |
+| `update_card` | `id`, and any of `title`, `body` (notes), `description` (file cards), `pinned`, `archived`, `area`, `step`, `look` (each `null` to clear) | Changes only what is given |
 | `remove_card` | `id` | Deletes the card, its links and its position |
 | `move` | `nodes`: a list of `{id, x, y}`; give `x` and `y` as `null` to forget a node's place | Remembers where each node is, or forgets it. Forgetting frees room when a card has left the board or a place is no longer wanted; nodes are applied in order, so a request can forget some and place others at the limit. The app only uses the places of cards |
 | `link` | `from`, `to`, `label?` | Draws a line |
@@ -101,8 +101,8 @@ Offered to `developer`, `interactive` and `full` sessions, like the screen tools
 | Tool | Use it to |
 | --- | --- |
 | `board_read` | Read the board, the areas cards can belong to (with `current` showing the checkpoint under way), and what a card or line can point at: the plan's checkpoints and the source documents with their node ids, and the id formats. Call it before changing the board. A note's body and a file card's description longer than 300 characters are cut and the card says `"truncated": true`; pass `cardId` to read one card in full with its lines and place |
-| `board_add_card` | Put a note on the board, or show a file you made (a picture, an HTML page, a PDF, a deck) as a file card, optionally placed in an `area`. Returns the card |
-| `board_update_card` | Change a card's title, text, description, pinned, archived, or `area` (or `null` to clear) |
+| `board_add_card` | Put a note on the board, or show a file you made (a picture, an HTML page, a PDF, a deck) as a file card, optionally placed in an `area`, tied to a plan `step` (the key or the text; the first open step of its area when left out) and flagged with a `look` reason. Returns the card |
+| `board_update_card` | Change a card's title, text, description, pinned, archived, `area`, `step` or `look` (each `null` to clear) |
 | `board_remove_card` | Delete a card that was a mistake (archive one that is only done) |
 | `board_move` | Place cards on the canvas, or forget a place with `null`. A place given to a checkpoint, a document or a commit is saved but not used for now |
 | `board_link` | Draw a line between two things, with a short label |

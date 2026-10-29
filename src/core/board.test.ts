@@ -17,12 +17,14 @@ import {
   changeBoard,
   isBoardAreaId,
   isBoardNodeId,
+  isBoardStepKey,
   parseBoardChanges,
   readBoard,
   readBoardChanges,
   type Board,
   type BoardChange,
 } from './board.js';
+import { parsePlanFile } from './plan-file.js';
 import { ArchivedWorkspaceError } from './archive-guard.js';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
@@ -326,6 +328,124 @@ describe('cards', () => {
       expect('area' in board.cards[i]!).toBe(false);
       expect(board.cards[i]!.area).toBeUndefined();
     }
+  });
+
+  it('adds and updates step and look, stamps lookAt itself, and clears with null', async () => {
+    const { board: made } = await changeBoard(root, [note('A note', { step: 'build-the-search-box', look: '  check the new search box ' })], as('claude'));
+    const added = made.cards[0]!;
+    expect(added).toMatchObject({ step: 'build-the-search-box', look: 'check the new search box' });
+    expect(added.lookAt).toBe(added.at);
+    const id = added.id;
+    expect('step' in (await changeBoard(root, [note('Plain')], as('user'))).board.cards[1]!).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const { board: same } = await changeBoard(root, [{ op: 'update_card', id, title: 'Renamed' }], as('user'));
+    expect(same.cards[0]!.lookAt).toBe(added.lookAt);
+    const { board: changed } = await changeBoard(root, [{ op: 'update_card', id, look: 'now the filters' }], as('user'));
+    expect(changed.cards[0]!.look).toBe('now the filters');
+    expect(changed.cards[0]!.lookAt).toBe(changed.cards[0]!.updatedAt);
+    expect(changed.cards[0]!.lookAt).not.toBe(added.lookAt);
+    expect(changed.cards[0]!.step).toBe('build-the-search-box');
+
+    const { board: cleared } = await changeBoard(root, [{ op: 'update_card', id, look: null, step: null }], as('user'));
+    for (const field of ['step', 'look', 'lookAt']) expect(field in cleared.cards[0]!).toBe(false);
+    expect(JSON.stringify(await stored())).not.toMatch(/"(step|look|lookAt)"/);
+  });
+
+  it('refuses a look with a line break or too long, a bad step key, and a lookAt from the caller', async () => {
+    const id = randomUUID();
+    for (const bad of ['two\nlines', 'x'.repeat(BOARD_LIMITS.look + 1), '   ', 5]) {
+      expect(() => parseBoardChanges([{ op: 'add_card', kind: 'note', title: 'T', look: bad }])).toThrow(BoardInputError);
+      expect(() => parseBoardChanges([{ op: 'update_card', id, look: bad }])).toThrow(BoardInputError);
+    }
+    for (const bad of ['', 'Not A Key', 'has space', 'x'.repeat(BOARD_LIMITS.stepKey + 1), 7]) {
+      expect(() => parseBoardChanges([{ op: 'add_card', kind: 'note', title: 'T', step: bad }])).toThrow(BoardInputError);
+      expect(() => parseBoardChanges([{ op: 'update_card', id, step: bad }])).toThrow(BoardInputError);
+    }
+    expect(() => parseBoardChanges([{ op: 'update_card', id, lookAt: '2026-10-01T10:00:00.000Z' }])).toThrow(BoardInputError);
+    expect(() => parseBoardChanges([{ op: 'add_card', kind: 'note', title: 'T', look: 'ok', lookAt: '2026-10-01T10:00:00.000Z' }])).toThrow(BoardInputError);
+  });
+
+  it('keeps a valid step, look and lookAt and drops junk when rebuilding cards', async () => {
+    const lookAt = '2026-10-02T10:00:00.000Z';
+    await seed({
+      cards: [
+        { ...card(1), step: 'build-it', look: 'see this', lookAt },
+        { ...card(2), step: 'Not A Key', look: 'x'.repeat(BOARD_LIMITS.look + 1), lookAt },
+        { ...card(3), step: 4, look: 7, lookAt },
+        { ...card(4), step: null, look: '   ' },
+        { ...card(5), look: 'no time', lookAt: 'yesterday' },
+      ],
+    });
+    const { cards } = await readBoard(root);
+    expect(cards[0]).toMatchObject({ step: 'build-it', look: 'see this', lookAt });
+    for (const i of [1, 2, 3]) for (const field of ['step', 'look', 'lookAt']) expect(field in cards[i]!, `${i} ${field}`).toBe(false);
+    expect('step' in cards[3]!).toBe(false);
+    expect(cards[4]).toMatchObject({ look: 'no time', lookAt: card(5).updatedAt });
+  });
+
+  it('keeps a hinted step without an area, clears the area with null, and clears the old area for a step the plan does not know', async () => {
+    await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n- [ ] Loose step\n');
+    const { board: hinted } = await changeBoard(root, [note('H', { step: 'loose-step' })], { ...as('claude'), stepIsHint: true });
+    expect(hinted.cards[0]).toMatchObject({ step: 'loose-step' });
+    expect(hinted.cards[0]!.area).toBeUndefined();
+    const { board: pinned } = await changeBoard(root, [note('P', { step: 'loose-step' })], as('user'));
+    expect(pinned.cards[1]!.area).toBe('plan:own');
+    const id = pinned.cards[1]!.id;
+    const { board: kept } = await changeBoard(root, [{ op: 'update_card', id, area: null }], as('user'));
+    expect(kept.cards[1]).toMatchObject({ step: 'loose-step' });
+    expect(kept.cards[1]!.area).toBeUndefined();
+    // A step the plan does not know cannot say an area, so the area the caller gave (null too) is applied.
+    await changeBoard(root, [{ op: 'update_card', id, area: 'plan:own' }], as('user'));
+    const { board: unknown } = await changeBoard(root, [{ op: 'update_card', id, step: 'not-in-the-plan', area: null }], as('user'));
+    expect(unknown.cards[1]).toMatchObject({ step: 'not-in-the-plan' });
+    expect(unknown.cards[1]!.area).toBeUndefined();
+    // An unreadable plan does the same.
+    await fs.rm(path.join(root, 'PLAN.md'));
+    await changeBoard(root, [{ op: 'update_card', id, area: 'plan:own' }], as('user'));
+    const { board: noPlan } = await changeBoard(root, [{ op: 'update_card', id, step: 'loose-step', area: null }], as('user'));
+    expect(noPlan.cards[1]).toMatchObject({ step: 'loose-step' });
+    expect(noPlan.cards[1]!.area).toBeUndefined();
+  });
+
+  it('keeps lookAt when the same look is repeated, and cleans a look like a title', async () => {
+    const { board: made } = await changeBoard(root, [note('N', { look: 'first\tlook\u0007 here' })], as('claude'));
+    const card = made.cards[0]!;
+    expect(card.look).toBe('first look here');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const { board: again } = await changeBoard(root, [{ op: 'update_card', id: card.id, look: 'first look here' }], as('claude'));
+    expect(again.cards[0]!.lookAt).toBe(card.lookAt);
+    for (const bad of ['a\rb', 'a\u0085b', 'a\u2028b', 'a\u2029b']) expect(() => parseBoardChanges([note('N', { look: bad })])).toThrow(BoardInputError);
+    await expect(changeBoard(root, [note('N', { look: '\u0007\u0007' })], as('user'))).rejects.toThrow(/cannot be empty/);
+  });
+
+  it('accepts every key the plan makes for a step', () => {
+    const long = 'Undo by Ctrl/Cmd+Z right after Shift+arrow moves or while a later drop is still running somewhere';
+    const plan = parsePlanFile(['# P', '', '- [ ] Reports export to CSV', '- [ ] Reports export to CSV', `- [ ] ${long}`, `- [ ] ${long}`, '- [ ] Ünïcode and 2nd step', `- [ ] ${'word-'.repeat(20)}`, '- [ ] `Code` and **bold**'].join('\n'));
+    const keys = plan.steps.map((step) => step.key);
+    expect(keys.some((key) => key.endsWith('-'))).toBe(true);
+    expect(keys.some((key) => key.includes('--'))).toBe(true);
+    for (const key of keys) expect(isBoardStepKey(key), key).toBe(true);
+    for (const bad of ['', '-x', 'a b', 'a/b', 'x'.repeat(BOARD_LIMITS.stepKey + 1)]) expect(isBoardStepKey(bad), bad).toBe(false);
+  });
+
+  it('lets the plan step decide the area of a card, and drops the step when the area moves away', async () => {
+    await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n- [ ] Loose step\n\n## Checkpoints\n\n- [ ] Outcome one\n  - [ ] Step in one\n');
+    const { board } = await changeBoard(root, [note('A', { step: 'step-in-one' }), note('B', { step: 'loose-step' }), note('C', { step: 'not-in-the-plan' })], as('user'));
+    expect(board.cards.map((card) => card.area)).toEqual(['checkpoint:outcome-one', 'plan:own', undefined]);
+    await expect(changeBoard(root, [note('D', { step: 'loose-step', area: 'checkpoint:outcome-one' })], as('user'))).rejects.toThrow(/in plan:own, not checkpoint:outcome-one/);
+    const id = board.cards[0]!.id;
+    const { board: moved } = await changeBoard(root, [{ op: 'update_card', id, step: 'loose-step' }], as('user'));
+    expect(moved.cards[0]).toMatchObject({ step: 'loose-step', area: 'plan:own' });
+    const { board: kept } = await changeBoard(root, [{ op: 'update_card', id, area: 'plan:own' }], as('user'));
+    expect(kept.cards[0]!.step).toBe('loose-step');
+    const { board: away } = await changeBoard(root, [{ op: 'update_card', id, area: 'checkpoint:outcome-one' }], as('user'));
+    expect(away.cards[0]).toMatchObject({ area: 'checkpoint:outcome-one' });
+    expect('step' in away.cards[0]!).toBe(false);
+    // A step the plan does not know is left alone.
+    const unknown = board.cards[2]!.id;
+    const { board: stays } = await changeBoard(root, [{ op: 'update_card', id: unknown, area: 'plan:own' }], as('user'));
+    expect(stays.cards[2]).toMatchObject({ step: 'not-in-the-plan', area: 'plan:own' });
   });
 
   it('accepts a card id of the caller, so one request can add a card and then link and place it', async () => {

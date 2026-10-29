@@ -296,6 +296,131 @@ describe('working on the board', () => {
     expect(badUpdate.text).toMatch(/That is not a board area id/);
   });
 
+  describe('step and look', () => {
+    const plan = '# Plan\n\n- [ ] Loose step one\n\n## Checkpoints\n\n- [x] First outcome\n  - [x] Done step of first\n- [ ] Second outcome\n  - [x] Finished second step\n  - [ ] Build the search box with filters\n  - [ ] Build the search results page\n- [ ] Third outcome\n  - [ ] Write the third thing down\n';
+    const add = (extra: Record<string, unknown> = {}) => call('board_add_card', { kind: 'note', title: 'N', ...extra });
+
+    it('resolves a step by key, full text and unique start, and refuses ambiguous or unknown ones', async () => {
+      await fs.writeFile(path.join(root, 'PLAN.md'), plan);
+      expect((await ok('board_add_card', { kind: 'note', title: 'a', step: 'write-the-third-thing-down' })).card.step).toBe('write-the-third-thing-down');
+      expect((await ok('board_add_card', { kind: 'note', title: 'b', step: '  LOOSE STEP ONE ' })).card.step).toBe('loose-step-one');
+      expect((await ok('board_add_card', { kind: 'note', title: 'c', step: 'build the search box' })).card.step).toBe('build-the-search-box-with-filters');
+      const ambiguous = await add({ step: 'Build the search' });
+      expect(ambiguous).toMatchObject({ isError: true });
+      expect(ambiguous.text).toMatch(/More than one plan step.*build-the-search-box-with-filters \("Build the search box with filters"\).*build-the-search-results-page/);
+      const unknown = await add({ step: 'Nothing like this step' });
+      expect(unknown.isError).toBe(true);
+      expect(unknown.text).toMatch(/No plan step matches/);
+      expect((await add({ step: 'Build' })).isError).toBe(true);
+      expect((await readBoard(root)).cards).toHaveLength(3);
+    });
+
+    it('sets, resolves and clears step and look on update, without a default', async () => {
+      await fs.writeFile(path.join(root, 'PLAN.md'), plan);
+      const older = await ok('board_add_card', { kind: 'note', title: 'older' });
+      expect('step' in older.card).toBe(true);
+      await fs.rm(path.join(root, 'PLAN.md'));
+      const bare = await ok('board_add_card', { kind: 'note', title: 'bare' });
+      await fs.writeFile(path.join(root, 'PLAN.md'), plan);
+      expect('step' in (await ok('board_update_card', { id: bare.card.id, title: 'still bare' })).card).toBe(false);
+      const { card } = await ok('board_add_card', { kind: 'note', title: 'n', area: 'plan:own', look: 'check the box' });
+      expect(card).toMatchObject({ step: 'loose-step-one', look: 'check the box' });
+      expect(card.lookAt).toEqual(expect.any(String));
+      const own = await ok('board_add_card', { kind: 'note', title: 'x' });
+      const cleared = await ok('board_update_card', { id: own.card.id, step: null });
+      expect('step' in cleared.card).toBe(false);
+      const set = await ok('board_update_card', { id: own.card.id, step: 'Write the third thing', look: 'read me' });
+      expect(set.card).toMatchObject({ step: 'write-the-third-thing-down', look: 'read me' });
+      const gone = await ok('board_update_card', { id: own.card.id, look: null });
+      expect('look' in gone.card || 'lookAt' in gone.card).toBe(false);
+      expect(gone.card.step).toBe('write-the-third-thing-down');
+      expect((await call('board_update_card', { id: own.card.id, step: 'Unknown step text here' })).isError).toBe(true);
+      expect((await call('board_add_card', { kind: 'note', title: 'bad', look: 'a\nb' })).isError).toBe(true);
+    });
+
+    it('defaults the step to the first open one of the explicit area, the current area or plan:own', async () => {
+      await fs.writeFile(path.join(root, 'PLAN.md'), plan);
+      // current area is the second checkpoint
+      expect((await ok('board_add_card', { kind: 'note', title: 'cur' })).card.step).toBe('build-the-search-box-with-filters');
+      expect((await ok('board_add_card', { kind: 'note', title: 'cp', area: 'checkpoint:third-outcome' })).card.step).toBe('write-the-third-thing-down');
+      expect((await ok('board_add_card', { kind: 'note', title: 'own', area: 'plan:own' })).card.step).toBe('loose-step-one');
+      expect('step' in (await ok('board_add_card', { kind: 'note', title: 'done', area: 'checkpoint:first-outcome' })).card).toBe(false);
+      expect('step' in (await ok('board_add_card', { kind: 'note', title: 'gone', area: 'checkpoint:no-such' })).card).toBe(false);
+      await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n## Checkpoints\n\n- [x] Only outcome\n  - [x] Only step\n');
+      expect('step' in (await ok('board_add_card', { kind: 'note', title: 'all done' })).card).toBe(false);
+      await fs.rm(path.join(root, 'PLAN.md'));
+      expect('step' in (await ok('board_add_card', { kind: 'note', title: 'no plan' })).card).toBe(false);
+    });
+
+    it('resolves duplicate texts by key, text in key form, and a text that equals another step key', async () => {
+      await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n- [ ] Same words for a step\n- [ ] Same words for a step\n- [ ] Run `npm test` and **ship it**\n- [ ] Alpha thing\n- [ ] alpha-thing\n');
+      const twice = await add({ step: 'same words for a step' });
+      expect(twice.isError).toBe(true);
+      expect(twice.text).toContain('same-words-for-a-step ("Same words for a step"), same-words-for-a-step-2');
+      expect((await ok('board_add_card', { kind: 'note', title: 'k', step: 'same-words-for-a-step-2' })).card.step).toBe('same-words-for-a-step-2');
+      expect((await ok('board_add_card', { kind: 'note', title: 'k', step: 'same-words-for-a-step' })).card.step).toBe('same-words-for-a-step');
+      expect((await ok('board_add_card', { kind: 'note', title: 'm', step: 'Run npm test and ship it' })).card.step).toBe('run-npm-test-and-ship-it');
+      expect((await ok('board_add_card', { kind: 'note', title: 'm', step: 'RUN `NPM TEST` AND SHIP' })).card.step).toBe('run-npm-test-and-ship-it');
+      expect((await ok('board_add_card', { kind: 'note', title: 'w', step: 'alpha-thing' })).card.step).toBe('alpha-thing');
+    });
+
+    it('lets the step decide the area, and refuses a step outside the area given', async () => {
+      await fs.writeFile(path.join(root, 'PLAN.md'), plan);
+      const own = await ok('board_add_card', { kind: 'note', title: 'a', step: 'loose-step-one' });
+      expect(own.card).toMatchObject({ step: 'loose-step-one', area: 'plan:own' });
+      const inCheckpoint = await ok('board_add_card', { kind: 'note', title: 'b', step: 'write-the-third-thing-down' });
+      expect(inCheckpoint.card.area).toBe('checkpoint:third-outcome');
+      // A default step is only a hint: it does not pin the area.
+      const hinted = (await ok('board_add_card', { kind: 'note', title: 'c' })).card;
+      expect(hinted.step).toBe('build-the-search-box-with-filters');
+      expect(hinted.area).toBeUndefined();
+      const done = (await ok('board_add_card', { kind: 'note', title: 'd', area: 'checkpoint:first-outcome' })).card;
+      expect(done.area).toBe('checkpoint:first-outcome');
+      expect(done.step).toBeUndefined();
+      const clash = await add({ step: 'loose-step-one', area: 'checkpoint:third-outcome' });
+      expect(clash.isError).toBe(true);
+      expect(clash.text).toContain('plan:own');
+      expect(await ok('board_add_card', { kind: 'note', title: 'e', step: 'loose-step-one', area: 'plan:own' })).toMatchObject({ card: { area: 'plan:own' } });
+
+      // Update: a step alone moves the area; an area alone out of the step drops the step.
+      const id = inCheckpoint.card.id;
+      expect((await ok('board_update_card', { id, step: 'loose-step-one' })).card).toMatchObject({ step: 'loose-step-one', area: 'plan:own' });
+      expect((await call('board_update_card', { id, step: 'write-the-third-thing-down', area: 'plan:own' })).isError).toBe(true);
+      expect((await ok('board_update_card', { id, area: 'plan:own' })).card.step).toBe('loose-step-one');
+      const moved = (await ok('board_update_card', { id, area: 'checkpoint:third-outcome' })).card;
+      expect(moved.area).toBe('checkpoint:third-outcome');
+      expect('step' in moved).toBe(false);
+    });
+
+    it('keeps a default step as a hint that a later link can move, and keeps the hint when the area is cleared', async () => {
+      await fs.writeFile(path.join(root, 'PLAN.md'), plan);
+      const { card } = await ok('board_add_card', { kind: 'note', title: 'hinted' });
+      expect(card.step).toBe('build-the-search-box-with-filters');
+      expect(card.area).toBeUndefined();
+      await ok('board_link', { from: card.id, to: 'checkpoint:third-outcome' });
+      const read = (await ok('board_read', { cardId: card.id })).card;
+      expect(read.area).toBeUndefined();
+      expect(read.step).toBe('build-the-search-box-with-filters');
+      // An explicit step pins; clearing the area afterwards keeps the step as a hint.
+      const pinned = (await ok('board_add_card', { kind: 'note', title: 'pinned', step: 'build the search box' })).card;
+      expect(pinned.area).toBe('checkpoint:second-outcome');
+      const cleared = (await ok('board_update_card', { id: pinned.id, area: null })).card;
+      expect(cleared.area).toBeUndefined();
+      expect(cleared.step).toBe('build-the-search-box-with-filters');
+    });
+
+    it('reads step and look on cards and never lists the plan steps', async () => {
+      await fs.writeFile(path.join(root, 'PLAN.md'), plan);
+      const { card } = await ok('board_add_card', { kind: 'note', title: 'n', step: 'loose step one', look: 'see it' });
+      const read = await ok('board_read');
+      expect(read.board.cards[0]).toMatchObject({ step: 'loose-step-one', look: 'see it', lookAt: card.lookAt });
+      expect((await ok('board_read', { cardId: card.id })).card).toMatchObject({ step: 'loose-step-one', look: 'see it' });
+      expect(JSON.stringify(read.areas)).not.toContain('step');
+      expect(JSON.stringify(read.canLinkTo)).not.toContain('search-box');
+      expect(JSON.stringify(read)).not.toContain('write-the-third-thing-down');
+    });
+  });
+
   it('works from a folder below the workspace root, and writes the board at the root', async () => {
     await fs.mkdir(path.join(root, 'NexusFlow'));
     const result = await findTool('board_add_card')!.handler({ kind: 'note', title: 'From below' }, { config, workspacePath: path.join(root, 'NexusFlow') });
