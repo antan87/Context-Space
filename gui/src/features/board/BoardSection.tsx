@@ -539,6 +539,14 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
 
   const areaEdges = useMemo(() => boardEdges(areaNodes, board?.links ?? []), [areaNodes, board]);
 
+  // A press anywhere ends the looking after the keyboard: whoever pressed has put it where they want it, and putting it back on the opener
+  // in the middle of a drag over a card's text (the focus moves, and the selection stops) is the one thing to avoid.
+  useEffect(() => {
+    const leave = () => { openerRetry.current = null; };
+    document.addEventListener('pointerdown', leave, true);
+    return () => document.removeEventListener('pointerdown', leave, true);
+  }, []);
+
   useEffect(() => {
     const retry = openerRetry.current;
     if (!retry) return;
@@ -980,7 +988,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
                   )
                 )}
                 {activeArea.data.kind === 'plan' && <Badge variant="outline" className="shrink-0">Plan</Badge>}
-                {activeArea.data.waitingCount > 0 && (
+                {activeArea.data.waitingCount > 0 && !areaNodes.some((areaNode) => areaNode.id === activeArea.id) && (
                   <Badge variant="warning" className="shrink-0">{waitingText(activeArea.data.waitingCount)}</Badge>
                 )}
                 {activeArea.data.kind !== 'work' && (

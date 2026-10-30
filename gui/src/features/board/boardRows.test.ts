@@ -70,7 +70,7 @@ describe('areaBoardLayout v2: which row is which', () => {
     const rows = areaRows(areaOf(planOf(3, 0), [card('x', 'X', { step: 's2', at: at(9) }), card('y', 'Y', { step: 's0', at: at(2) })]), { size: big });
     expect(rows[0]!.id).toBe('row:step:s2');
     expect(rows[0]!.state).toBe('current');
-    expect(rows[0]!.title).toBe('Current step');
+    expect(rows[0]!.title).toBe('Now');
   });
 
   it('is the first open step when no open step has a card', () => {
@@ -88,7 +88,7 @@ describe('areaBoardLayout v2: which row is which', () => {
     expect(other.data.current).toBe(false);
     const rows = areaRows(other, { size: big });
     expect(rows.some((r) => r.state === 'current')).toBe(false);
-    expect(rows[0]).toMatchObject({ kind: 'step', state: 'next', title: 'Next step' });
+    expect(rows[0]).toMatchObject({ kind: 'step', state: 'next', title: 'Next' });
     const nodes = areaBoardLayout(other, { size: big });
     expect(nodes.filter((n) => n.type === 'step').every((n) => (n as { data: { state: string } }).data.state !== 'current')).toBe(true);
     // and the Area that is current says so
@@ -227,14 +227,14 @@ describe('areaBoardLayout v2: height', () => {
   });
 
   it('pages an opened row that does not fit, with the newest first and a page nobody has to scroll to, and every card is on some page', () => {
-    const lots = Array.from({ length: 14 }, (_, i) => file(`p${i}`, `Page card ${i}`, { at: at(1 + i) }));
+    const lots = Array.from({ length: 30 }, (_, i) => file(`p${i}`, `Page card ${i}`, { at: at(1 + i) }));
     const a = areaOf(planOf(2, 0), lots, { docs: [doc('d1', 'Doc')] });
     const size = { width: 1100, height: 700 };
     const first = areaLayout(a, { size, openRow: 'lane:board', page: 0 });
     expect(first.open!.pages).toBeGreaterThan(1);
     const pager = byId(first.nodes, 'lane:board:pager') as BoardNode & { data: { from: number; to: number; total: number; page: number } };
     expect(pager.type).toBe('pager');
-    expect(pager.data).toMatchObject({ from: 1, total: 14, page: 0 });
+    expect(pager.data).toMatchObject({ from: 1, total: 30, page: 0 });
     const seen = new Set<string>();
     let expectedFrom = 1;
     for (let page = 0; page < first.open!.pages; page += 1) {
@@ -245,10 +245,10 @@ describe('areaBoardLayout v2: height', () => {
       for (const n of result.nodes) if (n.id.startsWith('p')) seen.add(n.id);
       for (const [, rect] of nodeRects(result.nodes)) expect(rect.y + rect.height).toBeLessThanOrEqual(areaStage(size).height);
     }
-    expect(seen.size).toBe(14);
+    expect(seen.size).toBe(30);
     // the oldest is on the last page, and a jump to it says which
     expect(areaPlace(a, { size }, 'p0')).toEqual({ row: 'lane:board', page: first.open!.pages - 1 });
-    expect(areaPlace(a, { size }, 'p13')!.page).toBe(0);
+    expect(areaPlace(a, { size }, 'p29')!.page).toBe(0);
     // a page past the end is the last page
     expect(areaLayout(a, { size, openRow: 'lane:board', page: 99 }).open!.page).toBe(first.open!.pages - 1);
   });
@@ -396,7 +396,9 @@ describe('areaBoardLayout v2: nothing overlaps, everything fits and everything c
             // A thing is never drawn smaller, or taller, than its compact variant is
             if (n.type === 'note' || n.type === 'file' || n.type === 'document' || n.type === 'commit' || n.type === 'placeholder' || (n.type === 'step' && (n.data as { static?: boolean }).static)) {
               expect(n.height, `${where} ${state.row}/${state.page}: ${n.id} is ${n.type}`).toBe(ITEM_HEIGHT[n.type === 'step' ? 'step' : n.type]);
-              expect(n.width).toBe(ROW_SIZE.card);
+              expect(n.width, `${where}: ${n.id} fills its column`).toBe(areaStage(size).cardWidth);
+              expect(n.width).toBeGreaterThanOrEqual(ROW_SIZE.card);
+              expect(n.width).toBeLessThanOrEqual(ROW_SIZE.maxCard);
             }
           }
         }
@@ -436,7 +438,7 @@ describe('lines to things that are not drawn', () => {
   });
 
   it('go to the page buttons when the card is on another page of the opened row', () => {
-    const lots = Array.from({ length: 14 }, (_, i) => file(`p${i}`, `Page card ${i}`, { at: at(1 + i) }));
+    const lots = Array.from({ length: 30 }, (_, i) => file(`p${i}`, `Page card ${i}`, { at: at(1 + i) }));
     const area = areaOf(planOf(2, 0), [...lots, card('elsewhere', 'Elsewhere', { step: 's0', at: at(30) })]);
     const size = { width: 1100, height: 700 };
     const nodes = areaBoardLayout(area, { size, openRow: 'lane:board' });
@@ -448,5 +450,80 @@ describe('lines to things that are not drawn', () => {
     expect(edges).toHaveLength(1);
     expect(edges[0]!.target).toBe('lane:board:pager');
     expect(edges[0]!.ariaLabel).toMatch(/^Link from Elsewhere to Not tied to a step \(\d+ more\)$/);
+  });
+});
+
+describe('areaBoardLayout v2: the opened row, on the canvases the app really has', () => {
+  // 706x474 is the 1100x700 window, 414x510 and 678x574 the narrow panes beside the chat, 886x574 a wide pane
+  const sizes = [{ width: 706, height: 474 }, { width: 414, height: 510 }, { width: 678, height: 574 }, { width: 886, height: 574 }];
+  const cards = [
+    ...Array.from({ length: 12 }, (_, i) => file(`loose${i}`, `Loose picture ${i}`, { at: at(1 + i) })),
+    ...Array.from({ length: 6 }, (_, i) => card(`now${i}`, `On the current step ${i}`, { step: 's0', at: at(10 + i) })),
+    card('later', 'On a later step', { step: 's1', at: at(2) }),
+  ];
+  // An Area whose cards are tied to no step, so that row has the room, and one with a current step with cards and more rows under it
+  const looseOnly = () => areaOf(planOf(1, 0), cards.slice(0, 12), { news: newsOf(1, 4) });
+  const area = () => areaOf(planOf(2, 3, 1), cards, { docs: [doc('d1', 'Doc 1'), doc('d2', 'Doc 2'), doc('d3', 'Doc 3')], news: newsOf(1, 4) });
+
+  it('never shows fewer things on a page than the row shows closed', () => {
+    let compared = 0;
+    for (const [size, a] of sizes.flatMap((size) => [area, looseOnly].map((make) => [size, make()] as const))) {
+      const closed = areaBoardLayout(a, { size, news: newsOf(1, 4) });
+      for (const row of areaRows(a, { size, news: newsOf(1, 4) })) {
+        const itemIds = new Set(row.items.map((item) => item.id));
+        const shown = closed.filter((n) => itemIds.has(n.id)).length;
+        if (shown === 0) continue;
+        const open = areaLayout(a, { size, news: newsOf(1, 4), openRow: row.id, page: 0 });
+        const onPage = open.nodes.filter((n) => itemIds.has(n.id)).length;
+        expect(onPage, `${row.id} at ${size.width}x${size.height}`).toBeGreaterThanOrEqual(shown);
+        compared += 1;
+      }
+    }
+    expect(compared).toBeGreaterThanOrEqual(8);
+  });
+
+  it('puts the page buttons and "+N more" on the line of the row\'s header, not in a line of their own', () => {
+    const size = sizes[0]!;
+    const a = area();
+    const closed = areaBoardLayout(a, { size, news: newsOf(1, 4) });
+    const more = closed.find((n) => n.type === 'more')!;
+    const moreHead = byId(closed, more.id.replace(/:more$/, ''));
+    expect(more.position.y + more.height / 2).toBeCloseTo(moreHead.position.y + moreHead.height / 2);
+    expect(moreHead.position.x + moreHead.width).toBeLessThanOrEqual(more.position.x);
+    const open = areaLayout(a, { size, news: newsOf(1, 4), openRow: 'lane:board', page: 0 });
+    const pager = open.nodes.find((n) => n.type === 'pager')!;
+    const head = byId(open.nodes, 'lane:board');
+    expect(pager.position.y + pager.height / 2).toBeCloseTo(head.position.y + head.height / 2);
+    expect(head.position.x + head.width).toBeLessThanOrEqual(pager.position.x);
+    expect(pager.position.x + pager.width).toBeLessThanOrEqual(areaStage(size).width);
+    // no card shares the pager's line
+    for (const n of open.nodes) if (n.type === 'file') expect(n.position.y).toBeGreaterThanOrEqual(head.position.y + head.height);
+  });
+});
+
+describe('areaStage: things fill the line', () => {
+  it('stretches the columns to the width of the line, between the least and the most a thing is drawn at', () => {
+    for (const width of [414, 520, 706, 886, 1100, 1600, 1920]) {
+      const stage = areaStage({ width, height: 700 });
+      expect(stage.cardWidth).toBeGreaterThanOrEqual(ROW_SIZE.card);
+      expect(stage.cardWidth).toBeLessThanOrEqual(ROW_SIZE.maxCard);
+      const used = stage.columns * stage.cardWidth + (stage.columns - 1) * ROW_SIZE.gap;
+      expect(used).toBeLessThanOrEqual(stage.width);
+      // Without the cap, nothing is left over but the rounding
+      if (stage.cardWidth < ROW_SIZE.maxCard) expect(stage.width - used).toBeLessThan(stage.columns);
+    }
+  });
+
+  it('puts the buttons of the header line right after the header, so the keyboard reaches them before the things', () => {
+    const size = { width: 706, height: 474 };
+    const a = areaOf(planOf(2, 3, 1), Array.from({ length: 30 }, (_, i) => file(`tab${i}`, `Tab ${i}`, { at: at(1 + i), step: 's0' })), { news: newsOf(1, 4) });
+    const closed = areaBoardLayout(a, { size, news: newsOf(1, 4) });
+    const more = closed.find((n) => n.type === 'more')!;
+    const pos = closed.findIndex((n) => n.id === more.id);
+    expect(closed[pos - 1]!.id).toBe(more.id.replace(/:more$/, ''));
+    const open = areaLayout(a, { size, news: newsOf(1, 4), openRow: 'row:step:s0', page: 0 }).nodes;
+    const pagerAt = open.findIndex((n) => n.type === 'pager');
+    expect(pagerAt).toBeGreaterThan(0);
+    expect(open[pagerAt - 1]!.id).toBe('row:step:s0');
   });
 });

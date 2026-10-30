@@ -1,12 +1,12 @@
 /**
  * Level 1 of the Board, inside an Area: a list of rows by plan step, laid out for the canvas as it is, at a readable zoom.
  *
- * From the top down: the decisions that wait for you (compact), the current step (or "Next step" in an Area that is not the
+ * From the top down: the decisions that wait for you (compact), the current step ("Now", or "Next" in an Area that is not the
  * current one), the other open steps that have cards, the cards that are tied to no step, the documents, the commits of each
  * repository, then one line for the open steps that have no cards and one for the finished steps. A row is a header (one line)
  * with its things under it, in lines across the whole width. Every thing is drawn in a compact variant of its card, which has a
- * natural height of its own and is never made smaller: the whole card is in the reader, one press on Open away. Pinned things come
- * first, then the newest. A row shows as many lines as the room allows and ends in a "+N more" button. When the rows are too tall
+ * natural height of its own and is never made smaller: the whole card is one press away from the reader: a card has no buttons to read, its title is the one. Pinned things come
+ * first, then the newest. A row shows as many lines as the room allows, and "+N more" is on the line of its header. When the rows are too tall
  * the least important fold into one line each; one row can be opened, and then it takes the room that is left, in pages when its
  * things do not fit even then. Pure: the same input always gives the same nodes. The view is fixed (READABLE_ZOOM), so nothing
  * here ever needs the view to move.
@@ -33,8 +33,9 @@ export const READABLE_ZOOM = 0.9;
 
 /** The sizes of Level 1, in canvas units (the screen's pixels are these times the zoom). */
 export const ROW_SIZE = {
-  /** The width of a thing in a row, and the space between things, and between the lines of an open row. */
-  card: 320,
+  /** The least width of a thing in a row, the most it is drawn at, the space between things, and between the lines of an open row. Things stretch to fill the line. */
+  card: 300,
+  maxCard: 420,
   gap: 12,
   lineGap: 8,
   /** Between rows, and when the rows are made smaller to fit. */
@@ -44,22 +45,22 @@ export const ROW_SIZE = {
   fold: 48,
   compactFold: 36,
   /** The header of a row, and the header of the current step, which says all it can of the step. */
-  header: 36,
+  header: 32,
   current: 72,
   /** Between a header and its things. */
   stackGap: 4,
-  /** The "+N more" button. */
-  more: 112,
-  /** The line with the page buttons. */
-  pager: 36,
-  /** The least an opened row may have: its header, one line of the tallest things, and the page buttons. */
+  /** The width of the "+N more" button, at the right of the line of a row's header. */
+  more: 96,
+  /** The width of the page buttons ("‹ 1–4 of 12 ›"), at the right of the line of an opened row's header. */
+  pager: 148,
+  /** The least an opened row may have: its header and one line of the tallest things. */
   minOpen: 200,
   /** Room from the edges of the canvas, on the screen. */
   padX: 16,
   top: 12,
   bottom: 36,
   /** The decisions that wait for you. */
-  waitingHead: 56,
+  waitingHead: 32,
   decision: 40,
   waitingMore: 28,
   waitingPad: 8,
@@ -68,10 +69,9 @@ export const ROW_SIZE = {
 } as const;
 
 /** How high each kind of thing is, whatever the room: a compact card is never drawn shorter, nor taller. */
-export const ITEM_HEIGHT = { note: 112, file: 112, document: 96, commit: 80, placeholder: 56, step: 40 } as const;
+export const ITEM_HEIGHT = { note: 96, file: 96, document: 96, commit: 80, placeholder: 56, step: 40 } as const;
 
 const CARD_W = ROW_SIZE.card;
-const STRIDE = CARD_W + ROW_SIZE.gap;
 const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
 /** What the canvas is taken to be when it is not known (a test, the index). */
 const DEFAULT_SIZE: Size = { width: 1280, height: 800 };
@@ -85,15 +85,18 @@ export interface AreaStage {
   /** What the rows may fill, in canvas units at the readable zoom. */
   width: number;
   height: number;
-  /** How many things stand side by side in a line. */
+  /** How many things stand side by side in a line, and how wide each is (they fill the line). */
   columns: number;
+  cardWidth: number;
 }
 
 /** The canvas the rows are laid out for: its size on the screen, taken at the readable zoom. */
 export function areaStage(size: Size = DEFAULT_SIZE): AreaStage {
   const width = Math.max(CARD_W, Math.floor((size.width - 2 * ROW_SIZE.padX) / READABLE_ZOOM));
   const height = Math.max(ROW_SIZE.fold, Math.floor((size.height - ROW_SIZE.top - ROW_SIZE.bottom) / READABLE_ZOOM));
-  return { width, height, columns: Math.max(1, Math.floor((width + ROW_SIZE.gap) / STRIDE)) };
+  const columns = Math.max(1, Math.floor((width + ROW_SIZE.gap) / (CARD_W + ROW_SIZE.gap)));
+  const cardWidth = Math.min(ROW_SIZE.maxCard, Math.floor((width - (columns - 1) * ROW_SIZE.gap) / columns));
+  return { width, height, columns, cardWidth };
 }
 
 export interface AreaBoardLayoutOptions {
@@ -183,7 +186,7 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   const rows: AreaRow[] = [];
   if (head) {
     const items = plans(byStep.get(head.key) ?? []);
-    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.current ? 'Current step' : 'Next step', text: head.text, state: area.data.current ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : 'Nothing on this step yet' });
+    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.current ? 'Now' : 'Next', text: head.text, state: area.data.current ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : 'Nothing on this step yet' });
   }
   const others = open.filter((entry) => entry !== head);
   let withCards = others.filter((entry) => (byStep.get(entry.key)?.length ?? 0) > 0);
@@ -311,8 +314,8 @@ interface Sizing { fold: number; gap: number; waitingShown: number }
 const COMFY: Sizing = { fold: ROW_SIZE.fold, gap: ROW_SIZE.rowGap, waitingShown: ROW_SIZE.waitingShown };
 const COMPACT: Sizing = { fold: ROW_SIZE.compactFold, gap: ROW_SIZE.compactGap, waitingShown: 1 };
 
-function node(item: LaneCard, x: number, y: number): BoardNode {
-  return { id: item.id, type: item.type, position: { x, y }, width: CARD_W, height: item.height, data: item.data, ...FIXED } as BoardNode;
+function node(item: LaneCard, x: number, y: number, width: number): BoardNode {
+  return { id: item.id, type: item.type, position: { x, y }, width, height: item.height, data: item.data, ...FIXED } as BoardNode;
 }
 
 function waitingPiece(waiting: Waiting, stage: AreaStage, shown: number, expanded: boolean): Piece {
@@ -339,7 +342,7 @@ function waitingFold(waiting: Waiting, stage: AreaStage, fold: number): Piece {
     height: fold,
     nodes: (y) => [{
       id: waiting.areaId, type: 'fold', position: { x: 0, y }, width: stage.width, height: fold,
-      data: { rowId: WAITING_ROW, title: waiting.title, summary: total === 1 ? 'Waits for you' : `${total} waiting`, current: false, note: waiting.decisions[0]?.question, holds: [] },
+      data: { rowId: WAITING_ROW, title: 'Waits for you', summary: total === 1 ? '' : `${total} questions`, current: false, note: waiting.decisions[0]?.question, holds: [] },
       ...FIXED,
     }],
   };
@@ -357,12 +360,20 @@ function headNode(row: AreaRow, y: number, width: number, expanded: boolean, emp
   };
 }
 
+/** The first things a row holds, in words, for its folded line: the steps of a line of steps, the shas of commits, else the titles of the cards. */
+function previewOf(row: AreaRow): string {
+  const parts = row.groups
+    ? row.groups.map((group) => group.text)
+    : row.items.map((item) => (item.type === 'commit' ? (item.data as { sha: string }).sha : (item.data as { title?: string }).title ?? ''));
+  return parts.filter(Boolean).slice(0, 8).join(' · ');
+}
+
 function foldPiece(row: AreaRow, stage: AreaStage, fold: number): Piece {
   return {
     height: fold,
     nodes: (y) => [{
       id: row.id, type: 'fold', position: { x: 0, y }, width: stage.width, height: fold,
-      data: { rowId: row.id, title: row.kind === 'step' ? `${row.title}: ${row.text}` : row.title, summary: row.summary, current: row.state === 'current', holds: row.items.map((item) => item.id), ...(row.warning ? { warning: row.warning } : {}) },
+      data: { rowId: row.id, title: row.kind === 'step' ? `${row.title}: ${row.text}` : row.title, summary: row.summary, current: row.state === 'current', ...(previewOf(row) ? { preview: previewOf(row) } : {}), holds: row.items.map((item) => item.id), ...(row.warning ? { warning: row.warning } : {}) },
       ...FIXED,
     }],
   };
@@ -392,16 +403,17 @@ function linesPiece(row: AreaRow, stage: AreaStage, lines: number): Piece {
     height,
     nodes: (y) => {
       const out: BoardNode[] = [headNode(row, y, headerW, false, row.items.length === 0)];
-      let lineY = y + head + ROW_SIZE.stackGap;
-      for (const line of rows) {
-        line.forEach((item, index) => out.push(node(item, index * STRIDE, lineY)));
-        lineY += lineHeight(line) + ROW_SIZE.lineGap;
-      }
+      // The button on the line of the header comes right after it, so the keyboard reaches it before the things
       if (hidden > 0) {
         out.push({
           id: `${row.id}:more`, type: 'more', position: { x: stage.width - ROW_SIZE.more, y: y + (head - ROW_SIZE.header) / 2 }, width: ROW_SIZE.more, height: ROW_SIZE.header,
           data: { rowId: row.id, title: `+${hidden} more`, count: hidden, rowTitle: row.text ?? row.title, holds: row.items.slice(shown.length).map((item) => item.id) }, ...FIXED,
         });
+      }
+      let lineY = y + head + ROW_SIZE.stackGap;
+      for (const line of rows) {
+        line.forEach((item, index) => out.push(node(item, index * (stage.cardWidth + ROW_SIZE.gap), lineY, stage.cardWidth)));
+        lineY += lineHeight(line) + ROW_SIZE.lineGap;
       }
       return out;
     },
@@ -429,11 +441,11 @@ function linesOf(row: AreaRow, columns: number): Cell[][] {
   return lines;
 }
 
-/** The least an opened row needs: its header, one line of the tallest things it holds, and the page buttons when it has more than one line. */
+/** The least an opened row needs: its header and one line of the tallest things it holds (the page buttons are on the line of the header). */
 function openNeed(row: AreaRow, stage: AreaStage): number {
   const lines = linesOf(row, stage.columns);
   const tallest = Math.max(0, ...lines.map(lineHeight));
-  return headerHeight(row) + ROW_SIZE.stackGap + tallest + (lines.length > 1 ? ROW_SIZE.lineGap + ROW_SIZE.pager : 0);
+  return headerHeight(row) + ROW_SIZE.stackGap + tallest;
 }
 
 export interface OpenInfo { rowId: string; page: number; pages: number }
@@ -446,7 +458,7 @@ function openPiece(row: AreaRow, stage: AreaStage, room: number, requested: numb
   const top = head + ROW_SIZE.stackGap;
   const natural = lines.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? ROW_SIZE.lineGap : 0), 0);
   const pager = top + natural > room;
-  const avail = room - top - (pager ? ROW_SIZE.pager + ROW_SIZE.lineGap : 0);
+  const avail = room - top;
   const pages: Cell[][][] = [];
   let current: Cell[][] = [];
   let used = 0;
@@ -465,22 +477,22 @@ function openPiece(row: AreaRow, stage: AreaStage, room: number, requested: numb
   const total = lines.reduce((sum, line) => sum + things(line), 0);
   const onPage = new Set(shown.flat().map((cell) => cell.id));
   const gridH = shown.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? ROW_SIZE.lineGap : 0), 0);
-  const height = top + gridH + (pager ? ROW_SIZE.lineGap + ROW_SIZE.pager : 0);
+  const height = top + gridH;
   return {
     height,
     info: { rowId: row.id, page, pages: pages.length },
     nodes: (y) => {
-      const out: BoardNode[] = [headNode(row, y, stage.width, true, false)];
-      let lineY = y + top;
-      for (const line of shown) {
-        line.forEach((cell, index) => out.push(node(cell, index * STRIDE, lineY)));
-        lineY += lineHeight(line) + ROW_SIZE.lineGap;
-      }
+      const out: BoardNode[] = [headNode(row, y, pager ? stage.width - ROW_SIZE.pager - ROW_SIZE.gap : stage.width, true, false)];
       if (pager) {
         out.push({
-          id: `${row.id}:pager`, type: 'pager', position: { x: 0, y: y + height - ROW_SIZE.pager }, width: stage.width, height: ROW_SIZE.pager,
+          id: `${row.id}:pager`, type: 'pager', position: { x: stage.width - ROW_SIZE.pager, y: y + (head - ROW_SIZE.header) / 2 }, width: ROW_SIZE.pager, height: ROW_SIZE.header,
           data: { rowId: row.id, title: row.text ?? row.title, page, pages: pages.length, from: before + 1, to: before + inPage, total, holds: row.items.filter((item) => !onPage.has(item.id)).map((item) => item.id) }, ...FIXED,
         });
+      }
+      let lineY = y + top;
+      for (const line of shown) {
+        line.forEach((cell, index) => out.push(node(cell, index * (stage.cardWidth + ROW_SIZE.gap), lineY, stage.cardWidth)));
+        lineY += lineHeight(line) + ROW_SIZE.lineGap;
       }
       return out;
     },

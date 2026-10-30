@@ -1,7 +1,9 @@
 import { createContext } from 'react';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { API_BASE } from '../../lib/apiBase.js';
+import { agoText } from '../plan/whatsNew.js';
 import { fileTitle } from './boardDock.js';
+import { authorName } from './boardLayout.js';
 
 /** A file of the workspace for the reader beside the board, and what to call it. `card` is the board card it is the content of. */
 export interface ReaderTarget {
@@ -11,6 +13,18 @@ export interface ReaderTarget {
   card?: string;
   /** The id of a source document: it is read by the work route, through the storage port, and not from the workspace folder by `path`. */
   source?: string;
+  /** The text of the card the file belongs to, and its whole byline: the reader shows them under the file, where the card shows only the start of the text. */
+  text?: string;
+  byline?: string;
+}
+
+/** "by claude · 5 min ago", and who changed it since when someone did. */
+export function bylineText(data: { by: string; at: string; updatedBy: string; updatedAt: string }): string {
+  const made = agoText(data.at);
+  const edited = Date.parse(data.updatedAt) - Date.parse(data.at) > 1000
+    ? ` · edited${data.updatedBy === data.by ? '' : ` by ${authorName(data.updatedBy)}`} ${agoText(data.updatedAt)}`.trimEnd()
+    : '';
+  return `by ${authorName(data.by)}${made ? ` · ${made}` : ''}${edited}`;
 }
 
 /** What the nodes on the canvas need from the page around it: which workspace they are in, how to open a file, and how to open or fold a group. */
@@ -53,13 +67,19 @@ export const cardLinks = (actions: BoardActions, opener: HTMLElement | null = nu
   onOpenFile: (path) => { onOpen?.(); actions.openInReader({ path, title: fileTitle(path) }, opener); },
 });
 
-/** The first control of a card that the keyboard can reach and the eye can see: a link inside clamped text is neither. */
+const usable = (element: HTMLElement) =>
+  element.getAttribute('tabindex') !== '-1' && !element.hasAttribute('disabled') && element.getClientRects().length > 0 && !element.closest('[hidden], [aria-hidden="true"]');
+
+/**
+ * The control of a card that does its main action: its title, which is a button (or a link) named "Open <title>" or "Read <title>" and
+ * marked `data-card-main`. A card with no such control has its first control that the keyboard can reach and the eye can see (a link inside
+ * clamped text is neither), or none.
+ */
 export function firstControl(card: HTMLElement, selector = 'button, a[href]'): HTMLElement | null {
+  const main = card.querySelector<HTMLElement>('[data-card-main]');
+  if (main && usable(main)) return main;
   for (const element of card.querySelectorAll<HTMLElement>(selector)) {
-    if (element.getAttribute('tabindex') === '-1' || element.hasAttribute('disabled')) continue;
-    if (element.getClientRects().length === 0) continue;
-    if (element.closest('[hidden], [aria-hidden="true"]')) continue;
-    return element;
+    if (usable(element)) return element;
   }
   return null;
 }

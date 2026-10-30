@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ExternalLink, Maximize2, PanelRight, X } from 'lucide-react';
 
@@ -9,6 +9,7 @@ import { cn } from '../../lib/utils.js';
 import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
+import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { documentFileUrl, type ReaderTarget } from './boardActions.js';
 import { LARGE_WINDOW, type ReaderLayout } from './boardReaderLayout.js';
 
@@ -72,10 +73,31 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   const data = preview.data ?? null;
   // Rendered or raw is for what is open: another file starts rendered.
   const [rawOpen, setRawOpen] = useState<string | null>(null);
+  // The card's text is one quiet line; when it has more, "More" opens it (up to a quarter of the reader) and "Less" closes it.
+  const noteRef = useRef<HTMLDivElement>(null);
+  const [noteOpenFor, setNoteOpenFor] = useState<string | null>(null);
+  const [noteLong, setNoteLong] = useState(false);
+  const noteKey = `${open}\u0000${target.text ?? ''}`;
+  // Open only for the card it was opened on: another card is drawn closed from its first frame.
+  const noteOpen = noteOpenFor === noteKey;
+  // Closed, the one-line box never keeps a scroll position from when it was open.
+  useEffect(() => { if (!noteOpen && noteRef.current) noteRef.current.scrollTop = 0; }, [noteOpen, noteKey]);
+  useLayoutEffect(() => {
+    const node = noteRef.current;
+    if (!node || noteOpen) return undefined;
+    const measure = () => setNoteLong(node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1);
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(node);
+    return () => watch.disconnect();
+  }, [noteKey, noteOpen]);
   const raw = rawOpen === open;
   // A file can be downloaded and shown by the server; a source document is read through the storage port and has neither.
   const fileUrl = source ? '' : documentFileUrl(workspaceId, path);
   const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, documentPath: path, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile }), [workspaceId, workspacePath, path, onOpenFile]);
+
+  // The words of the card the file belongs to: their links open files in this reader, by their path from the workspace folder
+  const noteLinks = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile }), [workspaceId, workspacePath, onOpenFile]);
 
   // Escape pressed in the page of an HTML document, where the keyboard may be (a key in a frame never reaches this page): its script
   // says so with one fixed message. Only from a frame of this reader: its origin is "null", which says nothing, and a message from
@@ -125,7 +147,7 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   >
     <section
       aria-label="Reader"
-      className={cn('z-20 flex min-h-0 flex-col border-border bg-background',
+      className={cn('@container z-20 flex min-h-0 flex-col border-border bg-background',
         large ? 'overflow-hidden rounded-xl border shadow-2xl' : covers ? 'absolute inset-0' : 'relative shrink-0 border-l shadow-lg')}
       style={large ? { width: `${LARGE_WINDOW.width * 100}%`, height: `${LARGE_WINDOW.height * 100}%` } : covers ? undefined : { width }}
     >
@@ -161,6 +183,22 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
           </>}
         />
       </div>
+      {(target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">
+        {target.text && <div
+          id="board-reader-note"
+          ref={noteRef}
+          data-closed={noteOpen ? undefined : ''}
+          className={cn('board-text min-w-0 flex-[1_1_100%] break-words @[32.5rem]:flex-[1_1_0%]', noteOpen ? 'max-h-[calc(100%-1.25rem)] self-stretch overflow-auto @[32.5rem]:max-h-full' : 'line-clamp-1 max-h-5 overflow-hidden')}
+        ><ChatMarkdown content={target.text} links={noteLinks} onCard cut={!noteOpen && noteLong} /></div>}
+        {target.text && (noteLong || noteOpen) && <button
+          type="button"
+          aria-expanded={noteOpen}
+          aria-controls="board-reader-note"
+          className="shrink-0 rounded-sm text-xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+          onClick={() => setNoteOpenFor(noteOpen ? null : noteKey)}
+        >{noteOpen ? 'Less' : 'More'}</button>}
+        {target.byline && <p className="ml-auto min-w-0 max-w-[40%] truncate text-[11px]" title={target.byline}>{target.byline}</p>}
+      </footer>}
     </section>
   </div>;
 }

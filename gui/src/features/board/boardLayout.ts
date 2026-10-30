@@ -189,7 +189,7 @@ export type RowHeadData = {
   static?: boolean;
 };
 /** A row folded to one line: its title and what it holds. Pressing it opens the row. */
-export type FoldData = { rowId: string; title: string; summary: string; current: boolean; warning?: string; /** The first thing the row holds that is worth saying, in the muted colour: red is for errors. */ note?: string; /** The things of the row, which are not drawn: a line to one of them goes to the row. */ holds: string[] };
+export type FoldData = { rowId: string; title: string; summary: string; current: boolean; warning?: string; /** The first thing the row holds that is worth saying, in the muted colour: red is for errors. */ note?: string; /** The first things the row holds, in a line, for the muted words after its name. */ preview?: string; /** The things of the row, which are not drawn: a line to one of them goes to the row. */ holds: string[] };
 /** The tile at the end of a row that has more than fits: "+N more". Pressing it opens the row. */
 export type MoreData = { rowId: string; title: string; count: number; rowTitle: string; static?: boolean; /** The things the tile stands for, which are not drawn. */ holds: string[] };
 /** The buttons that page through an opened row: "‹ Newer", "1–6 of 10", "Older ›". */

@@ -180,12 +180,15 @@ async function reveal(page: Page, target: Locator) {
   // Which row holds the card is not known, and it may not have arrived yet: each row that has more than fits is opened in turn, and closed again when the card is not in it
   await expect.poll(async () => {
     if (await target.isVisible()) return true;
+    // The rows slide to their places when the cards change (a late answer): they are looked at when they have stopped, and not while they move
+    await nodesAtRest(page);
+    if (await target.isVisible()) return true;
     const rows = await more.count();
     for (let index = 0; index < rows; index += 1) {
       await more.nth(index).click();
       await frames(page, 6);
       // The row may have pages: each is looked at
-      const older = board(page).locator('#board-area').getByRole('button', { name: 'Older ›' });
+      const older = board(page).locator('#board-area').getByRole('button', { name: 'Older cards' });
       for (let turn = 0; turn < 12 && !(await target.isVisible()) && await older.count() && await older.isEnabled(); turn += 1) {
         await older.click();
         await frames(page, 4);
@@ -210,6 +213,18 @@ const frames = (page: Page, count = 6) => page.evaluate((total) => new Promise<v
   const tick = () => (++drawn >= total ? resolve() : requestAnimationFrame(tick));
   requestAnimationFrame(tick);
 }), count);
+/** Waits until no node of the Area is sliding to its place (they slide when a row opens or the canvas changes size). */
+const nodesAtRest = async (page: Page) => {
+  // A slide starts about 100 ms after a click or a resize: still for 8 frames in a row, so this cannot pass before it begins.
+  await page.waitForFunction(() => {
+    const w = window as unknown as { __nodesStill?: number };
+    const nodes = Array.from(document.querySelectorAll('#board-area .react-flow__node'));
+    const still = nodes.length > 0 && nodes.every((node) => node.getAnimations().length === 0);
+    w.__nodesStill = still ? (w.__nodesStill ?? 0) + 1 : 0;
+    return w.__nodesStill >= 8;
+  }, undefined, { polling: 'raf', timeout: 10_000 });
+  await page.evaluate(() => { delete (window as unknown as { __nodesStill?: number }).__nodesStill; });
+};
 /**
  * Drags from the middle of `target` by that many screen pixels with the mouse, and lets go unless told to hold on. React
  * Flow starts a drag at the first move of a few pixels and counts from there, so a short move starts it and the rest is
@@ -307,12 +322,19 @@ test.describe('Board', () => {
     await expect(overview).toHaveAttribute('inert', '');
 
     // Stepped-in details are open and visible
-    const frame = stepped.getByRole('article', { name: 'Reports export to CSV' });
+    const frame = stepped.getByRole('article', { name: 'Waits for you' });
     await expect(frame).toBeVisible();
-    await expect(frame).toContainText('1 of 3 steps');
+    // The Area's name and steps are said once, in the header above; the waiting frame says what waits, not whose it is
     await expect(frame).toContainText('Waits for you');
+    await expect(frame).toContainText('Which time zone should export timestamps use?');
+    await expect(frame).not.toContainText('Reports export to CSV');
+    await expect(frame).not.toContainText('1 of 3 steps');
+    const header = stepped.locator('header').first();
+    await expect(header).toContainText('Reports export to CSV');
+    await expect(header).toContainText('1 of 3 steps');
+    await expect(header).not.toContainText(/wait/i);
     // The open steps are rows, the first one is the current step, and the done step is folded into one line that opens
-    await expect(stepped.getByRole('button', { name: /^Current step: Background job queue for large exports/ })).toBeVisible();
+    await expect(stepped.getByRole('button', { name: /^Now: Background job queue for large exports/ })).toBeVisible();
     await expect(stepped.getByRole('button', { name: /^1 more open step/ })).toBeVisible();
     const done = stepped.getByRole('button', { name: /1 done step/ });
     await expect(done).toHaveAttribute('aria-expanded', 'false');
@@ -361,7 +383,7 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('button', { name: 'Board ›' })).toBeVisible();
 
     // Dragging from inside onto backdrop does NOT step out
-    const frame = canvas.locator('#board-area').getByRole('article', { name: 'Reports export to CSV' });
+    const frame = canvas.locator('#board-area').getByRole('article', { name: 'Waits for you' });
     const box = (await frame.boundingBox())!;
     await page.mouse.move(box.x + 10, box.y + 10);
     await page.mouse.down();
@@ -536,7 +558,7 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     await reveal(page, canvas.getByRole('article', { name: 'A long note' }));
     await expect.poll(() => isWithin(canvas.getByRole('article', { name: 'A long note' }), canvas.locator('#board-area .react-flow'))).toBe(true);
-    await canvas.locator('#board-area').getByRole('button', { name: 'Read all of A long note' }).click();
+    await canvas.locator('#board-area').getByRole('button', { name: 'Read A long note' }).click();
     const dialog = page.getByRole('dialog', { name: 'A long note' });
     await expect(dialog).toContainText('Line 30 of a long note.');
     await page.keyboard.press('Escape');
@@ -633,7 +655,7 @@ test.describe('Board cards', () => {
     const card = board(page).getByRole('article', { name: 'A long note' });
     await expect(card).toContainText('Line 1 of a long note.');
     // The card shows the start only, and says there is more: the button is only there when the text is cut.
-    const readAll = card.getByRole('button', { name: 'Read all of A long note' });
+    const readAll = card.getByRole('button', { name: 'Read A long note' });
     await readAll.focus();
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: 'A long note' });
@@ -1040,7 +1062,7 @@ test.describe('Board, reader', () => {
     expect(panel!.width).toBeGreaterThanOrEqual(360);
     expect(Math.abs(panel!.x + panel!.width - (section!.x + section!.width))).toBeLessThanOrEqual(1);
     expect(canvas!.x + canvas!.width).toBeLessThanOrEqual(panel!.x + 1);
-    await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    await expect(board(page).getByRole('article', { name: 'Waits for you' })).toBeVisible();
     // Inside an Area the view is fixed: no zoom controls and no map
     await expect(board(page).locator('#board-area').getByRole('button', { name: 'Zoom in' })).toHaveCount(0);
     await expect(board(page).locator('#board-area .react-flow__minimap')).toHaveCount(0);
@@ -1061,6 +1083,111 @@ test.describe('Board, reader', () => {
     await expect(readerTitle(page, 'The CSV spec')).toHaveCount(0);
     await expect(reader(page)).toHaveCount(1);
     expect([...new Set(asked)]).toEqual(['docs/spec.md', 'overview.html']);
+  });
+
+  test('shows the text of a file card under the file, where the card cuts it off, with its byline and links that work', async ({ page }) => {
+    const description = [...Array.from({ length: 6 }, (_, index) => `Line ${index + 1} of what the file is.`), 'END-OF-TEXT, see [the overview](overview.html).'].join('\n');
+    await openBoard(page, [boardFileCard(5, 'docs/spec.md', { title: 'Spec with notes', description })]);
+    const card = board(page).getByRole('article', { name: 'Spec with notes' });
+    // The card shows the start of it, and has no Read all: the end is read in the reader
+    await expect(card.getByRole('button', { name: /Read all/ })).toHaveCount(0);
+    await expect(card.getByRole('link', { name: 'the overview' })).toHaveAttribute('tabindex', '-1');
+    await opener(page, 'Spec with notes').click();
+    const note = reader(page).locator('footer');
+    // Closed it is one quiet row; More opens the cut end
+    expect((await note.boundingBox())!.height).toBeLessThanOrEqual(36);
+    await expect(note.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'false');
+    await note.getByRole('button', { name: 'More' }).click();
+    await expect(note.getByRole('button', { name: 'Less' })).toBeVisible();
+    await expect(note).toContainText('END-OF-TEXT');
+    await expect(note).toContainText(/^[\s\S]*by claude/);
+    const link = note.getByRole('link', { name: 'the overview' });
+    await link.focus();
+    await expect(link).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(readerTitle(page, 'overview.html')).toBeVisible();
+    // The page opened by the link is not the card's: no text of it under the page
+    await expect(reader(page).locator('footer')).toHaveCount(0);
+  });
+
+  test('keeps the reader footer one line: no hidden link by Tab, the start after Less, code and tables clamped, a wide note in a narrow pane', async ({ page }) => {
+    const long = ['First words of the note, then more.', ...Array.from({ length: 8 }, (_, index) => `Filler ${index + 1} with [a link ${index + 1}](overview.html).`), 'END-OF-TEXT'].join('\n');
+    const closedHeight = async () => (await reader(page).locator('footer').boundingBox())!.height;
+    await openBoard(page, [
+      boardFileCard(5, 'docs/spec.md', { title: 'Spec with notes', description: long, at: '2026-01-03T10:00:00.000Z', updatedAt: '2026-01-03T10:00:00.000Z' }),
+      boardFileCard(6, 'docs/code.md', { title: 'Code first', at: '2026-01-02T10:00:00.000Z', updatedAt: '2026-01-02T10:00:00.000Z', description: '```\nconst first = 1;\nconst second = 2;\n```\nafter the code' }),
+      boardFileCard(7, 'docs/table.md', { title: 'Table first', at: '2026-01-01T10:00:00.000Z', updatedAt: '2026-01-01T10:00:00.000Z', description: '| A | B |\n| - | - |\n| one | two |\n| three | four |\n\nafter the table' }),
+    ]);
+    await opener(page, 'Spec with notes').click();
+    const note = reader(page).locator('footer');
+    await expect(note.getByRole('button', { name: 'More' })).toBeVisible();
+    // Closed, Tab never lands on a link in the hidden part
+    await expect(note.getByRole('link')).toHaveCount(8);
+    expect(await note.getByRole('link').evaluateAll((els) => els.map((el) => (el as HTMLElement).tabIndex))).toEqual(Array(8).fill(-1));
+    await readerTitle(page, 'Spec with notes').focus();
+    for (let step = 0; step < 40; step += 1) {
+      await page.keyboard.press('Tab');
+      expect(await page.evaluate(() => document.activeElement?.closest('footer') !== null && document.activeElement?.tagName === 'A'), 'Tab reached a hidden link').toBe(false);
+    }
+    // More, scroll to the end, Less: the first words show again
+    await note.getByRole('button', { name: 'More' }).click();
+    // Open, every link of the note is reachable by Tab
+    await readerTitle(page, 'Spec with notes').focus();
+    const reached = new Set<string>();
+    for (let step = 0; step < 40; step += 1) {
+      await page.keyboard.press('Tab');
+      const text = await page.evaluate(() => (document.activeElement?.closest('footer') && document.activeElement?.tagName === 'A' ? document.activeElement.textContent : null));
+      if (text) reached.add(text);
+    }
+    expect(reached.size).toBe(8);
+    await note.locator('#board-reader-note').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await note.getByRole('button', { name: 'Less' }).click();
+    expect(await note.locator('#board-reader-note').evaluate((el) => el.scrollTop)).toBe(0);
+    await expect(note.locator('#board-reader-note')).toContainText('First words');
+    // A code block or a table first is still one closed line, and More shows the rest
+    for (const [title, rest] of [['Code first', 'after the code'], ['Table first', 'after the table']] as const) {
+      await page.keyboard.press('Escape');
+      await opener(page, title).click();
+      expect(await closedHeight()).toBeLessThanOrEqual(36);
+      await expect(reader(page).locator('footer').getByRole('button', { name: 'More' })).toBeVisible();
+      await reader(page).locator('footer').getByRole('button', { name: 'More' }).click();
+      await expect(reader(page).locator('footer').getByRole('button', { name: 'Less' })).toHaveAttribute('aria-expanded', 'true');
+      const restBox = reader(page).locator('footer').getByText(rest);
+      await expect(restBox).toBeVisible();
+      await expect(restBox).toBeInViewport({ ratio: 1 });
+    }
+    // In a narrow pane the note keeps most of the reader's width
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 480, height: 900 });
+    await opener(page, 'Spec with notes').click();
+    const widths = await reader(page).evaluate((el) => ({ reader: el.getBoundingClientRect().width, note: el.querySelector('#board-reader-note')!.getBoundingClientRect().width }));
+    expect(widths.note).toBeGreaterThanOrEqual(widths.reader * 0.6);
+    // Opened, the second row (Less and the byline) is whole inside the reader, and Less closes the note
+    const footer = reader(page).locator('footer');
+    await footer.getByRole('button', { name: 'More' }).click();
+    const inside = async (locator: Locator) => {
+      const [box, area] = [(await locator.boundingBox())!, (await reader(page).boundingBox())!];
+      expect(box.y).toBeGreaterThanOrEqual(area.y - 0.5);
+      expect(box.y + box.height).toBeLessThanOrEqual(area.y + area.height + 0.5);
+    };
+    await inside(footer.getByRole('button', { name: 'Less' }));
+    await inside(footer.getByText(/^by claude/));
+    await footer.getByRole('button', { name: 'Less' }).click();
+    await expect(footer.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('lets the keyboard reach the links of a note that fits on one line', async ({ page }) => {
+    await openBoard(page, [boardFileCard(5, 'docs/spec.md', { title: 'Short note', description: 'See [the overview](overview.html).' })]);
+    await opener(page, 'Short note').click();
+    const footer = reader(page).locator('footer');
+    await expect(footer.getByRole('button', { name: 'More' })).toHaveCount(0);
+    const link = footer.getByRole('link', { name: 'the overview' });
+    await expect(link).not.toHaveAttribute('tabindex', '-1');
+    await readerTitle(page, 'Short note').focus();
+    for (let step = 0; step < 40 && !(await link.evaluate((el) => el === document.activeElement)); step += 1) await page.keyboard.press('Tab');
+    await expect(link).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(readerTitle(page, 'overview.html')).toBeVisible();
   });
 
   test('keeps a page\'s HTML out of the board: it is drawn in the sandboxed frame', async ({ page }) => {
@@ -1132,7 +1259,7 @@ test.describe('Board, reader', () => {
     const body = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long note.`).join('\n');
     await openBoard(page, [FILE_CARDS[0], boardNote(3, { title: 'A long note', body })], { [boardId(1)]: FILE_PLACES[boardId(1)], [boardId(3)]: { x: 1100, y: 240 } });
     await opener(page, 'The CSV spec').click();
-    await board(page).getByRole('button', { name: 'Read all of A long note' }).focus();
+    await board(page).getByRole('button', { name: 'Read A long note' }).focus();
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: 'A long note' });
     await expect(dialog).toBeVisible();
@@ -1153,7 +1280,7 @@ test.describe('Board, reader', () => {
     await expect(reader(page)).toBeVisible();
 
     // 3. Open Read all dialog over everything
-    await board(page).getByRole('button', { name: 'Read all of A long note' }).focus();
+    await board(page).getByRole('button', { name: 'Read A long note' }).focus();
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: 'A long note' });
     await expect(dialog).toBeVisible();
@@ -1403,7 +1530,7 @@ test.describe('Board, reader', () => {
       expect(canvas!.x + canvas!.width - (win!.x + win!.width)).toBeGreaterThan(40);
       expect(canvas!.y + canvas!.height - (win!.y + win!.height)).toBeGreaterThan(20);
       // The board is still drawn under the dimming, where it was: the view did not move, and the card that was opened is marked.
-      await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+      await expect(board(page).getByRole('article', { name: 'Waits for you' })).toBeVisible();
       await expect(card(page, 'The CSV spec')).toHaveAttribute('aria-current', 'true');
       expect(await transformOf(page)).toEqual(view);
       // A press beside the window lands on the dimmed board and not on the canvas under it, which waits out of the keyboard's reach.
@@ -1523,7 +1650,7 @@ test.describe('Board, reader', () => {
         return inner.overflow === 'hidden' && inner.scroll <= inner.height && Math.abs(shown!.height - (inner.height - 32)) <= 2;
       }).toBe(true);
       // A frame that fills it is taller than the share of the screen it had before.
-      expect((await frame.boundingBox())!.height).toBeGreaterThan(750);
+      expect((await frame.boundingBox())!.height).toBeGreaterThan(700);
       // A document that is not a page still scrolls in the body.
       await reader(page).getByRole('button', { name: 'Back to board' }).click();
       await opener(page, 'The CSV spec').click();
@@ -1804,7 +1931,7 @@ test.describe('Board, reader', () => {
       const long = Array.from({ length: 12 }, (_, index) => `Line ${index + 1} of what was seen.`).join('\n');
       await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Example</title>' }));
       await openBoard(page, [boardNote(1, { title: 'A long note', body: `${long}\nThen [the spec](docs/spec.md) and [the web](https://example.com/end).` })], { [boardId(1)]: { x: 800, y: 240 } });
-      const readAll = board(page).getByRole('button', { name: 'Read all of A long note' });
+      const readAll = board(page).getByRole('button', { name: 'Read A long note' });
       await readAll.click();
       const dialog = page.getByRole('dialog', { name: 'A long note' });
       await expect(dialog).toContainText('Line 12 of what was seen.');
@@ -1825,7 +1952,7 @@ test.describe('Board, reader', () => {
       const body = [...Array.from({ length: 6 }, (_, index) => `Line ${index + 1}.`), 'Last line: [the hidden link](https://example.com/hidden)'].join('\n');
       await openBoard(page, [boardNote(1, { title: 'Cut note', body }), boardNote(2, { title: 'Short note', body: 'One [short link](https://example.com/short).' })], { [boardId(1)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 } });
       const cut = card(page, 'Cut note');
-      const readAll = cut.getByRole('button', { name: 'Read all of Cut note' });
+      const readAll = cut.getByRole('button', { name: 'Read Cut note' });
       await expect(readAll).toBeVisible();
       // Some of its links may be where they cannot be seen, so none is a stop; a card that shows all of its text keeps its links as stops.
       await expect(cut.getByRole('link', { name: /the hidden link/ })).toHaveAttribute('tabindex', '-1');
@@ -1846,7 +1973,7 @@ test.describe('Board, reader', () => {
       await openBoard(page, [boardNote(1, { title: 'Findings', body })], { [boardId(1)]: { x: 800, y: 240 } });
       const note = card(page, 'Findings');
       await expect(note.locator('li').first()).toBeVisible();
-      await expect(note.getByRole('button', { name: 'Read all of Findings' })).toBeVisible();
+      await expect(note.getByRole('button', { name: 'Read Findings' })).toBeVisible();
       // The card shows four lines of text at most: the clamp holds with lists in it.
       const lines = await note.locator('.board-text').evaluate((element) => Math.round(element.clientHeight / 18));
       expect(lines).toBeLessThanOrEqual(4);
@@ -1929,11 +2056,11 @@ test.describe('Board, rows by step', () => {
 
   /** Every node is whole inside the canvas, and none is under the attribution link or any other control of the canvas. */
   async function expectClearOfControls(page: Page) {
+    await nodesAtRest(page);
     const canvas = (await flow(page).boundingBox())!;
     const controls = await inArea(page).locator('.react-flow__attribution, .react-flow__controls, .react-flow__minimap').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
-    for (const handle of await inArea(page).locator('.react-flow__node').all()) {
-      const box = (await handle.boundingBox())!;
-      const id = await handle.getAttribute('data-id');
+    const nodes = await inArea(page).locator('.react-flow__node').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { id: el.getAttribute('data-id'), x: r.x, y: r.y, width: r.width, height: r.height }; }));
+    for (const { id, ...box } of nodes) {
       expect(box.x >= canvas.x - 0.5 && box.y >= canvas.y - 0.5 && box.x + box.width <= canvas.x + canvas.width + 0.5 && box.y + box.height <= canvas.y + canvas.height + 0.5, `${id} is outside the canvas`).toBe(true);
       for (const control of controls) {
         const apart = box.x + box.width <= control.x || control.x + control.width <= box.x || box.y + box.height <= control.y || control.y + control.height <= box.y;
@@ -1968,7 +2095,7 @@ test.describe('Board, rows by step', () => {
       expect(width).toBeGreaterThan(canvasWidth[0]);
       expect(width).toBeLessThan(canvasWidth[1]);
       // The current step is the open step with the newest card; its cards are drawn; so are some of the cards tied to no step
-      const current = rowButton(page, new RegExp(`^Current step: ${OPEN_STEP(3)}`));
+      const current = rowButton(page, new RegExp(`^Now: ${OPEN_STEP(3)}`));
       await expect(current).toBeVisible();
       await expect(inArea(page).getByRole('article', { name: 'Newest on an open step' })).toBeVisible();
       expect(await inArea(page).locator('.react-flow__node-note, .react-flow__node-file').count()).toBeGreaterThanOrEqual(1);
@@ -1976,7 +2103,7 @@ test.describe('Board, rows by step', () => {
       await expect(rowButton(page, /more open steps/)).toBeVisible();
       await expect(rowButton(page, /12 done steps/)).toBeVisible();
       await expect(inArea(page).getByRole('article', { name: 'Reports export to CSV' })).toHaveCount(0);
-      await expect(inArea(page).getByRole('article', { name: /real work/ })).toBeVisible();
+      await expect(inArea(page).getByRole('article', { name: 'Waits for you' })).toBeVisible();
       await expectClearOfControls(page);
       // Panning and zooming are off: the view is where the layout put it
       expect((await transformOf(page)).scale).toBeCloseTo(0.9, 5);
@@ -1985,15 +2112,16 @@ test.describe('Board, rows by step', () => {
     });
 
     test(`never moves the view when rows are opened, closed or paged, and Escape gives back the exact view, at ${name}`, async ({ page }) => {
+      test.slow();
       await openReal(page, { size });
       const before = await transformOf(page);
       const same = async () => { await frames(page, 6); expect(await transformOf(page)).toEqual(before); };
-      for (const label of [/^Current step:/, /more open steps/, /12 done steps/, /Not tied to a step/]) {
+      for (const label of [/^Now:/, /more open steps/, /12 done steps/, /Not tied to a step/]) {
         const button = rowButton(page, label).first();
         await button.click();
         await same();
         await expectClearOfControls(page);
-        const older = inArea(page).getByRole('button', { name: 'Older ›' });
+        const older = inArea(page).getByRole('button', { name: 'Older cards' });
         // A row that has more than one page is paged all the way through
         while (await older.count() && await older.isEnabled()) {
           await older.click();
@@ -2028,10 +2156,12 @@ test.describe('Board, rows by step', () => {
     await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_reader_layout_v1', 'side'); });
     await openReal(page, { size: { width: 1280, height: 800 } });
     await rowButton(page, /Not tied to a step/).first().click();
-    const older = inArea(page).getByRole('button', { name: 'Older ›' });
-    await older.click();
-    await older.click();
-    await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).toContainText(/^‹ Newer\d+–\d+ of 10Older ›$/);
+    const older = inArea(page).getByRole('button', { name: 'Older cards' });
+    // As far as the pages go, up to two: the cards fill the line, so a wide canvas has fewer pages
+    for (let turn = 0; turn < 2 && await older.isEnabled(); turn += 1) { await older.click(); await frames(page, 4); }
+    await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).toContainText(/^\d+–\d+ of 10$/);
+    // Not the first page: that is what this test is about
+    await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).not.toContainText(/^1–/);
     const open = inArea(page).getByRole('button', { name: /^Open Picture/ }).first();
     const label = (await open.getAttribute('aria-label'))!;
     const wide = (await flow(page).boundingBox())!;
@@ -2062,8 +2192,8 @@ test.describe('Board, rows by step', () => {
     await collect();
     if (await pager.count()) {
       await expect(pager).toContainText(/1–\d+ of 10/);
-      const older = inArea(page).getByRole('button', { name: 'Older ›' });
-      const newer = inArea(page).getByRole('button', { name: '‹ Newer' });
+      const older = inArea(page).getByRole('button', { name: 'Older cards' });
+      const newer = inArea(page).getByRole('button', { name: 'Newer cards' });
       await expect(newer).toBeDisabled();
       while (await older.isEnabled()) { await older.click(); await frames(page, 4); await collect(); }
       await expect(older).toBeDisabled();
@@ -2083,23 +2213,18 @@ test.describe('Board, rows by step', () => {
     await expect(reading).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(reading).toHaveCount(0);
-    // Selecting text by dragging over the description does not open it
-    // The text is selected by dragging over it; on a busy machine the pointer sometimes misses, which is a plain press and opens the reader: that is closed and the drag is tried again
+    // Selecting text by dragging over the description does not open it, and one drag selects all of it, also right after the reader has closed
+    // (the keyboard is put back on the card that opened it, which must not happen in the middle of a drag: the focus moves and the selection stops)
     const selectText = async (target: Locator) => {
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        if (await reading.count()) { await page.keyboard.press('Escape'); await expect(reading).toHaveCount(0); }
-        await expect.poll(() => target.evaluate((element) => Boolean(element.closest('[inert]')))).toBe(false);
-        await page.evaluate(() => window.getSelection()?.removeAllRanges());
-        await frames(page, 10);
-        const box = (await target.boundingBox())!;
-        await page.mouse.move(box.x + 2, box.y + box.height / 2);
-        await page.mouse.down();
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 10 });
-        await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10 });
-        await page.mouse.up();
-        if (await page.evaluate(() => (window.getSelection()?.toString() ?? '') !== '')) return;
-      }
-      expect(await page.evaluate(() => window.getSelection()?.toString() ?? ''), 'the drag selected nothing').not.toBe('');
+      const wanted = (await target.textContent())!.trim();
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
+      const box = (await target.boundingBox())!;
+      await page.mouse.move(box.x + 1, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 10 });
+      await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, { steps: 10 });
+      await page.mouse.up();
+      expect((await page.evaluate(() => window.getSelection()?.toString() ?? '')).trim()).toBe(wanted);
     };
     await selectText(picture.getByText('The file 10.'));
     await frames(page, 6);
@@ -2112,13 +2237,13 @@ test.describe('Board, rows by step', () => {
     await page.keyboard.press('Escape');
     await expect(reading).toHaveCount(0);
     await page.evaluate(() => window.getSelection()?.removeAllRanges());
-    // A note whose text is cut: a press on it does what Read all does, and Read all still does it by itself
+    // A note whose text is cut: a press on it reads it whole, and so does its title button by itself
     const note = inArea(page).getByRole('article', { name: 'Newest on an open step' });
     await note.getByRole('heading', { name: 'Newest on an open step' }).click();
     await expect(page.getByRole('dialog', { name: 'Newest on an open step' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await note.getByRole('button', { name: 'Read all of Newest on an open step' }).click();
+    await note.getByRole('button', { name: 'Read Newest on an open step' }).click();
     await expect(page.getByRole('dialog', { name: 'Newest on an open step' })).toBeVisible();
     await page.keyboard.press('Escape');
     // A note that shows all of its text is not a brick: nothing happens, and it does not look pressable
@@ -2133,18 +2258,125 @@ test.describe('Board, rows by step', () => {
     await expect(reading).toHaveCount(0);
   });
 
-  test('keeps a compact note whose text starts with code or a table inside its card, with its byline and Read all', async ({ page }) => {
+  test('shows no Open or Read all button on a card: the title is the one control, a press on the card does what it does, and the keyboard opens it', async ({ page }) => {
+    await openReal(page, { size: { width: 1920, height: 1080 } });
+    const reading = board(page).getByRole('region', { name: 'Reader', exact: true });
+    const picture = inArea(page).getByRole('article', { name: 'Picture 0' });
+    const note = inArea(page).getByRole('article', { name: 'Newest on an open step' });
+    await expect(picture).toBeVisible();
+    await expect(note).toBeVisible();
+    // No button says "Open" or "Read all": what a card's buttons say is its title
+    for (const text of await inArea(page).locator('.react-flow__node-note button, .react-flow__node-file button, .react-flow__node-document button').allTextContents()) {
+      expect(text.trim(), 'a button of a card that is not its title').not.toMatch(/^(Open|Read all)$/);
+    }
+    await expect(inArea(page).getByText('Read all', { exact: true })).toHaveCount(0);
+    await expect(inArea(page).getByText('Open', { exact: true })).toHaveCount(0);
+    // Its title is a button named for what it does; a note whose text is cut reads, one whose text is whole has no button
+    const open = picture.getByRole('button', { name: 'Open Picture 0' });
+    await expect(open).toHaveText('Picture 0');
+    await expect(note.getByRole('button', { name: 'Read Newest on an open step' })).toHaveText('Newest on an open step');
+    await expect(inArea(page).getByRole('article', { name: 'Older on an open step' }).getByRole('button')).toHaveCount(0);
+    // The keyboard reaches the title and opens the card with Enter; the card shows a ring all round it while the title has the keyboard
+    const before = await picture.evaluate((element) => getComputedStyle(element).boxShadow);
+    await open.focus();
+    await expect(open).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    await expect(open).toBeFocused();
+    const ring = await picture.evaluate((element) => getComputedStyle(element).boxShadow);
+    expect(ring, 'a ring round the whole card, that was not there before').not.toBe(before);
+    expect(await open.evaluate((element) => getComputedStyle(element).outlineStyle), 'no second outline round the title').toBe('none');
+    await page.keyboard.press('Enter');
+    await expect(reading).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(reading).toHaveCount(0);
+    await expect(open).toBeFocused();
+    const read = note.getByRole('button', { name: 'Read Newest on an open step' });
+    await read.focus();
+    await page.keyboard.press('Space');
+    await expect(page.getByRole('dialog', { name: 'Newest on an open step' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(read).toBeFocused();
+  });
+
+  test('says who made a card last with a small mark, "you" or "AI", and the whole byline is its description', async ({ page }) => {
+    await openReal(page, { size: { width: 1920, height: 1080 } });
+    const picture = inArea(page).getByRole('article', { name: 'Picture 0' });
+    await expect(picture.getByText('AI', { exact: true })).toBeVisible();
+    await expect(picture).toHaveAccessibleDescription(/^by \w+ · \d+ (min|h)/);
+    const mark = picture.locator('[title^="by "]');
+    await expect(mark).toHaveAttribute('title', /^by \w+ · /);
+    await expect(mark).toHaveCSS('font-size', '12.5px');
+  });
+
+  test('says "Now" with a dot for the current step, and puts the page buttons and "+N more" on the line of the row\'s header', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    const now = rowButton(page, /^Now:/);
+    await expect(now).toContainText('Now');
+    await expect(now).not.toContainText(/current step/i);
+    await expect(now.locator('.board-now-dot')).toHaveCount(1);
+    // "+N more" is a quiet button on the line of its row's header, to the right of it
+    const more = rowButton(page, /^Show \d+ more for/).first();
+    await expect(more).toBeVisible();
+    await expect(more).toHaveText(/^\+\d+ more$/);
+    const moreRow = (await more.getAttribute('data-row-control'))!;
+    const head = inArea(page).locator(`[data-row-control="${moreRow}"]`).first();
+    const moreBox = (await more.boundingBox())!;
+    const headBox = (await inArea(page).locator(`.react-flow__node[data-id="${moreRow}"]`).boundingBox())!;
+    expect(Math.abs((moreBox.y + moreBox.height / 2) - (headBox.y + headBox.height / 2))).toBeLessThan(2);
+    expect(moreBox.x).toBeGreaterThanOrEqual(headBox.x + headBox.width - 1);
+    await expect(head).toBeVisible();
+    // The page buttons of an opened row are on its line too, as small icon buttons, and no card is on that line
+    await rowButton(page, /Not tied to a step/).first().click();
+    const pager = inArea(page).getByRole('navigation', { name: /Pages of/ });
+    await expect(pager).toBeVisible();
+    await frames(page, 30);
+    await expect(pager).toContainText(/^\d+–\d+ of 10$/);
+    const rowHead = (await inArea(page).locator('.react-flow__node[data-id="lane:board"]').boundingBox())!;
+    const pagerBox = (await pager.boundingBox())!;
+    expect(Math.abs((pagerBox.y + pagerBox.height / 2) - (rowHead.y + rowHead.height / 2))).toBeLessThan(2);
+    expect(pagerBox.x).toBeGreaterThanOrEqual(rowHead.x + rowHead.width - 1);
+    for (const button of await pager.getByRole('button').all()) expect((await button.boundingBox())!.width).toBeLessThanOrEqual(32);
+    for (const card of await inArea(page).locator('.react-flow__node-file, .react-flow__node-note').all()) {
+      const box = (await card.boundingBox())!;
+      expect(box.y + box.height <= rowHead.y + 1 || box.y >= rowHead.y + rowHead.height - 1, 'a card on the line of the header').toBe(true);
+    }
+  });
+
+  test('says the waiting decisions without the Area\'s title, and the Area\'s header does not say it twice', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    const waiting = inArea(page).getByRole('article', { name: 'Waits for you' });
+    await expect(waiting).toBeVisible();
+    await expect(waiting).toContainText('Which time zone?');
+    await expect(waiting).not.toContainText('A Board tab shows the real work');
+    const header = inArea(page).locator('header').first();
+    await expect(header).toContainText('A Board tab shows the real work');
+    await expect(header).toContainText('Current');
+    await expect(header).not.toContainText(/wait/i);
+  });
+
+  test('keeps a compact note whose text starts with code or a table inside its card, with its mark and its title button', async ({ page }) => {
     await openReal(page, { size: { width: 1920, height: 1080 } });
     await rowButton(page, /12 done steps/).click();
     await expectClearOfControls(page);
     for (const title of ['Starts with code', 'Starts with a table']) {
       const note = inArea(page).getByRole('article', { name: title });
       await expect(note).toBeVisible();
-      await expect(note.getByRole('button', { name: `Read all of ${title}` })).toBeVisible();
+      await expect(note.getByRole('button', { name: `Read ${title}` })).toBeVisible();
       await expect(note).toHaveCSS('cursor', 'pointer');
       // The code and the table are drawn at 11 px or more on the screen as well
       const sizes = await note.locator('pre, pre *, th, td').evaluateAll((els) => els.map((el) => parseFloat(getComputedStyle(el).fontSize) * 0.9));
       expect(sizes.filter((size) => size < 11), "code and table sizes").toEqual([]);
+      // No band above the code and no half line: the text starts at the top of its box and its last visible line is whole
+      const fit = await note.locator('.board-text-compact').evaluate((body) => {
+        const box = body.getBoundingClientRect();
+        const first = body.querySelector('pre, table');
+        const zoom = box.height / (body as HTMLElement).offsetHeight;
+        const top = first ? (first.getBoundingClientRect().top - box.top) / zoom : 0;
+        return { top, lines: Math.floor((body as HTMLElement).offsetHeight / 17), height: box.height };
+      });
+      expect(fit.top, 'a band above the first block').toBeLessThanOrEqual(1);
+      expect(fit.lines, 'two whole lines').toBeGreaterThanOrEqual(2);
       await note.getByRole('heading', { name: title }).click();
       await expect(page.getByRole('dialog', { name: title })).toBeVisible();
       await page.keyboard.press('Escape');
@@ -2154,7 +2386,7 @@ test.describe('Board, rows by step', () => {
 
   test('draws every text of the rows at 11 px or more on the screen', async ({ page }) => {
     await openReal(page, { size: { width: 1280, height: 800 } });
-    for (const open of [null, /^Current step:/, /Not tied to a step/, /12 done steps/]) {
+    for (const open of [null, /^Now:/, /Not tied to a step/, /12 done steps/]) {
       if (open) await rowButton(page, open).first().click();
       const scale = (await transformOf(page)).scale;
       const small = await inArea(page).locator('.react-flow__node').evaluateAll((els, zoom) => {
@@ -2179,7 +2411,7 @@ test.describe('Board, rows by step', () => {
     await page.clock.install();
     await openReal(page, { size: { width: 1280, height: 800 } });
     await rowButton(page, /Not tied to a step/).first().click();
-    const older = inArea(page).getByRole('button', { name: 'Older ›' });
+    const older = inArea(page).getByRole('button', { name: 'Older cards' });
     await older.focus();
     await expect(older).toBeFocused();
     // The cards are fewer (a live change): the row fits on one page, and the pager is gone
@@ -2192,8 +2424,8 @@ test.describe('Board, rows by step', () => {
   test('moves the keyboard to the other page button when the one it was on has no page left', async ({ page }) => {
     await openReal(page, { size: { width: 1280, height: 800 } });
     await rowButton(page, /Not tied to a step/).first().click();
-    const older = inArea(page).getByRole('button', { name: 'Older ›' });
-    const newer = inArea(page).getByRole('button', { name: '‹ Newer' });
+    const older = inArea(page).getByRole('button', { name: 'Older cards' });
+    const newer = inArea(page).getByRole('button', { name: 'Newer cards' });
     await older.focus();
     for (let turn = 0; turn < 12 && await older.isEnabled(); turn += 1) { await page.keyboard.press('Enter'); await frames(page, 4); }
     await expect(older).toBeDisabled();
@@ -2203,11 +2435,11 @@ test.describe('Board, rows by step', () => {
     await expect(older).toBeFocused();
   });
 
-  test('says "Next step" and never "Current" in an Area that is not the current one', async ({ page }) => {
+  test('says "Next" and never "Now" in an Area that is not the current one', async ({ page }) => {
     await openReal(page, { area: /Later work/ });
-    await expect(rowButton(page, /^Next step: Plan the later work/)).toBeVisible();
-    await expect(rowButton(page, /Current step/)).toHaveCount(0);
-    await expect(inArea(page).getByText('Current step')).toHaveCount(0);
+    await expect(rowButton(page, /^Next: Plan the later work/)).toBeVisible();
+    await expect(rowButton(page, /^Now/)).toHaveCount(0);
+    await expect(inArea(page).getByText('Now', { exact: true })).toHaveCount(0);
     await expect(inArea(page).getByRole('article', { name: 'Later note' })).toBeVisible();
   });
 
@@ -2222,11 +2454,11 @@ test.describe('Board, rows by step', () => {
     await expect(open).toBeFocused();
     // The done steps are many: the opened row pages through them
     await expect(inArea(page).getByText(DONE_STEP(0), { exact: true }).first()).toBeVisible();
-    const older = inArea(page).getByRole('button', { name: 'Older ›' });
+    const older = inArea(page).getByRole('button', { name: 'Older cards' });
     for (let page_ = 0; page_ < 6 && !(await inArea(page).getByRole('article', { name: 'On a done step' }).count()) && await older.count() && await older.isEnabled(); page_ += 1) await older.click();
     await expect(inArea(page).getByRole('article', { name: 'On a done step' })).toBeVisible();
     // One row is open at a time: the others are folded to one line
-    await expect(rowButton(page, /^Current step/)).toHaveAttribute('aria-expanded', 'false');
+    await expect(rowButton(page, /^Now/)).toHaveAttribute('aria-expanded', 'false');
     await open.click();
     await expect(rowButton(page, /12 done steps/)).toHaveAttribute('aria-expanded', 'false');
     await expect(rowButton(page, /12 done steps/)).toBeFocused();
@@ -2250,7 +2482,7 @@ test.describe('Board, rows by step', () => {
     await expect(rowButton(page, /Not tied to a step/).first()).toHaveAttribute('aria-expanded', 'true');
     const reading = board(page).getByRole('region', { name: 'Reader', exact: true });
     // A dialog first
-    await inArea(page).getByRole('button', { name: 'Read all of A loose note' }).or(inArea(page).getByRole('button', { name: /^Open Picture/ }).first()).first().click();
+    await inArea(page).getByRole('button', { name: 'Read A loose note' }).or(inArea(page).getByRole('button', { name: /^Open Picture/ }).first()).first().click();
     await expect(reading.or(page.getByRole('dialog'))).toBeVisible();
     if (await page.getByRole('dialog').count()) {
       await page.keyboard.press('Escape');
@@ -2283,7 +2515,7 @@ test.describe('Board, rows by step', () => {
       await page.keyboard.press('Tab');
       reached = await page.evaluate(() => {
         const element = document.activeElement as HTMLElement | null;
-        return element?.closest('#board-area article') && /^(Open|Read all of)/.test(element.getAttribute('aria-label') ?? '') ? (element.getAttribute('aria-label') ?? null) : null;
+        return element?.closest('#board-area article') && /^(Open|Read) /.test(element.getAttribute('aria-label') ?? '') ? (element.getAttribute('aria-label') ?? null) : null;
       });
     }
     expect(reached, 'Tab never reached a card button').not.toBeNull();
@@ -2293,6 +2525,7 @@ test.describe('Board, rows by step', () => {
   });
 
   test('lets the Board index reach every item by a jump, with the card in view, highlighted and focused, including one on a later page', async ({ page }) => {
+    test.slow();
     await openReal(page, { size: { width: 1280, height: 800 }, nav: true });
     await board(page).getByRole('button', { name: 'Board ›' }).click();
     await expect(inArea(page)).toHaveCount(0);
@@ -2346,8 +2579,8 @@ test.describe('Board, rows by step', () => {
   test('folds the rows with the least priority first when the canvas is short, and a press opens one', async ({ page }) => {
     await openReal(page, { size: { width: 1280, height: 640 } });
     // Something is folded (commits, then what is tied to no step ...), and the current step and the waiting decisions never are
-    await expect(rowButton(page, /^Current step/)).toBeVisible();
-    await expect(inArea(page).getByRole('article', { name: /real work/ })).toBeVisible();
+    await expect(rowButton(page, /^Now/)).toBeVisible();
+    await expect(inArea(page).getByRole('article', { name: 'Waits for you' })).toBeVisible();
     const folded = inArea(page).locator('.react-flow__node-fold');
     expect(await folded.count()).toBeGreaterThanOrEqual(2);
     await expectClearOfControls(page);
@@ -2463,7 +2696,7 @@ test.describe('Board, areas', () => {
     await stepIntoArea(page, 'Reports export to CSV');
     const stepped = canvas.locator('#board-area');
     await expect(stepped).toBeVisible();
-    await expect(stepped.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
+    await expect(stepped.getByRole('article', { name: 'Waits for you' })).toBeVisible();
     await expect(stepped.getByRole('article', { name: 'Export note' })).toBeVisible();
     await expect(stepped.getByRole('heading', { name: 'Report rows load fast' })).toHaveCount(0);
     await expect(stepped.getByRole('article', { name: 'Rows note' })).toHaveCount(0);
@@ -2479,7 +2712,7 @@ test.describe('Board, areas', () => {
     await expect(stepped).toBeVisible();
     await expect(stepped.getByRole('heading', { name: 'Report rows load fast' })).toBeVisible();
     await expect(stepped.getByRole('article', { name: 'Rows note' })).toBeVisible();
-    await expect(stepped.getByRole('article', { name: 'Reports export to CSV' })).toHaveCount(0);
+    await expect(stepped.getByRole('article', { name: 'Waits for you' })).toHaveCount(0);
     await expect(stepped.getByRole('article', { name: 'Export note' })).toHaveCount(0);
   });
 
@@ -2709,7 +2942,7 @@ test.describe('Board, live', () => {
     // It is drawn behind the part that is on show, where it has no size yet.
     await workspaceNav(page).getByRole('link', { name: 'Board' }).click();
     await reveal(page, board(page).getByRole('article', { name: 'A long note' }));
-    await expect(board(page).getByRole('article', { name: 'A long note' }).getByRole('button', { name: 'Read all of A long note' })).toBeVisible();
+    await expect(board(page).getByRole('article', { name: 'A long note' }).getByRole('button', { name: 'Read A long note' })).toBeVisible();
   });
 
   /**
@@ -3200,7 +3433,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expectNoSeriousViolations(page, '[aria-label="Board"]');
       await revealAll(page);
       await expect(canvas.getByRole('article', { name: 'Export flow' }).getByRole('img', { name: 'Export flow' })).toBeAttached();
-      await expect(canvas.getByRole('button', { name: 'Read all of Export leaks memory' })).toBeVisible();
+      await expect(canvas.getByRole('button', { name: 'Read Export leaks memory' })).toBeVisible();
       await expect(canvas.locator('#board-area .react-flow__edge')).toHaveCount(2);
       await expectNoSeriousViolations(page, '[aria-label="Board"]');
 
@@ -3209,7 +3442,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expectNoSeriousViolations(page, '[aria-label="Board"]');
 
       // The whole text of a card, in its dialog.
-      await canvas.locator('#board-area').getByRole('button', { name: 'Read all of Export leaks memory' }).focus();
+      await canvas.locator('#board-area').getByRole('button', { name: 'Read Export leaks memory' }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('dialog', { name: 'Export leaks memory' })).toBeVisible();
       await expectNoSeriousViolations(page, '[role="dialog"]');

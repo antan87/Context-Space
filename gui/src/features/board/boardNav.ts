@@ -5,7 +5,7 @@
  * exact node IDs with areaBoardLayout for seamless one-click jump from overview or across areas.
  */
 
-import type { ReaderTarget } from './boardActions.js';
+import { bylineText, type ReaderTarget } from './boardActions.js';
 import { stepsText, waitingText, type BoardArea } from './boardAreas.js';
 import { cardOrder, fileTypeOf, uniqueId, type FileType } from './boardLayout.js';
 
@@ -265,7 +265,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
                 : ft === 'pdf'
                   ? { text: 'PDF', variant: 'outline' }
                   : undefined,
-          readerTarget: { path: card.path, title: card.title, card: card.id },
+          readerTarget: { path: card.path, title: card.title, card: card.id, ...(card.description ? { text: card.description } : {}), byline: bylineText(card) },
           searchText: [card.title, card.description, card.path, ft, area.data.title].join(' ').toLowerCase(),
         };
         if (isPic) {

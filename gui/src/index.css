@@ -697,6 +697,14 @@
 .board-text blockquote { padding-inline-start: 0.75em; }
 .board-text :has(> pre) { margin-block: 4px; }
 .board-text pre :is(code, span), .board-text table, .board-text :is(th, td) { font-size: inherit; line-height: inherit; }
+/* The reader's closed one-line note: a first code line or table row is plain inline text, like any other line. */
+.board-text[data-closed] :has(> pre) { display: inline; margin: 0; }
+.board-text[data-closed] pre { display: inline; margin: 0; padding: 0; border: 0; background: none; border-radius: 0; font: inherit; white-space: pre-line; }
+.board-text[data-closed] :is(pre, code, th) { color: inherit; font-weight: inherit; }
+.board-text[data-closed] :has(> pre) > button { display: none; }
+.board-text[data-closed] :is(table, thead, tbody, tr) { display: block; }
+.board-text[data-closed] :is(th, td) { display: inline; padding: 0; border: 0; }
+.board-text[data-closed] :is(th, td)::after { content: ' '; }
 .board-text pre { padding: 6px 8px; font-size: 12.5px; line-height: 16px; }
 
 /* A grab cursor on the board itself and on whatever can be dragged (the library gives those nodes theirs). A node that the
@@ -793,3 +801,15 @@
 
 /* A card that opens on a press: it darkens to the accent, and stays opaque so the dot grid of the board never shows through. */
 .board-brick:hover { background-color: color-mix(in oklab, var(--accent) 30%, var(--card)); }
+
+/* The chevron of a row's label line shows when the pointer or the keyboard is on the row, and always where there is no hover. */
+.board-flow .board-row-chevron { opacity: 0; transition: opacity 120ms ease-out; }
+.board-flow .board-row-control:is(:hover, :focus-visible) .board-row-chevron { opacity: 1; }
+@media (hover: none) { .board-flow .board-row-chevron { opacity: 1; } }
+/* The Now dot breathes. */
+@keyframes board-now-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: no-preference) { .board-now-dot { animation: board-now-breathe 2.4s ease-in-out infinite; } }
+/* The text of a compact card has a line of 17px, and a code block at its start shows whole lines: no band above it. */
+.board-text-compact :has(> pre) { margin-block: 0; }
+.board-text-compact pre { margin-block: 0; padding-block: 0; line-height: 17px; }
+.board-text-compact pre :is(code, span) { line-height: 17px; }
