@@ -23,6 +23,20 @@ describe('cleanBoard', () => {
     expect(board.positions).toEqual({ [uuid(1)]: { x: 120, y: 40 }, 'checkpoint:reports-export-to-csv': { x: 400, y: 0 } });
   });
 
+  it('reads the step, look and lookAt of a card leniently, and drops what is not usable', () => {
+    const board = cleanBoard(reply({ cards: [
+      note(1, { step: 'build-it', look: ' check this ', lookAt: AT }),
+      note(2, { step: 'Not A Key', look: 'two\nlines', lookAt: AT }),
+      note(3, { step: 4, look: 7, lookAt: 'x' }),
+      note(4, { look: 'y'.repeat(300), lookAt: 'not a time' }),
+    ] }));
+    expect(board.cards[0]).toMatchObject({ step: 'build-it', look: 'check this', lookAt: AT });
+    expect('step' in board.cards[1]! || 'look' in board.cards[1]!).toBe(false);
+    expect('step' in board.cards[2]! || 'look' in board.cards[2]!).toBe(false);
+    expect(board.cards[3]!.look).toHaveLength(140);
+    expect('lookAt' in board.cards[3]!).toBe(false);
+  });
+
   it('refuses a reply that is not a board, so an older backend is not read as an empty one', () => {
     for (const raw of [null, undefined, 'x', 7, [], {}, { cards: [] }, { revision: 1 }, { revision: '1', cards: [] }, { revision: -1, cards: [] }, { revision: 1.5, cards: [] }, { revision: 1, cards: {} }]) {
       expect(() => cleanBoard(raw), JSON.stringify(raw)).toThrow(/does not read/);

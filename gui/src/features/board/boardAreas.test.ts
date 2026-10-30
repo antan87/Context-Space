@@ -12,7 +12,6 @@ import {
   overviewLayout,
 } from './boardAreas.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
-import { BOARD_SIZE } from './boardLayout.js';
 
 describe('boardAreas', () => {
   const samplePlan: PlanFileView = {
@@ -379,43 +378,20 @@ describe('boardAreas', () => {
   });
 
   describe('areaBoardLayout', () => {
-    it('produces deterministic coordinates with collapsible: false and fits within screen', () => {
+    it('produces deterministic coordinates and keeps the waiting frame fixed', () => {
       const areas = buildBoardAreas({
         plan: samplePlan,
         documents: [sampleDoc('d1', 'Doc 1', 'csv')],
-        board: {
-          cards: [sampleCard('c1', 'Card 1', 'checkpoint:csv')],
-          positions: {},
-          links: [],
-        },
+        board: { cards: [sampleCard('c1', 'Card 1', 'checkpoint:csv')], positions: {}, links: [] },
       });
-
       const csvArea = areas.find((a) => a.id === 'checkpoint:csv')!;
       const nodes1 = areaBoardLayout(csvArea);
-      const nodes2 = areaBoardLayout(csvArea);
-
-      expect(nodes1).toEqual(nodes2);
-
+      expect(nodes1).toEqual(areaBoardLayout(csvArea));
       const frameNode = nodes1.find((n) => n.id === 'checkpoint:csv');
-      expect(frameNode).toBeDefined();
       expect(frameNode?.type).toBe('checkpoint');
       expect((frameNode as any).data.collapsible).toBe(false);
-
-      const fit = fitBoundsView(nodes1, { width: 1440, height: 900 });
-      expect(fit).not.toBeNull();
-      expect(fit!.zoom).toBeLessThanOrEqual(1);
-
-      for (const node of nodes1.filter((n) => !n.parentId)) {
-        const screenLeft = node.position.x * fit!.zoom + fit!.x;
-        const screenRight = (node.position.x + (node.width ?? BOARD_SIZE.card)) * fit!.zoom + fit!.x;
-        const screenTop = node.position.y * fit!.zoom + fit!.y;
-        const screenBottom = (node.position.y + (node.height ?? 0)) * fit!.zoom + fit!.y;
-
-        expect(screenLeft).toBeGreaterThanOrEqual(-0.01);
-        expect(screenRight).toBeLessThanOrEqual(1440 + 0.01);
-        expect(screenTop).toBeGreaterThanOrEqual(-0.01);
-        expect(screenBottom).toBeLessThanOrEqual(900 + 0.01);
-      }
+      expect((frameNode as any).data.waitingOnly).toBe(true);
+      expect(nodes1.every((n) => n.parentId === undefined)).toBe(true);
     });
 
     it('accurately sets waitingKeys when decision 0 is answered and decision 1 is waiting', () => {

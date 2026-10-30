@@ -442,6 +442,9 @@ describe('cards', () => {
     const { board: away } = await changeBoard(root, [{ op: 'update_card', id, area: 'checkpoint:outcome-one' }], as('user'));
     expect(away.cards[0]).toMatchObject({ area: 'checkpoint:outcome-one' });
     expect('step' in away.cards[0]!).toBe(false);
+    // Naming a known step while clearing the area stores the step's own area.
+    const { board: stepped } = await changeBoard(root, [{ op: 'update_card', id, step: 'loose-step', area: null }], as('user'));
+    expect(stepped.cards[0]).toMatchObject({ step: 'loose-step', area: 'plan:own' });
     // A step the plan does not know is left alone.
     const unknown = board.cards[2]!.id;
     const { board: stays } = await changeBoard(root, [{ op: 'update_card', id: unknown, area: 'plan:own' }], as('user'));

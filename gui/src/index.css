@@ -696,7 +696,8 @@
 .board-text :is(li, blockquote) > p { margin-block: 0; }
 .board-text blockquote { padding-inline-start: 0.75em; }
 .board-text :has(> pre) { margin-block: 4px; }
-.board-text pre { padding: 6px 8px; font-size: 11px; line-height: 16px; }
+.board-text pre :is(code, span), .board-text table, .board-text :is(th, td) { font-size: inherit; line-height: inherit; }
+.board-text pre { padding: 6px 8px; font-size: 12.5px; line-height: 16px; }
 
 /* A grab cursor on the board itself and on whatever can be dragged (the library gives those nodes theirs). A node that the
    keyboard can move shows its focus on the card inside it, which has the rounded corners. */
@@ -779,6 +780,16 @@
   .board-area-enter,
   .board-area-exit { animation: none; }
 }
+.board-flow .board-row-control:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Nothing is dragged inside an Area, but a card is still pressed on and its text read and selected. */
+.board-flow-rows .react-flow__node { pointer-events: all !important; cursor: default; user-select: text; -webkit-user-select: text; }
+/* Rows slide to their new place when one opens or folds. */
+@media (prefers-reduced-motion: no-preference) {
+  .board-flow-rows .react-flow__node { transition: transform 160ms ease-out, height 160ms ease-out; }
+}
 .board-flow .board-area:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .board-flow .react-flow__minimap-node.board-mini-area { fill: var(--primary); fill-opacity: 0.55; }
 
+
+/* A card that opens on a press: it darkens to the accent, and stays opaque so the dot grid of the board never shows through. */
+.board-brick:hover { background-color: color-mix(in oklab, var(--accent) 30%, var(--card)); }

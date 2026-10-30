@@ -115,6 +115,11 @@ export type CheckpointData = {
   moreWaiting: number;
   /** Whether the checkpoint shows a fold button when open. True by default when omitted. */
   collapsible?: boolean;
+  /** Inside an Area the steps are rows of their own: the frame then shows only the header and the waiting decisions. */
+  waitingOnly?: boolean;
+  /** For the waiting frame inside an Area: the row it opens and closes, and whether it is open. */
+  rowId?: string;
+  waitingExpanded?: boolean;
 };
 
 export type DocumentData = {
@@ -129,11 +134,12 @@ export type DocumentData = {
   /** What it is kept as, in the workspace (a stored text document), or the link it stands for. A document has one of the two. */
   filename?: string;
   url?: string;
+  compact?: boolean;
 };
 
-export type CommitData = { sha: string; subject: string; author: string; at: string };
+export type CommitData = { sha: string; subject: string; author: string; at: string; compact?: boolean };
 /** What stands where a lane would be, when there is nothing to draw in it. */
-export type PlaceholderData = { text: string };
+export type PlaceholderData = { text: string; compact?: boolean };
 
 /** What a file card shows of its file: a picture, or a kind of file to open. */
 export type FileType = 'image' | 'html' | 'pdf' | 'markdown' | 'other';
@@ -151,6 +157,8 @@ export type CardData = {
   updatedAt: string;
   /** Made or changed in the last minute by someone other than the user: it gets a brief highlight. */
   fresh: boolean;
+  /** Drawn as it is inside an Area: the compact variant of the card. */
+  compact?: boolean;
 };
 export type NoteData = CardData;
 export type FileCardData = CardData & { path: string; fileType: FileType };
@@ -162,7 +170,35 @@ export type CommitNode = Node<CommitData, 'commit'>;
 export type PlaceholderNode = Node<PlaceholderData, 'placeholder'>;
 export type NoteNode = Node<NoteData, 'note'>;
 export type FileNode = Node<FileCardData, 'file'>;
-export type BoardNode = LaneNode | CheckpointNode | DocumentNode | CommitNode | PlaceholderNode | NoteNode | FileNode;
+/** The tile at the left of a row inside an Area: a plan step, or the name of a group of things. Pressing it opens the row. */
+export type RowHeadData = {
+  rowId: string;
+  title: string;
+  /** The step's text (up to two lines), when the row is a plan step. */
+  text?: string;
+  caption?: string;
+  /** `current`: the open step the work is on. `next`: the first open step of an Area that is not the current one. `done`: a finished step. `open`: an open step. `plain`: a row that is not a step. */
+  state: 'current' | 'next' | 'open' | 'done' | 'plain';
+  expanded: boolean;
+  /** What the row holds, in words ("10 cards"), and whether it holds nothing. */
+  summary: string;
+  empty: boolean;
+  /** The header of the current step (or the next one): it says all it can of the step, in up to two lines. */
+  prominent: boolean;
+  /** A tile that only tells (a finished step inside the opened done row), not a button. */
+  static?: boolean;
+};
+/** A row folded to one line: its title and what it holds. Pressing it opens the row. */
+export type FoldData = { rowId: string; title: string; summary: string; current: boolean; warning?: string; /** The first thing the row holds that is worth saying, in the muted colour: red is for errors. */ note?: string; /** The things of the row, which are not drawn: a line to one of them goes to the row. */ holds: string[] };
+/** The tile at the end of a row that has more than fits: "+N more". Pressing it opens the row. */
+export type MoreData = { rowId: string; title: string; count: number; rowTitle: string; static?: boolean; /** The things the tile stands for, which are not drawn. */ holds: string[] };
+/** The buttons that page through an opened row: "‹ Newer", "1–6 of 10", "Older ›". */
+export type PagerData = { rowId: string; title: string; page: number; pages: number; from: number; to: number; total: number; /** The things of the row that are not on this page, which are not drawn: a line to one of them goes to the buttons. */ holds: string[] };
+export type RowHeadNode = Node<RowHeadData, 'step'>;
+export type PagerNode = Node<PagerData, 'pager'>;
+export type FoldNode = Node<FoldData, 'fold'>;
+export type MoreNode = Node<MoreData, 'more'>;
+export type BoardNode = LaneNode | CheckpointNode | DocumentNode | CommitNode | PlaceholderNode | NoteNode | FileNode | RowHeadNode | FoldNode | MoreNode | PagerNode;
 
 export interface BoardSources {
   /** A source that is missing (still loading, or it failed) leaves its part of the board out. */
@@ -179,7 +215,7 @@ export interface BoardSources {
   folds?: Folds;
 }
 
-/** Nothing is linked or picked, and nothing can be moved here: the cards that may be dragged are marked by `withMoves` (boardMoves). */
+/** Nothing is linked, picked or dragged. */
 const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
 
 /** Above the columns and the cards in them, so a card put on a column stays in front. A pinned card stays in front of the rest. */
@@ -350,7 +386,11 @@ export function currentFrame<T extends CheckpointNode>(frames: T[]): T | undefin
 }
 
 /** How tall a frame is for this many steps and waiting decisions, each cut to its cap. A frame with no steps says so in one row. */
-export function frameHeight(stepCount: number, waitingCount: number): number {
+export function frameHeight(stepCount: number, waitingCount: number, waitingOnly = false): number {
+  if (waitingOnly) {
+    const waitingShown = Math.min(waitingCount, BOARD_LIMITS.waiting);
+    return BOARD_SIZE.frameHeader + waitingShown * BOARD_SIZE.decisionRow + (waitingCount > waitingShown ? BOARD_SIZE.moreRow : 0) + pad;
+  }
   const steps = Math.min(stepCount, BOARD_LIMITS.steps);
   const waiting = Math.min(waitingCount, BOARD_LIMITS.waiting);
   return BOARD_SIZE.frameHeader
@@ -569,6 +609,9 @@ export function sidesBetween(from: Rect, to: Rect): [Side, Side] {
 export function nodeTitle(node: BoardNode): string {
   switch (node.type) {
     case 'commit': return `commit ${node.data.sha}`;
+    case 'fold': return node.data.holds.length > 0 ? `${node.data.title} (${node.data.holds.length} more)` : node.data.title;
+    case 'more': return `${node.data.rowTitle} (${node.data.count} more)`;
+    case 'pager': return `${node.data.title} (${node.data.holds.length} more)`;
     case 'lane': return node.data.group ? node.data.title : node.id;
     case 'placeholder': return node.id;
     default: return node.data.title;
@@ -593,7 +636,10 @@ export function boardEdges(nodes: BoardNode[], links: BoardLink[]): Edge[] {
   const rects = nodeRects(nodes);
   // What a folded lane holds is not drawn, but it can still be named by a line, and the line then goes to the lane.
   const hidden = new Map<string, string>();
-  for (const node of nodes) if (node.type === 'lane' && node.data.group?.open === false) for (const id of node.data.group.holds) hidden.set(id, node.id);
+  for (const node of nodes) {
+    if (node.type === 'lane' && node.data.group?.open === false) for (const id of node.data.group.holds) hidden.set(id, node.id);
+    else if (node.type === 'fold' || node.type === 'more' || node.type === 'pager') for (const id of node.data.holds) hidden.set(id, node.id);
+  }
   const resolve = nodeResolver([...byId.keys(), ...hidden.keys()]);
   const edges: Edge[] = [];
   for (const link of links) {

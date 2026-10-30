@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from 'react';
+import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type Ref, type RefObject } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { ChevronDown, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, PanelRightOpen, Pin, type LucideIcon } from 'lucide-react';
 
@@ -9,9 +9,9 @@ import { Button } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
 import { cn } from '../../lib/utils.js';
 import { agoText } from '../plan/whatsNew.js';
-import { BoardActionsContext, BoardReadingContext, cardLinks, documentFileUrl } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, cardLinks, documentFileUrl, firstControl } from './boardActions.js';
 import { stepsText, waitingText, type AreaNode } from './boardAreas.js';
-import { BOARD_SIZE, authorName, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type LaneNode, type NoteNode, type PlaceholderNode } from './boardLayout.js';
+import { BOARD_SIZE, authorName, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
@@ -99,7 +99,7 @@ function FrameFacts({ data }: { data: CheckpointData }) {
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
   return <>
     <div className="mt-1.5 flex h-5 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
-      {data.kind === 'checkpoint' && <Badge variant={data.done ? 'success' : 'outline'}>{data.done ? 'Done' : 'Not done'}</Badge>}
+      {data.kind === 'checkpoint' && <Badge className="sm:text-[12.5px]" variant={data.done ? 'success' : 'outline'}>{data.done ? 'Done' : 'Not done'}</Badge>}
       <span>{stepsText(data)}</span>
       {waiting > 0 && <Badge variant="warning">{waitingText(waiting)}</Badge>}
     </div>
@@ -113,6 +113,38 @@ function FrameFacts({ data }: { data: CheckpointData }) {
 const planSubtitle = (data: CheckpointData, open: boolean) =>
   open ? 'Steps and decisions outside the checkpoints'
     : data.stepsTotal ? `${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'} outside the checkpoints` : 'Decisions outside the checkpoints';
+
+/**
+ * The decisions that wait for you, inside an Area: the Area's name and progress in one line, the first decisions, and a button that
+ * opens the rest (and, when they are open, closes them again).
+ */
+function WaitingFrame({ data, border, titleId }: { data: CheckpointData; border: string; titleId: string }) {
+  const actions = useContext(BoardActionsContext);
+  const waiting = data.waiting.length + data.moreWaiting;
+  const expanded = data.waitingExpanded === true;
+  return <article tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}>
+    <Anchors />
+    <header className="flex flex-col justify-center border-b border-border/60 px-3" style={{ height: BOARD_SIZE.frameHeader - 36 }}>
+      <h2 id={titleId} className="truncate text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>
+      <div className="flex h-5 items-center gap-1.5 whitespace-nowrap text-[12.5px] text-muted-foreground">
+        {data.kind === 'checkpoint' && <Badge className="text-[12.5px] sm:text-[12.5px]" variant={data.done ? 'success' : 'outline'}>{data.done ? 'Done' : 'Not done'}</Badge>}
+        <span>{stepsText(data)}</span>
+        {waiting > 0 && <Badge className="sm:text-[12.5px]" variant="warning">{waitingText(waiting)}</Badge>}
+      </div>
+    </header>
+    <ul aria-label="Decisions waiting for you" className="min-h-0 flex-1">
+      {data.waiting.map((decision) => <li key={decision.key} className="flex items-start gap-2 border-l-2 border-warning bg-warning/8 px-3 py-1 text-[12.5px] leading-4 text-foreground" style={{ height: BOARD_SIZE.decisionRow }}>
+        <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
+        <span className="line-clamp-2" title={decision.question}><span className="sr-only">Waiting for you: </span>{decision.question}</span>
+      </li>)}
+    </ul>
+    {(data.moreWaiting > 0 || expanded) && <button
+      type="button" data-row-control={data.rowId} aria-expanded={expanded} disabled={!actions} onClick={() => data.rowId && actions?.toggleRow?.(data.rowId)}
+      aria-label={expanded ? 'Show fewer decisions waiting for you' : `Show ${data.moreWaiting} more decisions waiting for you`}
+      className="board-row-control nodrag nopan flex shrink-0 items-center justify-center border-t border-border/60 px-3 text-[12.5px] font-medium text-foreground hover:bg-accent/40" style={{ height: BOARD_SIZE.moreRow + 6 }}
+    >{expanded ? 'Show fewer' : `+${data.moreWaiting} more`}</button>}
+  </article>;
+}
 
 /**
  * One checkpoint of PLAN.md: whether it is done, how far its steps are, what waits for the user, and the first steps.
@@ -129,11 +161,12 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
         : [data.title, data.done ? 'done' : 'not done', stepsText(data).toLowerCase(), waiting > 0 && waitingText(waiting).toLowerCase()])}>
       <span className="block h-10 w-full pr-6">
         <span className={cn('block w-full text-sm font-semibold leading-5 text-foreground', data.kind === 'plan' ? 'truncate' : 'line-clamp-2')} title={data.title}>{data.title}</span>
-        {data.kind === 'plan' && <span className="block w-full truncate text-xs leading-5 text-muted-foreground">{planSubtitle(data, false)}</span>}
+        {data.kind === 'plan' && <span className="block w-full truncate text-[12.5px] leading-5 text-muted-foreground">{planSubtitle(data, false)}</span>}
       </span>
       <FrameFacts data={data} />
     </FoldedGroup>;
   }
+  if (data.waitingOnly) return <WaitingFrame data={data} border={border} titleId={titleId} />;
   return <article
     tabIndex={-1}
     aria-labelledby={titleId}
@@ -144,21 +177,21 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
       {data.kind === 'plan'
         ? <div className="h-10 pr-6">
           <h2 id={titleId} className="truncate text-sm font-semibold leading-5 text-foreground">{data.title}</h2>
-          <p className="truncate text-xs leading-5 text-muted-foreground">{planSubtitle(data, true)}</p>
+          <p className="truncate text-[12.5px] leading-5 text-muted-foreground">{planSubtitle(data, true)}</p>
         </div>
         : <h2 id={titleId} className="line-clamp-2 h-10 pr-6 text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>}
       <FrameFacts data={data} />
       {data.collapsible !== false && <FoldButton id={id} title={data.title} />}
     </header>
     {data.waiting.length > 0 && <ul aria-label="Decisions waiting for you">
-      {data.waiting.map((decision) => <li key={decision.key} className="flex items-start gap-2 border-l-2 border-warning bg-warning/8 px-3 py-1 text-xs leading-4 text-foreground" style={{ height: BOARD_SIZE.decisionRow }}>
+      {data.waiting.map((decision) => <li key={decision.key} className="flex items-start gap-2 border-l-2 border-warning bg-warning/8 px-3 py-1 text-[12.5px] leading-4 text-foreground" style={{ height: BOARD_SIZE.decisionRow }}>
         <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
         <span className="line-clamp-2" title={decision.question}><span className="sr-only">Waiting for you: </span>{decision.question}</span>
       </li>)}
-      {data.moreWaiting > 0 && <li className="flex items-center border-l-2 border-warning bg-warning/8 px-3 text-xs text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreWaiting} more waiting</li>}
+      {data.moreWaiting > 0 && <li className="flex items-center border-l-2 border-warning bg-warning/8 px-3 text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreWaiting} more waiting</li>}
     </ul>}
-    <ul className="px-3">
-      {data.steps.map((step) => <li key={step.key} className="flex items-center gap-2 text-xs" style={{ height: BOARD_SIZE.stepRow }}>
+    {!data.waitingOnly && <ul className="px-3">
+      {data.steps.map((step) => <li key={step.key} className="flex items-center gap-2 text-[12.5px]" style={{ height: BOARD_SIZE.stepRow }}>
         {step.done
           ? <CircleCheck aria-hidden="true" className="size-3.5 shrink-0 text-success-foreground" />
           : <Circle aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
@@ -166,11 +199,27 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
           <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span>{step.text}
         </span>
       </li>)}
-      {data.steps.length === 0 && <li className="flex items-center text-xs text-muted-foreground" style={{ height: BOARD_SIZE.stepRow }}>No steps yet</li>}
-      {data.moreSteps > 0 && <li className="flex items-center text-xs text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreSteps} more</li>}
-    </ul>
+      {data.steps.length === 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.stepRow }}>No steps yet</li>}
+      {data.moreSteps > 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreSteps} more</li>}
+    </ul>}
   </article>;
 }
+
+/**
+ * A press anywhere on a compact card does the card's main action, which is what its own button does (`find` names that button). It is not
+ * a button itself (a button cannot hold buttons and links), so a press on one of those keeps its own action, and a press that ends the
+ * selection of some text does nothing: the text of a card can be selected.
+ */
+function brickPress(event: MouseEvent<HTMLElement>, find: (card: HTMLElement) => HTMLElement | null) {
+  const target = event.target;
+  // A press inside a dialog that the card opened bubbles up through React's tree, but is not on the card
+  if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
+  if (target.closest('button, a, input, textarea, select, [role="button"]')) return;
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && selection.toString() && event.currentTarget.contains(selection.anchorNode) && event.currentTarget.contains(selection.focusNode)) return;
+  find(event.currentTarget)?.click();
+}
+const BRICK = 'board-brick cursor-pointer';
 
 /** The title row of a card that opens: the whole row is the button, and a small icon at its end says where it opens. */
 const OPENER = 'nodrag nopan flex h-5 w-full items-center gap-1.5 rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none';
@@ -187,6 +236,31 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
   const href = web?.kind === 'external' && !web.href.startsWith('mailto:') ? web.href : undefined;
   const icon = <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />;
   const title = <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</span>;
+  if (data.compact) {
+    const opens = Boolean(actions && data.filename) || Boolean(href);
+    return <article
+      tabIndex={-1} aria-labelledby={titleId} aria-current={reading ? 'true' : undefined}
+      onClick={opens ? (event) => brickPress(event, (card) => firstControl(card)) : undefined}
+      className={cn('flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border px-3 py-2 shadow-xs', opens && BRICK,
+        data.dimmed ? 'border-dashed border-border bg-muted text-muted-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
+    >
+      <Anchors />
+      {data.filename
+        ? <button type="button" className={OPENER} aria-label={`Open ${data.title}`} disabled={!actions}
+          onClick={(event) => actions?.openInReader({ path: data.filename!, title: data.title, card: id, source: data.sourceId }, event.currentTarget)}
+        >{icon}{title}<PanelRightOpen aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" /></button>
+        : href
+          ? <a href={href} target="_blank" rel="noopener noreferrer" className={OPENER} aria-label={`Open ${data.title} (opens outside the app)`}>
+            {icon}{title}<ExternalLink aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+          </a>
+          : <div className="flex h-5 items-center gap-1.5">{icon}{title}</div>}
+      <div className="flex h-[20px] items-center gap-1.5">
+        <Badge variant="outline">{ROLE_LABEL[data.role] ?? data.role}</Badge>
+        <Badge variant={STATUS_BADGE[data.status] ?? 'outline'}>{STATUS_LABEL[data.status] ?? data.status}</Badge>
+      </div>
+      <p className="line-clamp-1 text-[13px] leading-[17px] text-muted-foreground">{data.summary}</p>
+    </article>;
+  }
   return <article
     tabIndex={-1}
     aria-labelledby={titleId} aria-current={reading ? 'true' : undefined}
@@ -216,6 +290,18 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
 export function BoardCommit({ data }: NodeProps<CommitNode>) {
   const shaId = useId();
   const ago = agoText(data.at);
+  if (data.compact) {
+    return <article tabIndex={-1} aria-labelledby={shaId} className="flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-card-foreground shadow-xs">
+      <Anchors />
+      <div className="flex h-5 items-center gap-2 text-[13px]">
+        <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+        <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
+        {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
+      </div>
+      <p className="line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</p>
+    </article>;
+  }
   return <article tabIndex={-1} aria-labelledby={shaId} className="flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs">
     <Anchors />
     <div className="flex h-4 items-center gap-2 text-xs">
@@ -230,7 +316,7 @@ export function BoardCommit({ data }: NodeProps<CommitNode>) {
 
 /** Stands in a lane that has nothing in it, so the gap is explained and not mistaken for something that failed to load. */
 export function BoardPlaceholder({ data }: NodeProps<PlaceholderNode>) {
-  return <p className="flex h-full w-full items-center rounded-lg border border-dashed border-border bg-card/60 px-3 text-xs leading-4 text-muted-foreground">{data.text}</p>;
+  return <p className={cn('flex h-full w-full items-center overflow-hidden rounded-lg border border-dashed border-border bg-card/60 px-3 text-muted-foreground', data.compact ? 'text-[13px] leading-[17px]' : 'text-xs leading-4')}>{data.text}</p>;
 }
 
 // ─── Cards ──────────────────────────────────────────────────────────────────
@@ -290,7 +376,7 @@ function ReadAll({ data }: { data: CardData }) {
   const [handingOver, setHandingOver] = useState(false);
   const links = useMemo(() => actions && cardLinks(actions, trigger, () => { setHandingOver(true); setOpen(false); }), [actions, trigger]);
   return <Dialog open={open} onOpenChange={(next) => { if (next) setHandingOver(false); setOpen(next); }}>
-    <DialogTrigger render={<Button ref={setTrigger} size="xs" variant="ghost" className="nodrag nopan" aria-label={`Read all of ${data.title}`} />}>Read all</DialogTrigger>
+    <DialogTrigger render={<Button ref={setTrigger} size="xs" variant="ghost" className="nodrag nopan text-[13px]" aria-label={`Read all of ${data.title}`} />}>Read all</DialogTrigger>
     <DialogPopup className="max-w-lg" finalFocus={() => !handingOver}>
       <DialogHeader>
         <DialogTitle className="break-words pr-8 text-base leading-snug">{data.title}</DialogTitle>
@@ -315,11 +401,23 @@ function Byline({ data, children }: { data: CardData; children?: ReactNode }) {
   </div>;
 }
 
+/** The line under a compact card's text: who put it there and when, whether it is pinned or put away, and what the card offers. */
+function CompactFoot({ data, children }: { data: CardData; children?: ReactNode }) {
+  const byline = bylineText(data);
+  return <div className="flex h-6 shrink-0 items-center gap-1.5 text-[13px] text-muted-foreground">
+    {children}
+    {data.pinned && <Pin aria-hidden="true" className="size-3 shrink-0 text-primary" />}
+    {data.pinned && <span className="sr-only">Pinned. </span>}
+    <span className="min-w-0 flex-1 truncate" title={byline}>{byline}</span>
+    {data.archived && <Badge variant="secondary" size="sm">Archived</Badge>}
+  </div>;
+}
+
 /** The frame every card shares. A card that is new, or was just changed by someone else, glows for a moment; the one open in the reader has a ring. */
-function CardFrame({ data, labelledBy, reading = false, children }: { data: CardData; labelledBy: string; reading?: boolean; children: ReactNode }) {
+function CardFrame({ data, labelledBy, reading = false, compact = false, onPress, children }: { data: CardData; labelledBy: string; reading?: boolean; compact?: boolean; onPress?: (event: MouseEvent<HTMLElement>) => void; children: ReactNode }) {
   return <article
-    aria-labelledby={labelledBy} aria-current={reading ? 'true' : undefined}
-    className={cn('relative flex h-full w-full flex-col overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
+    aria-labelledby={labelledBy} aria-current={reading ? 'true' : undefined} onClick={onPress}
+    className={cn('relative flex h-full w-full flex-col overflow-hidden rounded-lg border px-3 shadow-xs', compact ? 'py-2' : 'py-2.5', onPress && BRICK,
       data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
   >
     <Anchors />
@@ -333,6 +431,14 @@ export function BoardNote({ data }: NodeProps<NoteNode>) {
   const titleId = useId();
   const [titleRef, titleCut] = useCut<HTMLHeadingElement>(data.title);
   const [bodyRef, bodyCut] = useCut<HTMLDivElement>(data.text);
+  if (data.compact) {
+    return <CardFrame data={data} labelledBy={titleId} compact onPress={titleCut || bodyCut ? (event) => brickPress(event, (card) => card.querySelector<HTMLElement>('[data-slot="dialog-trigger"]')) : undefined}>
+      <h2 ref={titleRef} id={titleId} className={cn('line-clamp-1 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
+      <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-0.5 line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
+      <div className="mt-auto" />
+      <CompactFoot data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</CompactFoot>
+    </CardFrame>;
+  }
   return <CardFrame data={data} labelledBy={titleId}>
     <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
     <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-1 line-clamp-4 shrink-0 text-xs leading-[18px]" />
@@ -347,7 +453,7 @@ function FileKind({ type, path }: { type: FileType; path: string }) {
   return <div className="flex size-full flex-col items-center justify-center gap-1 px-3 text-center">
     <Icon aria-hidden="true" className="size-8 text-muted-foreground" />
     <span className="text-xs font-medium">{FILE_LABEL[type]}</span>
-    <code className="max-w-full truncate font-mono text-[11px] text-muted-foreground" title={path}>{path}</code>
+    <code className="max-w-full truncate font-mono text-[12.5px] text-muted-foreground" title={path}>{path}</code>
   </div>;
 }
 
@@ -361,6 +467,33 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   const [titleRef, titleCut] = useCut<HTMLHeadingElement>(data.title);
   const [textRef, textCut] = useCut<HTMLDivElement>(data.text);
   const picture = data.fileType === 'image' && actions && brokenPath !== data.path;
+  if (data.compact) {
+    const Icon = FILE_ICON[data.fileType];
+    return <CardFrame data={data} labelledBy={titleId} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => card.querySelector<HTMLElement>('button[aria-label^="Open "]')) : undefined}>
+      <div className="flex min-h-0 flex-1 gap-3">
+        <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/60">
+          {picture
+            ? <img
+              src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
+              loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-contain"
+            />
+            : <div className="flex size-full flex-col items-center justify-center gap-0.5 px-1 text-center">
+              <Icon aria-hidden="true" className="size-6 text-muted-foreground" />
+              <span className="text-[12.5px] font-medium leading-4">{FILE_LABEL[data.fileType]}</span>
+              <span className="sr-only">{data.path}</span>
+            </div>}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <h2 ref={titleRef} id={titleId} className={cn('line-clamp-1 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
+          <CardText ref={textRef} text={data.text} cut={textCut} className="line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
+        </div>
+      </div>
+      <CompactFoot data={data}>
+        <Button size="xs" variant="outline" className="nodrag nopan text-[13px]" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" />Open</Button>
+        {(titleCut || textCut) && <ReadAll data={data} />}
+      </CompactFoot>
+    </CardFrame>;
+  }
   return <CardFrame data={data} labelledBy={titleId} reading={reading}>
     <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
     <div className="mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/60">
@@ -439,14 +572,14 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
           border,
         )}
       >
-        <span className="flex h-5 w-full items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+        <span className="flex h-5 w-full items-center gap-1.5 whitespace-nowrap text-[12.5px] text-muted-foreground">
           {data.kind === 'checkpoint' && (
             data.done ? (
               <Badge variant="success" className="board-area-badge">Done</Badge>
             ) : data.current ? (
               <Badge variant="default" className="board-area-badge">Current</Badge>
             ) : (
-              <Badge variant="outline" className="board-area-badge">Not done</Badge>
+              <Badge variant="outline" className="board-area-badge sm:text-[12.5px]">Not done</Badge>
             )
           )}
           {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge">Plan</Badge>}
@@ -461,7 +594,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
 
         {data.kind !== 'work' && (
           <span className="mt-1 block">
-            <span className="block truncate text-xs leading-4 text-muted-foreground">{stepsLabel}</span>
+            <span className="block truncate text-[12.5px] leading-4 text-muted-foreground">{stepsLabel}</span>
             <span aria-hidden="true" className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted">
               <span
                 className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')}
@@ -489,11 +622,11 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
               ))}
             </span>
           ) : data.preview ? (
-            <span className="line-clamp-2 block text-xs leading-4 text-muted-foreground">{data.preview}</span>
+            <span className="line-clamp-2 block text-[12.5px] leading-4 text-muted-foreground">{data.preview}</span>
           ) : null}
         </span>
 
-        <span className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-border/50 pt-2 text-xs text-muted-foreground">
+        <span className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-border/50 pt-2 text-[12.5px] text-muted-foreground">
           {countItems.length > 0 ? (
             <span className="truncate">{countItems.join(' · ')}</span>
           ) : (
@@ -508,3 +641,117 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
   );
 }
 
+
+// ─── Rows inside an Area ────────────────────────────────────────────────────
+
+const STATE_LABEL = { current: 'Current step', next: 'Next step', open: 'Step', done: 'Done', plain: '' } as const;
+
+/**
+ * The header of a row, which stands above its things: its name and what it holds on one line, as a button that opens the row where it
+ * stands and closes it when it is open already. The header of the current step (or the next one) is the exception: it says all it can of
+ * the step, in up to two lines, and is there even when the step has nothing on it yet.
+ */
+export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
+  const actions = useContext(BoardActionsContext);
+  const isStep = data.text !== undefined;
+  const label = [isStep ? `${STATE_LABEL[data.state]}: ${data.text}` : data.title, data.summary || data.caption].filter(Boolean).join(', ');
+  const chevron = data.expanded
+    ? <ChevronUp aria-hidden="true" className="absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+    : <ChevronDown aria-hidden="true" className="absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />;
+  if (data.static) {
+    return <div className="flex h-full w-full flex-col justify-center overflow-hidden rounded-xl border border-border bg-card px-3 py-1 text-left">
+      <Anchors />
+      <span className="truncate text-[12.5px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground">{STATE_LABEL[data.state]}</span>
+      <span className="line-clamp-1 text-[13px] font-medium leading-[17px] text-foreground" title={data.text}>{data.text}</span>
+    </div>;
+  }
+  const body = data.prominent
+    ? <span className="flex min-w-0 flex-col justify-center pr-6">
+      <span className="flex items-baseline gap-2 whitespace-nowrap text-[12.5px] font-semibold uppercase leading-4 tracking-wide text-primary">
+        {STATE_LABEL[data.state]}
+        {data.empty && <span className="text-[13px] font-normal normal-case tracking-normal text-muted-foreground">{data.summary}</span>}
+      </span>
+      <span className="line-clamp-2 text-[14px] font-semibold leading-[18px] text-foreground" title={data.text}>{data.text}</span>
+    </span>
+    : <span className="flex min-w-0 items-baseline gap-2 pr-6">
+      {isStep && <span className="shrink-0 text-[12.5px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground">{STATE_LABEL[data.state]}</span>}
+      <span className={cn('truncate text-[14px] leading-5 text-foreground', isStep ? 'font-medium' : 'font-semibold')} title={isStep ? data.text : data.title}>{isStep ? data.text : data.title}</span>
+      {!isStep && (data.summary || data.caption) && <span className="min-w-0 truncate text-[13px] leading-5 text-muted-foreground" title={data.caption}>{data.summary}</span>}
+    </span>;
+  return <div className="relative h-full w-full">
+    <Anchors />
+    <button
+      type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
+      onClick={() => actions?.toggleRow?.(data.rowId)}
+      className={cn('board-row-control nodrag nopan relative flex h-full w-full items-center overflow-hidden rounded-xl border px-3 text-left hover:bg-accent/40',
+        data.prominent ? 'border-primary bg-primary/5' : 'border-border bg-card', data.expanded && 'bg-accent/30')}
+    >
+      {body}
+      {chevron}
+    </button>
+  </div>;
+}
+
+/** A row folded to one line: what it is and what it holds. Pressing it opens the row. */
+export function BoardFoldRow({ data }: NodeProps<FoldNode>) {
+  const actions = useContext(BoardActionsContext);
+  return <div className="relative h-full w-full">
+    <Anchors />
+    <button
+      type="button" data-row-control={data.rowId} aria-expanded="false" aria-label={summaryLabel([data.title, data.summary, data.current && 'current step', data.note, data.warning?.toLowerCase()])}
+      disabled={!actions} onClick={() => actions?.toggleRow?.(data.rowId)}
+      className={cn('board-row-control nodrag nopan flex h-full w-full items-center gap-3 rounded-xl border border-dashed px-3 text-left hover:bg-muted/70',
+        data.current ? 'border-primary bg-primary/5' : 'border-border bg-muted/40')}
+    >
+      <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-foreground" title={data.title}>{data.title}</span>
+      <span className="shrink-0 whitespace-nowrap text-[13px] text-muted-foreground">{data.summary}</span>
+      {data.note && <span className="min-w-0 max-w-[40%] truncate text-[13px] text-muted-foreground" title={data.note}>{data.note}</span>}
+      {data.warning && <span className="min-w-0 max-w-[40%] truncate text-[13px] text-destructive-foreground" title={data.warning}>{data.warning}</span>}
+    </button>
+  </div>;
+}
+
+/** "+N more" at the end of a row that has more than fits. Pressing it opens the row. */
+export function BoardMoreTile({ data }: NodeProps<MoreNode>) {
+  const actions = useContext(BoardActionsContext);
+  return <div className="relative h-full w-full">
+    <Anchors />
+    <button
+      type="button" data-row-control={data.rowId} aria-expanded="false" aria-label={`Show ${data.count} more for ${data.rowTitle}`} disabled={!actions}
+      onClick={() => actions?.toggleRow?.(data.rowId)}
+      className="board-row-control nodrag nopan flex h-full w-full items-center justify-center rounded-xl border border-dashed border-border bg-muted/40 px-2 text-[13px] font-semibold text-foreground hover:bg-muted/70"
+    >{data.title}</button>
+  </div>;
+}
+
+/** The buttons that page through an opened row: "‹ Newer", "1–6 of 10", "Older ›". The keyboard moves to the other button when the one it is on has no page left. */
+export function BoardPager({ data }: NodeProps<PagerNode>) {
+  const actions = useContext(BoardActionsContext);
+  const newer = useRef<HTMLButtonElement>(null);
+  const older = useRef<HTMLButtonElement>(null);
+  const atStart = data.page <= 0;
+  const atEnd = data.page >= data.pages - 1;
+  useEffect(() => {
+    const active = document.activeElement;
+    if (atEnd && !atStart && active === older.current) newer.current?.focus({ preventScroll: true });
+    else if (atStart && !atEnd && active === newer.current) older.current?.focus({ preventScroll: true });
+  }, [atStart, atEnd]);
+  // A live change can take the pager away while the keyboard is on it: it goes to the header of the row, and not to the page.
+  const nav = useRef<HTMLElement>(null);
+  const rowId = data.rowId;
+  useLayoutEffect(() => {
+    const element = nav.current;
+    return () => {
+      if (!element || !element.contains(document.activeElement)) return;
+      document.querySelector<HTMLElement>(`[data-row-control="${CSS.escape(rowId)}"]`)?.focus({ preventScroll: true });
+    };
+  }, [rowId]);
+  const button = 'board-row-control nodrag nopan inline-flex h-8 items-center rounded-lg border border-border bg-card px-3 text-[13px] font-medium text-foreground hover:bg-accent/40 disabled:pointer-events-none disabled:opacity-50';
+  return <nav ref={nav} aria-label={`Pages of ${data.title}`} className="flex h-full w-full items-center justify-center gap-3">
+    <Anchors />
+    <button ref={newer} type="button" className={button} disabled={!actions || atStart} onClick={() => actions?.setRowPage?.(data.rowId, data.page - 1)}>‹ Newer</button>
+    <span role="status" aria-live="polite" className="text-[13px] text-muted-foreground">{data.from}–{data.to} of {data.total}</span>
+    <button ref={older} type="button" className={button} disabled={!actions || atEnd} onClick={() => actions?.setRowPage?.(data.rowId, data.page + 1)}>Older ›</button>
+  </nav>;
+}

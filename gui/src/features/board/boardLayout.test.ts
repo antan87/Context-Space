@@ -90,7 +90,7 @@ describe('boardLayout columns', () => {
     expect(new Set(twins.map((node) => node.id)).size).toBe(2);
   });
 
-  it('marks nothing as draggable, linkable or pickable itself: what may be moved is for boardMoves to say', () => {
+  it('marks nothing as draggable, linkable or pickable itself: what may be moved is for the board moves to say', () => {
     for (const node of nodes) {
       expect(node.draggable).toBe(false);
       expect(node.connectable).toBe(false);
@@ -669,7 +669,7 @@ describe('cards from the board', () => {
     expect(files(nodes).map((card) => [card.width, card.height])).toEqual([[BOARD_SIZE.card, BOARD_SIZE.file]]);
   });
 
-  it('are drawn fixed like the rest, whether they are in the lane or have a place of their own: boardMoves makes them draggable', () => {
+  it('are drawn fixed like the rest, whether they are in the lane or have a place of their own: the board moves make them draggable', () => {
     for (const node of boardLayout({ now: NOW, board: boardOf({ cards: [note(1), note(2)], positions: { [uuid(2)]: { x: 5, y: 5 } } }) })) {
       expect(node.draggable).toBe(false);
       expect(node.selectable).toBe(false);

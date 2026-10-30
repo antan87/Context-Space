@@ -46,16 +46,19 @@ export function whatsNew(fields: Partial<WhatsNewView> = {}): WhatsNewView {
 /** A uuid for the nth card or line of a test board. */
 export const boardId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-/** A note card as the board file keeps it. Made by claude a few minutes ago unless the fields say otherwise. */
+/** The first open step of the checkpoint 'Reports export to CSV' in the specs: the current step, where a card with no step of its own goes. */
+export const CURRENT_STEP = 'background-job-queue-for-large-exports';
+
+/** A note card as the board file keeps it. Made by claude a few minutes ago, on the current step, unless the fields say otherwise. */
 export function boardNote(n: number, fields: Record<string, unknown> = {}) {
   const at = new Date(Date.now() - 10 * 60_000).toISOString();
-  return { id: boardId(n), kind: 'note', title: `Note ${n}`, body: `About note ${n}.`, pinned: false, archived: false, by: 'claude', at, updatedBy: 'claude', updatedAt: at, ...fields };
+  return { id: boardId(n), kind: 'note', title: `Note ${n}`, body: `About note ${n}.`, pinned: false, archived: false, by: 'claude', at, updatedBy: 'claude', updatedAt: at, step: CURRENT_STEP, ...fields };
 }
 
 /** A file card as the board file keeps it. */
 export function boardFileCard(n: number, path: string, fields: Record<string, unknown> = {}) {
   const at = new Date(Date.now() - 10 * 60_000).toISOString();
-  return { id: boardId(n), kind: 'file', title: `File ${n}`, path, description: `The file ${n}.`, pinned: false, archived: false, by: 'claude', at, updatedBy: 'claude', updatedAt: at, ...fields };
+  return { id: boardId(n), kind: 'file', title: `File ${n}`, path, description: `The file ${n}.`, pinned: false, archived: false, by: 'claude', at, updatedBy: 'claude', updatedAt: at, step: CURRENT_STEP, ...fields };
 }
 
 export function boardLink(n: number, from: string, to: string, label?: string) {

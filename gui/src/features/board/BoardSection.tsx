@@ -2,8 +2,8 @@ import '@xyflow/react/dist/style.css';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Background, BackgroundVariant, ConnectionMode, Controls, MarkerType, MiniMap, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
-import { Archive, Kanban, RefreshCw, X } from 'lucide-react';
+import { Background, BackgroundVariant, ConnectionMode, Controls, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { Archive, Kanban, RefreshCw } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -17,9 +17,13 @@ import { usePlanFile } from '../plan/planFile.js';
 import { useWhatsNew } from '../plan/whatsNew.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests } from '../workspace-shell/openRequests.js';
-import { BoardActionsContext, BoardReadingContext, type BoardActions, type ReaderTarget } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, firstControl, type BoardActions, type ReaderTarget } from './boardActions.js';
 import {
-  areaBoardLayout,
+  areaLayout,
+  areaPlace,
+  areaRowIds,
+  areaView,
+  READABLE_ZOOM,
   buildBoardAreas,
   fitBoundsView,
   overviewEdges,
@@ -29,9 +33,8 @@ import {
   type AreaNode,
 } from './boardAreas.js';
 import { useBoard } from './boardData.js';
-import { fileTitle, readerDock, readerReveal } from './boardDock.js';
-import { boardEdges, nodeRects, type BoardNode } from './boardLayout.js';
-import { MOVE_HELP, revealed, useBoardMoves, withMoves, type MoveNotice } from './boardMoves.js';
+import { fileTitle, readerDock } from './boardDock.js';
+import { boardEdges, type BoardNode } from './boardLayout.js';
 import {
   buildBoardNav,
   readNavMode,
@@ -43,7 +46,7 @@ import {
   type NavItem,
   type NavMode,
 } from './boardNav.js';
-import { BoardArea, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardLane, BoardNote, BoardPlaceholder } from './BoardNodes.js';
+import { BoardArea, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
 import { BoardReader } from './BoardReader.js';
 import { useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
@@ -57,13 +60,15 @@ const AREA_NODE_TYPES: NodeTypes = {
   placeholder: BoardPlaceholder,
   note: BoardNote,
   file: BoardFile,
+  step: BoardRowHead,
+  fold: BoardFoldRow,
+  more: BoardMoreTile,
+  pager: BoardPager,
 };
 
 /** "Fit the board in view" shows everything, but never zoomed in past life size: a lone card is not blown up. */
 const FIT = { padding: 0.12, maxZoom: 1 } as const;
 const PAN_STEP = 96;
-/** How far from the edge of the view a group or card is put, when the view moves to show it: clear of corners. */
-const OPEN_MARGIN = 40;
 /** How many frames a jump from the Board index waits for the card to be drawn in its Area, before it gives up. */
 const JUMP_FRAMES = 30;
 /** How long a move of the view takes, in ms: none for those who ask for less motion. */
@@ -78,9 +83,6 @@ const ARIA_LABELS = {
   'controls.fitView.ariaLabel': 'Fit the board in view',
   'minimap.ariaLabel': 'Board overview',
 };
-
-const minimapClass = (node: { type?: string; data: Record<string, unknown> }) =>
-  `board-mini-${node.type}${node.type === 'checkpoint' && node.data.done ? ' board-mini-done' : ''}`;
 
 /**
  * Arrow keys pan, plus and minus zoom, zero fits: the canvas is a keyboard stop of its own.
@@ -129,22 +131,6 @@ function showFocused(flow: ReactFlowInstance<any> | null, event: FocusEvent<HTML
   if (seen) return;
   onMoved();
   void flow.setCenter(left + width / 2, top + height / 2, { zoom, duration: moveMs(200) });
-}
-
-/**
- * Status of the last card move on Level 1.
- */
-function MoveStatus({ notice, onDismiss, onKeep }: { notice: MoveNotice; onDismiss: () => void; onKeep: (on: boolean) => void }) {
-  return <div
-    onPointerEnter={() => onKeep(true)} onPointerLeave={() => onKeep(false)}
-    onFocus={() => onKeep(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) onKeep(false); }}
-    className={cn('pointer-events-auto flex max-w-lg items-center gap-2 rounded-lg border px-3 py-1.5 text-xs shadow-sm',
-      notice.failed ? 'border-destructive/30 bg-destructive/10 text-destructive-foreground' : 'border-border bg-card text-foreground')}
-  >
-    <span aria-hidden="true" className="min-w-0 break-words">{notice.text}</span>
-    {notice.undo && <Button size="xs" variant="outline" onClick={notice.undo}>Undo</Button>}
-    {notice.failed && <Button size="icon-xs" variant="ghost" aria-label="Dismiss" onClick={onDismiss}><X aria-hidden="true" /></Button>}
-  </div>;
 }
 
 /** One part of the data that could not be read; the rest of the board still shows. */
@@ -246,24 +232,24 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   const [layout, setLayout] = useReaderLayout();
   const requests = useRef(0);
   const opener = useRef<HTMLElement | null>(null);
+  /** Which node and control the opener was, to find it again when the rows were laid out again and its button was drawn anew. */
+  const openerWas = useRef<{ node: string; label: string } | null>(null);
   const pressedLink = useRef<HTMLElement | null>(null);
-  const revealing = useRef<string | null>(null);
 
-  const show = useCallback((target: ReaderTarget, from: HTMLElement | null, reveal: boolean) => {
+  const show = useCallback((target: ReaderTarget, from: HTMLElement | null) => {
     opener.current = from ?? pressedLink.current;
-    revealing.current = reveal ? opener.current?.closest('.react-flow__node')?.getAttribute('data-id') ?? null : null;
+    const node = opener.current?.closest('.react-flow__node')?.getAttribute('data-id');
+    const label = opener.current?.getAttribute('aria-label');
+    openerWas.current = node && label ? { node, label } : null;
     requests.current += 1;
     setReader({ target, request: requests.current });
   }, [setReader]);
 
-  const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from, true), [show]);
+  const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from), [show]);
   const closeReader = useCallback(() => setReader(null), [setReader]);
-  const changeLayout = useCallback((next: ReaderLayout) => {
-    if (next === 'side') revealing.current = opener.current?.closest('.react-flow__node')?.getAttribute('data-id') ?? null;
-    setLayout(next);
-  }, [setLayout]);
+  const changeLayout = useCallback((next: ReaderLayout) => setLayout(next), [setLayout]);
 
-  const openLinked = useCallback((path: string) => show({ path, title: fileTitle(path) }, opener.current, false), [show]);
+  const openLinked = useCallback((path: string) => show({ path, title: fileTitle(path) }, opener.current), [show]);
   const openInDocs = useCallback((name: string) => {
     documentRequests.open(workspaceId, { name });
     goToWorkspace(navigateTo, workspaceId, 'documents');
@@ -448,16 +434,28 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   // reader and changes the Area in one commit, the old opener is still connected here, so those later effects must run after
   // it and win (otherwise focus ends on the opener, then falls to BODY when React Flow removes it).
   const wasReaderOpen = useRef(false);
+  /** The control to put the keyboard on when the reader has closed and the card it came from is not drawn yet (the rows are laid out again). */
+  const openerRetry = useRef<{ was: { node: string; label: string }; until: number; placed: boolean } | null>(null);
+  const [openerTick, setOpenerTick] = useState(0);
+  const findOpener = useCallback((was: { node: string; label: string }) => Array.from(areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
+    .find((el) => el.dataset.id === was.node)?.querySelector<HTMLElement>(`[aria-label="${was.label.replace(/["\\]/g, '\\$&')}"]`) ?? null, [areaCanvasContainer]);
   useLayoutEffect(() => {
     if (reader) { wasReaderOpen.current = true; return; }
     if (!wasReaderOpen.current) return;
     wasReaderOpen.current = false;
     const from = opener.current;
+    const was = openerWas.current;
     opener.current = null;
+    openerWas.current = null;
+    const target = from?.isConnected ? from : was ? findOpener(was) : null;
     focusing.current = true;
-    (from?.isConnected ? from : areaCanvasContainer?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
+    (target ?? areaCanvasContainer?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
     focusing.current = false;
-  }, [reader, areaCanvasContainer]);
+    if (was) {
+      openerRetry.current = { was, until: Date.now() + 1500, placed: false };
+      setOpenerTick((tick) => (tick + 1) % 1000);
+    }
+  }, [reader, areaCanvasContainer, findOpener]);
 
   // Restore keyboard focus to Area button when stepping out
   useLayoutEffect(() => {
@@ -498,7 +496,6 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   // Plane 1 (Inside Area) elements
   const activeArea = areas.find((a) => a.id === stepped?.areaId);
   const areaHeadingId = useId();
-  const moveHelp = useId();
 
   const [areaRow, setAreaRow] = useState<HTMLDivElement | null>(null);
   const areaSection = useLayoutElementSize(areaRow);
@@ -506,77 +503,123 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   const areaCanvasSize = useLayoutElementSize(areaCanvasContainer);
   const areaFlow = useRef<ReactFlowInstance<BoardNode> | null>(null);
   const [areaInstance, setAreaInstance] = useState<ReactFlowInstance<BoardNode> | null>(null);
-  const areaTaken = useRef(false);
-  const areaTakenBefore = useRef(false);
 
   useEffect(() => {
     if (!stepped) setAreaInstance(null);
   }, [stepped]);
 
-  const readerOpenRef = useRef(Boolean(reader));
-  useLayoutEffect(() => {
-    readerOpenRef.current = Boolean(reader);
-  }, [reader]);
-
-  const areaNodes = useMemo(
-    () => (activeArea ? withMoves(areaBoardLayout(activeArea, { news: newsView, positions: board?.positions }), moveHelp) : []),
-    [activeArea, newsView, board?.positions, moveHelp],
-  );
-
-  const moves = useBoardMoves({
-    workspaceId,
-    nodes: areaNodes,
-    flow: areaFlow,
-    size: areaCanvasSize,
-    reveal: (view) => {
-      areaTaken.current = true;
-      void areaFlow.current?.setViewport(view, { duration: moveMs(120) });
-    },
-    focusNode: (id) => {
-      const things = areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [];
-      (Array.from(things).find((thing) => thing.dataset.id === id) ?? areaCanvasContainer?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
-    },
-  });
-
-  const areaEdges = useMemo(() => boardEdges(moves.shown, board?.links ?? []), [moves.shown, board]);
-
-  // Plane 1 Viewport auto-fitting
-  const areaViewport = useMemo(
-    () => fitBoundsView(areaNodes, areaSection, { topInset: 28, bottomInset: 48, minAutoZoom: 0.4 }),
-    [areaNodes, areaSection],
-  );
-
-  const loaded = `${Boolean(planView)}${Boolean(documents)}${Boolean(newsView)}${Boolean(board)}`;
-  const activeAreaId = activeArea?.id;
-  const areaFitKey = activeAreaId && areaSection.width > 0 && areaSection.height > 0
-    ? `${activeAreaId}|${loaded}|${showArchived}|${areaSection.width}x${areaSection.height}`
-    : null;
-  const lastSteppedAreaId = useRef<string | null>(null);
-  const steppedAreaFitted = useRef<string | null>(null);
+  // Which row of the Area is open, and its page, if any (not saved). One at a time; it belongs to the Area it was opened in.
+  const [openState, setOpenState] = useState<{ areaId: string; rowId: string; page: number } | null>(null);
+  const steppedAreaId = stepped?.areaId;
+  const openRow = openState && openState.areaId === steppedAreaId ? openState.rowId : null;
+  const openPage = openState && openState.areaId === steppedAreaId ? openState.page : 0;
+  const openRef = useRef<{ rowId: string | null; page: number }>({ rowId: null, page: 0 });
+  useLayoutEffect(() => { openRef.current = { rowId: openRow, page: openPage }; }, [openRow, openPage]);
   useEffect(() => {
-    if (!activeAreaId) {
-      lastSteppedAreaId.current = null;
-      steppedAreaFitted.current = null;
-      areaTaken.current = false;
+    if (!stepped) setOpenState(null);
+  }, [stepped]);
+
+  // The rows are laid out for the canvas as it is: what the reader docked beside it leaves
+  const areaReady = areaCanvasSize.width > 0 && areaCanvasSize.height > 0;
+  const areaDrawn = useMemo(() => {
+    if (!activeArea || !areaReady) return { nodes: [] as BoardNode[], open: null };
+    const { nodes, open } = areaLayout(activeArea, { news: newsView, size: areaCanvasSize, openRow, page: openPage });
+    return { nodes: nodes.map((node) => (node.width !== undefined && node.height !== undefined ? { ...node, measured: { width: node.width, height: node.height } } : node) as BoardNode[][number]), open };
+  }, [activeArea, areaReady, newsView, areaCanvasSize, openRow, openPage]);
+  const areaNodes = areaDrawn.nodes;
+  const areaOpen = areaDrawn.open;
+  const rowIds = useMemo(() => (activeArea && areaReady ? areaRowIds(activeArea, { news: newsView, size: areaCanvasSize }) : []), [activeArea, areaReady, newsView, areaCanvasSize]);
+
+  // A row that is no longer there (a live change took its things away), or a page past the end, is let go at once, so Escape works on the first press
+  useEffect(() => {
+    if (!openState || openState.areaId !== steppedAreaId || !areaReady || !activeArea) return;
+    if (!rowIds.includes(openState.rowId)) setOpenState(null);
+    else if (areaOpen && areaOpen.page !== openState.page) setOpenState({ ...openState, page: areaOpen.page });
+  }, [openState, steppedAreaId, areaReady, activeArea, rowIds, areaOpen]);
+
+  const areaEdges = useMemo(() => boardEdges(areaNodes, board?.links ?? []), [areaNodes, board]);
+
+  useEffect(() => {
+    const retry = openerRetry.current;
+    if (!retry) return;
+    const target = findOpener(retry.was);
+    const active = document.activeElement;
+    const adrift = !active || active === document.body || (active instanceof HTMLElement && active.classList.contains('react-flow'));
+    // The keyboard has been put somewhere else meanwhile: leave it
+    if (!adrift && active !== target) { openerRetry.current = null; return; }
+    if (target && adrift) {
+      focusing.current = true;
+      target.focus({ preventScroll: true });
+      focusing.current = false;
+    }
+    // The canvas has its whole size again and the card is on another page of the row, or in a row that is folded: its row is opened at its page
+    if (!target && !retry.placed && activeArea && areaReady && !areaNodes.some((areaNode) => areaNode.id === retry.was.node)) {
+      retry.placed = true;
+      const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, retry.was.node);
+      if (place) setOpenState(place.row ? { areaId: activeArea.id, rowId: place.row, page: place.page } : null);
+    }
+    // The rows may be laid out again a frame or two after the reader closed, so the keyboard is looked after for a few frames
+    if (Date.now() > retry.until) { openerRetry.current = null; return; }
+    const frame = requestAnimationFrame(() => setOpenerTick((tick) => (tick + 1) % 1000));
+    return () => cancelAnimationFrame(frame);
+  }, [openerTick, areaNodes, findOpener, activeArea, areaReady, newsView, areaCanvasSize]);
+
+  // When the canvas changes size (the reader docks beside it, or leaves), the card the reader shows may no longer be drawn: its row is opened at the page it is on
+  const areaSizeKey = `${areaCanvasSize.width}x${areaCanvasSize.height}`;
+  const lastAreaSize = useRef(areaSizeKey);
+  useEffect(() => {
+    const changed = lastAreaSize.current !== areaSizeKey;
+    lastAreaSize.current = areaSizeKey;
+    const card = reader?.target.card;
+    if (!changed || !card || !activeArea || !areaReady || areaNodes.some((areaNode) => areaNode.id === card)) return;
+    const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, card);
+    if (place) setOpenState(place.row ? { areaId: activeArea.id, rowId: place.row, page: place.page } : null);
+  }, [areaSizeKey, reader, activeArea, areaReady, areaNodes, newsView, areaCanvasSize]);
+
+  // Opening or closing a row: the control that was pressed is swapped for another node, so the keyboard is put on the row's control again
+  const rowFocus = useRef<{ rowId: string; pressed: HTMLElement | null } | null>(null);
+  const rowFocusFrames = useRef(0);
+  const keepFocusOn = useCallback((rowId: string) => {
+    rowFocusFrames.current = 0;
+    rowFocus.current = { rowId, pressed: document.activeElement instanceof HTMLElement ? document.activeElement : null };
+  }, []);
+  const toggleRow = useCallback((rowId: string) => {
+    keepFocusOn(rowId);
+    setOpenState((curr) => {
+      if (!steppedAreaId) return null;
+      return curr && curr.areaId === steppedAreaId && curr.rowId === rowId ? null : { areaId: steppedAreaId, rowId, page: 0 };
+    });
+  }, [steppedAreaId, keepFocusOn]);
+  const setRowPage = useCallback((rowId: string, page: number) => {
+    setOpenState((curr) => (steppedAreaId && curr && curr.rowId === rowId ? { ...curr, page: Math.max(0, page) } : curr));
+  }, [steppedAreaId]);
+  // The control that was pressed may be swapped for another one a frame or two after the row changes (it is drawn then), so for
+  // a few frames the keyboard is put on the row's control whenever the pressed one is gone
+  const [rowFocusTick, setRowFocusTick] = useState(0);
+  useEffect(() => {
+    const pending = rowFocus.current;
+    if (!pending) return;
+    const gone = !pending.pressed?.isConnected || pending.pressed.matches(':disabled') || document.activeElement === document.body || document.activeElement === null;
+    const controls = Array.from(areaCanvasContainer?.querySelectorAll<HTMLElement>('[data-row-control]') ?? []).filter((el) => el.dataset.rowControl === pending.rowId);
+    if (gone && controls[0]) {
+      rowFocus.current = null;
+      focusing.current = true;
+      controls[0].focus({ preventScroll: true });
+      focusing.current = false;
       return;
     }
-    if (!areaFitKey || !areaViewport || !areaInstance) return;
-    if (lastSteppedAreaId.current !== activeAreaId) {
-      lastSteppedAreaId.current = activeAreaId;
-      steppedAreaFitted.current = areaFitKey;
-      areaTaken.current = false;
-      void areaInstance.setViewport(areaViewport, { duration: 0 });
-      return;
-    }
-    if (steppedAreaFitted.current !== areaFitKey) {
-      if (!areaTaken.current && !readerOpenRef.current) {
-        steppedAreaFitted.current = areaFitKey;
-        void areaInstance.setViewport(areaViewport, { duration: moveMs(200) });
-      } else if (areaTaken.current) {
-        steppedAreaFitted.current = areaFitKey;
-      }
-    }
-  }, [activeAreaId, areaFitKey, areaViewport, areaInstance]);
+    if (rowFocusFrames.current >= 12) { rowFocus.current = null; return; }
+    const frame = requestAnimationFrame(() => { rowFocusFrames.current += 1; setRowFocusTick((tick) => (tick + 1) % 1000); });
+    return () => cancelAnimationFrame(frame);
+  }, [areaNodes, areaCanvasContainer, rowFocusTick]);
+
+  // The view of Level 1 never moves: whenever the rows change (a row opened or closed, a page, new data, the size of the canvas) it is set again
+  useEffect(() => {
+    if (!areaInstance || !steppedAreaId) return;
+    void areaInstance.setViewport(areaView(), { duration: 0 });
+  }, [areaInstance, steppedAreaId, areaNodes, areaCanvasSize]);
+
+  const activeAreaId = activeArea?.id;
 
   // Highlight state for nodes jumped to from the Board index sidebar
   const [highlightedNode, setHighlightedNode] = useState<{ id: string; request: number } | null>(null);
@@ -598,17 +641,16 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
         el.removeAttribute('data-highlighted');
       }
     }
-  }, [highlightedNode, areaCanvasContainer, moves.shown]);
+  }, [highlightedNode, areaCanvasContainer, areaNodes]);
 
-  // Executing pendingJump after areaFitKey effect so viewport fitting runs first
+  // Executing pendingJump: a card in a folded row, behind "+N more" or on another page is drawn when its row is open at its page
   useEffect(() => {
     if (
       !pendingJump ||
       stepped?.phase !== 'open' ||
       activeAreaId !== pendingJump.areaId ||
-      !areaFitKey ||
-      !areaInstance ||
-      areaCanvasSize.width <= 0
+      !areaReady ||
+      !areaInstance
     ) {
       return;
     }
@@ -620,7 +662,18 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     if (!nodeEl) {
       // The cards of an Area that was just chosen are drawn a frame or two later (and the old Area's are on the screen until then):
       // look again each frame for a while, and give up at once on a card that this Area does not have
-      if (jumpFrames.current >= JUMP_FRAMES || !areaNodes.some((areaNode) => areaNode.id === pendingJump.nodeId)) {
+      const drawn = areaNodes.some((areaNode) => areaNode.id === pendingJump.nodeId);
+      const place = drawn || !activeArea ? null : areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, pendingJump.nodeId);
+      if (!drawn && (!place || jumpFrames.current >= JUMP_FRAMES)) {
+        clearJump();
+        backButtonRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      if (place && (place.row !== openRef.current.rowId || (place.row !== null && place.page !== openRef.current.page))) {
+        openRef.current = { rowId: place.row, page: place.page };
+        setOpenState(place.row ? { areaId: pendingJump.areaId, rowId: place.row, page: place.page } : null);
+      }
+      if (jumpFrames.current >= JUMP_FRAMES) {
         clearJump();
         backButtonRef.current?.focus({ preventScroll: true });
         return;
@@ -635,26 +688,16 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     const jump = pendingJump;
     clearJump();
 
-    // Pan only if needed via revealed
-    const rect = nodeRects(moves.shown).get(jump.nodeId);
-    const currentView = areaInstance.getViewport();
-    const nextView = rect && revealed(rect, currentView, areaCanvasSize, OPEN_MARGIN);
-    if (nextView) {
-      areaTaken.current = true;
-      void areaInstance.setViewport(nextView, { duration: moveMs(220) });
-    }
-
     // Trigger node highlight
     setHighlightedNode({ id: jump.nodeId, request: jump.request });
 
-    // Focus target inside nodeEl
-    const cardFocusEl =
-      nodeEl.tabIndex >= 0
-        ? nodeEl
-        : (nodeEl.querySelector<HTMLElement>('button, a[href], article') ?? nodeEl);
+    // The cards are not stops of their own (nothing is moved here), so the keyboard goes to the card's first control, or to the card itself
+    const inner = firstControl(nodeEl);
+    if (!inner && nodeEl.tabIndex < 0) nodeEl.tabIndex = -1;
+    const cardFocusEl = nodeEl.tabIndex >= 0 ? nodeEl : (inner ?? nodeEl);
 
     if (jump.readerTarget) {
-      const openerEl = nodeEl.querySelector<HTMLElement>('button') ?? cardFocusEl;
+      const openerEl = firstControl(nodeEl, 'button') ?? cardFocusEl;
       openInReader(jump.readerTarget, openerEl);
     } else {
       focusing.current = true;
@@ -665,30 +708,17 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     pendingJump,
     stepped?.phase,
     activeAreaId,
-    areaFitKey,
+    activeArea,
+    areaReady,
     areaInstance,
     areaCanvasSize,
     areaCanvasContainer,
     areaNodes,
+    newsView,
     jumpTick,
-    moves.shown,
     openInReader,
     clearJump,
   ]);
-
-  // Docked reader reveal in Plane 1
-  useEffect(() => {
-    const id = revealing.current;
-    const instance = areaFlow.current;
-    if (!reader || id === null || !instance || areaSection.width === 0) return;
-    revealing.current = null;
-    if (layout === 'large') return;
-    const rect = nodeRects(moves.shown).get(id);
-    const view = rect && readerReveal(rect, instance.getViewport(), areaSection, OPEN_MARGIN);
-    if (view) {
-      void instance.setViewport(view, { duration: moveMs(300) });
-    }
-  }, [reader, layout, moves.shown, areaSection]);
 
   // Narrow sidebar Escape handling
   const root = useRef<HTMLDivElement>(null);
@@ -724,7 +754,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [reader, active, closeReader, navDock.overlays, narrowNavOpen]);
 
-  // Stepped Area Escape handling (only when reader is closed and no modal dialog is open)
+  // Stepped Area Escape handling (only when reader is closed and no modal dialog is open): an open row closes first, then the Area
   useEffect(() => {
     if (!stepped || stepped.phase !== 'open' || reader || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -735,11 +765,18 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
       const inside = target instanceof Node && Boolean(root.current?.contains(target));
       if (!inside && target !== document.body && target !== document.documentElement) return;
       event.preventDefault();
+      if (openRef.current.rowId) {
+        const row = openRef.current.rowId;
+        keepFocusOn(row);
+        openRef.current = { rowId: null, page: 0 };
+        setOpenState(null);
+        return;
+      }
       stepOut();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [stepped, reader, active, stepOut, navDock.overlays, narrowNavOpen]);
+  }, [stepped, reader, active, stepOut, navDock.overlays, narrowNavOpen, keepFocusOn]);
 
   // Actions for Plane 0 & Plane 1
   const overviewActions = useMemo<BoardActions>(() => ({
@@ -757,7 +794,9 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     openInReader,
     toggleGroup: () => {},
     keepFocus: () => {},
-  }), [workspaceId, workspacePath, openInReader]);
+    toggleRow,
+    setRowPage,
+  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage]);
 
   const backdropPress = useRef({ down: false, up: false });
 
@@ -969,51 +1008,29 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
                   <div
                     ref={setAreaCanvasContainer}
                     className="absolute inset-0"
-                    onPointerDownCapture={(event) => {
-                      areaTakenBefore.current = areaTaken.current;
-                      if (isViewGesture(areaCanvasContainer, event.target)) areaTaken.current = true;
-                    }}
-                    onMouseDownCapture={(event) => {
-                      if (event.detail >= 2) areaTaken.current = areaTakenBefore.current;
-                    }}
-                    onWheelCapture={(event) => {
-                      if (areaCanvasContainer?.contains(event.target as Node)) areaTaken.current = true;
-                    }}
-                    onFocusCapture={(event) => {
-                      if (!focusing.current) showFocused(areaFlow.current, event, areaCanvasSize, () => { areaTaken.current = true; });
-                    }}
                   >
-                    <p id={moveHelp} className="sr-only">{MOVE_HELP}</p>
-                    <div role="status" className="sr-only">{moves.notice?.text}</div>
-                    {moves.notice && (
-                      <div className="pointer-events-none absolute inset-x-16 top-3 z-10 flex justify-center">
-                        <MoveStatus notice={moves.notice} onDismiss={moves.dismiss} onKeep={moves.keepNotice} />
-                      </div>
-                    )}
                     <BoardActionsContext value={areaActions}>
                       <BoardReadingContext value={reader?.target.card ?? null}>
                         <ReactFlow
                           id="board-area-flow"
-                          className="board-flow"
-                          aria-label="Area canvas. Arrow keys pan, plus and minus zoom, zero fits the board in view. Drag a card to move it, or press Shift and an arrow key on it."
+                          className="board-flow board-flow-rows"
+                          aria-label="Area canvas. Press a step, a folded row or a plus button to open that row."
                           tabIndex={0}
-                          nodes={moves.shown}
+                          nodes={areaNodes}
                           edges={areaEdges}
                           nodeTypes={AREA_NODE_TYPES}
                           defaultEdgeOptions={EDGE_OPTIONS}
-                          defaultViewport={areaViewport ?? undefined}
+                          defaultViewport={areaView()}
+                          panOnDrag={false}
+                          panOnScroll={false}
+                          zoomOnScroll={false}
+                          zoomOnPinch={false}
+                          preventScrolling={false}
                           connectionMode={ConnectionMode.Loose}
                           onInit={(instance) => {
                             areaFlow.current = instance;
                             setAreaInstance(instance);
                           }}
-                          onKeyDown={(event) => {
-                            if (!moves.onKeyDown(event)) navigate(areaFlow.current, event, () => { areaTaken.current = true; });
-                          }}
-                          onNodesChange={moves.onNodesChange}
-                          onNodeDragStart={moves.onNodeDragStart}
-                          onNodeDragStop={moves.onNodeDragStop}
-                          nodeDragThreshold={3}
                           nodesDraggable={false}
                           nodesConnectable={false}
                           nodesFocusable={false}
@@ -1026,14 +1043,12 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
                           zoomActivationKeyCode={null}
                           disableKeyboardA11y
                           zoomOnDoubleClick={false}
-                          minZoom={0.1}
-                          maxZoom={1.5}
+                          minZoom={READABLE_ZOOM}
+                          maxZoom={READABLE_ZOOM}
                           attributionPosition="bottom-center"
                           ariaLabelConfig={ARIA_LABELS}
                         >
                           <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
-                          <Controls showInteractive={false} fitViewOptions={FIT} />
-                          <MiniMap pannable zoomable nodeClassName={minimapClass} />
                         </ReactFlow>
                       </BoardReadingContext>
                     </BoardActionsContext>

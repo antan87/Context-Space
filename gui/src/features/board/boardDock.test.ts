@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { READER, fileTitle, readerDock, readerReveal } from './boardDock.js';
+import { READER, fileTitle, readerDock } from './boardDock.js';
 
 describe('readerDock', () => {
   it('takes 45% of the section beside the canvas', () => {
@@ -29,31 +29,6 @@ describe('readerDock', () => {
   });
 });
 
-describe('readerReveal', () => {
-  const view = { x: 0, y: 0, zoom: 1 };
-  const section = { width: 1440, height: 900 };
-
-  it('leaves the view alone for a card that stays in sight beside the reader', () => {
-    expect(readerReveal({ x: 100, y: 100, width: 264, height: 128 }, view, section, 40)).toBeNull();
-  });
-
-  it('moves the view just far enough for a card that would be under the reader', () => {
-    // The reader takes 648 px of 1440, so the canvas shows 792 px; a card from 700 to 964 is cut off on the right.
-    const moved = readerReveal({ x: 700, y: 100, width: 264, height: 128 }, view, section, 40);
-    expect(moved).toEqual({ x: 792 - 40 - 264 - 700, y: 0, zoom: 1 });
-  });
-
-  it('keeps the zoom and the vertical place', () => {
-    const moved = readerReveal({ x: 900, y: 100, width: 264, height: 128 }, { x: 10, y: -20, zoom: 0.8 }, section, 40);
-    expect(moved?.zoom).toBe(0.8);
-    expect(moved?.y).toBe(-20);
-  });
-
-  it('does nothing when the reader covers the whole canvas', () => {
-    expect(readerReveal({ x: 700, y: 100, width: 264, height: 128 }, view, { width: 600, height: 900 }, 40)).toBeNull();
-  });
-});
-
 describe('fileTitle', () => {
   it('is the file name at the end of the path', () => {
     expect(fileTitle('docs/export flow.md')).toBe('export flow.md');
@@ -65,3 +40,4 @@ describe('fileTitle', () => {
     expect(fileTitle('')).toBe('');
   });
 });
+

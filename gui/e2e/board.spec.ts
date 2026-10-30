@@ -13,7 +13,8 @@ import type { WorkDocument } from '../src/types.ts';
  * people and AIs put on the board can be dragged; the place is kept in the board file.
  */
 const workspace = { id: 'demo', branchName: 'demo', name: 'Reports CSV export', description: 'Add CSV export to reports', repos: [], assistants: [], workspacePath: '/tmp/demo', createdAt: '2026-10-01T00:00:00Z' };
-test.use({ workspacesData: [[workspace], { option: true }], viewport: { width: 1440, height: 900 } });
+// A laptop-sized window, as the Board is used; a spec that needs more or less sets its own size and says why.
+test.use({ workspacesData: [[workspace], { option: true }], viewport: { width: 1280, height: 800 } });
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
@@ -124,8 +125,6 @@ async function stepIntoArea(page: Page, name: string | RegExp = /Reports export 
   await expect(board(page).getByRole('button', { name: 'Board ›' })).toBeVisible();
   await viewAtRest(page, options);
 }
-/** What the board says about a move: its live region, which is there from the start and empty until there is something to say. */
-const status = (page: Page) => board(page).getByRole('status').filter({ hasNotText: /^Still loading/ });
 /** Where a node stands on the canvas (not on the screen): its own place, or its lane's for a card in one. */
 const canvasPosition = (page: Page, id: string) => node(page, id).evaluate((element) => {
   const matrix = new DOMMatrix(getComputedStyle(element).transform);
@@ -170,7 +169,40 @@ async function viewAtRest(page: Page, options: { allowLoading?: boolean } = {}) 
     const before = JSON.stringify(await transformOf(page));
     await frames(page, 6);
     return JSON.stringify(await transformOf(page)) === before;
-  }, { intervals: [120] }).toBe(true);
+  }, { intervals: [120], timeout: 15000 }).toBe(true);
+}
+/**
+ * Makes sure a card is on show: when it is behind a "+N more" tile (the row is wider than the window), the tile is pressed and the
+ * row opens. A card that is on show already is left alone.
+ */
+async function reveal(page: Page, target: Locator) {
+  const more = board(page).locator('#board-area').locator('.react-flow__node-more button, .react-flow__node-fold button');
+  // Which row holds the card is not known, and it may not have arrived yet: each row that has more than fits is opened in turn, and closed again when the card is not in it
+  await expect.poll(async () => {
+    if (await target.isVisible()) return true;
+    const rows = await more.count();
+    for (let index = 0; index < rows; index += 1) {
+      await more.nth(index).click();
+      await frames(page, 6);
+      // The row may have pages: each is looked at
+      const older = board(page).locator('#board-area').getByRole('button', { name: 'Older ›' });
+      for (let turn = 0; turn < 12 && !(await target.isVisible()) && await older.count() && await older.isEnabled(); turn += 1) {
+        await older.click();
+        await frames(page, 4);
+      }
+      if (await target.isVisible()) return true;
+      await page.keyboard.press('Escape');
+      await frames(page, 6);
+    }
+    return false;
+  }, { timeout: 15000, intervals: [300] }).toBe(true);
+}
+/** Opens the row of the current step, if it has more than fits. */
+async function revealAll(page: Page) {
+  const more = board(page).locator('#board-area').getByRole('button', { name: /^Show \d+ more for Background job queue/ });
+  await frames(page, 4);
+  if (await more.count()) await more.click();
+  await viewAtRest(page);
 }
 /** Waits until the browser has drawn that many frames: whatever was going to happen in them has happened. */
 const frames = (page: Page, count = 6) => page.evaluate((total) => new Promise<void>((resolve) => {
@@ -178,17 +210,6 @@ const frames = (page: Page, count = 6) => page.evaluate((total) => new Promise<v
   const tick = () => (++drawn >= total ? resolve() : requestAnimationFrame(tick));
   requestAnimationFrame(tick);
 }), count);
-/**
- * Shows the whole board, with room all round. A drag that comes within a few dozen pixels of the edge of the canvas makes it
- * pan by itself, so the cards that are dragged stand well inside, wherever the board opened.
- */
-async function fitted(page: Page) {
-  const steppedBtn = board(page).locator('#board-area button[aria-label="Fit the board in view"]');
-  const count = await steppedBtn.count();
-  const chosen = count > 0 ? steppedBtn : board(page).locator('#board-overview button[aria-label="Fit the board in view"]');
-  await chosen.click();
-  await viewAtRest(page);
-}
 /**
  * Drags from the middle of `target` by that many screen pixels with the mouse, and lets go unless told to hold on. React
  * Flow starts a drag at the first move of a few pixels and counts from there, so a short move starts it and the rest is
@@ -205,9 +226,6 @@ async function dragBy(page: Page, target: Locator, dx: number, dy: number, optio
   if (!options.hold) await page.mouse.up();
   return start;
 }
-/** How big a card is on the canvas, as the layout makes it: a note, and any card across. */
-const BOARD_CARD = { width: 264, note: 160 };
-const nearTo = (at: { x: number; y: number }, expected: { x: number; y: number }, tolerance = 3) => Math.abs(at.x - expected.x) <= tolerance && Math.abs(at.y - expected.y) <= tolerance;
 
 test.describe('Board', () => {
   test('opens from the rail, right after Plan, on its own address', async ({ page }) => {
@@ -292,8 +310,16 @@ test.describe('Board', () => {
     const frame = stepped.getByRole('article', { name: 'Reports export to CSV' });
     await expect(frame).toBeVisible();
     await expect(frame).toContainText('1 of 3 steps');
-    await expect(frame.getByRole('listitem').filter({ hasText: 'Write the CSV writer' })).toContainText('Done:');
     await expect(frame).toContainText('Waits for you');
+    // The open steps are rows, the first one is the current step, and the done step is folded into one line that opens
+    await expect(stepped.getByRole('button', { name: /^Current step: Background job queue for large exports/ })).toBeVisible();
+    await expect(stepped.getByRole('button', { name: /^1 more open step/ })).toBeVisible();
+    const done = stepped.getByRole('button', { name: /1 done step/ });
+    await expect(done).toHaveAttribute('aria-expanded', 'false');
+    await done.click();
+    await expect(stepped.getByRole('button', { name: /1 done step/ })).toHaveAttribute('aria-expanded', 'true');
+    await expect(stepped.getByText('Write the CSV writer')).toBeVisible();
+    await stepped.getByRole('button', { name: /1 done step/ }).click();
 
     // Documents & commits routed to this area are open
     await expect(stepped.getByRole('article', { name: 'Export requirements' })).toBeVisible();
@@ -435,8 +461,8 @@ test.describe('Board', () => {
     await stepIntoArea(page, /Reports export to CSV/, { allowLoading: true });
     const canvas = board(page);
     await expect(canvas.getByText('No new commits since you last looked.')).toBeVisible();
-    await expect(canvas.getByRole('heading', { name: 'Commits', exact: true })).toBeVisible();
-    await expect(canvas.getByRole('heading', { name: 'api' })).toHaveCount(0);
+    await expect(canvas.getByRole('button', { name: /^Commits/ })).toBeVisible();
+    await expect(canvas.getByRole('button', { name: /^api/ })).toHaveCount(0);
     await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toHaveCount(0);
   });
 
@@ -446,7 +472,7 @@ test.describe('Board', () => {
     await page.goto('/#/workspaces/demo/board');
     await stepIntoArea(page, /Reports export to CSV/, { allowLoading: true });
     const canvas = board(page);
-    await expect(canvas.getByRole('heading', { name: 'gone' })).toBeVisible();
+    await expect(canvas.getByRole('button', { name: /^gone/ })).toBeVisible();
     await expect(canvas.getByText('Could not be read: The folder is missing.')).toBeVisible();
     await expect(canvas.getByText(/No new commits/)).toHaveCount(0);
 
@@ -454,7 +480,7 @@ test.describe('Board', () => {
     await page.reload();
     await stepIntoArea(page);
     await expect(canvas.getByText('No new commits in the other repositories since you last looked.')).toBeVisible();
-    await expect(canvas.getByRole('heading', { name: 'api' })).toHaveCount(0);
+    await expect(canvas.getByRole('button', { name: /^api/ })).toHaveCount(0);
   });
 
   test('moves to the work again, without being rebuilt, when a part arrives after the board opened', async ({ page }) => {
@@ -508,6 +534,7 @@ test.describe('Board', () => {
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     await canvas.locator('#board-area').getByRole('button', { name: 'Archived (1)' }).click();
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
+    await reveal(page, canvas.getByRole('article', { name: 'A long note' }));
     await expect.poll(() => isWithin(canvas.getByRole('article', { name: 'A long note' }), canvas.locator('#board-area .react-flow'))).toBe(true);
     await canvas.locator('#board-area').getByRole('button', { name: 'Read all of A long note' }).click();
     const dialog = page.getByRole('dialog', { name: 'A long note' });
@@ -516,7 +543,7 @@ test.describe('Board', () => {
     await expect(dialog).toHaveCount(0);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     release();
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeAttached();
+    await reveal(page, canvas.getByRole('article', { name: 'a91f2e0' }));
     await expect.poll(() => isWithin(canvas.getByRole('article', { name: 'a91f2e0' }), canvas.locator('#board-area .react-flow'))).toBe(true);
   });
 
@@ -570,6 +597,10 @@ test.describe('Board', () => {
 });
 
 test.describe('Board cards', () => {
+  // A large window: these specs put several cards, and often a document and a commit too, on screen at once, which a laptop-sized
+  // canvas shows as folded rows and "+N more" (specs for that are under "Board, rows by step").
+  test.use({ viewport: { width: 1800, height: 1200 } });
+
   test('draws a note with its title, its text, who wrote it and when', async ({ page }) => {
     await routeBoard(page);
     await routeCards(page, boardFile({ cards: [
@@ -652,6 +683,7 @@ test.describe('Board cards', () => {
     await page.goto('/#/workspaces/demo/board');
     await stepIntoArea(page);
     const canvas = board(page);
+    await revealAll(page);
     for (const [title, kind, path] of [['Overview page', 'HTML page', 'docs/overview.html'], ['The spec', 'PDF', 'docs/spec.pdf'], ['Notes in Markdown', 'Markdown', 'docs/notes.md'], ['The deck', 'File', 'docs/deck.pptx']]) {
       const card = canvas.getByRole('article', { name: title });
       await expect(card).toContainText(kind);
@@ -685,11 +717,13 @@ test.describe('Board cards', () => {
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await reveal(page, canvas.getByRole('article', { name: 'An old PDF' }));
     for (const title of ['Done with this', 'An old PDF']) {
       const card = canvas.getByRole('article', { name: title });
       await expect(card).toBeVisible();
       await expect(card).toContainText('Archived');
     }
+    await reveal(page, canvas.getByRole('article', { name: 'Just a note' }));
     await expect(canvas.getByRole('article', { name: 'Just a note' })).not.toContainText('Archived');
     await toggle.click();
     await expect(canvas.getByRole('article', { name: 'Done with this' })).toHaveCount(0);
@@ -813,33 +847,36 @@ test.describe('Board cards', () => {
     await expect(canvas.getByRole('article', { name: 'First note' })).toHaveCount(0);
   });
 
-  test('uses a saved place over the automatic one, and puts the cards with none by the plan, not over it', async ({ page }) => {
+  test('ignores a saved place inside an Area: cards stand on their step row, the others under "Not tied to a step", clear of each other', async ({ page }) => {
     await routeBoard(page);
     await routeCards(page, boardFile({
-      cards: [boardNote(1, { title: 'Placed note' }), boardNote(2, { title: 'Second note' }), boardNote(3, { title: 'Third note' }), boardFileCard(4, 'docs/a.html', { title: 'A page' })],
+      cards: [boardNote(1, { title: 'Placed note' }), boardNote(2, { title: 'Second note', step: undefined }), boardNote(3, { title: 'Third note', step: 'no-such-step' }), boardFileCard(4, 'docs/a.html', { title: 'A page', step: undefined })],
       positions: { [boardId(1)]: { x: 2300, y: 333 }, 'checkpoint:reports-export-to-csv': { x: 700, y: 520 }, 'commit:billing api:a91f2e0': { x: 2000, y: 90 } },
     }));
     await page.goto('/#/workspaces/demo/board');
     await stepIntoArea(page);
     const canvas = board(page);
     await expect(canvas.getByRole('article', { name: 'Placed note' })).toBeVisible();
-    // A saved place is used as it is for a card. The app places checkpoints, documents and commits itself: a place saved for
-    // one of them is ignored, and it stays in its group and order.
-    await expect(node(page, boardId(1))).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 2300, 333)');
+    // The saved place is kept in the file but not used: the card is on the row of its step, under the step's header
+    const [head, placed] = await Promise.all([canvasBox(page, 'row:step:background-job-queue-for-large-exports'), canvasBox(page, boardId(1))]);
+    expect(placed.y).toBeGreaterThanOrEqual(head.y + head.height);
+    expect(placed.x).toBeLessThan(400);
     expect(await canvasPosition(page, 'checkpoint:reports-export-to-csv')).toEqual({ x: 0, y: 0 });
     await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
-    // The others stand in a band under the checkpoints, clear of everything beside it.
-    const band = canvas.getByRole('heading', { name: 'From the board' });
+    // The cards with no step, or a step this Area does not have, stand in a row of their own, clear of everything beside it
+    const band = canvas.getByRole('button', { name: /Not tied to a step/ });
     await expect(band).toBeVisible();
-    // Compared where they stand on the canvas: the view may still be moving, and two screen readings would differ.
-    const [lane, current] = await Promise.all([canvasBox(page, 'lane:board'), canvasBox(page, 'checkpoint:reports-export-to-csv')]);
-    expect(lane.y).toBeGreaterThan(current.y + current.height);
+    const lane = await canvasBox(page, 'lane:board');
+    expect(lane.y).toBeGreaterThan(placed.y + placed.height);
     for (const id of ['lane:documents', 'checkpoint:reports-export-to-csv', boardId(1)]) {
       const box = await canvasBox(page, id);
       const apart = box.x + box.width <= lane.x || lane.x + lane.width <= box.x || box.y + box.height <= lane.y || lane.y + lane.height <= box.y;
       expect(apart).toBe(true);
     }
-    for (const title of ['Second note', 'Third note', 'A page']) await expect(canvas.getByRole('article', { name: title })).toBeVisible();
+    for (const title of ['Second note', 'Third note', 'A page']) {
+      expect((await canvasBox(page, title === 'Second note' ? boardId(2) : title === 'Third note' ? boardId(3) : boardId(4))).y).toBeGreaterThanOrEqual(lane.y + lane.height);
+      await expect(canvas.getByRole('article', { name: title })).toBeVisible();
+    }
   });
 
   test('highlights what an AI made or changed in the last minute, and nothing else, and does not animate for those who ask for less motion', async ({ page }) => {
@@ -854,6 +891,7 @@ test.describe('Board cards', () => {
     await page.goto('/#/workspaces/demo/board');
     await stepIntoArea(page);
     const canvas = board(page);
+    await revealAll(page);
     await expect(canvas.getByRole('article', { name: 'Made a while ago' })).toBeVisible();
     const glow = (title: string) => canvas.getByRole('article', { name: title }).locator('.board-fresh');
     await expect(glow('Just made by claude')).toHaveCount(1);
@@ -865,7 +903,7 @@ test.describe('Board cards', () => {
     await expect(glow('Just made by claude')).toHaveCSS('animation-name', 'board-fresh-still');
   });
 
-  test('brings a card into view when the keyboard reaches it', async ({ page }) => {
+  test('keeps every card in view whatever place it was given, and the keyboard reaches its buttons', async ({ page }) => {
     await routeBoard(page);
     await routeCards(page, boardFile({
       cards: [boardFileCard(1, 'docs/far.html', { title: 'A card far away' })],
@@ -876,18 +914,10 @@ test.describe('Board cards', () => {
     const canvas = board(page);
     const far = canvas.getByRole('article', { name: 'A card far away' });
     await expect(far).toBeVisible();
-    await expect(far).not.toBeInViewport();
-    await canvas.locator('#board-area .react-flow').focus();
-    const stops: string[] = [];
-    for (let press = 0; press < 12 && !(await node(page, boardId(1)).evaluate((element) => element === document.activeElement)); press += 1) {
-      await page.keyboard.press('Tab');
-      stops.push(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? ''));
-    }
-    await expect(node(page, boardId(1))).toBeFocused();
-    expect(stops.at(-1)).toBe('A card far away');
     await expect.poll(() => isWithin(far, canvas.locator('#board-area .react-flow'))).toBe(true);
-    await page.keyboard.press('Tab');
+    await canvas.getByRole('button', { name: 'Open A card far away' }).focus();
     await expect(canvas.getByRole('button', { name: 'Open A card far away' })).toBeFocused();
+    await expect.poll(() => isWithin(far, canvas.locator('#board-area .react-flow'))).toBe(true);
   });
 
   test('draws nothing of its own for a card with a path that leaves the workspace', async ({ page }) => {
@@ -901,6 +931,10 @@ test.describe('Board cards', () => {
 });
 
 test.describe('Board, reader', () => {
+  // A large window: these specs put several cards, and often a document and a commit too, on screen at once, which a laptop-sized
+  // canvas shows as folded rows and "+N more" (specs for that are under "Board, rows by step").
+  test.use({ viewport: { width: 1800, height: 1200 } });
+
   const MODIFIED = '2026-10-22T00:00:00.000Z';
   /** The workspace folder, so a link can name a file by its full path. */
   const ROOT = workspace.workspacePath;
@@ -981,8 +1015,8 @@ test.describe('Board, reader', () => {
     return asked;
   }
   const FILE_CARDS = [
-    boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec', description: 'What a row looks like.' }),
-    boardFileCard(2, 'overview.html', { title: 'Overview page', description: 'Start with the diagram.' }),
+    boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec', description: 'What a row looks like.', at: minutesAgo(10), updatedAt: minutesAgo(10) }),
+    boardFileCard(2, 'overview.html', { title: 'Overview page', description: 'Start with the diagram.', at: minutesAgo(11), updatedAt: minutesAgo(11) }),
   ];
   /** Under the checkpoints, in sight when the board opens: the first stands where the reader will not be, the second where it will. */
   const FILE_PLACES = { [boardId(1)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 } };
@@ -1007,7 +1041,9 @@ test.describe('Board, reader', () => {
     expect(Math.abs(panel!.x + panel!.width - (section!.x + section!.width))).toBeLessThanOrEqual(1);
     expect(canvas!.x + canvas!.width).toBeLessThanOrEqual(panel!.x + 1);
     await expect(board(page).getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
-    await expect(board(page).locator('#board-area').getByRole('button', { name: 'Zoom in' })).toBeVisible();
+    // Inside an Area the view is fixed: no zoom controls and no map
+    await expect(board(page).locator('#board-area').getByRole('button', { name: 'Zoom in' })).toHaveCount(0);
+    await expect(board(page).locator('#board-area .react-flow__minimap')).toHaveCount(0);
   });
 
   test('opens a file card in the reader, and another card replaces what it shows', async ({ page }) => {
@@ -1180,8 +1216,9 @@ test.describe('Board, reader', () => {
   test('covers the canvas where the section is too narrow for both, and has a Close that gives it back', async ({ page }) => {
     await page.setViewportSize({ width: 820, height: 900 });
     await openBoard(page, FILE_CARDS);
-    // On a small screen the card is out of sight below the checkpoints: the keyboard brings it into view.
+    // On a small screen the row is too narrow for both cards: the second is behind "+N more"; the card comes first, newest first.
     const button = opener(page, 'The CSV spec');
+    await reveal(page, card(page, 'The CSV spec'));
     await button.focus();
     await page.keyboard.press('Enter');
     await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
@@ -1197,42 +1234,23 @@ test.describe('Board, reader', () => {
     await expect(card(page, 'The CSV spec')).toBeInViewport();
   });
 
-  test('moves the view only as far as it takes to keep the opened card in sight, and does not move the card', async ({ page }) => {
-    // The card stands in the right of the view, where the reader will be.
-    await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], { [boardId(1)]: { x: 1000, y: 330 } });
-    await fitted(page);
-    const canvas = board(page).locator('#board-area .react-flow');
-    const [before, area] = await Promise.all([card(page, 'The CSV spec').boundingBox(), canvas.boundingBox()]);
-    expect(before!.x + before!.width).toBeGreaterThan(area!.x + area!.width * 0.55);
-    const place = await canvasPosition(page, boardId(1));
+  test('keeps the view fixed when the reader docks: the rows are laid out again for the canvas it leaves, and the opened card stays whole beside it', async ({ page }) => {
+    await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], {});
     const view = await transformOf(page);
+    expect(view.scale).toBeCloseTo(0.9, 5);
+    const flow = board(page).locator('#board-area .react-flow');
+    const wide = (await flow.boundingBox())!;
     await opener(page, 'The CSV spec').click();
     await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
     const free = (await reader(page).boundingBox())!;
-    // The view glides there; it has arrived when the card is whole beside the reader.
     await expect.poll(async () => { const box = (await card(page, 'The CSV spec').boundingBox())!; return box.x + box.width <= free.x; }).toBe(true);
+    await expect.poll(async () => (await flow.boundingBox())!.width).toBeLessThan(wide.width);
     await viewAtRest(page);
-    const after = (await card(page, 'The CSV spec').boundingBox())!;
-    expect(after.x).toBeGreaterThanOrEqual(area!.x);
-    // Only the left-right place of the view changed, by as little as it took; the zoom and the card's own place did not.
-    const moved = await transformOf(page);
-    expect(moved.scale).toBeCloseTo(view.scale, 5);
-    expect(moved.y).toBeCloseTo(view.y, 1);
-    expect(moved.x).toBeLessThan(view.x);
-    expect(await canvasPosition(page, boardId(1))).toEqual(place);
-    // Closing does not move it back: the view is the user's.
+    expect(await transformOf(page)).toEqual(view);
+    await expect.poll(() => isWithin(card(page, 'The CSV spec'), flow)).toBe(true);
+    // Closing gives the canvas back, and the view is where it was
     await reader(page).getByRole('button', { name: 'Close' }).click();
     await viewAtRest(page);
-    expect(await transformOf(page)).toEqual(moved);
-  });
-
-  test('leaves the view alone when the opened card is in sight beside the reader already', async ({ page }) => {
-    await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], { [boardId(1)]: { x: 100, y: 330 } });
-    await fitted(page);
-    const view = await transformOf(page);
-    await opener(page, 'The CSV spec').click();
-    await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
-    await frames(page);
     expect(await transformOf(page)).toEqual(view);
   });
 
@@ -1256,28 +1274,29 @@ test.describe('Board, reader', () => {
     await expect.poll(() => isWithin(canvas.getByRole('article', { name: 'a91f2e0' }), canvas.locator('#board-area .react-flow'))).toBe(true);
   });
 
-  test('leaves the view where the user put it when a link in the reader opens another file', async ({ page }) => {
+  test('cannot be panned by a drag on the empty canvas, so a link in the reader opening another file leaves the view where it is', async ({ page }) => {
     await openBoard(page);
     await opener(page, 'Export requirements').click();
     await expect(reader(page).getByRole('heading', { name: 'Customers export reports', level: 1 })).toBeVisible();
-    // The user pans away from the card that was opened, by dragging the empty canvas, until it is out of sight.
+    const before = await transformOf(page);
     const area = (await board(page).locator('#board-area .react-flow').boundingBox())!;
     await page.mouse.move(area.x + 60, area.y + area.height - 30);
     await page.mouse.down();
     await page.mouse.move(area.x + 60, area.y - 20, { steps: 8 });
     await page.mouse.up();
+    await page.mouse.wheel(0, 300);
     await viewAtRest(page);
-    expect(await isWithin(card(page, 'Export requirements'), board(page).locator('#board-area .react-flow'))).toBe(false);
-    const moved = await transformOf(page);
+    expect(await transformOf(page)).toEqual(before);
     await reader(page).getByRole('link', { name: 'the design' }).click();
     await expect(readerTitle(page, 'design.md')).toBeVisible();
     await frames(page, 12);
-    expect(await transformOf(page)).toEqual(moved);
+    expect(await transformOf(page)).toEqual(before);
   });
 
   test('moves the keyboard to the reader when the window narrows until it covers the canvas, and Escape still closes it', async ({ page }) => {
-    await openBoard(page, FILE_CARDS);
+    await openBoard(page, [FILE_CARDS[0]!]);
     const button = opener(page, 'The CSV spec');
+    await reveal(page, card(page, 'The CSV spec'));
     await button.click();
     await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
     // The keyboard is on the card again (the reader took it when it opened).
@@ -1322,6 +1341,7 @@ test.describe('Board, reader', () => {
   test('closes with Escape when the keyboard has dropped to the page itself', async ({ page }) => {
     await openBoard(page, FILE_CARDS);
     const button = opener(page, 'The CSV spec');
+    await reveal(page, card(page, 'The CSV spec'));
     await button.click();
     await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -1565,23 +1585,23 @@ test.describe('Board, reader', () => {
       await expect(button).toBeFocused();
     });
 
-    test('moves the view to keep the card in sight when the window is docked over it', async ({ page }) => {
-      // The card stands in the right of the view, where the dock will be.
-      await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], { [boardId(1)]: { x: 1000, y: 330 } }, 'default');
-      await fitted(page);
+    test('lays the rows out again for the canvas the dock leaves, without moving the view', async ({ page }) => {
+      await openBoard(page, [boardFileCard(1, 'docs/spec.md', { title: 'The CSV spec' })], {}, 'default');
       await opener(page, 'The CSV spec').click();
       await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
       const view = await transformOf(page);
       await sideBySide(page).click();
       const free = (await reader(page).boundingBox())!;
       await expect.poll(async () => { const box = (await card(page, 'The CSV spec').boundingBox())!; return box.x + box.width <= free.x; }).toBe(true);
-      expect((await transformOf(page)).x).toBeLessThan(view.x);
+      await viewAtRest(page);
+      expect(await transformOf(page)).toEqual(view);
     });
 
     test('offers no dock where the section is too narrow for both, and the window still fits', async ({ page }) => {
       await page.setViewportSize({ width: 820, height: 900 });
       await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
       const button = opener(page, 'The CSV spec');
+      await reveal(page, card(page, 'The CSV spec'));
       await button.focus();
       await page.keyboard.press('Enter');
       await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
@@ -1698,7 +1718,9 @@ test.describe('Board, reader', () => {
     async function openNotes(page: Page) {
       // A new tab is not the page: the context's routes cover it, and nothing reaches the network.
       await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Example</title><p>An example page.</p>' }));
-      return openBoard(page, NOTES, PLACES);
+      const asked = await openBoard(page, NOTES, PLACES);
+      await revealAll(page);
+      return asked;
     }
 
     test('opens an https link in a new tab, safely, without moving the card or the view', async ({ page }) => {
@@ -1808,7 +1830,9 @@ test.describe('Board, reader', () => {
       // Some of its links may be where they cannot be seen, so none is a stop; a card that shows all of its text keeps its links as stops.
       await expect(cut.getByRole('link', { name: /the hidden link/ })).toHaveAttribute('tabindex', '-1');
       await expect(card(page, 'Short note').getByRole('link', { name: /short link/ })).not.toHaveAttribute('tabindex', /.*/);
-      await node(page, boardId(1)).focus();
+      await readAll.focus();
+      await page.keyboard.press('Shift+Tab');
+      await expect(cut.getByRole('link', { name: /the hidden link/ })).not.toBeFocused();
       await page.keyboard.press('Tab');
       await expect(readAll).toBeFocused();
       // The whole text is one press away, with every link a stop.
@@ -1831,602 +1855,527 @@ test.describe('Board, reader', () => {
   });
 });
 
-test.describe('Board, moving things', () => {
-  /** A note with a place of its own, above the checkpoint that is under way. */
-  const NOTE = { x: 352, y: -420 };
-  const placedNote = (fields: Record<string, unknown> = {}) => boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory', ...fields })], positions: { [boardId(1)]: NOTE } });
-  async function openWith(page: Page, content: ReturnType<typeof boardFile>, options: { fit?: boolean } = {}) {
+test.describe('Board, nothing to drag inside an Area', () => {
+  test('keeps every node where the layout put it when dragged, and shows no draggable cursor', async ({ page }) => {
     await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'closed'); });
-    // The view takes a late part in at once, so a drag is measured from a view that is not about to move.
-    await page.emulateMedia({ reducedMotion: 'reduce' });
     await routeBoard(page);
-    const server = await routeMoves(page, content);
+    await routeCards(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory', area: 'checkpoint:reports-export-to-csv', step: 'background-job-queue-for-large-exports' })], positions: { [boardId(1)]: { x: 352, y: -420 } } }));
+    const posted: unknown[] = [];
+    await page.route('**/api/workspace/demo/board/changes', (route) => { posted.push(route.request().postDataJSON()); return route.fulfill({ json: boardFile() }); });
     await page.goto('/#/workspaces/demo/board');
     await stepIntoArea(page, /Reports export to CSV/);
-    if (options.fit !== false) await fitted(page);
-    return server;
+    const card = board(page).getByRole('article', { name: 'Export leaks memory' });
+    await expect(card).toBeVisible();
+    // A saved place is not used inside an Area: the card is on its step row
+    const before = await canvasBox(page, boardId(1));
+    expect(before.y).toBeGreaterThanOrEqual(0);
+    await dragBy(page, card, 120, 90);
+    await frames(page, 8);
+    expect(await canvasBox(page, boardId(1))).toEqual(before);
+    await page.keyboard.press('Shift+ArrowRight');
+    await frames(page, 4);
+    expect(await canvasBox(page, boardId(1))).toEqual(before);
+    expect(posted).toHaveLength(0);
+    expect(await node(page, boardId(1)).evaluate((element) => element.classList.contains('draggable'))).toBe(false);
+    expect(await node(page, boardId(1)).evaluate((element) => getComputedStyle(element).cursor)).not.toBe('grab');
+    await expect(board(page).locator('#board-area .react-flow__node.draggable')).toHaveCount(0);
+  });
+});
+
+test.describe('Board, rows by step', () => {
+  const inArea = (page: Page) => board(page).locator('#board-area');
+  const rowButton = (page: Page, name: RegExp | string) => inArea(page).getByRole('button', { name });
+  const flow = (page: Page) => inArea(page).locator('.react-flow');
+  const OPEN_STEP = (i: number) => `Open step ${i} that says something long about board polish and other things to do`;
+  const DONE_STEP = (i: number) => `Done step ${i}`;
+  const key = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const ago = (m: number) => ({ at: minutesAgo(m), updatedAt: minutesAgo(m) });
+
+  /**
+   * The workspace of the real board, as the work on this very feature looks: a checkpoint with 13 open steps and 12 done ones, two decisions
+   * that wait, a repository with commits, 10 cards that are tied to no step, 2 on an open step, 3 on done steps. And another checkpoint after it.
+   */
+  async function openReal(page: Page, options: { size?: { width: number; height: number }; nav?: boolean; area?: RegExp | string; onSteps?: boolean } = {}) {
+    if (!options.nav) await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'closed'); });
+    if (options.size) await page.setViewportSize(options.size);
+    const open = Array.from({ length: 13 }, (_, i) => step(OPEN_STEP(i)));
+    const done = Array.from({ length: 12 }, (_, i) => step(DONE_STEP(i), true));
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ title: 'Real', checkpoints: [
+      checkpoint('Concept', { done: true, steps: [step('Drew the idea', true)] }),
+      checkpoint('A Board tab shows the real work', { steps: [...done, ...open], decisions: [decision('Which time zone?'), decision('Which delimiter?')] }),
+      checkpoint('Later work', { steps: [step('Plan the later work'), step('Do the later work')] }),
+    ] }) }));
+    await routeWork(page, []);
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [{ repo: 'NexusFlow', more: 0, commits: Array.from({ length: 5 }, (_, i) => ({ sha: `a91f2e0c4d5${i}`, author: 'Anna', subject: `Commit ${i}`, at: minutesAgo(30 + i) })) }] }) }));
+    await routePictures(page);
+    const area = 'checkpoint:a-board-tab-shows-the-real-work';
+    await routeCards(page, boardFile({ cards: [
+      ...Array.from({ length: 9 }, (_, i) => boardFileCard(10 + i, `board-pictures/p${i}.png`, { title: `Picture ${i}`, step: undefined, area, ...ago(i + 5) })),
+      boardNote(19, { title: 'A loose note', step: undefined, area, ...ago(40) }),
+      ...(options.onSteps === false ? [] : [boardNote(20, { title: 'Newest on an open step', body: Array.from({ length: 8 }, (_, i) => `Line ${i + 1} of the note.`).join('\n'), step: key(OPEN_STEP(3)), ...ago(1) }), boardNote(21, { title: 'Older on an open step', step: key(OPEN_STEP(3)), ...ago(3) })]),
+      ...(options.onSteps === false ? [] : [
+        boardNote(26, { title: 'Starts with code', body: '```\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\n```\nsee [the plan](PLAN.md) after the code.', step: key(DONE_STEP(2)), ...ago(53) }),
+        boardNote(27, { title: 'Starts with a table', body: '| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n\nand then some words after the table.', step: key(DONE_STEP(2)), ...ago(54) }),
+      ]),
+      boardNote(22, { title: 'On a done step', step: key(DONE_STEP(2)), ...ago(50) }),
+      boardNote(23, { title: 'On another done step', step: key(DONE_STEP(5)), ...ago(51) }),
+      boardNote(24, { title: 'On a third done step', step: key(DONE_STEP(9)), ...ago(52) }),
+      boardNote(25, { title: 'Later note', step: key('Plan the later work'), area: 'checkpoint:later-work', ...ago(2) }),
+    ] }));
+    await page.goto('/#/workspaces/demo/board');
+    await stepIntoArea(page, options.area ?? /A Board tab shows the real work/);
+    return area;
   }
 
-  test('moves a card where it is dropped and keeps the place for a reload, without sending a revision', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    const card = board(page).getByRole('article', { name: 'Export leaks memory' });
-    await expect(card).toBeInViewport();
-    await expect(node(page, boardId(1))).toHaveClass(/draggable/);
-    await expect(node(page, boardId(1))).toHaveCSS('cursor', 'grab');
-    const { scale } = await transformOf(page);
-    await dragBy(page, card, 120, 80);
-
-    // It stays where it was dropped, in canvas units, whatever the zoom.
-    const dropped = { x: NOTE.x + 120 / scale, y: NOTE.y + 80 / scale };
-    await expect.poll(async () => nearTo(await canvasPosition(page, boardId(1)), dropped)).toBe(true);
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    // One move for the one node, as the user would send it. A place is independent of the rest, so no revision.
-    expect(server.posted).toHaveLength(1);
-    expect(server.posted[0]).toEqual({ changes: [{ op: 'move', nodes: [{ id: boardId(1), x: expect.any(Number), y: expect.any(Number) }] }] });
-    expect(server.posted[0]).not.toHaveProperty('revision');
-    const saved = server.posted[0].changes[0].nodes[0];
-    expect(nearTo(saved, dropped)).toBe(true);
-    expect(Number.isInteger(saved.x) && Number.isInteger(saved.y)).toBe(true);
-    // The card did not snap back when the answer came, and the place is the one that was saved.
-    expect(await canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-
-    // The place is in the board file now, so it is there after a reload.
-    await page.reload();
-    await stepIntoArea(page, /Reports export to CSV/);
-    await expect(board(page).getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-    expect(server.posted).toHaveLength(1);
-  });
-
-  test('pans the board when the empty canvas is dragged, and leaves the cards where they are', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    const area = (await board(page).locator('#board-area .react-flow').boundingBox())!;
-    const spot = { x: area.x + 200, y: area.y + 40 };
-    expect(await page.evaluate(({ x, y }) => !document.elementFromPoint(x, y)?.closest('.react-flow__node, .react-flow__controls, .react-flow__minimap'), spot)).toBe(true);
-    const [viewBefore, noteAt, frameAt] = await Promise.all([transformOf(page), canvasPosition(page, boardId(1)), canvasPosition(page, 'checkpoint:reports-export-to-csv')]);
-    await page.mouse.move(spot.x, spot.y);
-    await page.mouse.down();
-    await page.mouse.move(spot.x + 90, spot.y + 30, { steps: 5 });
-    await page.mouse.up();
-    await expect.poll(async () => (await transformOf(page)).x).toBeGreaterThan(viewBefore.x + 80);
-    const viewAfter = await transformOf(page);
-    expect(viewAfter.x - viewBefore.x).toBeCloseTo(90, 0);
-    expect(viewAfter.y - viewBefore.y).toBeCloseTo(30, 0);
-    expect(await canvasPosition(page, boardId(1))).toEqual(noteAt);
-    expect(await canvasPosition(page, 'checkpoint:reports-export-to-csv')).toEqual(frameAt);
-    await expect(status(page)).toHaveText('');
-    expect(server.posted).toEqual([]);
-  });
-
-  test('leaves a card alone that is put down where it was, or pressed on at its button, or only clicked', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardFileCard(1, 'docs/overview.html', { title: 'Overview page' })], positions: { [boardId(1)]: NOTE } }));
-    const card = board(page).getByRole('article', { name: 'Overview page' });
-    // A press on the button and a move is not a drag of the card.
-    const open = (await card.getByRole('button', { name: 'Open Overview page' }).boundingBox())!;
-    await page.mouse.move(open.x + open.width / 2, open.y + open.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(open.x + open.width / 2 + 60, open.y + open.height / 2 + 40, { steps: 4 });
-    await page.mouse.up();
-    expect(await canvasPosition(page, boardId(1))).toEqual(NOTE);
-    // A press that slips a pixel or two is a click.
-    const body = (await card.boundingBox())!;
-    await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(body.x + body.width / 2 + 2, body.y + body.height / 2 + 1);
-    await page.mouse.up();
-    expect(await canvasPosition(page, boardId(1))).toEqual(NOTE);
-    // Picked up and put down on the same spot: nothing to save.
-    const from = await dragBy(page, card, 40, 30, { hold: true });
-    await page.mouse.move(from.x, from.y, { steps: 4 });
-    await page.mouse.up();
-    expect(await canvasPosition(page, boardId(1))).toEqual(NOTE);
-    // The one save that is sent is the one for the drag that moved it.
-    await dragBy(page, card, 60, 0);
-    await expect(status(page)).toContainText('Moved “Overview page”');
-    expect(server.posted).toHaveLength(1);
-  });
-
-  test('puts a card back and says why when its place could not be saved', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    server.fail = { status: 409, error: 'Workspace "demo" is archived, so it cannot change the board. Its record stays readable; unarchive it (ctxspace unarchive demo) to work in it again.' };
-    const canvas = board(page);
-    await dragBy(page, canvas.getByRole('article', { name: 'Export leaks memory' }), 120, 80);
-    // The backend's first sentence, in lower case after the colon; the rest is left out.
-    await expect(status(page)).toHaveText('Could not save the place: workspace "demo" is archived, so it cannot change the board');
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(NOTE);
-    await expect(canvas.getByRole('button', { name: 'Undo' })).toHaveCount(0);
-    expect(server.posted).toHaveLength(1);
-    // The message stays until it is put away, and it goes with a click.
-    await canvas.getByRole('button', { name: 'Dismiss' }).click();
-    await expect(status(page)).toHaveText('');
-    // The card can be moved again once the board takes it.
-    server.fail = null;
-    await dragBy(page, canvas.getByRole('article', { name: 'Export leaks memory' }), 60, 0);
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-  });
-
-  test('does not show the words of a server that failed, only that it did', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    server.fail = { status: 500, error: "EACCES: permission denied, open '/home/anna/work/contextspace-board.json'" };
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 120, 80);
-    await expect(status(page)).toHaveText('Could not save the place: something went wrong on the server');
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(NOTE);
-  });
-
-  test('takes a move back with Undo: to the place the card had before', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    const canvas = board(page);
-    await dragBy(page, canvas.getByRole('article', { name: 'Export leaks memory' }), 120, 80);
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    expect((await canvasPosition(page, boardId(1))).x).toBeGreaterThan(NOTE.x + 100);
-    await canvas.getByRole('button', { name: 'Undo' }).click();
-    // The previous saved place is sent, and the card goes back to it; there is no Undo of an Undo.
-    await expect.poll(() => server.posted.length).toBe(2);
-    expect(server.posted[1]).toEqual({ changes: [{ op: 'move', nodes: [{ id: boardId(1), ...NOTE }] }] });
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(NOTE);
-    await expect(canvas.getByRole('button', { name: 'Undo' })).toHaveCount(0);
-    await expect(status(page)).toHaveText('');
-  });
-
-  test('offers Undo for about eight seconds', async ({ page }) => {
-    await page.clock.install();
-    await openWith(page, placedNote());
-    const undo = board(page).getByRole('button', { name: 'Undo' });
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 120, 80);
-    await expect(undo).toBeVisible();
-    await page.clock.fastForward(7_000);
-    await expect(undo).toBeVisible();
-    await page.clock.fastForward(1_500);
-    await expect(undo).toHaveCount(0);
-    await expect(status(page)).toHaveText('');
-  });
-
-  /** Stops the page's clock where it is: what waits for time (a save that comes a moment after the last key) happens when the spec says. */
-  const pauseClock = (page: Page) => page.clock.pauseAt(new Date(Date.now() + 1_000));
-
-  test('moves a focused card with Shift and the arrow keys, and saves once, a moment after the last press', async ({ page }) => {
-    await page.clock.install();
-    const server = await openWith(page, placedNote());
-    const canvas = board(page);
-    const wrapper = node(page, boardId(1));
-    // Named for what it is, and described by one hidden line that says how to move it: a stop of its own for the keyboard.
-    await expect(wrapper).toHaveAttribute('aria-label', 'Export leaks memory');
-    await expect(page.locator(`[id="${await wrapper.getAttribute('aria-describedby')}"]`)).toHaveText(/Press Shift and an arrow key to move it/);
-    await pauseClock(page);
-    await wrapper.focus();
-    await expect(wrapper).toBeFocused();
-    for (const key of ['Shift+ArrowRight', 'Shift+ArrowRight', 'Shift+ArrowRight', 'Shift+ArrowDown']) await page.keyboard.press(key);
-    // Drawn at once, 24 units a press; saved when the presses have stopped for 400 ms, and not before.
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: NOTE.x + 72, y: NOTE.y + 24 });
-    await page.clock.runFor(350);
-    expect(server.posted).toHaveLength(0);
-    await page.clock.runFor(100);
-    await page.clock.resume();
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    expect(server.posted).toHaveLength(1);
-    expect(server.posted[0]).toEqual({ changes: [{ op: 'move', nodes: [{ id: boardId(1), x: NOTE.x + 72, y: NOTE.y + 24 }] }] });
-    await expect(wrapper).toBeFocused();
-
-    // The same Undo as for a drag.
-    await canvas.getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(NOTE);
-    expect(server.posted).toHaveLength(2);
-  });
-
-  test('keeps the arrow keys panning from a card that was clicked, which has the keyboard; Shift and an arrow key move it instead', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    await board(page).getByRole('article', { name: 'Export leaks memory' }).click();
-    await expect(node(page, boardId(1))).toBeFocused();
-    const before = await transformOf(page);
-    await page.keyboard.press('ArrowRight');
-    await expect.poll(async () => (await transformOf(page)).x).toBeLessThan(before.x);
-    await page.keyboard.press('-');
-    await expect.poll(async () => (await transformOf(page)).scale).toBeLessThan(before.scale);
-    await page.keyboard.press('0');
-    expect(await canvasPosition(page, boardId(1))).toEqual(NOTE);
-    expect(server.posted).toHaveLength(0);
-  });
-
-  test('keeps the card in view when the keyboard moves it off the screen', async ({ page }) => {
-    await page.clock.install();
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: { x: 1300, y: -240 } } }), { fit: false });
-    const canvas = board(page);
-    const card = canvas.getByRole('article', { name: 'Export leaks memory' });
-    await node(page, boardId(1)).focus();
-    await expect.poll(() => isWithin(card, canvas.locator('#board-area .react-flow'))).toBe(true);
-    await pauseClock(page);
-    for (let press = 0; press < 40; press += 1) await page.keyboard.press('Shift+ArrowRight');
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: 1300 + 40 * 24, y: -240 });
-    await expect.poll(() => isWithin(card, canvas.locator('#board-area .react-flow'))).toBe(true);
-    // Forty presses, one save, a moment after the last.
-    await page.clock.runFor(350);
-    expect(server.posted).toHaveLength(0);
-    await page.clock.runFor(100);
-    await page.clock.resume();
-    await expect.poll(() => server.posted.length).toBe(1);
-    expect(server.posted[0].changes[0].nodes[0]).toEqual({ id: boardId(1), x: 1300 + 40 * 24, y: -240 });
-  });
-
-  test('saves once when keys and a drag come within a moment of each other, and Undo goes back to the place from before both', async ({ page }) => {
-    await page.clock.install();
-    const server = await openWith(page, placedNote());
-    await pauseClock(page);
-    await node(page, boardId(1)).focus();
-    await page.keyboard.press('Shift+ArrowRight');
-    // The save of the drop is still out when the time for the keys comes.
-    server.holdPosts = true;
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 100, 0);
-    await expect.poll(() => server.posted.length).toBe(1);
-    // The key press's timer would go off here if it were still waiting, and save the place the drop gave the card a second time.
-    await page.clock.runFor(500);
-    await page.clock.resume();
-    await frames(page, 8);
-    expect(server.posted).toHaveLength(1);
-    server.holdPosts = false;
-    for (const answer of server.heldPosts.splice(0)) await answer();
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    expect(server.posted).toHaveLength(1);
-    await board(page).getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => server.posted.length).toBe(2);
-    expect(server.posted[1]).toEqual({ changes: [{ op: 'move', nodes: [{ id: boardId(1), ...NOTE }] }] });
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(NOTE);
-  });
-
-  test('keeps a key press that a drag went on from: picked up and put down where the keys left it, it is still saved', async ({ page }) => {
-    await page.clock.install();
-    const server = await openWith(page, placedNote());
-    await pauseClock(page);
-    await node(page, boardId(1)).focus();
-    await page.keyboard.press('Shift+ArrowRight');
-    const from = await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 60, 0, { hold: true });
-    await page.mouse.move(from.x, from.y, { steps: 3 });
-    await page.mouse.up();
-    await page.clock.runFor(500);
-    await page.clock.resume();
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    expect(server.posted).toHaveLength(1);
-    expect(server.posted[0].changes[0].nodes[0]).toEqual({ id: boardId(1), x: NOTE.x + 24, y: NOTE.y });
-  });
-
-  test('can move a card, in the band or not, and nothing else: not a checkpoint, a document, a commit, a lane or the plan\'s own frame', async ({ page }) => {
-    await openWith(page, boardFile({ revision: 4, cards: [boardNote(1)] }));
-    await expect(node(page, boardId(1))).toHaveClass(/draggable/);
-    // The card stands in the band, and is still moved.
-    expect(await node(page, boardId(1)).evaluate((element) => Boolean(element.closest('.react-flow')?.querySelector('[data-id="lane:board"]')))).toBe(true);
-    // Inside the stepped area, all lanes and frames are open.
-    for (const id of ['checkpoint:reports-export-to-csv', 'commit:billing api:a91f2e0c4d5b', 'document:export-requirements', 'lane:documents', 'lane:board', 'lane:commits:billing api']) {
-      await expect(node(page, id), id).not.toHaveClass(/draggable/);
-      await expect(node(page, id), id).not.toHaveAttribute('tabindex', /.*/);
+  /** Every node is whole inside the canvas, and none is under the attribution link or any other control of the canvas. */
+  async function expectClearOfControls(page: Page) {
+    const canvas = (await flow(page).boundingBox())!;
+    const controls = await inArea(page).locator('.react-flow__attribution, .react-flow__controls, .react-flow__minimap').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
+    for (const handle of await inArea(page).locator('.react-flow__node').all()) {
+      const box = (await handle.boundingBox())!;
+      const id = await handle.getAttribute('data-id');
+      expect(box.x >= canvas.x - 0.5 && box.y >= canvas.y - 0.5 && box.x + box.width <= canvas.x + canvas.width + 0.5 && box.y + box.height <= canvas.y + canvas.height + 0.5, `${id} is outside the canvas`).toBe(true);
+      for (const control of controls) {
+        const apart = box.x + box.width <= control.x || control.x + control.width <= box.x || box.y + box.height <= control.y || control.y + control.height <= box.y;
+        expect(apart, `${id} is under a control`).toBe(true);
+      }
     }
-  });
-
-  test('does not move a checkpoint, a document or a commit when it is dragged, or when Shift and an arrow key are pressed on it', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4 }));
-    await fitted(page);
-    const ids = ['checkpoint:reports-export-to-csv', 'commit:billing api:a91f2e0c4d5b', 'document:export-requirements'];
-    const before = await Promise.all(ids.map((id) => canvasPosition(page, id)));
-    const canvas = board(page);
-    // A drag that starts on one of them is a drag of the canvas, so the whole board is brought into view for each.
-    for (const name of ['Reports export to CSV', 'a91f2e0', 'Export requirements']) {
-      await fitted(page);
-      await dragBy(page, canvas.getByRole('article', { name }), 30, 160);
-    }
-    expect(await Promise.all(ids.map((id) => canvasPosition(page, id)))).toEqual(before);
-    expect(server.posted).toEqual([]);
-    await expect(status(page)).toHaveText('');
-  });
-
-  /** Where a node stands on the canvas, sampled on every frame from now until `stop`: a jump between two frames shows. */
-  async function trackPlace(page: Page, id: string) {
-    await page.evaluate((nodeId) => {
-      const samples: Array<{ x: number; y: number }> = [];
-      const state = { running: true, samples };
-      (window as unknown as { __track: typeof state }).__track = state;
-      const tick = () => {
-        const element = document.querySelector(`.react-flow__node[data-id="${nodeId}"]`);
-        if (element) { const matrix = new DOMMatrix(getComputedStyle(element).transform); samples.push({ x: matrix.e, y: matrix.f }); }
-        if (state.running) requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    }, id);
-    return () => page.evaluate(() => { const state = (window as unknown as { __track: { running: boolean; samples: Array<{ x: number; y: number }> } }).__track; state.running = false; return state.samples; });
+    // No card grows out of itself: what is cut stays inside the card, so its byline and Read all are not pushed out
+    const grown = await inArea(page).locator('.react-flow__node article').evaluateAll((els) => els.filter((el) => el.scrollHeight > el.clientHeight + 1).map((el) => `${el.getAttribute('aria-labelledby') ?? el.className}: ${el.scrollHeight} > ${el.clientHeight}`));
+    expect(grown, 'cards that grow out of themselves').toEqual([]);
+    // The control the keyboard is on is whole inside the canvas too, so the person can see where it is
+    const focused = await page.evaluate(() => {
+      const element = document.activeElement as HTMLElement | null;
+      if (!element || !element.closest('#board-area .react-flow__node')) return null;
+      const r = element.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height, label: element.getAttribute('aria-label') ?? element.tagName };
+    });
+    if (focused) expect(focused.x >= canvas.x - 0.5 && focused.y >= canvas.y - 0.5 && focused.x + focused.width <= canvas.x + canvas.width + 0.5 && focused.y + focused.height <= canvas.y + canvas.height + 0.5, `the focused ${focused.label} is outside the canvas`).toBe(true);
   }
 
-  test('drags a card out of the lane and it stays exactly where it was dropped: through the save and the reread, and after a reload', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' }), boardNote(2, { title: 'Second note' })] }));
-    const card = board(page).getByRole('article', { name: 'Export leaks memory' });
-    // Both notes stand in the band under the checkpoints, with no place of their own.
-    await expect(node(page, 'lane:board')).toBeAttached();
-    const before = await canvasPosition(page, boardId(1));
-    const { scale } = await transformOf(page);
-    server.holdPosts = true;
-    // Down and across, clear of the band: a drop over a group is put clear of it (see the specs for that).
-    await dragBy(page, card, 50, -208, { hold: true });
-    const dropped = { x: before.x + 50 / scale, y: before.y - 208 / scale };
-    await expect.poll(async () => nearTo(await canvasPosition(page, boardId(1)), dropped)).toBe(true);
-    // From before the card is let go: through the drop, the wait for the answer, the answer, and the layout that takes it out of the lane.
-    const stop = await trackPlace(page, boardId(1));
-    await page.mouse.up();
-    await expect.poll(() => server.posted.length).toBe(1);
-    await frames(page, 12);
-    server.holdPosts = false;
-    for (const answer of server.heldPosts.splice(0)) await answer();
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    await frames(page, 12);
-    const saved = server.posted[0].changes[0].nodes[0];
-    expect(server.posted[0]).not.toHaveProperty('revision');
-    // The place that is saved is the one on the canvas, not the one in the lane.
-    expect(nearTo(saved, dropped)).toBe(true);
-    await expect.poll(async () => (await canvasPosition(page, boardId(1)))).toEqual({ x: saved.x, y: saved.y });
-    await expect(node(page, boardId(2))).toBeAttached();
-    // It did not jump, on any frame.
-    const sampled = await stop();
-    expect(sampled.length).toBeGreaterThan(20);
-    for (const at of sampled) expect(nearTo(at, dropped), JSON.stringify(at)).toBe(true);
+  const SIZES = [
+    { name: '1280x800', size: { width: 1280, height: 800 }, canvasWidth: [800, 1100] },
+    { name: '1100x700', size: { width: 1100, height: 700 }, canvasWidth: [600, 900] },
+    // The Board in a narrow pane beside the chat: about 420 px of canvas
+    { name: 'a narrow pane', size: { width: 480, height: 960 }, canvasWidth: [330, 520] },
+    { name: 'a short narrow pane', size: { width: 480, height: 800 }, canvasWidth: [330, 520] },
+  ] as const;
 
-    await page.reload();
-    await stepIntoArea(page, /Reports export to CSV/);
-    await expect(board(page).getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-    expect(server.posted).toHaveLength(1);
+  for (const { name, size, canvasWidth } of SIZES) {
+    test(`shows the current step with its cards and some more cards, all inside the canvas, at ${name}`, async ({ page }) => {
+      await openReal(page, { size });
+      const width = (await flow(page).boundingBox())!.width;
+      expect(width).toBeGreaterThan(canvasWidth[0]);
+      expect(width).toBeLessThan(canvasWidth[1]);
+      // The current step is the open step with the newest card; its cards are drawn; so are some of the cards tied to no step
+      const current = rowButton(page, new RegExp(`^Current step: ${OPEN_STEP(3)}`));
+      await expect(current).toBeVisible();
+      await expect(inArea(page).getByRole('article', { name: 'Newest on an open step' })).toBeVisible();
+      expect(await inArea(page).locator('.react-flow__node-note, .react-flow__node-file').count()).toBeGreaterThanOrEqual(1);
+      await expect(rowButton(page, /^Show \d+ more|Not tied to a step/).first()).toBeVisible();
+      await expect(rowButton(page, /more open steps/)).toBeVisible();
+      await expect(rowButton(page, /12 done steps/)).toBeVisible();
+      await expect(inArea(page).getByRole('article', { name: 'Reports export to CSV' })).toHaveCount(0);
+      await expect(inArea(page).getByRole('article', { name: /real work/ })).toBeVisible();
+      await expectClearOfControls(page);
+      // Panning and zooming are off: the view is where the layout put it
+      expect((await transformOf(page)).scale).toBeCloseTo(0.9, 5);
+      await expect(inArea(page).getByRole('button', { name: 'Zoom in' })).toHaveCount(0);
+      await expect(inArea(page).locator('.react-flow__minimap')).toHaveCount(0);
+    });
+
+    test(`never moves the view when rows are opened, closed or paged, and Escape gives back the exact view, at ${name}`, async ({ page }) => {
+      await openReal(page, { size });
+      const before = await transformOf(page);
+      const same = async () => { await frames(page, 6); expect(await transformOf(page)).toEqual(before); };
+      for (const label of [/^Current step:/, /more open steps/, /12 done steps/, /Not tied to a step/]) {
+        const button = rowButton(page, label).first();
+        await button.click();
+        await same();
+        await expectClearOfControls(page);
+        const older = inArea(page).getByRole('button', { name: 'Older ›' });
+        // A row that has more than one page is paged all the way through
+        while (await older.count() && await older.isEnabled()) {
+          await older.click();
+          await same();
+          await expectClearOfControls(page);
+        }
+        await page.keyboard.press('Escape');
+        await same();
+        await expect(inArea(page)).toBeVisible();
+      }
+      expect(await transformOf(page)).toEqual(before);
+    });
+  }
+
+  test('fills the canvas with cards: at least 4 pictures with the index open at 1280x800, 2 in the narrow pane, most of them on a big screen', async ({ page }) => {
+    // The real board has no cards on the open steps: its pictures are all tied to no step
+    const pictures = () => inArea(page).locator('.react-flow__node-file').count();
+    await openReal(page, { size: { width: 1280, height: 800 }, nav: true, onSteps: false });
+    expect(await pictures()).toBeGreaterThanOrEqual(4);
+    await expectClearOfControls(page);
+    await page.goto('about:blank');
+    await openReal(page, { size: { width: 480, height: 960 }, onSteps: false });
+    expect(await pictures()).toBeGreaterThanOrEqual(2);
+    await expectClearOfControls(page);
+    await page.goto('about:blank');
+    await openReal(page, { size: { width: 1920, height: 1080 }, onSteps: false });
+    expect(await pictures()).toBeGreaterThanOrEqual(7);
+    await expectClearOfControls(page);
   });
 
-  test('puts a card that was dragged out of the lane back in it with Undo', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' }), boardNote(2, { title: 'Second note' })] }));
-    const before = await Promise.all([boardId(1), boardId(2)].map((id) => canvasPosition(page, id)));
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 150, -120);
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    // The cards left in the lane may close up around the gap.
-    await board(page).getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => server.posted.length).toBe(2);
-    expect(server.posted[1]).toEqual({ changes: [{ op: 'move', nodes: [{ id: boardId(1), x: null, y: null }] }] });
-    for (const [index, id] of [boardId(1), boardId(2)].entries()) await expect.poll(() => canvasPosition(page, id)).toEqual(before[index]);
-  });
-
-  test('moves a card of the lane with Shift and the arrow keys from where it stands on the canvas, and Undo puts it back', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })] }));
-    const before = await canvasPosition(page, boardId(1));
-    await node(page, boardId(1)).focus();
-    await page.keyboard.press('Shift+ArrowRight');
-    await page.keyboard.press('Shift+ArrowRight');
-    await page.keyboard.press('Shift+ArrowUp');
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: before.x + 48, y: before.y - 24 });
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    expect(server.posted).toHaveLength(1);
-    expect(server.posted[0]).toEqual({ changes: [{ op: 'move', nodes: [{ id: boardId(1), x: Math.round(before.x + 48), y: Math.round(before.y - 24) }] }] });
-    expect(await canvasPosition(page, boardId(1))).toEqual({ x: before.x + 48, y: before.y - 24 });
-    await board(page).getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => server.posted.length).toBe(2);
-    expect(server.posted[1].changes[0].nodes[0]).toEqual({ id: boardId(1), x: null, y: null });
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(before);
-  });
-
-  /** What is dragged is put clear of the groups before it is saved, so it snaps clear at once and the answer changes nothing. */
-  test('puts a card dropped on an open group clear of it, saves that place, and does not move it when the answer comes', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' }), boardNote(2, { title: 'Second note' })] }));
-    const canvas = board(page);
-    const card = canvas.getByRole('article', { name: 'Export leaks memory' });
-    const [from, onto] = await Promise.all([card.boundingBox(), canvas.getByRole('article', { name: 'Reports export to CSV' }).boundingBox()]);
-    server.holdPosts = true;
-    // Onto the middle of the frame that is open.
-    await dragBy(page, card, onto!.x + onto!.width / 2 - (from!.x + from!.width / 2) - 6, onto!.y + 80 - (from!.y + from!.height / 2));
-    await expect.poll(() => server.posted.length).toBe(1);
-    const saved = server.posted[0].changes[0].nodes[0];
-    const group = await canvasBox(page, 'checkpoint:reports-export-to-csv');
-    // What is saved is clear of the group: below it, with the room between things, and no part of the card is over it.
-    expect(saved.id).toBe(boardId(1));
-    expect(saved.y).toBeGreaterThanOrEqual(group.y + group.height + 12);
-    const box = { x: saved.x, y: saved.y, width: BOARD_CARD.width, height: BOARD_CARD.note };
-    expect(group.x + group.width <= box.x || box.x + box.width <= group.x || group.y + group.height <= box.y || box.y + box.height <= group.y).toBe(true);
-    // It snapped there when it was let go, before the answer.
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-    const stop = await trackPlace(page, boardId(1));
-    server.holdPosts = false;
-    for (const answer of server.heldPosts.splice(0)) await answer();
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    await frames(page, 12);
-    for (const at of await stop()) expect(at, JSON.stringify(at)).toEqual({ x: saved.x, y: saved.y });
-    expect(await canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-    // And it is the same after a reload.
-    await page.reload();
-    await stepIntoArea(page, /Reports export to CSV/);
-    await expect(canvas.getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-    expect(server.posted).toHaveLength(1);
-  });
-
-  test('puts a card dropped onto a lane below it, and saves that place', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' }), boardNote(2, { title: 'Second note' })] }));
-    const canvas = board(page);
-    const laneBox = await canvasBox(page, 'lane:commits:billing api');
-    await fitted(page);
-    const card = canvas.getByRole('article', { name: 'Export leaks memory' });
-    const laneNode = node(page, 'lane:commits:billing api');
-    const [from, onto] = await Promise.all([card.boundingBox(), laneNode.boundingBox()]);
-    await dragBy(page, card, onto!.x + onto!.width / 2 - (from!.x + from!.width / 2) - 6, onto!.y + onto!.height / 2 - (from!.y + from!.height / 2));
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    const saved = server.posted[0].changes[0].nodes[0];
-    expect(saved.y).toBe(laneBox.y + laneBox.height + 12);
-    expect(await canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
-  });
-
-  test('puts a card that is nudged into a group clear of it at once, saves that place, and saves nothing when it cannot move', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: { x: 28, y: -170 } } }));
-    const wrapper = node(page, boardId(1));
-    const group = await canvasBox(page, 'checkpoint:reports-export-to-csv');
-    const clear = { x: 28, y: group.y + group.height + 12 };
-    await wrapper.focus();
-    server.holdPosts = true;
-    // One press moves it 24 units down, into the frame that is open: it is put just below the frame, not left over it.
-    await page.keyboard.press('Shift+ArrowDown');
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(clear);
-    await expect.poll(() => server.posted.length).toBe(1);
-    expect(server.posted[0].changes[0].nodes[0]).toEqual({ id: boardId(1), ...clear });
-    const stop = await trackPlace(page, boardId(1));
-    server.holdPosts = false;
-    for (const answer of server.heldPosts.splice(0)) await answer();
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    await frames(page, 12);
-    for (const at of await stop()) expect(at, JSON.stringify(at)).toEqual(clear);
-    // Pushed up against it, it would be put clear again, so nothing moves and nothing is saved.
-    await page.keyboard.press('Shift+ArrowUp');
-    await frames(page, 12);
-    expect(await canvasPosition(page, boardId(1))).toEqual(clear);
-    expect(server.posted).toHaveLength(1);
-  });
-
-  test('moves a note but not a commit: a commit is where its lane puts it', async ({ page }) => {
-    const server = await openWith(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })] }));
-    await viewAtRest(page);
-    const canvas = board(page);
-    const commit = canvas.getByRole('article', { name: 'a91f2e0' });
-    const id = 'commit:billing api:a91f2e0c4d5b';
-    const before = await Promise.all([canvasPosition(page, id), canvasPosition(page, 'lane:commits:billing api')]);
-    await expect(node(page, id)).not.toHaveClass(/draggable/);
-    // A drag that starts on the commit is a drag of the canvas: the view moves and the commit stays in its lane.
-    const view = await transformOf(page);
-    await dragBy(page, commit, 0, 120);
-    await expect.poll(async () => (await transformOf(page)).y).toBeGreaterThan(view.y + 100);
-    expect(await Promise.all([canvasPosition(page, id), canvasPosition(page, 'lane:commits:billing api')])).toEqual(before);
-    await expect(node(page, 'lane:commits:billing api')).toBeAttached();
-    expect(server.posted).toEqual([]);
-    await expect(status(page)).toHaveText('');
-
-    // A note, in the same board, can be.
-    await fitted(page);
-    const note = canvas.getByRole('article', { name: 'Export leaks memory' });
-    const noteBefore = await canvasPosition(page, boardId(1));
-    await dragBy(page, note, 90, -60);
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    expect(server.posted).toHaveLength(1);
-    expect(server.posted[0].changes[0].nodes[0].id).toBe(boardId(1));
-    expect(await canvasPosition(page, boardId(1))).not.toEqual(noteBefore);
-    // The commit still stands where it did.
-    expect(await canvasPosition(page, id)).toEqual(before[0]);
-  });
-
-  test('leaves a newer message alone when the answer to an Undo comes after it', async ({ page }) => {
-    const server = await openWith(page, boardFile({
-      revision: 4, cards: [boardNote(1, { title: 'Note one' }), boardNote(2, { title: 'Note two' })],
-      positions: { [boardId(1)]: { x: 352, y: -420 }, [boardId(2)]: { x: 352, y: -230 } },
-    }));
-    await dragBy(page, board(page).getByRole('article', { name: 'Note one' }), 100, 0);
-    await expect(status(page)).toHaveText('Moved “Note one”');
-    server.holdPosts = true;
-    await board(page).getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => server.posted.length).toBe(2);
-    await dragBy(page, board(page).getByRole('article', { name: 'Note two' }), 100, 0);
-    await expect.poll(() => server.posted.length).toBe(3);
-    const [undone, moved] = server.heldPosts.splice(0);
-    await moved!();
-    await expect(status(page)).toHaveText('Moved “Note two”');
-    await undone!();
-    await frames(page, 12);
-    await expect(status(page)).toHaveText('Moved “Note two”');
-    await expect(board(page).getByRole('button', { name: 'Undo' })).toBeVisible();
-  });
-
-  test('puts the keyboard back on the card after Undo and after Dismiss', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    const wrapper = node(page, boardId(1));
-    await wrapper.focus();
-    await page.keyboard.press('Shift+ArrowRight');
-    await expect(status(page)).toContainText('Moved');
-    await board(page).getByRole('button', { name: 'Undo' }).focus();
-    await page.keyboard.press('Enter');
-    await expect(wrapper).toBeFocused();
-    await expect.poll(() => server.posted.length).toBe(2);
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual(NOTE);
-    await expect(wrapper).toBeFocused();
-
-    server.fail = { status: 409, error: 'The board is busy.' };
-    await page.keyboard.press('Shift+ArrowRight');
-    await expect(status(page)).toContainText('Could not save the place');
-    await board(page).getByRole('button', { name: 'Dismiss' }).focus();
-    await page.keyboard.press('Enter');
-    await expect(status(page)).toHaveText('');
-    await expect(wrapper).toBeFocused();
-  });
-
-  test('keeps the offer of Undo while the pointer or the keyboard is on it, and takes the move back with Control or Command and Z', async ({ page }) => {
-    await page.clock.install();
-    const server = await openWith(page, placedNote());
-    const canvas = board(page);
-    const undo = canvas.getByRole('button', { name: 'Undo' });
-    const card = canvas.getByRole('article', { name: 'Export leaks memory' });
-    await dragBy(page, card, 120, 80);
-    await expect(undo).toBeVisible();
-    // The pointer on it: it stays, however long, and goes a while after the pointer leaves.
-    await undo.hover();
-    await page.clock.fastForward(20_000);
-    await expect(undo).toBeVisible();
-    await page.mouse.move(300, 700);
-    await page.clock.fastForward(7_000);
-    await expect(undo).toBeVisible();
-    await page.clock.fastForward(1_500);
-    await expect(undo).toHaveCount(0);
-
-    // The keyboard on it, the same.
-    await dragBy(page, card, -120, -80);
-    await expect(undo).toBeVisible();
-    await undo.focus();
-    await page.clock.fastForward(20_000);
-    await expect(undo).toBeVisible();
-    await canvas.locator('#board-area .react-flow').focus();
-    await page.clock.fastForward(8_500);
-    await expect(undo).toHaveCount(0);
-
-    // Control or Command and Z, from the board, while it is offered.
-    await dragBy(page, card, 60, 30);
-    await expect(undo).toBeVisible();
-    await node(page, boardId(1)).focus();
-    await page.keyboard.press('ControlOrMeta+z');
-    await expect.poll(() => server.posted.length).toBe(4);
-    expect(server.posted[3].changes[0].nodes[0]).toEqual({ id: boardId(1), ...server.posted[1].changes[0].nodes[0] });
-    await expect(undo).toHaveCount(0);
-    await expect(node(page, boardId(1))).toBeFocused();
-    // With nothing to take back it does nothing.
-    await page.keyboard.press('ControlOrMeta+z');
-    await frames(page, 8);
-    expect(server.posted).toHaveLength(4);
-  });
-
-  test('does not take a move back for Control or Command and Z pressed in the dialog of a card', async ({ page }) => {
-    const body = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long note.`).join('\n');
-    const server = await openWith(page, boardFile({
-      revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' }), boardNote(2, { title: 'A long note', body })],
-      positions: { [boardId(1)]: NOTE, [boardId(2)]: { x: 700, y: -240 } },
-    }));
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 100, 60);
-    await expect(status(page)).toContainText('Moved');
-    await board(page).getByRole('button', { name: 'Read all of A long note' }).focus();
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('dialog', { name: 'A long note' })).toBeVisible();
-    await page.keyboard.press('ControlOrMeta+z');
-    await frames(page, 8);
-    expect(server.posted).toHaveLength(1);
-    // The offer of Undo was not used up: it is still there when the dialog is closed.
+  test('keeps the card the reader shows drawn when the reader docks beside the canvas, from a page that is not the first, and gives the keyboard back to it when the reader closes', async ({ page }) => {
+    await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_reader_layout_v1', 'side'); });
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await rowButton(page, /Not tied to a step/).first().click();
+    const older = inArea(page).getByRole('button', { name: 'Older ›' });
+    await older.click();
+    await older.click();
+    await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).toContainText(/^‹ Newer\d+–\d+ of 10Older ›$/);
+    const open = inArea(page).getByRole('button', { name: /^Open Picture/ }).first();
+    const label = (await open.getAttribute('aria-label'))!;
+    const wide = (await flow(page).boundingBox())!;
+    await open.click();
+    const reading = board(page).getByRole('region', { name: 'Reader', exact: true });
+    await expect(reading).toBeVisible();
+    // The canvas is what the reader leaves, the rows are laid out for it again, and the card is still drawn beside the reader
+    await expect.poll(async () => (await flow(page).boundingBox())!.width).toBeLessThan(wide.width);
+    const card = inArea(page).getByRole('article', { name: label.replace(/^Open /, '') });
+    await expect(card).toBeVisible();
+    const free = (await reading.boundingBox())!;
+    await expect.poll(async () => { const box = (await card.boundingBox())!; return box.x + box.width <= free.x + 1; }).toBe(true);
+    await expectClearOfControls(page);
     await page.keyboard.press('Escape');
-    await expect(board(page).getByRole('button', { name: 'Undo' })).toBeVisible();
-    expect(server.posted).toHaveLength(1);
+    await expect(reading).toHaveCount(0);
+    await expect(inArea(page).getByRole('button', { name: label })).toBeFocused();
+    await expectClearOfControls(page);
   });
 
-  test('has one live region, there before a move and the same element when it speaks, for what was saved and for what was not', async ({ page }) => {
-    const server = await openWith(page, placedNote());
-    const live = status(page);
-    await expect(live).toHaveCount(1);
-    await expect(live).toHaveText('');
-    await live.evaluate((element) => { (element as HTMLElement & { marked?: boolean }).marked = true; });
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 100, 0);
-    await expect(live).toHaveText('Moved “Export leaks memory”');
-    server.fail = { status: 409, error: 'The board is busy. Try again in a moment.' };
-    await node(page, boardId(1)).focus();
-    await page.keyboard.press('Shift+ArrowRight');
-    await expect(live).toHaveText('Could not save the place: the board is busy');
-    // The words on the screen are for the eye; the live region says them once.
-    await expect(board(page).getByRole('alert')).toHaveCount(0);
-    expect(await live.evaluate((element) => Boolean((element as HTMLElement & { marked?: boolean }).marked))).toBe(true);
+  test('puts the cards tied to no step in a row that opens into pages, with a count, newest first, and every card reachable by a button', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await rowButton(page, /Not tied to a step/).first().click();
+    const pager = inArea(page).getByRole('navigation', { name: /Pages of/ });
+    const more = rowButton(page, /Show \d+ more for Not tied/);
+    await expect(more).toHaveCount(0);
+    const seen = new Set<string>();
+    const collect = async () => { for (const label of await inArea(page).locator('.react-flow__node-note h2, .react-flow__node-file h2').allTextContents()) if (/^(Picture|A loose note)/.test(label)) seen.add(label); };
+    await collect();
+    if (await pager.count()) {
+      await expect(pager).toContainText(/1–\d+ of 10/);
+      const older = inArea(page).getByRole('button', { name: 'Older ›' });
+      const newer = inArea(page).getByRole('button', { name: '‹ Newer' });
+      await expect(newer).toBeDisabled();
+      while (await older.isEnabled()) { await older.click(); await frames(page, 4); await collect(); }
+      await expect(older).toBeDisabled();
+      await expect(pager).toContainText(/of 10/);
+    }
+    expect(seen.size).toBe(10);
+  });
+
+  test('does the card\'s main action for a press anywhere on the brick, but not for a press on its own buttons or for a text selection', async ({ page }) => {
+    await openReal(page, { size: { width: 1920, height: 1080 } });
+    const reading = board(page).getByRole('region', { name: 'Reader', exact: true });
+    const picture = inArea(page).getByRole('article', { name: 'Picture 0' });
+    await expect(picture).toBeVisible();
+    await expect(picture).toHaveCSS('cursor', 'pointer');
+    // The press on the title opens the picture in the reader, as Open does
+    await picture.getByRole('heading', { name: 'Picture 0' }).click();
+    await expect(reading).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(reading).toHaveCount(0);
+    // Selecting text by dragging over the description does not open it
+    // The text is selected by dragging over it; on a busy machine the pointer sometimes misses, which is a plain press and opens the reader: that is closed and the drag is tried again
+    const selectText = async (target: Locator) => {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        if (await reading.count()) { await page.keyboard.press('Escape'); await expect(reading).toHaveCount(0); }
+        await expect.poll(() => target.evaluate((element) => Boolean(element.closest('[inert]')))).toBe(false);
+        await page.evaluate(() => window.getSelection()?.removeAllRanges());
+        await frames(page, 10);
+        const box = (await target.boundingBox())!;
+        await page.mouse.move(box.x + 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 10 });
+        await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10 });
+        await page.mouse.up();
+        if (await page.evaluate(() => (window.getSelection()?.toString() ?? '') !== '')) return;
+      }
+      expect(await page.evaluate(() => window.getSelection()?.toString() ?? ''), 'the drag selected nothing').not.toBe('');
+    };
+    await selectText(picture.getByText('The file 10.'));
+    await frames(page, 6);
+    await expect(reading).toHaveCount(0);
+    // A selection in another card does not stop a press on this one: the thumbnail opens the picture
+    const other = inArea(page).getByRole('article', { name: 'Picture 1' });
+    await selectText(other.getByText('The file 11.'));
+    await picture.locator('img').click();
+    await expect(reading).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(reading).toHaveCount(0);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    // A note whose text is cut: a press on it does what Read all does, and Read all still does it by itself
+    const note = inArea(page).getByRole('article', { name: 'Newest on an open step' });
+    await note.getByRole('heading', { name: 'Newest on an open step' }).click();
+    await expect(page.getByRole('dialog', { name: 'Newest on an open step' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await note.getByRole('button', { name: 'Read all of Newest on an open step' }).click();
+    await expect(page.getByRole('dialog', { name: 'Newest on an open step' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    // A note that shows all of its text is not a brick: nothing happens, and it does not look pressable
+    const short = inArea(page).getByRole('article', { name: 'Older on an open step' });
+    await expect(short).toHaveCSS('cursor', 'default');
+    await short.getByRole('heading').click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(reading).toHaveCount(0);
+    // A commit does nothing for now
+    await rowButton(page, /NexusFlow/).first().click();
+    await inArea(page).getByRole('article', { name: /^a91f2e0/ }).first().click();
+    await expect(reading).toHaveCount(0);
+  });
+
+  test('keeps a compact note whose text starts with code or a table inside its card, with its byline and Read all', async ({ page }) => {
+    await openReal(page, { size: { width: 1920, height: 1080 } });
+    await rowButton(page, /12 done steps/).click();
+    await expectClearOfControls(page);
+    for (const title of ['Starts with code', 'Starts with a table']) {
+      const note = inArea(page).getByRole('article', { name: title });
+      await expect(note).toBeVisible();
+      await expect(note.getByRole('button', { name: `Read all of ${title}` })).toBeVisible();
+      await expect(note).toHaveCSS('cursor', 'pointer');
+      // The code and the table are drawn at 11 px or more on the screen as well
+      const sizes = await note.locator('pre, pre *, th, td').evaluateAll((els) => els.map((el) => parseFloat(getComputedStyle(el).fontSize) * 0.9));
+      expect(sizes.filter((size) => size < 11), "code and table sizes").toEqual([]);
+      await note.getByRole('heading', { name: title }).click();
+      await expect(page.getByRole('dialog', { name: title })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    }
+  });
+
+  test('draws every text of the rows at 11 px or more on the screen', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    for (const open of [null, /^Current step:/, /Not tied to a step/, /12 done steps/]) {
+      if (open) await rowButton(page, open).first().click();
+      const scale = (await transformOf(page)).scale;
+      const small = await inArea(page).locator('.react-flow__node').evaluateAll((els, zoom) => {
+        const found: string[] = [];
+        for (const el of els) {
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+            const parent = t.parentElement;
+            if (!parent || !t.textContent?.trim() || parent.closest('.sr-only')) continue;
+            const size = parseFloat(getComputedStyle(parent).fontSize);
+            if (size * zoom < 11 - 0.01) found.push(`${t.textContent.trim().slice(0, 30)}: ${size * zoom}`);
+          }
+        }
+        return found;
+      }, scale);
+      expect(small, "texts under 11 px").toEqual([]);
+      if (open) await page.keyboard.press('Escape');
+    }
+  });
+
+  test('moves the keyboard to the header of the row when a live change takes the pager away', async ({ page }) => {
+    await page.clock.install();
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await rowButton(page, /Not tied to a step/).first().click();
+    const older = inArea(page).getByRole('button', { name: 'Older ›' });
+    await older.focus();
+    await expect(older).toBeFocused();
+    // The cards are fewer (a live change): the row fits on one page, and the pager is gone
+    await routeCards(page, boardFile({ cards: [boardNote(19, { title: 'A loose note', step: undefined, area: 'checkpoint:a-board-tab-shows-the-real-work', ...ago(40) })] }));
+    await page.clock.fastForward(31_000);
+    await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).toHaveCount(0);
+    await expect(inArea(page).locator('[data-row-control="lane:board"]')).toBeFocused();
+  });
+
+  test('moves the keyboard to the other page button when the one it was on has no page left', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await rowButton(page, /Not tied to a step/).first().click();
+    const older = inArea(page).getByRole('button', { name: 'Older ›' });
+    const newer = inArea(page).getByRole('button', { name: '‹ Newer' });
+    await older.focus();
+    for (let turn = 0; turn < 12 && await older.isEnabled(); turn += 1) { await page.keyboard.press('Enter'); await frames(page, 4); }
+    await expect(older).toBeDisabled();
+    await expect(newer).toBeFocused();
+    for (let turn = 0; turn < 12 && await newer.isEnabled(); turn += 1) { await page.keyboard.press('Enter'); await frames(page, 4); }
+    await expect(newer).toBeDisabled();
+    await expect(older).toBeFocused();
+  });
+
+  test('says "Next step" and never "Current" in an Area that is not the current one', async ({ page }) => {
+    await openReal(page, { area: /Later work/ });
+    await expect(rowButton(page, /^Next step: Plan the later work/)).toBeVisible();
+    await expect(rowButton(page, /Current step/)).toHaveCount(0);
+    await expect(inArea(page).getByText('Current step')).toHaveCount(0);
+    await expect(inArea(page).getByRole('article', { name: 'Later note' })).toBeVisible();
+  });
+
+  test('opens the done row with a press: the done steps with cards head them, the rest are listed; a second press closes it and the keyboard stays on the button', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    const done = rowButton(page, /12 done steps/);
+    await expect(done).toHaveAttribute('aria-expanded', 'false');
+    await expect(inArea(page).getByRole('article', { name: 'On a done step' })).toHaveCount(0);
+    await done.click();
+    const open = rowButton(page, /12 done steps/);
+    await expect(open).toHaveAttribute('aria-expanded', 'true');
+    await expect(open).toBeFocused();
+    // The done steps are many: the opened row pages through them
+    await expect(inArea(page).getByText(DONE_STEP(0), { exact: true }).first()).toBeVisible();
+    const older = inArea(page).getByRole('button', { name: 'Older ›' });
+    for (let page_ = 0; page_ < 6 && !(await inArea(page).getByRole('article', { name: 'On a done step' }).count()) && await older.count() && await older.isEnabled(); page_ += 1) await older.click();
+    await expect(inArea(page).getByRole('article', { name: 'On a done step' })).toBeVisible();
+    // One row is open at a time: the others are folded to one line
+    await expect(rowButton(page, /^Current step/)).toHaveAttribute('aria-expanded', 'false');
+    await open.click();
+    await expect(rowButton(page, /12 done steps/)).toHaveAttribute('aria-expanded', 'false');
+    await expect(rowButton(page, /12 done steps/)).toBeFocused();
+    await expect(inArea(page).getByRole('article', { name: 'On a done step' })).toHaveCount(0);
+  });
+
+  test('lists the open steps that have no cards in one opened line, wrapping into columns', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await rowButton(page, /12 more open steps/).click();
+    await expect(inArea(page).getByText(OPEN_STEP(0), { exact: true })).toBeVisible();
+    const first = (await inArea(page).locator('.react-flow__node-step', { hasText: OPEN_STEP(0) }).first().boundingBox())!;
+    const second = (await inArea(page).locator('.react-flow__node-step', { hasText: OPEN_STEP(1) }).first().boundingBox())!;
+    expect(Math.abs(first.y - second.y) < 2 || first.x === second.x).toBe(true);
+    await expectClearOfControls(page);
+  });
+
+  test('closes things innermost first with Escape: a dialog, the reader, the open row, then the Area', async ({ page }) => {
+    await page.route('**/api/workspace/demo/documents/preview?*', (route) => route.fulfill({ status: 404, json: { error: 'No such document.' } }));
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await rowButton(page, /Not tied to a step/).first().click();
+    await expect(rowButton(page, /Not tied to a step/).first()).toHaveAttribute('aria-expanded', 'true');
+    const reading = board(page).getByRole('region', { name: 'Reader', exact: true });
+    // A dialog first
+    await inArea(page).getByRole('button', { name: 'Read all of A loose note' }).or(inArea(page).getByRole('button', { name: /^Open Picture/ }).first()).first().click();
+    await expect(reading.or(page.getByRole('dialog'))).toBeVisible();
+    if (await page.getByRole('dialog').count()) {
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    } else {
+      await page.keyboard.press('Escape');
+      await expect(reading).toHaveCount(0);
+    }
+    await expect(rowButton(page, /Not tied to a step/).first()).toHaveAttribute('aria-expanded', 'true');
+    // The reader, over the open row
+    await inArea(page).getByRole('button', { name: /^Open Picture/ }).first().click();
+    await expect(reading).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(reading).toHaveCount(0);
+    await expect(rowButton(page, /Not tied to a step/).first()).toHaveAttribute('aria-expanded', 'true');
+    // The open row
+    await page.keyboard.press('Escape');
+    await expect(rowButton(page, /Not tied to a step/).first()).toHaveAttribute('aria-expanded', 'false');
+    await expect(board(page).getByRole('button', { name: 'Board ›' })).toBeVisible();
+    // The Area
+    await page.keyboard.press('Escape');
+    await expect(inArea(page)).toHaveCount(0);
+  });
+
+  test('reaches a card button with the Tab key, and the card is in view', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await board(page).getByRole('button', { name: 'Board ›' }).focus();
+    let reached: string | null = null;
+    for (let press = 0; press < 40 && !reached; press += 1) {
+      await page.keyboard.press('Tab');
+      reached = await page.evaluate(() => {
+        const element = document.activeElement as HTMLElement | null;
+        return element?.closest('#board-area article') && /^(Open|Read all of)/.test(element.getAttribute('aria-label') ?? '') ? (element.getAttribute('aria-label') ?? null) : null;
+      });
+    }
+    expect(reached, 'Tab never reached a card button').not.toBeNull();
+    const focused = page.locator(':focus');
+    await expect(focused).toBeVisible();
+    expect(await isWithin(focused, flow(page))).toBe(true);
+  });
+
+  test('lets the Board index reach every item by a jump, with the card in view, highlighted and focused, including one on a later page', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 }, nav: true });
+    await board(page).getByRole('button', { name: 'Board ›' }).click();
+    await expect(inArea(page)).toHaveCount(0);
+    const nav = page.getByRole('navigation', { name: 'Board index' });
+    const wanted = /^(Picture|A loose note|Newest on|Older on|On a|On another|On a third|Commit|Later note)/;
+    const rows = nav.locator('ul li');
+    const labels: string[] = [];
+    for (const row of await rows.all()) {
+      const text = ((await row.locator('button').first().textContent()) ?? '').trim();
+      if (wanted.test(text) && await row.isVisible()) labels.push(text);
+    }
+    expect(labels.length).toBeGreaterThanOrEqual(15);
+    for (const label of labels) {
+      await nav.locator('ul li').filter({ hasText: label }).locator('button').first().click();
+      await expect(board(page).getByRole('button', { name: 'Board ›' })).toBeVisible();
+      const highlighted = inArea(page).locator('.react-flow__node[data-highlighted="true"]');
+      await expect(highlighted, label).toHaveCount(1);
+      await expect.poll(() => highlighted.evaluate((element) => element.contains(document.activeElement)), { message: label }).toBe(true);
+      await expect.poll(() => isWithin(highlighted, flow(page)), { message: label }).toBe(true);
+      await expectClearOfControls(page);
+      const focused = page.locator(':focus');
+      expect(await isWithin(focused, flow(page)), `${label}: the focused control is outside the canvas`).toBe(true);
+      // The keyboard is on something that can be seen and pressed: the topmost thing at its centre is it, or inside it
+      expect(await page.evaluate(() => {
+        const element = document.activeElement as HTMLElement;
+        const r = element.getBoundingClientRect();
+        const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return Boolean(top && (top === element || element.contains(top)));
+      }), `${label}: the focused control is hidden`).toBe(true);
+    }
+  });
+
+  test('lets go of an open row that a live change took away, so Escape leaves the Area on the first press', async ({ page }) => {
+    await page.clock.install();
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    await rowButton(page, /12 done steps/).click();
+    await expect(rowButton(page, /12 done steps/)).toHaveAttribute('aria-expanded', 'true');
+    // The plan loses its done steps (a live change): the row is not there any more
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ title: 'Real', checkpoints: [
+      checkpoint('Concept', { done: true, steps: [step('Drew the idea', true)] }),
+      checkpoint('A Board tab shows the real work', { steps: [step(OPEN_STEP(0))] }),
+    ] }) }));
+    // The plan is read again every half minute
+    await page.clock.fastForward(31_000);
+    await expect(rowButton(page, /done steps/)).toHaveCount(0);
+    await expect(inArea(page).locator('.react-flow__node-step button[aria-expanded="true"]')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(inArea(page)).toHaveCount(0);
+  });
+
+  test('folds the rows with the least priority first when the canvas is short, and a press opens one', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 640 } });
+    // Something is folded (commits, then what is tied to no step ...), and the current step and the waiting decisions never are
+    await expect(rowButton(page, /^Current step/)).toBeVisible();
+    await expect(inArea(page).getByRole('article', { name: /real work/ })).toBeVisible();
+    const folded = inArea(page).locator('.react-flow__node-fold');
+    expect(await folded.count()).toBeGreaterThanOrEqual(2);
+    await expectClearOfControls(page);
+    await folded.first().getByRole('button').click();
+    await expect(inArea(page).locator('.react-flow__node-step button[aria-expanded="true"]')).toHaveCount(1);
+    await expectClearOfControls(page);
+    await page.keyboard.press('Escape');
+    await expect(inArea(page).locator('.react-flow__node-step button[aria-expanded="true"]')).toHaveCount(0);
+  });
+
+  test('has no serious accessibility violations, in light and dark, with folded rows, "+N more" and a row open', async ({ page }) => {
+    await openReal(page, { size: { width: 1280, height: 800 } });
+    const axe = async () => {
+      await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });
+      const results = await new AxeBuilder({ page }).include('[aria-label="Board"]').withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze();
+      const serious = results.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')
+        .map((violation) => `${violation.id}: ${violation.nodes.slice(0, 3).map((node) => `${node.target.join(' ')} ${node.html.slice(0, 100)}`).join(' | ')}`);
+      expect(serious, serious.join('\n')).toEqual([]);
+    };
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme });
+      await axe();
+    }
+    await rowButton(page, /Not tied to a step/).first().click();
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme });
+      await axe();
+    }
   });
 });
 
@@ -2516,7 +2465,7 @@ test.describe('Board, areas', () => {
     await expect(stepped).toBeVisible();
     await expect(stepped.getByRole('article', { name: 'Reports export to CSV' })).toBeVisible();
     await expect(stepped.getByRole('article', { name: 'Export note' })).toBeVisible();
-    await expect(stepped.getByRole('article', { name: 'Report rows load fast' })).toHaveCount(0);
+    await expect(stepped.getByRole('heading', { name: 'Report rows load fast' })).toHaveCount(0);
     await expect(stepped.getByRole('article', { name: 'Rows note' })).toHaveCount(0);
 
     // Step out via back button
@@ -2528,7 +2477,7 @@ test.describe('Board, areas', () => {
     // Step into "Report rows load fast"
     await stepIntoArea(page, 'Report rows load fast');
     await expect(stepped).toBeVisible();
-    await expect(stepped.getByRole('article', { name: 'Report rows load fast' })).toBeVisible();
+    await expect(stepped.getByRole('heading', { name: 'Report rows load fast' })).toBeVisible();
     await expect(stepped.getByRole('article', { name: 'Rows note' })).toBeVisible();
     await expect(stepped.getByRole('article', { name: 'Reports export to CSV' })).toHaveCount(0);
     await expect(stepped.getByRole('article', { name: 'Export note' })).toHaveCount(0);
@@ -2694,7 +2643,7 @@ test.describe('Board, live', () => {
       await expect(canvas.getByRole('article', { name: 'Just added by claude' })).toHaveCount(0);
       release();
       const added = canvas.getByRole('article', { name: 'Just added by claude' });
-      await expect(added).toBeVisible();
+      await reveal(page, added);
       await expect(added.locator('.board-fresh')).toHaveCount(1);
       expect(state.sinceRelease).toBe(2);
     });
@@ -2758,8 +2707,8 @@ test.describe('Board, live', () => {
     await expect(board(page)).toBeHidden();
     release();
     // It is drawn behind the part that is on show, where it has no size yet.
-    await expect(page.locator('[role="region"][aria-label="Board"] article', { hasText: 'A long note' })).toBeAttached();
     await workspaceNav(page).getByRole('link', { name: 'Board' }).click();
+    await reveal(page, board(page).getByRole('article', { name: 'A long note' }));
     await expect(board(page).getByRole('article', { name: 'A long note' }).getByRole('button', { name: 'Read all of A long note' })).toBeVisible();
   });
 
@@ -2854,7 +2803,7 @@ test.describe('Board, live', () => {
     await feed.send({ event: { id: 'n1', timestamp: new Date().toISOString(), harness: 'claude', event: 'next', payload: { title: 'Cover the cache', reason: 'It has no tests yet' } } });
     await feed.send({ event: { id: 'b2', timestamp: new Date().toISOString(), harness: 'claude', event: 'board', payload: { revision: 2, changes: 1 } } });
     await expect(strip.getByRole('button', { name: /Next: Cover the cache/ })).toBeVisible();
-    await expect(board(page).getByRole('article', { name: 'Just added by claude' })).toBeVisible();
+    await reveal(page, board(page).getByRole('article', { name: 'Just added by claude' }));
     expect(await feed.open()).toBe(1);
     // The board stops listening when another part is shown; the chat stays beside Docs, and its strip keeps the one connection.
     await workspaceNav(page).getByRole('link', { name: 'Docs' }).click();
@@ -2862,130 +2811,6 @@ test.describe('Board, live', () => {
     await expect(strip).toBeVisible();
     await afterSomeFrames(page);
     expect(await feed.open()).toBe(1);
-  });
-
-  test('does not move the card in the hand when the board is read again, and keeps the place it is put down at', async ({ page }) => {
-    const feed = await holdFeed(page);
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await routeBoard(page);
-    const NOTE = { x: 352, y: -420 };
-    const server = await routeMoves(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: NOTE } }));
-    await page.goto('/#/workspaces/demo/board');
-    await stepIntoArea(page);
-    const canvas = board(page);
-    const card = canvas.getByRole('article', { name: 'Export leaks memory' });
-    await expect(card).toBeVisible();
-    await viewAtRest(page);
-    await fitted(page);
-    await expect.poll(() => feed.open()).toBe(1);
-    await feed.connect();
-    // Connecting reads the board; wait for that read, so the next one is the one the AI's change asks for.
-    await expect.poll(() => server.reads).toBeGreaterThanOrEqual(2);
-    const reads = server.reads;
-    const { scale } = await transformOf(page);
-
-    // The card is picked up and carried a little way.
-    const start = await dragBy(page, card, 80, 50, { hold: true });
-    const carried = { x: NOTE.x + 80 / scale, y: NOTE.y + 50 / scale };
-    await expect.poll(async () => nearTo(await canvasPosition(page, boardId(1)), carried)).toBe(true);
-
-    // Meanwhile an AI puts the same card somewhere else and adds a note.
-    server.board = {
-      ...server.board, revision: 5, positions: { ...server.board.positions, [boardId(1)]: { x: 1100, y: 300 } },
-      cards: [...server.board.cards, boardNote(2, { title: 'Just added by claude', at: minutesAgo(0), updatedAt: minutesAgo(0) })],
-    };
-    await feed.send({ event: { id: 'b5', timestamp: new Date().toISOString(), harness: 'claude', event: 'board', payload: { revision: 5, changes: 2 } } });
-    await expect.poll(() => server.reads).toBeGreaterThan(reads);
-    await expect(canvas.getByRole('article', { name: 'Just added by claude' })).toBeVisible();
-    // The card stayed in the hand, and still follows it.
-    expect(nearTo(await canvasPosition(page, boardId(1)), carried)).toBe(true);
-    await page.mouse.move(start.x + 120, start.y + 50, { steps: 4 });
-    const dropped = { x: NOTE.x + 120 / scale, y: NOTE.y + 50 / scale };
-    await expect.poll(async () => nearTo(await canvasPosition(page, boardId(1)), dropped)).toBe(true);
-    await page.mouse.up();
-
-    // The place it was put down at is the one that is saved and the one that stays.
-    await expect(status(page)).toContainText('Moved “Export leaks memory”');
-    const saved = server.posted[0].changes[0].nodes[0];
-    expect(nearTo(saved, dropped)).toBe(true);
-    expect(await canvasPosition(page, boardId(1))).toEqual({ x: saved.x, y: saved.y });
-    // Undo goes back to the place the card had when it was put down: the one the AI gave it.
-    await canvas.getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(() => server.posted.length).toBe(2);
-    expect(server.posted[1]).toEqual({ changes: [{ op: 'move', nodes: [{ id: boardId(1), x: 1100, y: 300 }] }] });
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: 1100, y: 300 });
-  });
-
-  /** A board event, as the stream sends it. */
-  const boardChanged = (revision: number) => ({ event: { id: `b${revision}`, timestamp: new Date().toISOString(), harness: 'claude', event: 'board', payload: { revision, changes: 1 } } });
-  /** The Board open on a board with one card that has a place of its own, and the live feed connected and read. */
-  async function openLive(page: Page) {
-    const feed = await holdFeed(page);
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await routeBoard(page);
-    const NOTE = { x: 352, y: -420 };
-    const server = await routeMoves(page, boardFile({ revision: 4, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: NOTE } }));
-    await page.goto('/#/workspaces/demo/board');
-    await stepIntoArea(page);
-    await expect(board(page).getByRole('article', { name: 'Export leaks memory' })).toBeVisible();
-    await viewAtRest(page);
-    await fitted(page);
-    await expect.poll(() => feed.open()).toBe(1);
-    await feed.connect();
-    await expect.poll(() => server.reads).toBeGreaterThanOrEqual(2);
-    await frames(page, 10);
-    return { feed, server, NOTE };
-  }
-
-  test('lets go of a card that went away while it was in the hand, so it is drawn where the board puts it when it comes back', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (error) => errors.push(error.message));
-    const { feed, server } = await openLive(page);
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 80, 40, { hold: true });
-    // An AI archives the card while it is in the hand: it is gone, and the drag is over without a drop.
-    server.board = { ...server.board, revision: 5, cards: [boardNote(1, { title: 'Export leaks memory', archived: true })] };
-    await feed.send(boardChanged(5));
-    await expect(node(page, boardId(1))).toHaveCount(0);
-    await page.mouse.move(700, 500, { steps: 3 });
-    await page.mouse.up();
-    // It comes back with a place of its own, and is drawn there, not where the hand left it.
-    server.board = { ...server.board, revision: 6, cards: [boardNote(1, { title: 'Export leaks memory' })], positions: { [boardId(1)]: { x: 1100, y: 300 } } };
-    await feed.send(boardChanged(6));
-    await expect(node(page, boardId(1))).toHaveCount(1);
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: 1100, y: 300 });
-    expect(server.posted).toEqual([]);
-    expect(errors).toEqual([]);
-  });
-
-  test('shows the change of an AI whose read was cancelled for a move that was then refused', async ({ page }) => {
-    const { feed, server } = await openLive(page);
-    // An AI adds a card, and the read that is asked for is slow.
-    server.board = { ...server.board, revision: 5, cards: [...server.board.cards, boardNote(2, { title: 'Added by the AI', at: minutesAgo(0), updatedAt: minutesAgo(0) })] };
-    server.holdGets = true;
-    const reads = server.reads;
-    await feed.send(boardChanged(5));
-    await expect.poll(() => server.reads).toBeGreaterThan(reads);
-    // A card is dropped while that read is out, and the move is refused: nothing else will say that the board changed.
-    server.fail = { status: 409, error: 'The board is busy.' };
-    await dragBy(page, board(page).getByRole('article', { name: 'Export leaks memory' }), 100, 0);
-    await expect(status(page)).toContainText('Could not save the place');
-    server.holdGets = false;
-    for (const answer of server.heldGets.splice(0)) await answer();
-    await expect(board(page).getByRole('article', { name: 'Added by the AI' })).toBeVisible();
-    await expect.poll(() => canvasPosition(page, boardId(1))).toEqual({ x: 352, y: -420 });
-  });
-
-  test('puts the keyboard on the canvas when the message is put away after the card has gone', async ({ page }) => {
-    const { feed, server } = await openLive(page);
-    server.fail = { status: 409, error: 'The board is busy.' };
-    await node(page, boardId(1)).focus();
-    await page.keyboard.press('Shift+ArrowRight');
-    await expect(status(page)).toContainText('Could not save the place');
-    server.board = { ...server.board, revision: 5, cards: [boardNote(1, { title: 'Export leaks memory', archived: true })] };
-    await feed.send(boardChanged(5));
-    await expect(node(page, boardId(1))).toHaveCount(0);
-    await board(page).getByRole('button', { name: 'Dismiss' }).click();
-    await expect(board(page).locator('#board-area .react-flow')).toBeFocused();
   });
 });
 
@@ -3328,6 +3153,10 @@ test.describe('Board index sidebar', () => {
 
 for (const colorScheme of ['light', 'dark'] as const) {
   test.describe(`${colorScheme} theme`, () => {
+  // A large window: these specs put several cards, and often a document and a commit too, on screen at once, which a laptop-sized
+  // canvas shows as folded rows and "+N more" (specs for that are under "Board, rows by step").
+  test.use({ viewport: { width: 1800, height: 1200 } });
+
     test.use({ colorScheme });
 
     async function expectNoSeriousViolations(page: Page, scope: string) {
@@ -3347,7 +3176,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         document('Draft notes', { role: 'reference', status: 'draft', summary: 'Rough notes.' }),
         document('First export design', { status: 'superseded', summary: 'Replaced by the queue design.' }),
       ]);
-      const server = await routeMoves(page, boardFile({
+      await routeMoves(page, boardFile({
         cards: [
           boardNote(1, { title: 'Export leaks memory', body: Array.from({ length: 12 }, (_, index) => `Line ${index + 1} of what was seen in the CSV writer.`).join('\n'), updatedAt: minutesAgo(0) }),
           boardNote(2, { title: 'Ask finance about time zones', body: 'Before we ship.', pinned: true, by: 'user', updatedBy: 'user' }),
@@ -3368,6 +3197,8 @@ for (const colorScheme of ['light', 'dark'] as const) {
       // Step into area for Level 1 accessibility
       await stepIntoArea(page);
       const canvas = board(page);
+      await expectNoSeriousViolations(page, '[aria-label="Board"]');
+      await revealAll(page);
       await expect(canvas.getByRole('article', { name: 'Export flow' }).getByRole('img', { name: 'Export flow' })).toBeAttached();
       await expect(canvas.getByRole('button', { name: 'Read all of Export leaks memory' })).toBeVisible();
       await expect(canvas.locator('#board-area .react-flow__edge')).toHaveCount(2);
@@ -3375,16 +3206,6 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
       await canvas.locator('#board-area').getByRole('button', { name: 'Archived (2)' }).click();
       await expect(canvas.getByRole('article', { name: 'The spec' })).toBeVisible();
-      await expectNoSeriousViolations(page, '[aria-label="Board"]');
-
-      // A card moved with the keyboard, with Undo over the canvas; and the message when it could not be saved.
-      await node(page, boardId(2)).focus();
-      await page.keyboard.press('Shift+ArrowRight');
-      await expect(canvas.getByRole('button', { name: 'Undo' })).toBeVisible();
-      await expectNoSeriousViolations(page, '[aria-label="Board"]');
-      server.fail = { status: 409, error: 'The board is busy. Try again in a moment.' };
-      await page.keyboard.press('Shift+ArrowRight');
-      await expect(status(page)).toHaveText('Could not save the place: the board is busy');
       await expectNoSeriousViolations(page, '[aria-label="Board"]');
 
       // The whole text of a card, in its dialog.

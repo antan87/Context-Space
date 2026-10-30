@@ -24,6 +24,10 @@ export interface BoardActions {
   toggleGroup: (id: string, open: boolean) => void;
   /** A button of a group that has just opened or folded, to put the keyboard on when it was on the one that was pressed. */
   keepFocus: (id: string, button: HTMLElement) => void;
+  /** Opens the row of an Area that was pressed, or closes it when it is open already. */
+  toggleRow?: (rowId: string) => void;
+  /** Shows another page of the row that is open. */
+  setRowPage?: (rowId: string, page: number) => void;
   /** Steps into an area from Level 0 (Overview) into Level 1 (Area). */
   openArea?: (id: string, button: HTMLElement) => void;
 }
@@ -48,3 +52,14 @@ export const cardLinks = (actions: BoardActions, opener: HTMLElement | null = nu
   fileUrl: (path) => documentFileUrl(actions.workspaceId, path),
   onOpenFile: (path) => { onOpen?.(); actions.openInReader({ path, title: fileTitle(path) }, opener); },
 });
+
+/** The first control of a card that the keyboard can reach and the eye can see: a link inside clamped text is neither. */
+export function firstControl(card: HTMLElement, selector = 'button, a[href]'): HTMLElement | null {
+  for (const element of card.querySelectorAll<HTMLElement>(selector)) {
+    if (element.getAttribute('tabindex') === '-1' || element.hasAttribute('disabled')) continue;
+    if (element.getClientRects().length === 0) continue;
+    if (element.closest('[hidden], [aria-hidden="true"]')) continue;
+    return element;
+  }
+  return null;
+}

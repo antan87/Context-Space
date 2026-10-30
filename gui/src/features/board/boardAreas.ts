@@ -13,26 +13,18 @@ import type { Edge, Node } from '@xyflow/react';
 import type { WorkDocument } from '../../types.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
-import type { BoardCard, BoardLink, BoardPoint, BoardView } from './boardData.js';
+import type { BoardCard, BoardLink, BoardView } from './boardData.js';
 import {
   BOARD_LIMITS,
   BOARD_SIZE,
   cardOrder,
-  cardPlan,
-  clearOfGroups,
-  commitsSince,
-  documentsSummary,
   fileTypeOf,
-  frame,
-  freeCard,
   imageAlt,
   isFresh,
-  lane,
   newestFirst,
   nodeResolver,
   sidesBetween,
   uniqueId,
-  type BoardNode,
   type LaneCard,
   type Rect,
 } from './boardLayout.js';
@@ -600,249 +592,8 @@ export function overviewEdges(areas: BoardArea[], nodes: AreaNode[], links: Boar
   return edges;
 }
 
-export interface AreaBoardLayoutOptions {
-  news?: WhatsNewView;
-  positions?: Record<string, BoardPoint>;
-  now?: number;
-}
-
-/**
- * Pure 2D layout for Level 1 (inside an Area). Coordinates are deterministic from the area and options alone.
- */
-export function areaBoardLayout(
-  area: BoardArea,
-  options: AreaBoardLayoutOptions = {},
-): BoardNode[] {
-  const nodes: BoardNode[] = [];
-  const taken = new Set<string>();
-  const MAX_COLS = 3;
-
-  type StructuredGroup = {
-    colSpan: number;
-    height: number;
-    render: (x: number, y: number) => BoardNode[];
-  };
-
-  const topGroups: StructuredGroup[] = [];
-
-  // Checkpoint or plan frame
-  if (area.kind === 'checkpoint' || area.kind === 'plan') {
-    const planItems = area.planItems ?? { steps: [], decisions: [] };
-    const frameWaitingKeys = new Set(planItems.waitingKeys ?? []);
-    const frameNode = frame(
-      area.kind,
-      area.id,
-      0,
-      area.data.title,
-      area.data.done,
-      planItems,
-      frameWaitingKeys,
-      false, // collapsible: false
-    );
-    topGroups.push({
-      colSpan: 1,
-      height: frameNode.height ?? BOARD_SIZE.folded,
-      render: (x, y) => [{ ...frameNode, position: { x, y } }],
-    });
-  }
-
-  // Documents lane
-  if (area.documents.length > 0) {
-    const docCols = area.documents.length >= 4 ? 2 : 1;
-    const docCards: LaneCard[] = area.documents.map((doc) => ({
-      id: uniqueId(`document:${doc.id}`, taken),
-      type: 'document' as const,
-      height: BOARD_SIZE.document,
-      data: {
-        title: doc.title,
-        role: doc.role,
-        status: doc.status,
-        summary: doc.summary,
-        dimmed: doc.status === 'superseded',
-        sourceId: doc.id,
-        ...(doc.filename ? { filename: doc.filename } : {}),
-        ...(doc.url ? { url: doc.url } : {}),
-      },
-    }));
-    const docsId = 'lane:documents';
-    const sample = lane(
-      docsId,
-      0,
-      { title: 'Documents', caption: 'Source documents', more: 0 },
-      docCards,
-      {
-        columns: docCols,
-        group: { open: true, collapsible: false, summary: documentsSummary(area.documents) },
-      },
-    );
-    const height = sample[0]?.height ?? BOARD_SIZE.folded;
-    topGroups.push({
-      colSpan: docCols,
-      height,
-      render: (x, y) =>
-        lane(
-          docsId,
-          x,
-          { title: 'Documents', caption: 'Source documents', more: 0 },
-          docCards,
-          {
-            y,
-            columns: docCols,
-            group: { open: true, collapsible: false, summary: documentsSummary(area.documents) },
-          },
-        ),
-    });
-  }
-
-  // Commits lanes
-  const news = options.news;
-  const since = news ? commitsSince(news) : { caption: 'New since you last looked', none: () => 'No new commits.', count: (n: number) => `${n} commits` };
-
-  if (area.repos.length > 0) {
-    for (const r of area.repos) {
-      const repoCols = r.cards.length >= 5 ? 2 : 1;
-      const more = r.repo.more;
-      const moreAtLeast = r.repo.moreAtLeast;
-      const totalAreaCommits = r.commits.length + more;
-      const newest = r.commits[0];
-      const summary = newest
-        ? {
-            headline: since.count(totalAreaCommits, moreAtLeast),
-            detail: newest.subject,
-            byline: newest.author,
-            ...(r.repo.problem ? { warning: 'Could not read everything' } : {}),
-          }
-        : {
-            headline: totalAreaCommits > 0 ? since.count(totalAreaCommits, moreAtLeast) : '0 commits',
-            ...(r.repo.problem ? { warning: 'Could not read everything' } : {}),
-          };
-
-      const sample = lane(
-        r.laneId,
-        0,
-        {
-          title: r.repo.repo,
-          caption: since.caption,
-          more,
-          ...(moreAtLeast ? { moreAtLeast: true } : {}),
-          ...(r.repo.problem ? { note: `Could not be read: ${r.repo.problem}` } : {}),
-        },
-        r.cards,
-        {
-          columns: repoCols,
-          group: { open: true, collapsible: false, summary },
-        },
-      );
-      const height = sample[0]?.height ?? BOARD_SIZE.folded;
-
-      topGroups.push({
-        colSpan: repoCols,
-        height,
-        render: (x, y) =>
-          lane(
-            r.laneId,
-            x,
-            {
-              title: r.repo.repo,
-              caption: since.caption,
-              more,
-              ...(moreAtLeast ? { moreAtLeast: true } : {}),
-              ...(r.repo.problem ? { note: `Could not be read: ${r.repo.problem}` } : {}),
-            },
-            r.cards,
-            {
-              y,
-              columns: repoCols,
-              group: { open: true, collapsible: false, summary },
-            },
-          ),
-      });
-    }
-  }
-
-  // Commit placeholder rule (only on current area when news is present, no commits across news, other content exists, and not all unreadable)
-  if (news && area.data.current) {
-    const problems = news.commits.filter((repo) => !repo.commits.length && repo.problem);
-    const unreadable = problems.length > 0 && problems.length === news.commits.length;
-    if (!news.commits.some((repo) => repo.commits.length) && (topGroups.length > 0 || problems.length > 0) && !unreadable) {
-      const placeholderLaneId = uniqueId('lane:commits', taken);
-      const placeholderCardId = uniqueId('placeholder:commits', taken);
-      const sample = lane(
-        placeholderLaneId,
-        0,
-        { title: 'Commits', caption: since.caption, more: 0 },
-        [{ id: placeholderCardId, type: 'placeholder', height: BOARD_SIZE.placeholder, data: { text: since.none(problems.length > 0) } }],
-      );
-      const height = sample[0]?.height ?? BOARD_SIZE.folded;
-      topGroups.push({
-        colSpan: 1,
-        height,
-        render: (x, y) =>
-          lane(
-            placeholderLaneId,
-            x,
-            { title: 'Commits', caption: since.caption, more: 0 },
-            [{ id: placeholderCardId, type: 'placeholder', height: BOARD_SIZE.placeholder, data: { text: since.none(problems.length > 0) } }],
-            { y },
-          ),
-      });
-    }
-  }
-
-  // Layout structured top groups in wrapped rows
-  let rowCols = 0;
-  let rowY = 0;
-  let maxRowHeight = 0;
-  let maxTopHeight = 0;
-  let totalTopColumns = 0;
-
-  for (const group of topGroups) {
-    if (rowCols + group.colSpan > MAX_COLS && rowCols > 0) {
-      rowY += maxRowHeight + BOARD_SIZE.columnGap;
-      rowCols = 0;
-      maxRowHeight = 0;
-    }
-    const x = rowCols * (BOARD_SIZE.column + BOARD_SIZE.columnGap);
-    nodes.push(...group.render(x, rowY));
-    rowCols += group.colSpan;
-    maxRowHeight = Math.max(maxRowHeight, group.height);
-    maxTopHeight = Math.max(maxTopHeight, rowY + group.height);
-    totalTopColumns = Math.max(totalTopColumns, rowCols);
-  }
-
-  // Cards layout
-  const positions = new Map(Object.entries(options.positions ?? {}));
-  const unplaced: LaneCard[] = [];
-  const free: BoardNode[] = [];
-  const now = options.now ?? Date.now();
-
-  for (const card of cardOrder(area.cards)) {
-    const entry = cardPlan(card, now);
-    const at = positions.get(card.id);
-    if (at) {
-      free.push(freeCard(entry, at, entry.z));
-    } else {
-      unplaced.push(entry);
-    }
-  }
-
-  nodes.push(...free);
-
-  if (unplaced.length > 0) {
-    const bandCols = Math.max(2, Math.min(4, totalTopColumns || Math.ceil(Math.sqrt(unplaced.length))));
-    const bandY = maxTopHeight > 0 ? maxTopHeight + BOARD_SIZE.columnGap : 0;
-    const bandNodes = lane(
-      'lane:board',
-      0,
-      { title: 'From the board', caption: 'Notes and files from you and the AI', more: 0 },
-      unplaced,
-      { columns: bandCols, y: bandY },
-    );
-    nodes.push(...bandNodes);
-  }
-
-  return clearOfGroups(nodes);
-}
+export { READABLE_ZOOM, ROW_SIZE, WAITING_ROW, areaBoardLayout, areaLayout, areaOpenInfo, areaPlace, areaRowIds, areaRowOf, areaRows, areaStage, areaView } from './boardRows.js';
+export type { AreaBoardLayoutOptions, AreaRow, AreaStage } from './boardRows.js';
 
 /**
  * Computes a viewport such that all bounded nodes fit whole inside the container screen with no scrolling.
@@ -850,7 +601,7 @@ export function areaBoardLayout(
 export function fitBoundsView(
   nodes: Array<{ id: string; parentId?: string; position: { x: number; y: number }; width?: number; height?: number }>,
   size: Size,
-  options?: { topInset?: number; bottomInset?: number; margin?: number; minAutoZoom?: number },
+  options?: { topInset?: number; bottomInset?: number; margin?: number },
 ): Viewport | null {
   if (nodes.length === 0 || size.width <= 0 || size.height <= 0) return null;
 
@@ -879,20 +630,9 @@ export function fitBoundsView(
   const availW = Math.max(40, size.width - 2 * padX);
   const availH = Math.max(40, size.height - padTop - padBottom);
 
-  let bounds = calcBounds(topNodes);
-  let zoom = Math.min(1, availW / bounds.width, availH / bounds.height);
+  const bounds = calcBounds(topNodes);
+  const zoom = Math.min(1, availW / bounds.width, availH / bounds.height);
 
-  if (options?.minAutoZoom !== undefined && zoom < options.minAutoZoom) {
-    const structured = topNodes.filter((n) => n.id.startsWith('lane:') || n.id.startsWith('checkpoint:') || n.id.startsWith('plan:'));
-    if (structured.length > 0) {
-      const sBounds = calcBounds(structured);
-      const sZoom = Math.min(1, availW / sBounds.width, availH / sBounds.height);
-      if (sZoom >= options.minAutoZoom) {
-        bounds = sBounds;
-        zoom = sZoom;
-      }
-    }
-  }
 
   const x = size.width / 2 - (bounds.x + bounds.width / 2) * zoom;
   const y = padTop + availH / 2 - (bounds.y + bounds.height / 2) * zoom;

@@ -690,7 +690,7 @@ export interface BoardChangeOptions {
   by: string;
   /** The revision the caller read. When given and no longer the board's, nothing is changed. */
   revision?: number;
-  /** The step of an added card was filled in by the caller, not asked for: it is kept as a hint and does not pin the card to the step's area. Not part of any change a caller can send. */
+  /** Every add in this call has its step filled in by the caller, not asked for: each is kept as a hint and does not pin its card to the step's area. Not part of any change a caller can send. */
   stepIsHint?: boolean;
 }
 

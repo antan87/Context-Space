@@ -23,6 +23,11 @@ interface CardBase {
   updatedAt: string;
   /** The board area (`checkpoint:<plan key>` or `plan:own`) the card belongs to. */
   area?: string;
+  /** The key of the plan step (in PLAN.md) the card is about. */
+  step?: string;
+  /** One line on why a person should look at the card, and when it was set. Not shown yet. */
+  look?: string;
+  lookAt?: string;
 }
 export interface BoardNoteCard extends CardBase { kind: 'note'; body: string }
 export interface BoardFileCard extends CardBase {
@@ -80,6 +85,7 @@ export function isBoardAreaId(value: unknown): value is string {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const validTime = (value: unknown): value is string => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
+const STEP_KEY = /^[\p{L}\p{N}][\p{L}\p{N}-]*$/u;
 /** The name of the AI tool, or `user`: the only form the backend writes. */
 const actor = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(value);
 
@@ -102,10 +108,14 @@ function cleanCard(raw: unknown): BoardCard | null {
   const title = text(raw.title, BOARD_DATA_LIMITS.title);
   if (!title) return null;
   const area = isBoardAreaId(raw.area) ? raw.area : undefined;
+  const step = typeof raw.step === 'string' && raw.step.length <= 120 && STEP_KEY.test(raw.step) ? raw.step : undefined;
+  const look = typeof raw.look === 'string' && raw.look.trim() && !/[\r\n]/.test(raw.look) ? raw.look.trim().slice(0, 140) : undefined;
   const base = {
     id: raw.id, title, pinned: raw.pinned === true, archived: raw.archived === true, by: raw.by, at: raw.at,
     updatedBy: actor(raw.updatedBy) ? raw.updatedBy : raw.by, updatedAt: validTime(raw.updatedAt) ? raw.updatedAt : raw.at,
     ...(area ? { area } : {}),
+    ...(step ? { step } : {}),
+    ...(look ? { look, ...(validTime(raw.lookAt) ? { lookAt: raw.lookAt } : {}) } : {}),
   };
   if (raw.kind === 'note') return { ...base, kind: 'note', body: typeof raw.body === 'string' ? raw.body.slice(0, BOARD_DATA_LIMITS.text) : '' };
   if (raw.kind === 'file') {
