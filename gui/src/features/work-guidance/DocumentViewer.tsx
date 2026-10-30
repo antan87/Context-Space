@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Copy, Download, Edit3, ExternalLink, Eye, FolderInput, Maximize2, Minimize2, Save, ShieldAlert, X } from 'lucide-react';
+import { Check, Copy, Download, Edit3, ExternalLink, Eye, FolderInput, Maximize2, Minimize2, Save, X } from 'lucide-react';
 import { Button, buttonVariants } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
@@ -8,7 +8,6 @@ import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
 import { DocumentPreview, type DocumentPreviewData } from './DocumentPreview.js';
-import { dependsOnExternalScript } from './previewPolicy.js';
 
 /** Matches the app's existing overlay idiom (dialog.tsx, PluggableDiffViewer, WorktreeTitleModal). */
 const OVERLAY = 'fixed inset-0 z-[100] flex flex-col bg-background';
@@ -45,6 +44,8 @@ export interface DocumentViewerProps {
    * fixed share of the screen's height and the body scrolls around it.
    */
   fillFrame?: boolean;
+  /** With `fill`: no row of its own: the reader around it draws the title and the actions. */
+  chromeless?: boolean;
   leading?: ReactNode;
   notice?: ReactNode;
   className?: string;
@@ -61,33 +62,13 @@ export interface DocumentViewerProps {
 }
 
 /**
- * An HTML document's scripts run by default (in the sandboxed frame, with no way to the app: see previewPolicy). This puts
- * one document back in the locked mode, and back again. It is per document and never persisted: it lapses as soon as another
- * document is opened.
- */
-function ScriptsControl({ running, onToggle, compact }: { running: boolean; onToggle: () => void; compact: boolean }) {
-  return <Button
-    size={compact ? 'xs' : 'sm'}
-    variant="outline"
-    title={running ? 'Block the scripts of this document: it shows without them' : 'Run the scripts of this document again, so its styling can load'}
-    onClick={onToggle}
-  >
-    <ShieldAlert size={compact ? 12 : 14} />
-    {running ? 'Stop scripts' : 'Run scripts'}
-  </Button>;
-}
-
-/**
  * Owns the maximize affordance for every document surface. Expanding fills the app viewport inside
  * the app's own borders — `fixed inset-0` portaled to `document.body` above the app shell, never the
- * browser Fullscreen API — so Download, the raw toggle and the scripts control all stay reachable, and
+ * browser Fullscreen API — so Download and the raw toggle stay reachable, and
  * docked side panels like the chat cannot overlap it.
  */
-export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['Raw text', 'Rendered view'], onClose, compact = false, fill = false, fillFrame = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false }: DocumentViewerProps) {
+export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['View source', 'View page'], onClose, compact = false, fill = false, fillFrame = false, chromeless = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false }: DocumentViewerProps) {
   const [expanded, setExpanded] = useState(false);
-  // HTML is trusted by default: only a user can switch one document to the locked mode.
-  const [scriptsStopped, setScriptsStopped] = useState(false);
-  const trusted = !scriptsStopped;
   const [editing, setEditing] = useState(initialEditing);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -137,13 +118,12 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     }
   };
 
-  // Stopped scripts and edit state lapse when a different document is opened.
+  // Edit state lapses when a different document is opened.
   const currentDocName = preview?.name ?? title;
   const previousDocName = useRef(currentDocName);
   useEffect(() => {
     if (currentDocName && previousDocName.current !== currentDocName) {
       previousDocName.current = currentDocName;
-      setScriptsStopped(false);
       setExpanded(false);
       setEditing(false);
       setEditContent(preview?.content ?? '');
@@ -272,22 +252,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   };
 
   const buttonSize = compact ? 'xs' : 'sm';
-  const scriptBound = useMemo(
-    () => preview?.kind === 'html' && !raw && dependsOnExternalScript(preview.content ?? ''),
-    [preview, raw],
-  );
-  const scriptsControl = preview?.kind === 'html' && !raw
-    ? <ScriptsControl running={trusted} onToggle={() => setScriptsStopped(value => !value)} compact={compact} />
-    : null;
-  const guidance = <>
-    {notice}
-    {scriptBound && <p role="status" className={cn('flex items-start gap-1.5 text-xs text-muted-foreground', compact ? 'mb-2' : 'mb-3')}>
-      <ShieldAlert size={12} className="mt-0.5 shrink-0" />
-      {trusted
-        ? 'This page runs scripts from the internet in a sandboxed frame, apart from the app. Stop scripts to block them.'
-        : 'Scripts are stopped, so the styling this page loads from an external script is blocked. Run scripts to load it.'}
-    </p>}
-  </>;
+  const guidance = notice;
   const editorView = (
     <div className="flex flex-col flex-1 h-full min-h-[350px] gap-2">
       <textarea
@@ -309,7 +274,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   const body = (expandedNow: boolean) => editing
     ? editorView
     : preview
-      ? <DocumentPreview preview={preview} fileUrl={fileUrl} raw={raw} expanded={expandedNow} fillFrame={framed && !expandedNow} trusted={trusted} links={links} />
+      ? <DocumentPreview preview={preview} fileUrl={fileUrl} raw={raw} expanded={expandedNow} fillFrame={framed && !expandedNow} trusted links={links} />
       : <>{status}</>;
 
   const folder = (preview?.name ?? title).includes('/') ? (preview?.name ?? title).slice(0, (preview?.name ?? title).lastIndexOf('/') + 1) : '';
@@ -348,7 +313,6 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         </Button>
       )}
       {onToggleRaw && !editing && <Button size="xs" variant="ghost" className="shrink-0" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
-      {!editing && scriptsControl}
       <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label={copiedPath ? 'Path copied' : `Copy path ${pathToCopy}`} title={copiedPath ? 'Path copied to clipboard' : 'Copy path'} onClick={handleCopyPath}>
         {copiedPath ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
       </Button>
@@ -455,7 +419,6 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
             </Button>
           )}
           {onToggleRaw && !editing && <Button size={buttonSize} variant="outline" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
-          {!editing && scriptsControl}
           {downloadHref && (
             <a
               className={cn(buttonVariants({ variant: 'outline', size: buttonSize }), 'gap-1.5')}
@@ -501,7 +464,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     <>
       {fill ? (
         <div className={cn('flex h-full min-h-0 flex-col', expanded && 'hidden', className)}>
-          {fillChrome(false)}
+          {!chromeless && fillChrome(false)}
           <div className={cn('min-h-0 flex-1 px-5 py-4', framed ? 'flex flex-col overflow-hidden' : 'overflow-auto')}>
             {guidance}
             {body(false)}

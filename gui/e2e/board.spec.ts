@@ -534,12 +534,23 @@ test.describe('Board', () => {
     const canvas = board(page);
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     const area = (await canvas.locator('#board-overview .react-flow').boundingBox())!;
+    const before0 = await transformOf(page);
     await page.mouse.move(area.x + 200, area.y + 40);
     await page.mouse.down();
     await page.mouse.move(area.x + 350, area.y + 70, { steps: 5 });
     await page.mouse.up();
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
-    const moved = await transformOf(page);
+    // The view at rest: the same for several frames in a row, so the drag has settled before it is read.
+    let moved = await transformOf(page);
+    for (let still = 0; still < 3;) {
+      await afterSomeFrames(page);
+      const now = await transformOf(page);
+      still = JSON.stringify(now) === JSON.stringify(moved) ? still + 1 : 0;
+      moved = now;
+    }
+    // The drag really moved the view by about (150, 30): a snap back before the part arrives cannot hide.
+    expect(Math.abs(moved.x - before0.x - 150)).toBeLessThanOrEqual(4);
+    expect(Math.abs(moved.y - before0.y - 30)).toBeLessThanOrEqual(4);
     release();
     await answered;
     await afterSomeFrames(page);
@@ -982,6 +993,29 @@ test.describe('Board, reader', () => {
   const readerTitle = (page: Page, name: string) => reader(page).getByRole('heading', { name, level: 2, exact: true });
   const card = (page: Page, title: string) => board(page).getByRole('article', { name: title, exact: true });
   const opener = (page: Page, title: string) => card(page, title).getByRole('button', { name: `Open ${title}`, exact: true });
+  /** The reader's header has two buttons: the menu of what can be done with what is open, and Close. The menu is drawn outside the reader (in a portal), so its items are found on the page. */
+  const moreButton = (page: Page) => reader(page).getByRole('button', { name: 'More actions', exact: true });
+  const closeButton = (page: Page) => reader(page).getByRole('button', { name: 'Close', exact: true });
+  const menuItem = (page: Page, name: string) => page.getByRole('menuitem', { name, exact: true });
+  async function openMenu(page: Page) {
+    await moreButton(page).click();
+    await expect(page.getByRole('menu')).toBeVisible();
+  }
+  async function chooseFromMenu(page: Page, name: string) {
+    await openMenu(page);
+    await menuItem(page, name).click();
+  }
+  /** The switch for scripts, the raw text button and the warning about scripts are gone: nothing of them is on the page. */
+  async function expectNoScriptWords(page: Page) {
+    for (const text of ['Stop scripts', 'Run scripts', 'Raw text', 'Rendered view', 'runs scripts', 'Scripts are stopped']) await expect(page.getByText(text, { exact: false })).toHaveCount(0);
+  }
+  /** Whether the menu has an item, looked at with the menu open and left as it was. */
+  async function expectMenuItem(page: Page, name: string, shown: boolean) {
+    await openMenu(page);
+    await expect(menuItem(page, name)).toHaveCount(shown ? 1 : 0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+  }
 
   /** The documents panel's preview request, answered from FILES; the names that were asked for are kept. */
   async function routeFiles(page: Page) {
@@ -1014,7 +1048,7 @@ test.describe('Board, reader', () => {
   /** What this browser remembers of how the reader is shown. */
   const LAYOUT_KEY = 'contextspace_board_reader_layout_v1';
   const storedLayout = (page: Page) => page.evaluate((key) => window.localStorage.getItem(key), LAYOUT_KEY);
-  /** The viewer has chosen "Side by side", unless this browser has a choice already: the specs of the docked reader. */
+  /** The viewer has chosen "Show beside the board", unless this browser has a choice already: the specs of the docked reader. */
   const dockReader = (page: Page) => page.addInitScript((key) => { if (window.localStorage.getItem(key) === null) window.localStorage.setItem(key, 'side'); }, LAYOUT_KEY);
   /**
    * The board of the specs: a source document that is kept as a file, and a few cards, one of each kind the reader opens. The reader is
@@ -1055,7 +1089,9 @@ test.describe('Board, reader', () => {
     // A source document is read through the work route, as the rest of the app reads them, and not from the folder by the preview request.
     expect([...new Set(sources)]).toEqual(['export-requirements']);
     expect(asked).toEqual([]);
-    await expect(reader(page).getByRole('link', { name: 'Download', exact: true })).toHaveCount(0);
+    await openMenu(page);
+    await expect(menuItem(page, 'Download')).toHaveCount(0);
+    await page.keyboard.press('Escape');
     // It is on the right, about 45% of the section and not under 360 px; the canvas is still there, on its left.
     const [section, panel, canvas] = await Promise.all([board(page).locator('#board-area').boundingBox(), reader(page).boundingBox(), board(page).locator('#board-area .react-flow').boundingBox()]);
     expect(Math.abs(panel!.width - section!.width * 0.45)).toBeLessThanOrEqual(2);
@@ -1074,7 +1110,9 @@ test.describe('Board, reader', () => {
     await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
     await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
     // A file of the workspace can be downloaded; it is read by the documents panel's preview request.
-    await expect(reader(page).getByRole('link', { name: 'Download', exact: true })).toHaveAttribute('href', /name=docs%2Fspec\.md&download=1$/);
+    await openMenu(page);
+    await expect(menuItem(page, 'Download')).toHaveAttribute('href', /name=docs%2Fspec\.md&download=1$/);
+    await page.keyboard.press('Escape');
     await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
     // The second card may be out of sight beside the reader: the keyboard brings it into view.
     await opener(page, 'Overview page').focus();
@@ -1249,7 +1287,7 @@ test.describe('Board, reader', () => {
     await page.keyboard.press('Escape');
     await expect(reader(page)).toHaveCount(0);
     await button.click();
-    await reader(page).getByRole('button', { name: 'Open in Docs' }).focus();
+    await moreButton(page).focus();
     await page.keyboard.press('Escape');
     await expect(reader(page)).toHaveCount(0);
     await expect(button).toBeFocused();
@@ -1306,7 +1344,7 @@ test.describe('Board, reader', () => {
     const asked = await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
     await opener(page, 'Overview page').click();
     await expect(readerTitle(page, 'Overview page')).toBeVisible();
-    await reader(page).getByRole('button', { name: 'Open in Docs' }).click();
+    await chooseFromMenu(page, 'Open in Docs');
     await expect(page).toHaveURL(/#\/workspaces\/demo\/documents$/);
     await expect(page.getByTitle('Preview of overview.html').first()).toBeVisible();
     expect(asked).toContain('overview.html');
@@ -1458,7 +1496,7 @@ test.describe('Board, reader', () => {
   test('does not take the keyboard from the reader when the canvas comes to be covered while it is on one of its buttons', async ({ page }) => {
     await openBoard(page, FILE_CARDS);
     await opener(page, 'The CSV spec').click();
-    const docs = reader(page).getByRole('button', { name: 'Open in Docs' });
+    const docs = moreButton(page);
     await docs.focus();
     await page.setViewportSize({ width: 820, height: 900 });
     await expect(board(page).locator('#board-area [inert]')).toHaveCount(1);
@@ -1493,9 +1531,6 @@ test.describe('Board, reader', () => {
   test.describe('in a large window', () => {
     /** The dimmed board the window stands on: it fills the Board section, under the window. */
     const behind = (page: Page) => reader(page).locator('xpath=..');
-    const backButton = (page: Page) => reader(page).getByRole('button', { name: 'Back to board', exact: true });
-    const sideBySide = (page: Page) => reader(page).getByRole('button', { name: 'Side by side', exact: true });
-    const large = (page: Page) => reader(page).getByRole('button', { name: 'Large', exact: true });
     /** The documents panel's file request, answered with a picture that is wider than any window. */
     async function routeWidePicture(page: Page) {
       await page.route('**/api/workspace/demo/documents/file**', (route) => route.fulfill({
@@ -1518,7 +1553,7 @@ test.describe('Board, reader', () => {
       await opener(page, 'The CSV spec').click();
       await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
       await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
-      await expect(reader(page).getByRole('button', { name: 'Open in Docs', exact: true })).toBeVisible();
+      await expect(moreButton(page)).toBeVisible();
       const [area, win, canvas] = await Promise.all([behind(page).boundingBox(), reader(page).boundingBox(), board(page).locator('#board-area .react-flow').boundingBox()]);
       expect(Math.abs(win!.width / area!.width - 0.92)).toBeLessThan(0.005);
       expect(Math.abs(win!.height / area!.height - 0.88)).toBeLessThan(0.005);
@@ -1552,7 +1587,7 @@ test.describe('Board, reader', () => {
       expect(Math.abs((await reader(page).boundingBox())!.width / (await behind(page).boundingBox())!.width - 0.92)).toBeLessThan(0.005);
     });
 
-    test('closes with Escape, with "Back to board" and with a click on the board behind it, and gives the keyboard back to the card', async ({ page }) => {
+    test('closes with Escape, with Close and with a click on the board behind it, and gives the keyboard back to the card', async ({ page }) => {
       await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
       const button = opener(page, 'The CSV spec');
       // Escape.
@@ -1563,10 +1598,10 @@ test.describe('Board, reader', () => {
       await expect(reader(page)).toHaveCount(0);
       await expect(button).toBeFocused();
       await expect(board(page).locator('#board-area [inert]')).toHaveCount(0);
-      // Back to board.
+      // Close.
       await button.click();
-      await expect(backButton(page)).toBeVisible();
-      await backButton(page).click();
+      await expect(closeButton(page)).toBeVisible();
+      await closeButton(page).click();
       await expect(reader(page)).toHaveCount(0);
       await expect(button).toBeFocused();
       // A click on the dimmed board behind the window, which is beside it and not in it.
@@ -1578,7 +1613,7 @@ test.describe('Board, reader', () => {
       await expect(button).toBeFocused();
       // Escape from a button of the window works as well.
       await button.click();
-      await reader(page).getByRole('button', { name: 'Open in Docs' }).focus();
+      await moreButton(page).focus();
       await page.keyboard.press('Escape');
       await expect(reader(page)).toHaveCount(0);
       await expect(button).toBeFocused();
@@ -1611,7 +1646,8 @@ test.describe('Board, reader', () => {
       await page.mouse.up();
       await frames(page);
       await expect(reader(page)).toBeVisible();
-      // And a press and a release that are both on the board close it, as before.
+      // And a press and a release that are both on the board close it, as before (the text the first drag selected is let go of, or a press on it starts dragging it).
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
       await page.mouse.move(area!.x + 8, area!.y + 8);
       await page.mouse.down();
       await page.mouse.move(area!.x + 14, area!.y + area!.height - 8, { steps: 4 });
@@ -1652,7 +1688,7 @@ test.describe('Board, reader', () => {
       // A frame that fills it is taller than the share of the screen it had before.
       expect((await frame.boundingBox())!.height).toBeGreaterThan(700);
       // A document that is not a page still scrolls in the body.
-      await reader(page).getByRole('button', { name: 'Back to board' }).click();
+      await closeButton(page).click();
       await opener(page, 'The CSV spec').click();
       await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
       expect(await reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 }).evaluate((element) => {
@@ -1662,15 +1698,14 @@ test.describe('Board, reader', () => {
       })).toBe(true);
     });
 
-    test('docks beside the board with "Side by side", comes back with "Large", and remembers the choice after a reload', async ({ page }) => {
+    test('docks beside the board with "Show beside the board", comes back with "Show large", and remembers the choice after a reload', async ({ page }) => {
       await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
       expect(await storedLayout(page)).toBeNull();
       await opener(page, 'The CSV spec').click();
-      await expect(large(page)).toHaveCount(0);
-      await sideBySide(page).click();
-      // Beside the canvas, as before: about 45% of the section on its right, the canvas free again, and Close in place of Back to board.
-      await expect(large(page)).toBeVisible();
-      await expect(backButton(page)).toHaveCount(0);
+      await expectMenuItem(page, 'Show large', false);
+      await chooseFromMenu(page, 'Show beside the board');
+      // Beside the canvas, as before: about 45% of the section on its right, the canvas free again, and Close where it was.
+      await expectMenuItem(page, 'Show large', true);
       await expect(reader(page).getByRole('button', { name: 'Close', exact: true })).toBeVisible();
       await expect(board(page).locator('#board-area [inert]')).toHaveCount(0);
       const [section, panel] = await Promise.all([board(page).locator('#board-area').boundingBox(), reader(page).boundingBox()]);
@@ -1683,18 +1718,18 @@ test.describe('Board, reader', () => {
       await page.reload();
       await stepIntoArea(page, /Reports export to CSV/);
       await opener(page, 'The CSV spec').click();
-      await expect(large(page)).toBeVisible();
+      await expectMenuItem(page, 'Show large', true);
       expect(Math.abs((await reader(page).boundingBox())!.width - (await board(page).locator('#board-area').boundingBox())!.width * 0.45)).toBeLessThanOrEqual(2);
       // And back to the window, kept the same way.
-      await large(page).click();
-      await expect(sideBySide(page)).toBeVisible();
-      await expect(backButton(page)).toBeVisible();
+      await chooseFromMenu(page, 'Show large');
+      await expectMenuItem(page, 'Show beside the board', true);
+      await expect(closeButton(page)).toBeVisible();
       await expect(board(page).locator('#board-area [inert]')).toHaveCount(1);
       expect(await storedLayout(page)).toBe('large');
       await page.reload();
       await stepIntoArea(page, /Reports export to CSV/);
       await opener(page, 'The CSV spec').click();
-      await expect(backButton(page)).toBeVisible();
+      await expect(closeButton(page)).toBeVisible();
     });
 
     test('keeps what is open, and where the keyboard is, when it changes between the window and the dock', async ({ page }) => {
@@ -1702,11 +1737,11 @@ test.describe('Board, reader', () => {
       const button = opener(page, 'The CSV spec');
       await button.click();
       await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
-      await sideBySide(page).click();
-      await expect(large(page)).toBeFocused();
+      await chooseFromMenu(page, 'Show beside the board');
+      await expect(moreButton(page)).toBeFocused();
       await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
-      await large(page).click();
-      await expect(sideBySide(page)).toBeFocused();
+      await chooseFromMenu(page, 'Show large');
+      await expect(moreButton(page)).toBeFocused();
       await page.keyboard.press('Escape');
       await expect(reader(page)).toHaveCount(0);
       await expect(button).toBeFocused();
@@ -1717,7 +1752,7 @@ test.describe('Board, reader', () => {
       await opener(page, 'The CSV spec').click();
       await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
       const view = await transformOf(page);
-      await sideBySide(page).click();
+      await chooseFromMenu(page, 'Show beside the board');
       const free = (await reader(page).boundingBox())!;
       await expect.poll(async () => { const box = (await card(page, 'The CSV spec').boundingBox())!; return box.x + box.width <= free.x; }).toBe(true);
       await viewAtRest(page);
@@ -1732,10 +1767,10 @@ test.describe('Board, reader', () => {
       await button.focus();
       await page.keyboard.press('Enter');
       await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
-      await expect(sideBySide(page)).toHaveCount(0);
-      await expect(backButton(page)).toBeVisible();
+      await expectMenuItem(page, 'Show beside the board', false);
+      await expect(closeButton(page)).toBeVisible();
       expect(Math.abs((await reader(page).boundingBox())!.width / (await behind(page).boundingBox())!.width - 0.92)).toBeLessThan(0.005);
-      await backButton(page).click();
+      await closeButton(page).click();
       await expect(reader(page)).toHaveCount(0);
       await expect(button).toBeFocused();
     });
@@ -1766,23 +1801,12 @@ test.describe('Board, reader', () => {
       await expect.poll(async () => { const now = await fit(frame); return now.zoom === 1 && now.width <= now.room; }).toBe(true);
     });
 
-    test('leaves a page that fits as it is, and a page whose scripts are stopped keeps today\'s behaviour', async ({ page }) => {
-      await openBoard(page, [FILE_CARDS[1], boardFileCard(3, 'wide.html', { title: 'Wide page' })], { [boardId(2)]: { x: 1100, y: 240 }, [boardId(3)]: { x: 800, y: 240 } }, 'default');
+    test('leaves a page that fits as it is', async ({ page }) => {
+      await openBoard(page, [FILE_CARDS[1]], { [boardId(2)]: { x: 1100, y: 240 } }, 'default');
       await opener(page, 'Overview page').click();
       await expect(page.frameLocator('iframe[title="Preview of overview.html"]').getByRole('heading', { name: 'The overview page' })).toBeVisible();
       await frames(page, 8);
       expect((await fit(await pageFrame(page, 'overview.html'))).zoom).toBe(1);
-      await backButton(page).click();
-      // With the scripts stopped nothing runs in the frame to scale the page: it is as wide as it was made.
-      await opener(page, 'Wide page').click();
-      await expect.poll(async () => (await fit(await pageFrame(page, 'wide.html'))).zoom < 1).toBe(true);
-      await reader(page).getByRole('button', { name: 'Stop scripts', exact: true }).click();
-      await expect(reader(page).locator('iframe[title="Preview of wide.html"]')).toHaveAttribute('sandbox', '');
-      await expect(page.frameLocator('iframe[title="Preview of wide.html"]').getByRole('heading', { name: 'A page made for 1280 px' })).toBeVisible();
-      await frames(page, 8);
-      const locked = await fit(await pageFrame(page, 'wide.html'));
-      expect(locked.zoom).toBe(1);
-      expect(locked.width).toBeGreaterThan(locked.room);
     });
 
     test('fits a picture to the window', async ({ page }) => {
@@ -1803,35 +1827,233 @@ test.describe('Board, reader', () => {
       })).toBe(true);
     });
 
-    test('runs the scripts of an HTML page by default, with no prompt, and "Stop scripts" puts that page back in the locked mode', async ({ page }) => {
+    test('runs the scripts of an HTML page, in a frame apart from the app, with no switch and no warning about it', async ({ page }) => {
       await openBoard(page, [boardFileCard(3, 'styled.html', { title: 'Styled page' }), FILE_CARDS[1]], { [boardId(3)]: { x: 800, y: 240 }, [boardId(2)]: { x: 1100, y: 240 } }, 'default');
       await opener(page, 'Styled page').click();
       const frame = reader(page).locator('iframe[title="Preview of styled.html"]');
       const srcdoc = () => frame.evaluate((element: HTMLIFrameElement) => element.srcdoc);
       await expect(frame).toBeVisible();
-      await expect(reader(page).getByRole('button', { name: /^Trust/ })).toHaveCount(0);
-      await expect(reader(page).getByText('Trust the document')).toHaveCount(0);
-      // Trusted from the start: the script of the internet is in the page, and the frame is still an opaque origin.
+      // The script of the internet is in the page, and the frame is still an opaque origin.
       await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
       expect(await srcdoc()).toMatch(/<script src="https:\/\/cdn\.tailwindcss\.com\/"><\/script>/);
       expect(await srcdoc()).toContain('script-src');
-      await expect(reader(page).getByText('This page runs scripts from the internet in a sandboxed frame', { exact: false })).toBeVisible();
-      // Stop scripts: the same page, locked.
-      await reader(page).getByRole('button', { name: 'Stop scripts', exact: true }).click();
-      await expect(frame).toHaveAttribute('sandbox', '');
-      expect(await srcdoc()).not.toContain('script-src');
-      expect(await srcdoc()).not.toContain('<script');
-      await expect(reader(page).getByText('Scripts are stopped', { exact: false })).toBeVisible();
-      await expect(reader(page).getByRole('button', { name: 'Stop scripts', exact: true })).toHaveCount(0);
-      // It can be run again, and another page starts with its scripts running whatever was done to this one.
-      await reader(page).getByRole('button', { name: 'Run scripts', exact: true }).click();
-      await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
-      await reader(page).getByRole('button', { name: 'Stop scripts', exact: true }).click();
-      await expect(frame).toHaveAttribute('sandbox', '');
-      await backButton(page).click();
+      await expectNoScriptWords(page);
+      await openMenu(page);
+      for (const name of ['Stop scripts', 'Run scripts']) await expect(menuItem(page, name)).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await closeButton(page).click();
       await opener(page, 'Overview page').click();
       await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toHaveAttribute('sandbox', 'allow-scripts');
-      await expect(reader(page).getByRole('button', { name: 'Stop scripts', exact: true })).toBeVisible();
+      await expectNoScriptWords(page);
+    });
+
+    test('has one quiet header line: the title and its path, a menu and Close, and nothing else to press', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      await opener(page, 'The CSV spec').click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      const header = reader(page).locator('header');
+      await expect(header.getByRole('button')).toHaveCount(2);
+      await expect(header.getByRole('button').nth(0)).toHaveAccessibleName('More actions');
+      await expect(header.getByRole('button').nth(1)).toHaveAccessibleName('Close');
+      await expect(header.getByRole('link')).toHaveCount(0);
+      await expect(header).toContainText('docs/spec.md');
+      // Nothing of the viewer's own row is left in the window: no path row, no second pair of buttons.
+      for (const name of ['Back to board', 'Open in Docs', 'Large', 'Side by side', 'Expand document', 'Download', 'Copy path', 'Raw text']) await expect(reader(page).getByRole('button', { name, exact: false })).toHaveCount(0);
+      await expect(reader(page).getByRole('link', { name: 'Download' })).toHaveCount(0);
+      expect((await header.boundingBox())!.height).toBeLessThanOrEqual(52);
+    });
+
+    test('has a menu that works by keyboard, and Escape closes only the menu', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      const button = opener(page, 'Overview page');
+      await button.click();
+      await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toBeVisible();
+      await moreButton(page).focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('menu')).toBeVisible();
+      const names = async () => (await page.getByRole('menuitem').allTextContents()).map((name) => name.trim());
+      expect(await names()).toEqual(['Show beside the board', 'Open in Docs', 'Open in new window', 'View source', 'Copy path', 'Download']);
+      await expect(menuItem(page, 'Open in new window')).toHaveAttribute('href', /name=overview\.html&open=1$/);
+      await expect(menuItem(page, 'Open in new window')).toHaveAttribute('target', '_blank');
+      await expect(menuItem(page, 'Open in new window')).toHaveAttribute('rel', 'noopener noreferrer');
+      await expect(menuItem(page, 'Download')).toHaveAttribute('href', /name=overview\.html&download=1$/);
+      // The arrows move through it, and Escape closes the menu only: the reader stays, and the keyboard is back on the menu button.
+      await expect(menuItem(page, 'Show beside the board')).toBeFocused();
+      await page.keyboard.press('ArrowDown');
+      await expect(menuItem(page, 'Open in Docs')).toBeFocused();
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('ArrowUp');
+      await expect(menuItem(page, 'Open in Docs')).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(reader(page)).toBeVisible();
+      await expect(moreButton(page)).toBeFocused();
+      // View source, by keyboard, and back to the page.
+      await page.keyboard.press('Enter');
+      await page.getByRole('menuitem', { name: 'View source' }).focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toHaveCount(0);
+      await expect(reader(page).locator('pre')).toContainText('<h1>');
+      await page.keyboard.press('Enter');
+      await expect(menuItem(page, 'View source')).toHaveCount(0);
+      await page.getByRole('menuitem', { name: 'View page' }).focus();
+      await page.keyboard.press('Enter');
+      await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toBeVisible();
+      // Show beside the board, and Show large, by keyboard; the choice is kept.
+      await page.keyboard.press('Enter');
+      await page.getByRole('menuitem', { name: 'Show beside the board' }).focus();
+      await page.keyboard.press('Enter');
+      expect(await storedLayout(page)).toBe('side');
+      await expectMenuItem(page, 'Show large', true);
+      await page.keyboard.press('Enter');
+      await page.getByRole('menuitem', { name: 'Show large' }).focus();
+      await page.keyboard.press('Enter');
+      expect(await storedLayout(page)).toBe('large');
+      // Escape with no menu closes the reader.
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
+      await expect(button).toBeFocused();
+    });
+
+    test('opens the menu with Space on the More actions button', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      await opener(page, 'Overview page').click();
+      await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toBeVisible();
+      await moreButton(page).focus();
+      await page.keyboard.press('Space');
+      await expect(page.getByRole('menu')).toBeVisible();
+      await expect(page.getByRole('menu').getByRole('separator')).toHaveCount(1);
+    });
+
+    test('offers View source for a Markdown file, and not for a picture; Copy path copies the path; Download is a download of the file', async ({ page }) => {
+      await page.addInitScript(() => {
+        (window as unknown as { copied: string[] }).copied = [];
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: (text: string) => { (window as unknown as { copied: string[] }).copied.push(text); return Promise.resolve(); } } });
+      });
+      await routeWidePicture(page);
+      await openBoard(page, [FILE_CARDS[0], boardFileCard(3, 'wide.svg', { title: 'Wide picture' })], { [boardId(1)]: { x: 800, y: 240 }, [boardId(3)]: { x: 1100, y: 240 } }, 'default');
+      await opener(page, 'The CSV spec').click();
+      await expect(reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 })).toBeVisible();
+      await chooseFromMenu(page, 'View source');
+      await expect(reader(page).locator('pre')).toContainText('# The CSV spec');
+      await chooseFromMenu(page, 'Copy path');
+      await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual(['docs/spec.md']);
+      await expect(reader(page).getByRole('status')).toHaveText('Path copied');
+      await expect(moreButton(page).locator('svg.lucide-check')).toBeVisible();
+      await expect(moreButton(page).locator('svg.lucide-check')).toHaveCount(0, { timeout: 5000 });
+      await openMenu(page);
+      const download = menuItem(page, 'Download');
+      await expect(download).toHaveAttribute('href', /name=docs%2Fspec\.md&download=1$/);
+      await expect(download).toHaveAttribute('download', 'spec.md');
+      await page.keyboard.press('Escape');
+      await closeButton(page).click();
+      await opener(page, 'Wide picture').click();
+      await expect(reader(page).getByRole('img', { name: 'wide.svg' })).toBeVisible();
+      await openMenu(page);
+      await expect(menuItem(page, 'View source')).toHaveCount(0);
+      await expect(menuItem(page, 'Open in new window')).toHaveCount(0);
+      await expect(menuItem(page, 'Download')).toHaveAttribute('href', /name=wide\.svg&download=1$/);
+      await page.keyboard.press('Escape');
+    });
+
+    test('closes with one press outside the window, on the dimmed board, the Board index or the Area header, and the keyboard goes back to the card', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); });
+      await page.reload();
+      await stepIntoArea(page, /Reports export to CSV/);
+      const button = opener(page, 'The CSV spec');
+      const nav = page.getByRole('navigation', { name: 'Board index' });
+      await expect(nav).toBeVisible();
+      for (const where of ['dimmed board', 'Board index', 'Area header']) {
+        await button.click();
+        await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+        if (where === 'dimmed board') {
+          const area = (await reader(page).locator('xpath=..').boundingBox())!;
+          await page.mouse.click(area.x + 10, area.y + area.height - 10);
+        } else {
+          const box = (await (where === 'Board index' ? nav : board(page).locator('#board-area > header')).boundingBox())!;
+          await page.mouse.click(box.x + box.width - 6, box.y + box.height - 6);
+        }
+        await expect(reader(page), where).toHaveCount(0);
+        await expect(button, where).toBeFocused();
+      }
+    });
+
+    test('does not close for a menu that is dismissed by a press outside it, nor for a drag that starts in the window and ends outside it', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
+      await opener(page, 'The CSV spec').click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      await openMenu(page);
+      await expect(page.getByRole('menu')).toBeVisible();
+      const area = (await reader(page).locator('xpath=..').boundingBox())!;
+      await page.mouse.click(area.x + 10, area.y + area.height - 10);
+      await expect(page.getByRole('menu')).toHaveCount(0);
+      await expect(reader(page)).toBeVisible();
+      // A drag from the window out of it.
+      const heading = reader(page).getByRole('heading', { name: 'The CSV spec', level: 1 });
+      const text = (await heading.boundingBox())!;
+      await page.mouse.move(text.x + 4, text.y + text.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(area.x + 6, area.y + area.height - 6, { steps: 6 });
+      await page.mouse.up();
+      await frames(page);
+      await expect(reader(page)).toBeVisible();
+    });
+
+    test('shows no "Stop scripts", "Raw text" or warning anywhere in the reader, for a page, a note or a picture', async ({ page }) => {
+      await openBoard(page, [boardFileCard(3, 'styled.html', { title: 'Styled page' }), FILE_CARDS[0]], { [boardId(3)]: { x: 800, y: 240 }, [boardId(1)]: { x: 1100, y: 240 } }, 'default');
+      for (const title of ['Styled page', 'The CSV spec']) {
+        await opener(page, title).click();
+        await expect(readerTitle(page, title)).toBeVisible();
+        await expectNoScriptWords(page);
+        await closeButton(page).click();
+      }
+    });
+  });
+
+  test.describe('in the dock', () => {
+    test('where it covers the canvas (1100x700), a press on the Area header or on the index rail closes it, and the keyboard goes back to the card', async ({ page }) => {
+      await page.setViewportSize({ width: 1100, height: 700 });
+      await openBoard(page, FILE_CARDS, FILE_PLACES, 'side');
+      const button = opener(page, 'The CSV spec');
+      // The index is the 40 px rail here: a press on the empty part of it, below its toggle.
+      const rail = page.getByRole('button', { name: /^Board index/ }).locator('xpath=..');
+      for (const where of ['Area header', 'Index rail']) {
+        await button.click();
+        await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+        expect(await storedLayout(page)).toBe('side');
+        await expect(board(page).locator('#board-area [inert]').first()).toBeAttached();
+        const box = (await (where === 'Index rail' ? rail : board(page).locator('#board-area > header')).boundingBox())!;
+        await page.mouse.click(box.x + box.width - 6, box.y + box.height - 6);
+        await expect(reader(page), where).toHaveCount(0);
+        await expect(button, where).toBeFocused();
+      }
+    });
+
+    test('closes with a press on empty board space, and opens another card with a press on that card', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES);
+      await opener(page, 'The CSV spec').click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      // A press on another card opens that one, and does not close the reader.
+      await opener(page, 'Overview page').focus();
+      await card(page, 'Overview page').click({ position: { x: 20, y: 12 } });
+      await expect(readerTitle(page, 'Overview page')).toBeVisible();
+      await expect(reader(page)).toHaveCount(1);
+      // A press on empty space of the board closes it, and the keyboard goes back to the card.
+      const canvas = (await board(page).locator('#board-area .react-flow').boundingBox())!;
+      await page.mouse.click(canvas.x + 6, canvas.y + canvas.height - 6);
+      await expect(reader(page)).toHaveCount(0);
+      await expect(opener(page, 'Overview page')).toBeFocused();
+    });
+
+    test('stays open for a press on a row label or its chevron, which do their own thing', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES);
+      await opener(page, 'The CSV spec').click();
+      await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+      const control = board(page).locator('#board-area [data-row-control]').first();
+      await control.click();
+      await expect(reader(page)).toBeVisible();
     });
   });
 
@@ -3226,7 +3448,7 @@ test.describe('Board index sidebar', () => {
     await expect(board(page).locator(`#board-area .react-flow__node[data-id="${boardId(2)}"]`)).toHaveAttribute('data-highlighted', 'true');
 
     // Stepping out and back in later opens no reader of its own
-    await reader.getByRole('button', { name: 'Back to board' }).click();
+    await reader.getByRole('button', { name: 'Close', exact: true }).click();
     await expect(reader).toHaveCount(0);
     await board(page).getByRole('button', { name: 'Board ›' }).click();
     await stepIntoArea(page, /Reports export to CSV/);
@@ -3485,15 +3707,15 @@ for (const colorScheme of ['light', 'dark'] as const) {
     test('has no serious accessibility violations with links in the cards and the reader open in its large window', async ({ page }) => {
       await checkReader(page, false);
       const reader = board(page).getByRole('region', { name: 'Reader', exact: true });
-      await expect(reader.getByRole('button', { name: 'Back to board' })).toBeVisible();
-      await expect(reader.getByRole('button', { name: 'Side by side' })).toBeVisible();
+      await expect(reader.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+      await expect(reader.getByRole('button', { name: 'More actions', exact: true })).toBeVisible();
       await expectNoSeriousViolations(page, '[aria-label="Board"]');
     });
 
     test('has no serious accessibility violations with links in the cards and the reader open beside them', async ({ page }) => {
       await checkReader(page, true);
       const reader = board(page).getByRole('region', { name: 'Reader', exact: true });
-      await expect(reader.getByRole('button', { name: 'Large', exact: true })).toBeVisible();
+      await expect(reader.getByRole('button', { name: 'More actions', exact: true })).toBeVisible();
     });
   });
 }

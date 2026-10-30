@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPreviewDocument,
-  dependsOnExternalScript,
   ESCAPE_MESSAGE,
   FIT_SCRIPT,
   isStyleSheetHref,
@@ -110,19 +109,6 @@ describe('stylesheet link admission', () => {
     expect(isStyleSheetHref('https://cdn.example.com/x.html', 'import')).toBe(false);
     expect(isStyleSheetHref('https://cdn.example.com/a.css', null)).toBe(false);
     expect(isStyleSheetHref('data:text/css,body{}', 'stylesheet')).toBe(false);
-  });
-});
-
-describe('external script detection', () => {
-  it('spots the Tailwind Play CDN pattern that makes styling script-dependent', () => {
-    expect(dependsOnExternalScript('<script src="https://cdn.tailwindcss.com"></script>')).toBe(true);
-    expect(dependsOnExternalScript('<script\n  defer\n  src="https://unpkg.com/x.js">')).toBe(true);
-  });
-
-  it('ignores documents that do not pull a remote script', () => {
-    expect(dependsOnExternalScript('<style>body{color:red}</style>')).toBe(false);
-    expect(dependsOnExternalScript('<link rel="stylesheet" href="https://cdn.example/a.css">')).toBe(false);
-    expect(dependsOnExternalScript('')).toBe(false);
   });
 });
 

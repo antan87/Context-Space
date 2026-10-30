@@ -3,8 +3,8 @@
  *
  * Every HTML document is trusted by default ("trusted" mode below): its remote scripts run, which is
  * what lets the Play CDN style a page, and never one of the document's own inline scripts, which are
- * stripped with the rest of the active content. A user can switch one document to the locked mode: no
- * script, and remote subresources limited to presentational types.
+ * stripped with the rest of the active content. The locked mode (no
+ * script, remote subresources limited to presentational types) is the fail-safe default of DocumentPreview; no UI selects it.
  *
  * Once scripts run, the CSP in the document's <meta> is NOT a security boundary: a script can navigate its
  * own frame to a page that has no such CSP, and nobody should count on `connect-src` (or any other
@@ -14,7 +14,7 @@
  *  - the server: it refuses a state-changing request from such a frame (its `Origin` is "null") and every
  *    /api request the browser marks cross-site that names no app origin, and gives it no CORS allowance
  *    to read an answer (src/server.ts, and the tests in src/server.test.ts).
- * The CSP is kept for what it does well, in the locked mode above all: it keeps a page with no script from
+ * The CSP is kept for what it does well, in the locked mode above all (which no UI reaches now): it keeps a page with no script from
  * loading anything but presentational resources.
  *
  * Kept free of DOM access so the policy is unit-testable without a browser; the DOM-level effects
@@ -32,7 +32,7 @@ const BASE = "default-src 'none'; base-uri 'none'; form-action 'none'";
 const ASSETS = "img-src data: https: http:; style-src 'unsafe-inline' https: http:; font-src data: https: http:";
 
 /**
- * Q5: what a trusted document (the default) is given, which the locked mode a user can switch one document to is not.
+ * Q5: what a trusted document (the default) is given, which the locked mode (the fail-safe default, reached by no UI) is not.
  *
  * `connect-src` is not optional here. Tailwind's Play CDN initializes, then fetches its engine over
  * `fetch()`, so without it the script runs and still generates no CSS. Verified in Chromium: with
@@ -192,15 +192,4 @@ export function buildPreviewDocument({ body, trusted, assets }: PreviewDocumentO
   const scripts = (trusted ? merged.scripts : []).map(src => `<script src="${escapeAttribute(src)}"></script>`).join('');
   const fit = trusted ? `<script>${FIT_SCRIPT}</script>` : '';
   return `<!doctype html><html${renderAttributes(merged.htmlAttributes)}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${previewCsp(trusted)}">${styles}${stylesheets}${scripts}${fit}</head><body${renderAttributes(merged.bodyAttributes)}>${body}</body></html>`;
-}
-
-const EXTERNAL_SCRIPT = /<script\b[^>]*\bsrc\s*=/i;
-
-/**
- * Detects pages whose styling depends on a script we are not running, so the viewer can explain
- * itself instead of silently rendering an unstyled document. The dominant case is Tailwind's Play
- * CDN, which generates CSS at runtime and has no stylesheet equivalent.
- */
-export function dependsOnExternalScript(html: string): boolean {
-  return EXTERNAL_SCRIPT.test(html);
 }

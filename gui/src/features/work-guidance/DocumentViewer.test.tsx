@@ -128,20 +128,32 @@ describe('DocumentViewer', () => {
   describe('scripts of an HTML document', () => {
     const page: DocumentPreviewData = { name: 'page.html', kind: 'html', content: '<h1>A page</h1>', size: 16, modifiedAt: '2026-10-18T12:00:00.000Z' };
 
-    it('run by default, in a frame that never shares the app\'s origin, with a button to stop them', () => {
+    it('run by default, in a frame that never shares the app\'s origin, with no switch and no warning', () => {
       for (const fill of [false, true]) {
         const html = renderToStaticMarkup(createElement(DocumentViewer, { title: 'page.html', preview: page, raw: false, fill }));
         expect(html).toContain('sandbox="allow-scripts"');
         expect(html).not.toContain('allow-same-origin');
-        expect(html).toContain('Stop scripts');
-        expect(html).not.toContain('Trust this document');
-        expect(html).not.toContain('Stop trusting');
+        expect(html).not.toMatch(/Stop scripts|Run scripts|runs scripts/);
       }
     });
 
-    it('offer no scripts button for a document that is not shown as a page', () => {
-      expect(renderToStaticMarkup(createElement(DocumentViewer, { title: 'page.html', preview: page, raw: true }))).not.toContain('scripts');
-      expect(renderToStaticMarkup(createElement(DocumentViewer, { title: 'test.md', preview: samplePreview, raw: false }))).not.toContain('scripts');
+    it('call the source toggle "View source", never "Raw text"', () => {
+      const html = renderToStaticMarkup(createElement(DocumentViewer, { title: 'page.html', preview: page, raw: false, onToggleRaw: () => {} }));
+      expect(html).toContain('View source');
+      expect(html).not.toContain('Raw text');
+    });
+
+    it('show "View page" when the source is shown', () => {
+      const html = renderToStaticMarkup(createElement(DocumentViewer, { title: 'page.html', preview: page, raw: true, onToggleRaw: () => {} }));
+      expect(html).toContain('View page');
+    });
+
+    it('with no chrome of its own in a reader that draws the header', () => {
+      const html = renderToStaticMarkup(createElement(DocumentViewer, { title: 'page.html', preview: page, raw: false, fill: true, chromeless: true }));
+      expect(html).not.toContain('Copy path');
+      expect(html).not.toContain('Expand document');
+      expect(html).toContain('sandbox="allow-scripts"');
+      expect(html).not.toContain('allow-same-origin');
     });
   });
 });

@@ -83,6 +83,7 @@ export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillF
   // `fillFrame` is for a container that is a column of its own height and does not scroll: the frame of a page (or a PDF) is as tall as what is left of it.
   const height = expanded ? 'h-full flex-1' : fillFrame ? 'min-h-0 flex-1' : 'h-[65vh]';
 
+  // `trusted=false` is a fail-safe default (no script, empty sandbox): no UI reaches it, DocumentViewer always passes `trusted`.
   // Only the trusted path may run script, and it must never be sandboxed into the app's origin.
   const sandbox = trusted ? 'allow-scripts' : '';
 

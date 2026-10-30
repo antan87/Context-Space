@@ -745,11 +745,50 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [navDock.overlays, narrowNavOpen, active, closeNarrowNav]);
 
-  // Reader Escape handling
+  // A press outside the reader closes it: in the large window or a docked one that covers the canvas, anywhere in the Board pane outside the window (the index and the Area
+  // header too); beside the canvas, on empty board space (a card or a row control does its own thing). The press must begin and end
+  // there, so a text selected in the window and dragged out of it does not close it. The reader's own menu is out of the DOM of this
+  // pane (a portal), and a press that only dismisses that menu does not also close the reader.
+  useEffect(() => {
+    const pane = root.current;
+    if (!reader || !pane) return undefined;
+    const press = { down: false, up: false, ignored: false };
+    const closes = (target: EventTarget | null) => {
+      if (!(target instanceof Element) || target.closest('[data-board-reader]')) return false;
+      if (layout === 'large' || areaDock.covers) return true;
+      return Boolean(areaCanvasContainer?.contains(target)) && !target.closest('.react-flow__node, button, a, [role="button"]');
+    };
+    const onDown = (event: PointerEvent) => {
+      press.ignored = document.querySelector('[data-slot="menu-popup"]') !== null;
+      press.down = closes(event.target);
+      press.up = false;
+    };
+    const onUp = (event: PointerEvent) => { press.up = closes(event.target); };
+    const onClick = () => {
+      const { down, up, ignored } = press;
+      press.down = false;
+      press.up = false;
+      if (down && up && !ignored) closeReader();
+    };
+    pane.addEventListener('pointerdown', onDown, true);
+    pane.addEventListener('pointerup', onUp, true);
+    pane.addEventListener('click', onClick);
+    return () => {
+      pane.removeEventListener('pointerdown', onDown, true);
+      pane.removeEventListener('pointerup', onUp, true);
+      pane.removeEventListener('click', onClick);
+    };
+  }, [reader, layout, areaDock.covers, areaCanvasContainer, closeReader]);
+
+  // Reader Escape handling. Escape that closes the reader's open menu is the menu's alone: whether one was open is seen first, in the
+  // capture phase, because the menu is already closing by the time this listener runs.
+  const menuHadEscape = useRef(false);
   useEffect(() => {
     if (!reader || !active) return;
+    const onCapture = (event: globalThis.KeyboardEvent) => { menuHadEscape.current = event.key === 'Escape' && document.querySelector('[data-slot="menu-popup"]') !== null; };
+    window.addEventListener('keydown', onCapture, true);
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (event.key !== 'Escape' || event.defaultPrevented || menuHadEscape.current) return;
       if (document.querySelector('[role="dialog"]')) return;
       if (navDock.overlays && narrowNavOpen) return;
       const target = event.target;
@@ -759,7 +798,10 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
       closeReader();
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onCapture, true);
+      window.removeEventListener('keydown', onKeyDown);
+    };
   }, [reader, active, closeReader, navDock.overlays, narrowNavOpen]);
 
   // Stepped Area Escape handling (only when reader is closed and no modal dialog is open): an open row closes first, then the Area

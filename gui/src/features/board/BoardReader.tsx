@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ExternalLink, Maximize2, PanelRight, X } from 'lucide-react';
+import { Check, CircleAlert, Code2, Copy, Download, Eye, FileText, Maximize2, MoreHorizontal, PanelRight, SquareArrowOutUpRight, X } from 'lucide-react';
 
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { Button } from '../../components/ui/button.js';
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '../../components/ui/menu.js';
+import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
 import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
@@ -22,11 +24,11 @@ const FOCUS_FRAMES = 30;
  * window over the board, about 92% of the section wide and 88% high and centred, with the board dimmed but visible all round
  * it; "Side by side" docks it beside the canvas instead (the viewer's choice, kept by boardReaderLayout), and "Large" brings the
  * window back. A file is read by the request the documents panel makes; a source document by the work route that reads it
- * through the storage port, as the rest of the app does, and not from the folder. It has the title of what was opened, "Open in
- * Docs" for the full documents panel, and a way back to the board: "Back to board" in the window, Close when docked.
- * It takes the keyboard when it opens, shows something else, or comes to cover the canvas (which then cannot keep it); closing
- * it, with those, with a click on the dimmed board (a press and a release on it both) or with Escape (BoardSection; and from the page
- * of an HTML document, whose frame says so), gives the keyboard back to what opened it. An HTML page or a PDF takes all the height of
+ * through the storage port, as the rest of the app does, and not from the folder. Its one quiet header line has the title of what
+ * was opened, its path under it, a "More actions" menu (the layout, Open in Docs, a new window, the source of a page, copy and download)
+ * and Close. It takes the keyboard when it opens, shows something else, or comes to cover the canvas (which then cannot keep it);
+ * closing it, with those, with a press outside it (BoardSection) or with Escape (BoardSection; and from the page of an HTML
+ * document, whose frame says so), gives the keyboard back to what opened it. An HTML page or a PDF takes all the height of
  * the window, and scrolls on its own.
  * `request` grows with every opening, so opening what is already shown still counts. Nothing of the document is put in the
  * board's own page: the viewer draws it, and HTML stays in its sandboxed frame.
@@ -53,8 +55,6 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   const large = layout === 'large';
   // The canvas is out of reach, under the reader: in the window, and where the dock covers it.
   const covering = large || covers;
-  /** Where the press that is going on began and ended: only one that did both on the dimmed board is a click on it, not a drag from a text in the window to the board, or from the board into the window. */
-  const press = useRef({ down: false, up: false });
   const { path, source } = target;
   // What is open: a source document or a file.
   const open = source ? `source:${source}` : path;
@@ -81,7 +81,7 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   // Open only for the card it was opened on: another card is drawn closed from its first frame.
   const noteOpen = noteOpenFor === noteKey;
   // Closed, the one-line box never keeps a scroll position from when it was open.
-  useEffect(() => { if (!noteOpen && noteRef.current) noteRef.current.scrollTop = 0; }, [noteOpen, noteKey]);
+  useLayoutEffect(() => { if (!noteOpen && noteRef.current) noteRef.current.scrollTop = 0; }, [noteOpen, noteKey]);
   useLayoutEffect(() => {
     const node = noteRef.current;
     if (!node || noteOpen) return undefined;
@@ -134,44 +134,70 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
     if (covering && lost) take();
   }, [covering, take]);
 
+  const kind = data?.kind;
+  const canViewSource = kind === 'markdown' || kind === 'html';
+  // A source document's "path" is its stored name.
+  const copyLabel = source ? 'Copy name' : 'Copy path';
+  // Said for what was open when it was copied: another card starts without it.
+  const [copiedFor, setCopiedFor] = useState<{ open: string; result: 'done' | 'failed' } | null>(null);
+  const copied = copiedFor?.open === open ? copiedFor.result : null;
+  const noun = source ? 'name' : 'path';
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const copyPath = () => {
+    const finish = (ok: boolean) => {
+      setCopiedFor({ open, result: ok ? 'done' : 'failed' });
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopiedFor(null), 1500);
+    };
+    safeCopyToClipboard(path).then(finish, () => finish(false));
+  };
+  const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground';
+
   return <div
     ref={panel}
+    // The press outside the window that closes it is BoardSection's: it reaches the sidebar and the Area header too.
     className={large ? 'absolute inset-0 z-20 flex animate-fade-in items-center justify-center bg-background/50' : 'contents'}
-    onPointerDown={large ? (event) => { press.current = { down: event.target === event.currentTarget, up: false }; } : undefined}
-    onPointerUp={large ? (event) => { press.current.up = event.target === event.currentTarget; } : undefined}
-    onClick={large ? (event) => {
-      const { down, up } = press.current;
-      press.current = { down: false, up: false };
-      if (down && up && event.target === event.currentTarget) onClose();
-    } : undefined}
   >
     <section
       aria-label="Reader"
+      data-board-reader=""
       className={cn('@container z-20 flex min-h-0 flex-col border-border bg-background',
         large ? 'overflow-hidden rounded-xl border shadow-2xl' : covers ? 'absolute inset-0' : 'relative shrink-0 border-l shadow-lg')}
       style={large ? { width: `${LARGE_WINDOW.width * 100}%`, height: `${LARGE_WINDOW.height * 100}%` } : covers ? undefined : { width }}
     >
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        {large && <Button size="xs" variant="outline" onClick={onClose}><ArrowLeft aria-hidden="true" />Back to board</Button>}
-        <h2 ref={title} tabIndex={-1} className="min-w-0 flex-1 truncate rounded-sm text-sm font-semibold text-foreground" title={target.title}>{target.title}</h2>
-        <Button size="xs" variant="outline" onClick={() => onOpenInDocs(path)}><ExternalLink aria-hidden="true" />Open in Docs</Button>
-        {/* Beside the canvas only where there is room for both: where the dock would cover it, it is no better than the window. */}
-        {large
-          ? !covers && <Button size="xs" variant="outline" onClick={() => onLayout('side')}><PanelRight aria-hidden="true" />Side by side</Button>
-          : <Button size="xs" variant="outline" onClick={() => onLayout('large')}><Maximize2 aria-hidden="true" />Large</Button>}
-        {!large && <Button size="xs" variant="ghost" onClick={onClose}><X aria-hidden="true" />Close</Button>}
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-3 pr-2">
+        <div className="min-w-0 flex-1">
+          <h2 ref={title} tabIndex={-1} className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground" title={target.title}>{target.title}</h2>
+          <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{path}</p>
+        </div>
+        <Menu>
+          <MenuTrigger className={quiet} aria-label="More actions" title="More actions">{copied === 'done' ? <Check aria-hidden="true" className="size-4" /> : copied === 'failed' ? <CircleAlert aria-hidden="true" className="size-4 opacity-70" /> : <MoreHorizontal aria-hidden="true" className="size-4" />}</MenuTrigger>
+          <MenuPopup align="end" className="w-56">
+            {/* Beside the canvas only where there is room for both: where the dock would cover it, it is no better than the window. */}
+            {large
+              ? !covers && <MenuItem onClick={() => onLayout('side')}><PanelRight aria-hidden="true" />Show beside the board</MenuItem>
+              : <MenuItem onClick={() => onLayout('large')}><Maximize2 aria-hidden="true" />Show large</MenuItem>}
+            <MenuItem onClick={() => onOpenInDocs(path)}><FileText aria-hidden="true" />Open in Docs</MenuItem>
+            {!source && kind === 'html' && <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}><SquareArrowOutUpRight aria-hidden="true" />Open in new window</MenuItem>}
+            {!source && kind === 'html' && <MenuSeparator />}
+            {canViewSource && <MenuItem onClick={() => setRawOpen(raw ? null : open)}>{raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}{raw ? 'View page' : 'View source'}</MenuItem>}
+            <MenuItem onClick={copyPath}><Copy aria-hidden="true" />{copyLabel}</MenuItem>
+            {!source && <MenuItem render={<a href={`${fileUrl}&download=1`} download={path.split('/').pop()} />}><Download aria-hidden="true" />Download</MenuItem>}
+          </MenuPopup>
+        </Menu>
+        <span role="status" aria-live="polite" className="sr-only">{copied === 'done' ? `${noun === 'name' ? 'Name' : 'Path'} copied` : copied === 'failed' ? `Could not copy the ${noun}` : ''}</span>
+        <button type="button" className={quiet} aria-label="Close" title="Close" onClick={onClose}><X aria-hidden="true" className="size-4" /></button>
       </header>
       <div className="min-h-0 flex-1">
         <DocumentViewer
           key={open}
           fill
           fillFrame
+          chromeless
           title={path}
           preview={data}
           raw={raw}
-          onToggleRaw={data?.kind === 'markdown' || data?.kind === 'html' ? () => setRawOpen(raw ? null : open) : undefined}
-          downloadHref={source ? undefined : `${fileUrl}&download=1`}
-          browserHref={!source && data?.kind === 'html' ? `${fileUrl}&open=1` : undefined}
           fileUrl={fileUrl}
           links={links}
           status={<>
