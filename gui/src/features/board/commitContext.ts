@@ -1,4 +1,5 @@
 import type { PlanFileStep, PlanFileView } from '../plan/planFile.js';
+import type { RawAstSymbol } from '../changes/utils/changesetSymbolIndex.js';
 import { parseCommitNodeId } from './boardActions.js';
 import { cleanCardPath, type BoardCard, type BoardView } from './boardData.js';
 import { fileTitle } from './boardDock.js';
@@ -31,6 +32,20 @@ export interface CommitDetail {
   pushed: boolean;
   forge: ForgeKind | null;
   webUrl: string | null;
+}
+
+export interface CommitFileDiff {
+  repo: string;
+  repoPath?: string;
+  sha: string;
+  file: string;
+  oldFile?: string;
+  diff: string;
+  fileContent: string;
+  originalContent: string;
+  symbols: RawAstSymbol[];
+  contentOmitted?: 'binary' | 'too-large';
+  diffOmitted?: boolean;
 }
 
 export interface CommitStepLink {

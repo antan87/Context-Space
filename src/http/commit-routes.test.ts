@@ -143,4 +143,132 @@ describe('commit routes', () => {
     const data = await res.json();
     expect(data.sha).toBe(validSha);
   });
+
+  describe('commit file diff endpoint', () => {
+    it('returns 200 with valid diff response shape', async () => {
+      const res = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=index.ts`);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data).toMatchObject({
+        repo: 'my-repo',
+        repoPath: repoDir,
+        sha: validSha,
+        file: 'index.ts',
+        fileContent: 'console.log("hello");\n',
+        originalContent: '',
+      });
+      expect(data.diff).toContain('+console.log("hello");');
+      expect(Array.isArray(data.symbols)).toBe(true);
+    });
+
+    it('returns 400 when file query param is missing or invalid', async () => {
+      // Missing ?file=
+      const resNoFile = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff`);
+      expect(resNoFile.status).toBe(400);
+      expect((await resNoFile.json()).error).toContain('File query parameter is required');
+
+      // Empty ?file=
+      const resEmptyFile = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=`);
+      expect(resEmptyFile.status).toBe(400);
+
+      // Traversal ../secret.txt
+      const resTraversal = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=../secret.txt`);
+      expect(resTraversal.status).toBe(400);
+      expect((await resTraversal.json()).error).toContain('Invalid repository file path');
+
+      // Absolute /etc/passwd
+      const resAbsolute = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=/etc/passwd`);
+      expect(resAbsolute.status).toBe(400);
+      expect((await resAbsolute.json()).error).toContain('Invalid repository file path');
+
+      // Bad sha format
+      const resBadSha = await app.request('/api/workspace/ws-1/commits/my-repo/not-hex/diff?file=index.ts');
+      expect(resBadSha.status).toBe(400);
+      expect((await resBadSha.json()).error).toContain('SHA');
+    });
+
+    it('returns 404 when workspace, repo, commit, or file is not found', async () => {
+      // Unknown workspace
+      const resWs = await app.request(`/api/workspace/unknown-ws/commits/my-repo/${validSha}/diff?file=index.ts`);
+      expect(resWs.status).toBe(404);
+      expect((await resWs.json()).error).toBe('Workspace not found.');
+
+      // Unknown repo
+      const resRepo = await app.request(`/api/workspace/ws-1/commits/non-existent-repo/${validSha}/diff?file=index.ts`);
+      expect(resRepo.status).toBe(404);
+      expect((await resRepo.json()).error).toContain('not found');
+
+      // Unknown commit
+      const fakeSha = 'c'.repeat(40);
+      const resSha = await app.request(`/api/workspace/ws-1/commits/my-repo/${fakeSha}/diff?file=index.ts`);
+      expect(resSha.status).toBe(404);
+      expect((await resSha.json()).error).toContain('not found');
+
+      // File not changed in commit
+      const resFile = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=non-existent.txt`);
+      expect(resFile.status).toBe(404);
+      expect((await resFile.json()).error).toContain('was not changed');
+    });
+
+    it('returns 200 with contentOmitted: too-large, diffOmitted: true, and contentOmitted: binary', async () => {
+      const spy = vi.spyOn(commitDetail, 'readCommitFileDiff');
+
+      // 1. contentOmitted: too-large
+      spy.mockResolvedValueOnce({
+        repo: 'my-repo',
+        repoPath: repoDir,
+        sha: validSha,
+        file: 'index.ts',
+        diff: 'some diff',
+        fileContent: '',
+        originalContent: '',
+        symbols: [],
+        contentOmitted: 'too-large',
+      });
+      const resTooLarge = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=index.ts`);
+      expect(resTooLarge.status).toBe(200);
+      const dataTooLarge = await resTooLarge.json();
+      expect(dataTooLarge.contentOmitted).toBe('too-large');
+      expect(dataTooLarge.diff).toBe('some diff');
+
+      // 2. diffOmitted: true
+      spy.mockResolvedValueOnce({
+        repo: 'my-repo',
+        repoPath: repoDir,
+        sha: validSha,
+        file: 'index.ts',
+        diff: '',
+        fileContent: '',
+        originalContent: '',
+        symbols: [],
+        contentOmitted: 'too-large',
+        diffOmitted: true,
+      });
+      const resDiffOmitted = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=index.ts`);
+      expect(resDiffOmitted.status).toBe(200);
+      const dataDiffOmitted = await resDiffOmitted.json();
+      expect(dataDiffOmitted.diffOmitted).toBe(true);
+      expect(dataDiffOmitted.contentOmitted).toBe('too-large');
+
+      // 3. contentOmitted: binary
+      spy.mockResolvedValueOnce({
+        repo: 'my-repo',
+        repoPath: repoDir,
+        sha: validSha,
+        file: 'image.png',
+        diff: 'Binary files differ\n',
+        fileContent: '',
+        originalContent: '',
+        symbols: [],
+        contentOmitted: 'binary',
+      });
+      const resBinary = await app.request(`/api/workspace/ws-1/commits/my-repo/${validSha}/diff?file=image.png`);
+      expect(resBinary.status).toBe(200);
+      const dataBinary = await resBinary.json();
+      expect(dataBinary.contentOmitted).toBe('binary');
+      expect(dataBinary.diff).toBe('Binary files differ\n');
+
+      spy.mockRestore();
+    });
+  });
 });

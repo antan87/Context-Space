@@ -7,7 +7,7 @@ import {
   step,
   whatsNew,
 } from './planData';
-import type { CommitDetail } from '../src/features/board/commitContext';
+import type { CommitDetail, CommitFileDiff } from '../src/features/board/commitContext';
 
 const workspace = {
   id: 'demo',
@@ -65,6 +65,7 @@ const readerTitle = (page: Page, name: string) => reader(page).getByRole('headin
 const moreButton = (page: Page) => reader(page).getByRole('button', { name: 'More actions', exact: true });
 const closeButton = (page: Page) => reader(page).getByRole('button', { name: 'Close', exact: true });
 const menuItem = (page: Page, name: string) => page.getByRole('menuitem', { name, exact: true });
+const menuCheckboxItem = (page: Page, name: string) => page.getByRole('menuitemcheckbox', { name, exact: true });
 
 async function stepIntoArea(page: Page, name: string | RegExp = /Reports export to CSV/) {
   const areaBtn = board(page).locator('.board-overview-plane button.board-area').filter({ hasText: name });
@@ -72,7 +73,117 @@ async function stepIntoArea(page: Page, name: string | RegExp = /Reports export 
   await expect(board(page).getByRole('button', { name: 'Board ›' })).toBeVisible();
 }
 
-async function setupCommitBoard(page: Page, commitDetail: CommitDetail, extraCommits: CommitDetail[] = []) {
+function makeMockDiff(commit: CommitDetail, file: string): CommitFileDiff {
+  if (file === 'src/export.ts') {
+    return {
+      repo: commit.repo,
+      repoPath: `/tmp/demo/${commit.repo}`,
+      sha: commit.sha,
+      file,
+      diff: [
+        'diff --git a/src/export.ts b/src/export.ts',
+        'index 1111111..2222222 100644',
+        '--- a/src/export.ts',
+        '+++ b/src/export.ts',
+        '@@ -1,4 +1,12 @@',
+        '-old export line 1',
+        '-old export line 2',
+        '-old export line 3',
+        '-old export line 4',
+        '+new export line 1',
+        '+new export line 2',
+        '+new export line 3',
+        '+new export line 4',
+        '+new export line 5',
+        '+new export line 6',
+        '+new export line 7',
+        '+new export line 8',
+        '+new export line 9',
+        '+new export line 10',
+        '+new export line 11',
+        '+new export line 12',
+      ].join('\n') + '\n',
+      fileContent: Array.from({ length: 12 }, (_, i) => `new export line ${i + 1}`).join('\n') + '\n',
+      originalContent: Array.from({ length: 4 }, (_, i) => `old export line ${i + 1}`).join('\n') + '\n',
+      symbols: [],
+    };
+  }
+
+  if (file === 'new.ts') {
+    return {
+      repo: commit.repo,
+      repoPath: `/tmp/demo/${commit.repo}`,
+      sha: commit.sha,
+      file,
+      oldFile: 'old.ts',
+      diff: [
+        'diff --git a/old.ts b/new.ts',
+        'similarity index 80%',
+        'rename from old.ts',
+        'rename to new.ts',
+        'index 3333333..4444444 100644',
+        '--- a/old.ts',
+        '+++ b/new.ts',
+        '@@ -1,2 +1,7 @@',
+        ' line 1',
+        '+line 2',
+        '+line 3',
+        '+line 4',
+        '+line 5',
+        '+line 6',
+        ' line 7',
+      ].join('\n') + '\n',
+      fileContent: Array.from({ length: 7 }, (_, i) => `line ${i + 1}`).join('\n') + '\n',
+      originalContent: 'line 1\nline 7\n',
+      symbols: [],
+    };
+  }
+
+  if (file === 'assets/sample.bin') {
+    return {
+      repo: commit.repo,
+      repoPath: `/tmp/demo/${commit.repo}`,
+      sha: commit.sha,
+      file,
+      contentOmitted: 'binary',
+      diff: 'Binary files a/assets/sample.bin and b/assets/sample.bin differ\n',
+      fileContent: '',
+      originalContent: '',
+      symbols: [],
+    };
+  }
+
+  if (file === 'unchanged.txt') {
+    return {
+      repo: commit.repo,
+      repoPath: `/tmp/demo/${commit.repo}`,
+      sha: commit.sha,
+      file,
+      diff: '',
+      fileContent: 'unchanged line\n',
+      originalContent: 'unchanged line\n',
+      symbols: [],
+    };
+  }
+
+  return {
+    repo: commit.repo,
+    repoPath: `/tmp/demo/${commit.repo}`,
+    sha: commit.sha,
+    file,
+    diff: '',
+    fileContent: '',
+    originalContent: '',
+    symbols: [],
+  };
+}
+
+async function setupCommitBoard(
+  page: Page,
+  commitDetail: CommitDetail,
+  extraCommits: CommitDetail[] = [],
+  diffOverrides?: (file: string, commit: CommitDetail) => CommitFileDiff | undefined,
+) {
   const allCommits = [commitDetail, ...extraCommits];
   await page.addInitScript(() => {
     window.localStorage.setItem('contextspace_board_nav_open_v1', 'closed');
@@ -159,8 +270,20 @@ async function setupCommitBoard(page: Page, commitDetail: CommitDetail, extraCom
   );
 
   await page.route('**/api/workspace/demo/commits/**', (route) => {
-    const url = route.request().url();
-    const matched = allCommits.find((c) => url.endsWith(`/${c.sha}`) || url.endsWith(`/${c.repo}/${c.sha}`));
+    const rawUrl = route.request().url();
+    const parsed = new URL(rawUrl);
+    if (parsed.pathname.endsWith('/diff')) {
+      const file = parsed.searchParams.get('file') ?? '';
+      const matched =
+        allCommits.find(
+          (c) =>
+            parsed.pathname.includes(`/${c.sha}/diff`) ||
+            parsed.pathname.includes(`/${c.repo}/${c.sha}/diff`),
+        ) ?? commitDetail;
+      const custom = diffOverrides?.(file, matched);
+      return route.fulfill({ json: custom ?? makeMockDiff(matched, file) });
+    }
+    const matched = allCommits.find((c) => rawUrl.endsWith(`/${c.sha}`) || rawUrl.endsWith(`/${c.repo}/${c.sha}`));
     return route.fulfill({ json: matched ?? commitDetail });
   });
 
@@ -222,8 +345,12 @@ test.describe('Commit cards in quiet reader', () => {
     await expect(header.getByRole('link')).toHaveCount(0);
     await expect(header).toContainText(`billing · ${detail.shortSha.slice(0, 7)}`);
 
-    // ZERO extra buttons anywhere in the entire reader
-    await expect(reader(page).getByRole('button')).toHaveCount(2);
+    // Verify reader has ONLY header's 2 buttons plus the file disclosure buttons (all collapsed)
+    await expect(reader(page).getByRole('button')).toHaveCount(2 + detail.files.length);
+    for (const file of detail.files) {
+      const btn = reader(page).getByRole('button', { name: new RegExp(file.path) });
+      await expect(btn).toHaveAttribute('aria-expanded', 'false');
+    }
 
     // Verify commit byline, full subject, and multi-line body
     await expect(reader(page).getByText(`by ${detail.author}`)).toBeVisible();
@@ -457,5 +584,102 @@ test.describe('Commit cards in quiet reader', () => {
     await expect(alert).toBeVisible();
     await expect(alert).toHaveText('Could not read this commit.');
     await expect(reader(page).getByRole('button')).toHaveCount(2);
+  });
+
+  test('expands and folds single-file diffs in place, renders diff viewer, plain patch, and handles binary and oversized diffs', async ({ page }) => {
+    const detail = makeCommitDetail();
+    await setupCommitBoard(page, detail, [], (file) => {
+      if (file === 'unchanged.txt') {
+        return {
+          repo: 'billing',
+          repoPath: '/tmp/demo/billing',
+          sha: FULL_SHA,
+          file: 'unchanged.txt',
+          diff: '',
+          fileContent: '',
+          originalContent: '',
+          symbols: [],
+          diffOmitted: true,
+          contentOmitted: 'too-large',
+        };
+      }
+      return undefined;
+    });
+
+    const commitCard = board(page).locator('#board-area .react-flow__node-commit').filter({ hasText: 'Write the CSV writer' });
+    await commitCard.getByRole('button', { name: 'Open Write the CSV writer' }).click();
+    await expect(reader(page)).toBeVisible();
+
+    // 1. Expand src/export.ts
+    const exportRowBtn = reader(page).getByRole('button', { name: /src\/export\.ts/ });
+    await expect(exportRowBtn).toHaveAttribute('aria-expanded', 'false');
+    await exportRowBtn.click();
+    await expect(exportRowBtn).toHaveAttribute('aria-expanded', 'true');
+
+    // Diff toolbar is mounted in place
+    const diffToolbar = reader(page).getByRole('toolbar', { name: 'Diff' });
+    await expect(diffToolbar).toBeVisible();
+    await expect(diffToolbar).toContainText('Change 1 of 1');
+
+    // Open More diff options
+    const moreDiffBtn = diffToolbar.getByRole('button', { name: 'More diff options' });
+    await moreDiffBtn.click();
+    await expect(page.getByRole('menu')).toBeVisible();
+
+    // Press Escape -> closes only menu and NOT BoardReader
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(reader(page)).toBeVisible();
+    await expect(diffToolbar).toBeVisible();
+
+    // Reopen menu and toggle Plain patch view
+    await moreDiffBtn.click();
+    await expect(page.getByRole('menu')).toBeVisible();
+    await menuCheckboxItem(page, 'Plain patch view').click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+
+    // Verify '-' and '+' diff lines render in place
+    const fallbackDiff = reader(page).getByTestId('fallback-diff');
+    await expect(fallbackDiff).toBeVisible();
+    await expect(fallbackDiff.locator('[data-diff-marker="-"]').first()).toBeVisible();
+    await expect(fallbackDiff.locator('[data-diff-marker="+"]').first()).toBeVisible();
+    await expect(fallbackDiff).toContainText('old export line 1');
+    await expect(fallbackDiff).toContainText('new export line 1');
+
+    // 2. Click 'Next file' in Diff toolbar on the last hunk of src/export.ts: opens new.ts, folds src/export.ts, and focuses renamedRowBtn
+    const renamedRowBtn = reader(page).getByRole('button', { name: /old\.ts → new\.ts/ });
+    await diffToolbar.getByRole('button', { name: 'Next file' }).click();
+    await expect(renamedRowBtn).toBeFocused();
+    await expect(renamedRowBtn).toHaveAttribute('aria-expanded', 'true');
+    await expect(exportRowBtn).toHaveAttribute('aria-expanded', 'false');
+    // Only 1 'Diff' toolbar visible
+    await expect(reader(page).getByRole('toolbar', { name: 'Diff' })).toHaveCount(1);
+
+    // 3. Click the open file row (old.ts → new.ts) a second time: folds it
+    await renamedRowBtn.click();
+    await expect(renamedRowBtn).toHaveAttribute('aria-expanded', 'false');
+    await expect(reader(page).getByRole('toolbar', { name: 'Diff' })).toHaveCount(0);
+
+    // 4. Open binary file row (assets/sample.bin)
+    const binaryRowBtn = reader(page).getByRole('button', { name: /assets\/sample\.bin/ });
+    await binaryRowBtn.click();
+    await expect(binaryRowBtn).toHaveAttribute('aria-expanded', 'true');
+    const binaryNote = reader(page).getByRole('note');
+    await expect(binaryNote).toBeVisible();
+    await expect(binaryNote).toHaveText(/binary file/i);
+    await expect(reader(page).getByText(/Binary files.*differ/)).toBeVisible();
+    await expect(reader(page).getByRole('toolbar', { name: 'Diff' })).toHaveCount(0);
+    await binaryRowBtn.click();
+    await expect(binaryRowBtn).toHaveAttribute('aria-expanded', 'false');
+
+    // 5. Open oversized-diff file row (unchanged.txt with diffOmitted: true, contentOmitted: 'too-large')
+    const oversizedRowBtn = reader(page).getByRole('button', { name: /unchanged\.txt/ });
+    await oversizedRowBtn.click();
+    await expect(oversizedRowBtn).toHaveAttribute('aria-expanded', 'true');
+    const oversizedNote = reader(page).getByRole('note');
+    await expect(oversizedNote).toBeVisible();
+    await expect(oversizedNote).toHaveText(/diff is too large to display/i);
+    await expect(reader(page).getByRole('toolbar', { name: 'Diff' })).toHaveCount(0);
   });
 });

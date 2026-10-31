@@ -5,7 +5,11 @@
  * and forge web URL.
  */
 
+import * as path from 'node:path';
 import { execa } from 'execa';
+import { assertPathWithin } from '../resources/fs-safety.js';
+import { looksBinary, MAX_VIEWABLE_FILE_BYTES, type OmittedReason } from '../services/repository-file.js';
+import { extractAstSymbols, type ExtractedSymbol } from '../services/symbolService.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { buildCommitUrl, parseRemoteUrl, type ForgeKind } from '../utils/pr.js';
 
@@ -16,6 +20,7 @@ import { buildCommitUrl, parseRemoteUrl, type ForgeKind } from '../utils/pr.js';
  */
 export const MAX_COMMIT_DIFF_BYTES = 32 * 1024 * 1024;
 export const MAX_COMMIT_FILES = 300;
+export const MAX_SINGLE_FILE_DIFF_BYTES = MAX_VIEWABLE_FILE_BYTES * 4;
 // A short hex equal to a branch/tag name resolves to that ref first,
 // which is acceptable because the full SHA is returned.
 const SHA_REGEX = /^[0-9a-f]{7,64}$/;
@@ -74,6 +79,26 @@ export interface CommitDetail {
   pushed: boolean;
   forge: ForgeKind | null;
   webUrl: string | null;
+}
+
+export interface CommitFileDiff {
+  repo: string;
+  repoPath: string;
+  sha: string;
+  file: string;
+  oldFile?: string;
+  diff: string;
+  fileContent: string;
+  originalContent: string;
+  symbols: ExtractedSymbol[];
+  contentOmitted?: OmittedReason;
+  diffOmitted?: true;
+}
+
+export interface ReadCommitFileDiffOptions {
+  maxCommitDiffBuffer?: number;
+  maxDiffBytes?: number;
+  maxFileBytes?: number;
 }
 
 interface NumstatItem {
@@ -156,28 +181,51 @@ export function parseNameStatusZ(stdout: string): NameStatusItem[] {
   return items;
 }
 
-export interface ReadCommitOptions {
-  /** Optional override for execa maxBuffer in diff calls (for testing/safety). */
-  maxDiffBuffer?: number;
+interface ResolvedCommitBase {
+  targetRepo: { name: string; path: string };
+  repoPath: string;
+  fullSha: string;
+  shortSha: string;
+  author: string;
+  at: string;
+  subject: string;
+  body: string;
+  parents: string[];
+  baseTree: string;
 }
 
-/**
- * Reads the details of a single commit from a workspace repository.
- *
- * Repository name matching is case-insensitive if an exact match is not found
- * (unlike whats-new which matches exactly). Ambiguous names throw an error.
- *
- * @throws {CommitInputError} when inputs are malformed or repo name is ambiguous.
- * @throws {RepoNotFoundError} when repository does not exist in workspace.
- * @throws {CommitNotFoundError} when commit SHA cannot be resolved.
- * @throws {CommitTooLargeError} when commit diff output exceeds max buffer limit.
- */
-export async function readCommit(
+export function normalizeCommitFilePath(repoPath: string, filePath: string): string {
+  if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4096) {
+    throw new CommitInputError('Invalid repository file path.');
+  }
+  for (let i = 0; i < filePath.length; i++) {
+    const code = filePath.charCodeAt(i);
+    if (code <= 31 || code === 127) {
+      throw new CommitInputError('Invalid repository file path.');
+    }
+  }
+  if (filePath.includes('\\') || filePath.startsWith('/') || /^[a-zA-Z]:/.test(filePath)) {
+    throw new CommitInputError('Invalid repository file path.');
+  }
+  const segments = filePath.split('/');
+  for (const seg of segments) {
+    if (seg === '' || seg === '.' || seg === '..') {
+      throw new CommitInputError('Invalid repository file path.');
+    }
+  }
+  try {
+    assertPathWithin(repoPath, path.resolve(repoPath, filePath));
+  } catch {
+    throw new CommitInputError('Invalid repository file path.');
+  }
+  return filePath;
+}
+
+async function resolveCommitBase(
   workspacePath: string,
   repoName: string,
   sha: string,
-  options?: ReadCommitOptions,
-): Promise<CommitDetail> {
+): Promise<ResolvedCommitBase> {
   const trimmedRepo = (repoName ?? '').trim();
   if (!trimmedRepo) {
     throw new CommitInputError('Repository name is required.');
@@ -257,6 +305,45 @@ export async function readCommit(
     });
     baseTree = emptyTreeSha.trim();
   }
+
+  return {
+    targetRepo,
+    repoPath,
+    fullSha,
+    shortSha,
+    author,
+    at,
+    subject,
+    body,
+    parents,
+    baseTree,
+  };
+}
+
+export interface ReadCommitOptions {
+  /** Optional override for execa maxBuffer in diff calls (for testing/safety). */
+  maxDiffBuffer?: number;
+}
+
+/**
+ * Reads the details of a single commit from a workspace repository.
+ *
+ * Repository name matching is case-insensitive if an exact match is not found
+ * (unlike whats-new which matches exactly). Ambiguous names throw an error.
+ *
+ * @throws {CommitInputError} when inputs are malformed or repo name is ambiguous.
+ * @throws {RepoNotFoundError} when repository does not exist in workspace.
+ * @throws {CommitNotFoundError} when commit SHA cannot be resolved.
+ * @throws {CommitTooLargeError} when commit diff output exceeds max buffer limit.
+ */
+export async function readCommit(
+  workspacePath: string,
+  repoName: string,
+  sha: string,
+  options?: ReadCommitOptions,
+): Promise<CommitDetail> {
+  const { targetRepo, repoPath, fullSha, shortSha, author, at, subject, body, parents, baseTree } =
+    await resolveCommitBase(workspacePath, repoName, sha);
 
   const diffMaxBuffer = options?.maxDiffBuffer ?? MAX_COMMIT_DIFF_BYTES;
   let stdoutNumstat: string;
@@ -409,4 +496,176 @@ export async function readCommit(
     forge,
     webUrl,
   };
+}
+
+/**
+ * Reads the single-file diff and file contents for a specific changed file in a commit.
+ *
+ * @throws {CommitInputError} when inputs or file paths are malformed.
+ * @throws {RepoNotFoundError} when repository does not exist in workspace.
+ * @throws {CommitNotFoundError} when commit SHA cannot be resolved or file was not changed in commit.
+ * @throws {CommitTooLargeError} when commit diff output exceeds max buffer limit.
+ */
+export async function readCommitFileDiff(
+  workspacePath: string,
+  repoName: string,
+  sha: string,
+  filePath: string,
+  options?: ReadCommitFileDiffOptions,
+): Promise<CommitFileDiff> {
+  const { targetRepo, repoPath, fullSha, baseTree } = await resolveCommitBase(workspacePath, repoName, sha);
+  const normalizedFile = normalizeCommitFilePath(repoPath, filePath);
+
+  let stdoutNameStatus: string;
+  try {
+    const res = await execa(
+      'git',
+      ['-c', 'diff.renames=true', 'diff', '-z', '-M', '--no-ext-diff', '--no-color', '--name-status', baseTree, fullSha],
+      { cwd: repoPath, maxBuffer: options?.maxCommitDiffBuffer ?? MAX_COMMIT_DIFF_BYTES },
+    );
+    stdoutNameStatus = res.stdout;
+  } catch (error: any) {
+    if (error?.isMaxBuffer) {
+      throw new CommitTooLargeError();
+    }
+    throw error;
+  }
+
+  const nameStatuses = parseNameStatusZ(stdoutNameStatus);
+  const matched = nameStatuses.find((ns) => ns.path === normalizedFile);
+  if (!matched) {
+    throw new CommitNotFoundError(`File "${normalizedFile}" was not changed in commit "${fullSha.slice(0, 7)}".`);
+  }
+
+  if (matched.oldPath !== undefined) {
+    normalizeCommitFilePath(repoPath, matched.oldPath);
+  }
+
+  const maxDiffBytes = options?.maxDiffBytes ?? MAX_SINGLE_FILE_DIFF_BYTES;
+  const maxFileBytes = options?.maxFileBytes ?? MAX_VIEWABLE_FILE_BYTES;
+  const isRenamedOrCopied = Boolean(matched.oldPath && matched.oldPath !== normalizedFile);
+  const origPath = matched.oldPath ?? normalizedFile;
+
+  const diffArgs = isRenamedOrCopied
+    ? ['diff', '--no-ext-diff', '--no-color', `${baseTree}:${origPath}`, `${fullSha}:${normalizedFile}`]
+    : ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-color', baseTree, fullSha, '--', normalizedFile];
+
+  const diffPromise = execa('git', diffArgs, {
+    cwd: repoPath,
+    reject: false,
+    encoding: 'buffer',
+    maxBuffer: maxDiffBytes,
+  });
+
+  const filePromise =
+    matched.status === 'deleted'
+      ? Promise.resolve(null)
+      : execa('git', ['cat-file', 'blob', `${fullSha}:${normalizedFile}`], {
+          cwd: repoPath,
+          reject: false,
+          stripFinalNewline: false,
+          encoding: 'buffer',
+          maxBuffer: maxFileBytes,
+        });
+
+  const origPromise =
+    matched.status === 'added'
+      ? Promise.resolve(null)
+      : execa('git', ['cat-file', 'blob', `${baseTree}:${origPath}`], {
+          cwd: repoPath,
+          reject: false,
+          stripFinalNewline: false,
+          encoding: 'buffer',
+          maxBuffer: maxFileBytes,
+        });
+
+  const [diffRes, fileRes, origRes] = await Promise.all([diffPromise, filePromise, origPromise]);
+
+  let diff = '';
+  let diffOmitted: true | undefined;
+  if (diffRes.isMaxBuffer) {
+    diffOmitted = true;
+  } else if (diffRes.exitCode === 0 || diffRes.exitCode === 1) {
+    diff = Buffer.from(diffRes.stdout).toString('utf8');
+  } else {
+    throw new Error(`git diff exited with code ${diffRes.exitCode}`);
+  }
+
+  function parseBlobResult(res: any): { text: string; omitted?: OmittedReason } {
+    if (!res) {
+      return { text: '' };
+    }
+    if (res.stdout && res.stdout.length > 0 && looksBinary(Buffer.from(res.stdout))) {
+      return { text: '', omitted: 'binary' };
+    }
+    if (res.isMaxBuffer) {
+      return { text: '', omitted: 'too-large' };
+    }
+    if (res.exitCode === 0) {
+      return { text: Buffer.from(res.stdout).toString('utf8') };
+    }
+    return { text: '' };
+  }
+
+  const fileBlob = parseBlobResult(fileRes);
+  const origBlob = parseBlobResult(origRes);
+
+  let contentOmitted: OmittedReason | undefined;
+  if (!diffOmitted && /^Binary files .* differ$/m.test(diff)) {
+    contentOmitted = 'binary';
+  } else if (fileBlob.omitted === 'binary' || origBlob.omitted === 'binary') {
+    contentOmitted = 'binary';
+  } else {
+    contentOmitted = fileBlob.omitted ?? origBlob.omitted;
+  }
+
+  let fileContent = fileBlob.text;
+  let originalContent = origBlob.text;
+
+  if ((fileRes && fileRes.exitCode !== 0) || (origRes && origRes.exitCode !== 0)) {
+    fileContent = '';
+    originalContent = '';
+  }
+
+  if (contentOmitted) {
+    fileContent = '';
+    originalContent = '';
+  }
+  if (diffOmitted) {
+    contentOmitted ??= 'too-large';
+    fileContent = '';
+    originalContent = '';
+  }
+
+  let symbols: ExtractedSymbol[] = [];
+  if (fileContent) {
+    try {
+      symbols = await extractAstSymbols(normalizedFile, fileContent);
+    } catch {
+      symbols = [];
+    }
+  }
+
+  const result: CommitFileDiff = {
+    repo: targetRepo.name,
+    repoPath,
+    sha: fullSha,
+    file: normalizedFile,
+    diff: diffOmitted ? '' : diff,
+    fileContent,
+    originalContent,
+    symbols,
+  };
+
+  if (matched.oldPath) {
+    result.oldFile = matched.oldPath;
+  }
+  if (contentOmitted) {
+    result.contentOmitted = contentOmitted;
+  }
+  if (diffOmitted) {
+    result.diffOmitted = true;
+  }
+
+  return result;
 }

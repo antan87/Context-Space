@@ -11,6 +11,7 @@ import {
   CommitTooLargeError,
   RepoNotFoundError,
   readCommit,
+  readCommitFileDiff,
 } from '../core/commit-detail.js';
 
 const workspaceId = z.string().trim().min(1, 'Workspace id is required.');
@@ -57,6 +58,19 @@ export function registerCommitRoutes(app: Hono, resolveWorkspace: (id: string) =
       return c.json({ error: 'Could not read this commit.' }, 500);
     }
   };
+
+  app.get(
+    '/api/workspace/:id/commits/:repo/:sha/diff',
+    handle(async (root, c) => {
+      const repo = repoName.parse(c.req.param('repo'));
+      const sha = commitSha.parse(c.req.param('sha'));
+      const file = c.req.query('file') ?? '';
+      if (!file) {
+        throw new CommitInputError('File query parameter is required.');
+      }
+      return readCommitFileDiff(root, repo, sha, file);
+    }),
+  );
 
   app.get(
     '/api/workspace/:id/commits/:repo/:sha',

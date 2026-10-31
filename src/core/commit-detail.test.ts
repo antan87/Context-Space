@@ -11,6 +11,8 @@ import {
   CommitTooLargeError,
   RepoNotFoundError,
   readCommit,
+  readCommitFileDiff,
+  normalizeCommitFilePath,
   parseNumstatZ,
   parseNameStatusZ,
 } from './commit-detail.js';
@@ -385,5 +387,331 @@ describe('readCommit', () => {
 
     const result = await readCommit(root, 'my-repo', sha.toUpperCase());
     expect(result.sha).toBe(sha);
+  });
+});
+
+describe('normalizeCommitFilePath', () => {
+  const dummyRepo = '/repos/test-repo';
+
+  it('allows valid relative paths', () => {
+    expect(normalizeCommitFilePath(dummyRepo, 'src/index.ts')).toBe('src/index.ts');
+    expect(normalizeCommitFilePath(dummyRepo, 'file.txt')).toBe('file.txt');
+    expect(normalizeCommitFilePath(dummyRepo, 'deep/nested/folder/code.ts')).toBe('deep/nested/folder/code.ts');
+  });
+
+  it('rejects empty, oversized, or non-string paths', () => {
+    expect(() => normalizeCommitFilePath(dummyRepo, '')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, null as any)).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'a'.repeat(4097))).toThrow(CommitInputError);
+  });
+
+  it('rejects control characters, backslashes, leading slashes, and Windows drive prefixes', () => {
+    expect(() => normalizeCommitFilePath(dummyRepo, 'src/\0index.ts')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'src/\x1Findex.ts')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'src/\x7Findex.ts')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'src\\index.ts')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, '/abs/path.ts')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'C:/windows/path.ts')).toThrow(CommitInputError);
+  });
+
+  it('rejects traversal or empty segments', () => {
+    expect(() => normalizeCommitFilePath(dummyRepo, '../a')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'a/../b')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'a/./b')).toThrow(CommitInputError);
+    expect(() => normalizeCommitFilePath(dummyRepo, 'a//b')).toThrow(CommitInputError);
+  });
+});
+
+describe('readCommitFileDiff', () => {
+  let root: string;
+  let repoDir: string;
+
+  const runGit = (args: string[], cwd = repoDir, env?: Record<string, string>) =>
+    execa('git', args, { cwd, env });
+
+  const commit = async (
+    message: string,
+    opts: { author?: string; date?: string; env?: Record<string, string> } = {},
+  ) => {
+    const author = opts.author ?? 'Alice Developer';
+    const date = opts.date ?? '2026-05-01T10:00:00Z';
+    const env = {
+      GIT_AUTHOR_NAME: author,
+      GIT_AUTHOR_EMAIL: 'alice@example.com',
+      GIT_AUTHOR_DATE: date,
+      GIT_COMMITTER_NAME: author,
+      GIT_COMMITTER_EMAIL: 'alice@example.com',
+      GIT_COMMITTER_DATE: date,
+      ...opts.env,
+    };
+    await runGit(['add', '-A'], repoDir, env);
+    await runGit(['commit', '-m', message], repoDir, env);
+    const { stdout } = await runGit(['rev-parse', 'HEAD']);
+    return stdout.trim();
+  };
+
+  beforeEach(async () => {
+    setActiveStorageProvider(new LocalStorageAdapter());
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'commit-file-diff-test-')));
+    repoDir = path.join(root, 'my-repo');
+    await fs.mkdir(repoDir);
+    await runGit(['init', '-b', 'main'], repoDir);
+    await runGit(['config', 'user.name', 'Alice Developer'], repoDir);
+    await runGit(['config', 'user.email', 'alice@example.com'], repoDir);
+
+    await fs.writeFile(
+      path.join(root, 'contextspace.json'),
+      JSON.stringify({
+        id: 'test-ws',
+        name: 'Test Workspace',
+        branchName: 'main',
+        repos: [repoDir],
+        assistants: [],
+        workspacePath: root,
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('reads modified TypeScript file at commit (not dirty working tree) with diff and symbols', async () => {
+    await fs.mkdir(path.join(repoDir, 'src'), { recursive: true });
+    await fs.writeFile(
+      path.join(repoDir, 'src', 'greeter.ts'),
+      'export function hello(): string {\n  return "parent";\n}\n',
+    );
+    const parentSha = await commit('Initial parent commit');
+
+    await fs.writeFile(
+      path.join(repoDir, 'src', 'greeter.ts'),
+      'export function hello(): string {\n  return "committed";\n}\n\nexport class Greeter {\n  greet() {\n    return "hi";\n  }\n}\n',
+    );
+    const commitSha = await commit('Update greeter and add class');
+
+    // Modify file on disk AFTER commit to prove readCommitFileDiff reads commit blob, not dirty working tree
+    await fs.writeFile(
+      path.join(repoDir, 'src', 'greeter.ts'),
+      'export function hello(): string {\n  return "dirty on disk";\n}\n',
+    );
+
+    const result = await readCommitFileDiff(root, 'my-repo', commitSha, 'src/greeter.ts');
+
+    expect(result.repo).toBe('my-repo');
+    expect(result.repoPath).toBe(repoDir);
+    expect(result.sha).toBe(commitSha);
+    expect(result.file).toBe('src/greeter.ts');
+    expect(result.oldFile).toBeUndefined();
+    expect(result.contentOmitted).toBeUndefined();
+    expect(result.diffOmitted).toBeUndefined();
+
+    // Verify fileContent contains 'committed' and NOT 'dirty on disk'
+    expect(result.fileContent).toContain('return "committed";');
+    expect(result.fileContent).not.toContain('dirty on disk');
+
+    // Verify originalContent at parent
+    expect(result.originalContent).toContain('return "parent";');
+
+    // Verify diff
+    expect(result.diff).toContain('-  return "parent";');
+    expect(result.diff).toContain('+  return "committed";');
+    expect(result.diff).toContain('+export class Greeter {');
+
+    // Verify symbols extracted from TypeScript
+    expect(result.symbols.length).toBeGreaterThanOrEqual(2);
+    const functionSym = result.symbols.find((s) => s.name === 'hello');
+    expect(functionSym).toBeDefined();
+    const classSym = result.symbols.find((s) => s.name === 'Greeter');
+    expect(classSym).toBeDefined();
+  });
+
+  it('reads root commit added file diffed against empty tree', async () => {
+    await fs.writeFile(path.join(repoDir, 'init.ts'), 'export const answer = 42;\n');
+    const rootSha = await commit('Root commit');
+
+    const result = await readCommitFileDiff(root, 'my-repo', rootSha, 'init.ts');
+
+    expect(result.sha).toBe(rootSha);
+    expect(result.file).toBe('init.ts');
+    expect(result.originalContent).toBe('');
+    expect(result.fileContent).toBe('export const answer = 42;\n');
+    expect(result.diff).toContain('new file mode');
+    expect(result.diff).toContain('+export const answer = 42;');
+    expect(result.symbols.length).toBeGreaterThanOrEqual(1);
+    expect(result.symbols[0].name).toBe('answer');
+  });
+
+  it('reads deleted file with empty fileContent and prior originalContent', async () => {
+    await fs.writeFile(path.join(repoDir, 'old-code.txt'), 'line to be removed\nsecond line\n');
+    await commit('Base with old-code');
+
+    await fs.rm(path.join(repoDir, 'old-code.txt'));
+    const deleteSha = await commit('Remove old-code');
+
+    const result = await readCommitFileDiff(root, 'my-repo', deleteSha, 'old-code.txt');
+
+    expect(result.sha).toBe(deleteSha);
+    expect(result.file).toBe('old-code.txt');
+    expect(result.fileContent).toBe('');
+    expect(result.originalContent).toBe('line to be removed\nsecond line\n');
+    expect(result.diff).toContain('deleted file mode');
+    expect(result.diff).toContain('-line to be removed');
+    expect(result.symbols).toEqual([]);
+  });
+
+  it('reads renamed file with edit and newly recreated file at oldPath on disk without mixing', async () => {
+    await fs.writeFile(path.join(repoDir, 'old.ts'), 'line 1\nold line 2\nline 3\n');
+    await commit('Base commit with old.ts');
+
+    // Rename old.ts to new.ts with edits
+    await runGit(['mv', 'old.ts', 'new.ts']);
+    await fs.writeFile(path.join(repoDir, 'new.ts'), 'line 1\nnew line 2\nline 3\n');
+    const renameSha = await commit('Rename old.ts to new.ts');
+
+    // Recreate a new file at old.ts on disk to verify dirty working tree is not mixed
+    await fs.writeFile(path.join(repoDir, 'old.ts'), 'recreated old file content\n');
+
+    const result = await readCommitFileDiff(root, 'my-repo', renameSha, 'new.ts');
+
+    expect(result.file).toBe('new.ts');
+    expect(result.oldFile).toBe('old.ts');
+    expect(result.originalContent).toBe('line 1\nold line 2\nline 3\n');
+    expect(result.fileContent).toBe('line 1\nnew line 2\nline 3\n');
+    expect(result.fileContent).not.toContain('recreated');
+    expect(result.diff).toContain('diff --git a/old.ts b/new.ts');
+    expect(result.diff).toContain('-old line 2');
+    expect(result.diff).toContain('+new line 2');
+  });
+
+  it('handles binary files both small and oversized', async () => {
+    await fs.writeFile(path.join(repoDir, 'dummy.txt'), 'base\n');
+    await commit('Base commit');
+
+    // 1. Small binary file
+    const bin1 = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]);
+    await fs.writeFile(path.join(repoDir, 'small.bin'), bin1);
+    const shaSmall = await commit('Add small binary');
+
+    const resultSmall = await readCommitFileDiff(root, 'my-repo', shaSmall, 'small.bin');
+    expect(resultSmall.contentOmitted).toBe('binary');
+    expect(resultSmall.diffOmitted).toBeUndefined();
+    expect(resultSmall.fileContent).toBe('');
+    expect(resultSmall.originalContent).toBe('');
+    expect(resultSmall.diff).toMatch(/Binary files/);
+
+    // 2. Oversized binary file exceeding maxFileBytes
+    const bin2 = Buffer.alloc(2048, 0);
+    bin2[0] = 0; // ensure NUL
+    bin2[1] = 1;
+    await fs.writeFile(path.join(repoDir, 'large.bin'), bin2);
+    const shaLarge = await commit('Add large binary');
+
+    const resultLarge = await readCommitFileDiff(root, 'my-repo', shaLarge, 'large.bin', { maxFileBytes: 64 });
+    expect(resultLarge.contentOmitted).toBe('binary');
+    expect(resultLarge.diffOmitted).toBeUndefined();
+    expect(resultLarge.fileContent).toBe('');
+    expect(resultLarge.originalContent).toBe('');
+    expect(resultLarge.diff).toMatch(/Binary files/);
+  });
+
+  it('handles oversized file with contentOmitted too-large but preserving diff', async () => {
+    const initialContent = 'x'.repeat(256) + '\n';
+    await fs.writeFile(path.join(repoDir, 'large-text.txt'), initialContent);
+    await commit('Base large text');
+
+    const modifiedContent = 'y'.repeat(256) + '\n';
+    await fs.writeFile(path.join(repoDir, 'large-text.txt'), modifiedContent);
+    const sha = await commit('Modify large text');
+
+    const result = await readCommitFileDiff(root, 'my-repo', sha, 'large-text.txt', {
+      maxFileBytes: 128,
+      maxDiffBytes: 4096,
+    });
+
+    expect(result.contentOmitted).toBe('too-large');
+    expect(result.diffOmitted).toBeUndefined();
+    expect(result.fileContent).toBe('');
+    expect(result.originalContent).toBe('');
+    expect(result.diff.length).toBeGreaterThan(0);
+    expect(result.diff).toContain('+');
+    expect(result.diff).toContain('-');
+  });
+
+  it('handles oversized diff with diffOmitted and contentOmitted too-large', async () => {
+    await fs.writeFile(path.join(repoDir, 'file.txt'), 'initial line\n');
+    await commit('Base');
+
+    await fs.writeFile(path.join(repoDir, 'file.txt'), 'a long replacement string that creates a diff larger than 64 bytes\nsecond line here\nthird line\n');
+    const sha = await commit('Large diff change');
+
+    const result = await readCommitFileDiff(root, 'my-repo', sha, 'file.txt', { maxDiffBytes: 64 });
+
+    expect(result.diffOmitted).toBe(true);
+    expect(result.contentOmitted).toBe('too-large');
+    expect(result.diff).toBe('');
+    expect(result.fileContent).toBe('');
+    expect(result.originalContent).toBe('');
+  });
+
+  it('throws CommitNotFoundError for unchanged or non-existent file in commit and CommitInputError for traversal', async () => {
+    await fs.writeFile(path.join(repoDir, 'unchanged.txt'), 'always here\n');
+    await fs.writeFile(path.join(repoDir, 'changed.txt'), 'v1\n');
+    await commit('Initial files');
+
+    await fs.writeFile(path.join(repoDir, 'changed.txt'), 'v2\n');
+    const sha = await commit('Update changed.txt only');
+
+    // Unchanged file in commit
+    await expect(readCommitFileDiff(root, 'my-repo', sha, 'unchanged.txt')).rejects.toThrow(CommitNotFoundError);
+    // Non-existent file
+    await expect(readCommitFileDiff(root, 'my-repo', sha, 'does-not-exist.txt')).rejects.toThrow(CommitNotFoundError);
+
+    // Traversal attempts
+    await expect(readCommitFileDiff(root, 'my-repo', sha, '../secret.txt')).rejects.toThrow(CommitInputError);
+    await expect(readCommitFileDiff(root, 'my-repo', sha, 'src/../secret.txt')).rejects.toThrow(CommitInputError);
+    await expect(readCommitFileDiff(root, 'my-repo', sha, '/etc/passwd')).rejects.toThrow(CommitInputError);
+    await expect(readCommitFileDiff(root, 'my-repo', sha, 'src\\test.ts')).rejects.toThrow(CommitInputError);
+    await expect(readCommitFileDiff(root, 'my-repo', sha, 'src/\0test.ts')).rejects.toThrow(CommitInputError);
+    await expect(readCommitFileDiff(root, 'my-repo', sha, '')).rejects.toThrow(CommitInputError);
+  });
+
+  it('treats identical content addition as added without -C copy detection', async () => {
+    await fs.writeFile(path.join(repoDir, 'existing.ts'), 'export const identical = "same content";\n');
+    await commit('Base with existing.ts');
+
+    await fs.writeFile(path.join(repoDir, 'copy.ts'), 'export const identical = "same content";\n');
+    const sha = await commit('Add copy.ts identical to existing.ts');
+
+    const commitDetail = await readCommit(root, 'my-repo', sha);
+    const copyFile = commitDetail.files.find((f) => f.path === 'copy.ts');
+    expect(copyFile).toBeDefined();
+    expect(copyFile?.status).toBe('added');
+    expect(copyFile?.oldPath).toBeUndefined();
+
+    const diffResult = await readCommitFileDiff(root, 'my-repo', sha, 'copy.ts');
+    expect(diffResult.file).toBe('copy.ts');
+    expect(diffResult.oldFile).toBeUndefined();
+    expect(diffResult.originalContent).toBe('');
+    expect(diffResult.fileContent).toBe('export const identical = "same content";\n');
+    expect(diffResult.diff).toContain('new file mode');
+  });
+
+  it('treats bracketed filenames literally with --literal-pathspecs', async () => {
+    await fs.mkdir(path.join(repoDir, 'src', 'pages'), { recursive: true });
+    await fs.writeFile(path.join(repoDir, 'src', 'pages', '[id].tsx'), 'export const id = 1;\n');
+    await fs.writeFile(path.join(repoDir, 'src', 'pages', 'i.tsx'), 'export const i = 1;\n');
+    await commit('Base pages');
+
+    await fs.writeFile(path.join(repoDir, 'src', 'pages', '[id].tsx'), 'export const id = 2;\n');
+    await fs.writeFile(path.join(repoDir, 'src', 'pages', 'i.tsx'), 'export const i = 2;\n');
+    const sha = await commit('Update pages');
+
+    const result = await readCommitFileDiff(root, 'my-repo', sha, 'src/pages/[id].tsx');
+    expect(result.file).toBe('src/pages/[id].tsx');
+    expect(result.fileContent).toBe('export const id = 2;\n');
+    expect(result.originalContent).toBe('export const id = 1;\n');
+    expect(result.diff).toContain('src/pages/[id].tsx');
+    expect(result.diff).not.toContain('src/pages/i.tsx');
   });
 });

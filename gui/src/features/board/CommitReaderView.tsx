@@ -1,5 +1,16 @@
-import type { UseQueryResult } from '@tanstack/react-query';
-import { FileImage } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { ChevronRight, FileImage } from 'lucide-react';
+import { apiFetch } from '../../lib/api/client.js';
+import { useConfig } from '../../lib/api/queries.js';
+import { cn } from '../../lib/utils.js';
+import { useElementWidth } from '../../lib/useElementWidth.js';
+import { DiffErrorBoundary } from '../changes/DiffErrorBoundary.js';
+import { PluggableDiffViewer } from '../changes/PluggableDiffViewer.js';
+import { disposeChangesetModelsAfterEditors } from '../changes/utils/changesetModelStore.js';
+import { globalChangesetSymbolIndex } from '../changes/utils/changesetSymbolIndex.js';
+import { omittedNotice } from '../changes/utils/omittedContent.js';
+import type { DiffViewMode } from '../changes/types.js';
 import { usePlanFile } from '../plan/planFile.js';
 import { agoText } from '../plan/whatsNew.js';
 import { documentFileUrl } from './boardActions.js';
@@ -7,6 +18,7 @@ import { useBoard } from './boardData.js';
 import {
   resolveCommitContext,
   type CommitDetail,
+  type CommitFileDiff,
   type CommitFileStatus,
 } from './commitContext.js';
 
@@ -31,8 +43,77 @@ export function CommitReaderView({
   query: UseQueryResult<CommitDetail, Error>;
   onOpenFile: (path: string) => void;
 }) {
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
+  const readerWidth = useElementWidth(containerEl);
+  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
+  const [userViewMode, setUserViewMode] = useState<DiffViewMode | null>(null);
+  const effectiveViewMode: DiffViewMode = userViewMode ?? (readerWidth >= 760 ? 'side-by-side' : 'unified');
+  const configQuery = useConfig();
+  const defaultEditor = configQuery.data?.config?.defaultEditor ?? null;
+  const baseId = useId();
+  const fileButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const pendingFocusFileRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (!openFilePath || pendingFocusFileRef.current !== openFilePath) return;
+    pendingFocusFileRef.current = null;
+    const btn = fileButtonRefs.current.get(openFilePath);
+    if (btn) {
+      btn.focus({ preventScroll: true });
+      btn.scrollIntoView({ block: 'nearest' });
+    }
+  }, [openFilePath]);
+
   const plan = usePlanFile(workspaceId);
   const board = useBoard(workspaceId, { poll: false });
+
+  const resolvedSha = query.data?.sha || sha;
+
+  // Reset open file when commit sha changes
+  const [lastSha, setLastSha] = useState(resolvedSha);
+  if (lastSha !== resolvedSha) {
+    setLastSha(resolvedSha);
+    setOpenFilePath(null);
+  }
+
+  const diffQuery = useQuery({
+    queryKey: ['board-commit-diff', workspaceId, repo, resolvedSha, openFilePath],
+    queryFn: ({ signal }) =>
+      apiFetch<CommitFileDiff>(
+        `/api/workspace/${encodeURIComponent(workspaceId)}/commits/${encodeURIComponent(repo)}/${encodeURIComponent(resolvedSha)}/diff?file=${encodeURIComponent(openFilePath!)}`,
+        { signal },
+      ),
+    enabled: Boolean(query.data && openFilePath),
+    retry: false,
+  });
+
+  const diffData = diffQuery.data;
+  const diffNotice = diffData
+    ? omittedNotice(
+        diffData.contentOmitted || diffData.diffOmitted
+          ? { content: diffData.contentOmitted, diff: diffData.diffOmitted }
+          : undefined,
+      )
+    : null;
+
+  const mountedDiffRepoName = diffQuery.data ? `commit-${resolvedSha}-${diffQuery.data.repo || repo}` : '';
+  const mountedDiffRepoPath = diffQuery.data?.repoPath;
+  const hasMountedDiffEditor = Boolean(
+    openFilePath &&
+      diffQuery.data &&
+      !diffQuery.data.diffOmitted &&
+      diffQuery.data.contentOmitted !== 'binary' &&
+      diffQuery.data.diff,
+  );
+
+  useEffect(() => {
+    if (!hasMountedDiffEditor || !openFilePath || !mountedDiffRepoName) return;
+    const owned = { repoName: mountedDiffRepoName, file: openFilePath, repoPath: mountedDiffRepoPath };
+    return () => {
+      disposeChangesetModelsAfterEditors([owned]);
+      globalChangesetSymbolIndex.removeFile(owned.repoName, owned.file);
+    };
+  }, [hasMountedDiffEditor, openFilePath, mountedDiffRepoName, mountedDiffRepoPath]);
 
   if (query.isPending) {
     return <p role="status" className="px-5 py-4 text-sm text-muted-foreground">Opening commit…</p>;
@@ -55,7 +136,7 @@ export function CommitReaderView({
   const timeAgo = agoText(detail.at) || detail.at;
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-4">
+    <div ref={setContainerEl} className="h-full overflow-y-auto px-5 py-4">
       {/* 1. Quiet byline */}
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
         <span>by {detail.author}</span>
@@ -150,33 +231,135 @@ export function CommitReaderView({
 
       {detail.files.length > 0 && (
         <ul aria-label="Changed files" className="mt-2 divide-y divide-border/60 rounded-lg border border-border/60 bg-card">
-          {detail.files.map((file) => {
+          {detail.files.map((file, index) => {
             const displayPath = file.oldPath && file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path;
             const statusWord = STATUS_WORDS[file.status] ?? null;
             const isBinary = file.additions === null && file.deletions === null;
+            const isOpen = openFilePath === file.path;
+            const panelId = `${baseId}-file-${index}`;
 
             return (
-              <li key={displayPath} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  <code className="min-w-0 truncate font-mono text-xs text-foreground" title={displayPath}>
-                    {displayPath}
-                  </code>
-                  {statusWord && <span className="shrink-0 text-xs text-muted-foreground">{statusWord}</span>}
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5 font-mono text-xs">
-                  {isBinary ? (
-                    <span className="text-muted-foreground">binary</span>
-                  ) : (
-                    <>
-                      {(file.additions ?? 0) > 0 && (
-                        <span className="text-success-foreground">+{file.additions}</span>
-                      )}
-                      {(file.deletions ?? 0) > 0 && (
-                        <span className="text-destructive-foreground">−{file.deletions}</span>
-                      )}
-                    </>
+              <li key={displayPath} className="overflow-hidden first:rounded-t-lg last:rounded-b-lg">
+                <button
+                  type="button"
+                  ref={(el) => {
+                    if (el) fileButtonRefs.current.set(file.path, el);
+                    else fileButtonRefs.current.delete(file.path);
+                  }}
+                  aria-expanded={isOpen}
+                  aria-controls={isOpen ? panelId : undefined}
+                  onClick={() => setOpenFilePath((prev) => (prev === file.path ? null : file.path))}
+                  className={cn(
+                    'group flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                    isOpen && 'bg-muted/30',
                   )}
-                </div>
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <ChevronRight
+                      aria-hidden="true"
+                      className={cn(
+                        'size-3.5 shrink-0 text-muted-foreground transition-transform',
+                        isOpen ? 'rotate-90 opacity-100' : 'opacity-50 group-hover:opacity-100 group-focus-visible:opacity-100',
+                      )}
+                    />
+                    <code className="min-w-0 truncate font-mono text-xs text-foreground" title={displayPath}>
+                      {displayPath}
+                    </code>
+                    {statusWord && <span className="shrink-0 text-xs text-muted-foreground">{statusWord}</span>}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs">
+                    {isBinary ? (
+                      <span className="text-muted-foreground">binary</span>
+                    ) : (
+                      <>
+                        {(file.additions ?? 0) > 0 && (
+                          <span className="text-success-foreground">+{file.additions}</span>
+                        )}
+                        {(file.deletions ?? 0) > 0 && (
+                          <span className="text-destructive-foreground">−{file.deletions}</span>
+                        )}
+                      </>
+                    )}
+                  </span>
+                </button>
+
+                {isOpen && (
+                  <div
+                    id={panelId}
+                    role="region"
+                    aria-label={`Diff for ${displayPath}`}
+                    className="border-t border-border/60 bg-background/50"
+                  >
+                    {diffQuery.isPending ? (
+                      <p role="status" className="px-3 py-3 text-xs text-muted-foreground">
+                        Loading diff…
+                      </p>
+                    ) : diffQuery.isError || !diffQuery.data ? (
+                      <p role="alert" className="px-3 py-3 text-xs text-destructive">
+                        {diffQuery.error instanceof Error ? diffQuery.error.message : 'Unable to load diff.'}
+                      </p>
+                    ) : !diffData ? null : (
+                      <>
+                        {diffNotice && (
+                          <p role="note" className="border-b border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                            {diffNotice}
+                          </p>
+                        )}
+                        {diffData.diffOmitted ? null : diffData.contentOmitted === 'binary' ? (
+                          <pre className="overflow-x-auto px-3 py-2.5 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
+                            {diffData.diff.trim() || 'Binary file changed.'}
+                          </pre>
+                        ) : diffData.diff ? (
+                          <div className="px-2 pb-1">
+                            <DiffErrorBoundary
+                              key={`${repo}/${resolvedSha}/${file.path}`}
+                              filePath={file.path}
+                              fallbackContent={diffData.diff}
+                            >
+                              <PluggableDiffViewer
+                                filePath={file.path}
+                                repoName={mountedDiffRepoName}
+                                repoPath={diffData.repoPath}
+                                patchText={diffData.diff}
+                                fullFileContent={diffData.fileContent}
+                                fullOriginalContent={diffData.originalContent}
+                                preExtractedSymbols={diffData.symbols}
+                                defaultEditor={defaultEditor}
+                                viewMode={effectiveViewMode}
+                                onToggleViewMode={() =>
+                                  setUserViewMode((prev) => {
+                                    const current = prev ?? (readerWidth >= 760 ? 'side-by-side' : 'unified');
+                                    return current === 'side-by-side' ? 'unified' : 'side-by-side';
+                                  })
+                                }
+                                onPrevFile={
+                                  index > 0
+                                    ? () => {
+                                        const targetPath = detail.files[index - 1]!.path;
+                                        pendingFocusFileRef.current = targetPath;
+                                        setOpenFilePath(targetPath);
+                                      }
+                                    : undefined
+                                }
+                                onNextFile={
+                                  index < detail.files.length - 1
+                                    ? () => {
+                                        const targetPath = detail.files[index + 1]!.path;
+                                        pendingFocusFileRef.current = targetPath;
+                                        setOpenFilePath(targetPath);
+                                      }
+                                    : undefined
+                                }
+                              />
+                            </DiffErrorBoundary>
+                          </div>
+                        ) : (
+                          <p className="px-3 py-2.5 text-xs text-muted-foreground">No changed lines in this file.</p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
