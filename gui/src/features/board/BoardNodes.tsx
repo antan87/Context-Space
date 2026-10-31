@@ -9,7 +9,7 @@ import { Button } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
 import { cn } from '../../lib/utils.js';
 import { agoText } from '../plan/whatsNew.js';
-import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { stepsText, waitingText, type AreaNode } from './boardAreas.js';
 import { BOARD_SIZE, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
 
@@ -286,11 +286,35 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
 }
 
 /** One commit: its short sha, who made it and when, and its subject. */
-export function BoardCommit({ data }: NodeProps<CommitNode>) {
+export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
   const shaId = useId();
   const ago = agoText(data.at);
+  const actions = useContext(BoardActionsContext);
+  const reading = useContext(BoardReadingContext) === id;
+  const commit = parseCommitNodeId(id);
+  const opens = Boolean(actions && commit);
+
+  const openCommit = (button: HTMLElement) => {
+    if (!commit) return;
+    actions?.openInReader({ path: `${commit.repo} · ${data.sha}`, title: data.subject, card: id, commit }, button);
+  };
+
+  const onSubjectClick = (event: MouseEvent<HTMLButtonElement>) => {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString() && event.currentTarget.contains(selection.anchorNode) && event.currentTarget.contains(selection.focusNode)) {
+      return;
+    }
+    openCommit(event.currentTarget);
+  };
+
   if (data.compact) {
-    return <article tabIndex={-1} aria-labelledby={shaId} className="flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-card-foreground shadow-xs">
+    return <article
+      tabIndex={-1}
+      aria-labelledby={shaId}
+      aria-current={reading ? 'true' : undefined}
+      onClick={opens ? (event) => brickPress(event, (card) => firstControl(card)) : undefined}
+      className={cn('flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-card-foreground shadow-xs', CARD_FOCUS, opens && BRICK, reading && 'ring-2 ring-primary')}
+    >
       <Anchors />
       <div className="flex h-5 items-center gap-2 text-[13px]">
         <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
@@ -298,10 +322,28 @@ export function BoardCommit({ data }: NodeProps<CommitNode>) {
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
       </div>
-      <p className="line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</p>
+      {commit ? (
+        <button
+          type="button"
+          data-card-main
+          aria-label={`Open ${data.subject}`}
+          disabled={!actions}
+          onClick={onSubjectClick}
+          className="nodrag nopan block w-full min-w-0 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none"
+        >
+          <span className="line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</span>
+        </button>
+      ) : (
+        <p className="line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</p>
+      )}
     </article>;
   }
-  return <article tabIndex={-1} aria-labelledby={shaId} className="flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs">
+  return <article
+    tabIndex={-1}
+    aria-labelledby={shaId}
+    aria-current={reading ? 'true' : undefined}
+    className={cn('flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs', reading && 'ring-2 ring-primary')}
+  >
     <Anchors />
     <div className="flex h-4 items-center gap-2 text-xs">
       <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
@@ -309,7 +351,20 @@ export function BoardCommit({ data }: NodeProps<CommitNode>) {
       <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
       {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
     </div>
-    <p className="line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</p>
+    {commit ? (
+      <button
+        type="button"
+        data-card-main
+        aria-label={`Open ${data.subject}`}
+        disabled={!actions}
+        onClick={onSubjectClick}
+        className="nodrag nopan block w-full min-w-0 rounded-sm text-left outline-hidden hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+      >
+        <span className="line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</span>
+      </button>
+    ) : (
+      <p className="line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</p>
+    )}
   </article>;
 }
 

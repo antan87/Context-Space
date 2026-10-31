@@ -7,7 +7,7 @@ import { authorName } from './boardLayout.js';
 
 /** A file of the workspace for the reader beside the board, and what to call it. `card` is the board card it is the content of. */
 export interface ReaderTarget {
-  /** The file, or for a source document the name it is kept under. */
+  /** The file, for a source document the name it is kept under, or for a commit a short label (`repo · sha`). */
   path: string;
   title: string;
   card?: string;
@@ -16,6 +16,8 @@ export interface ReaderTarget {
   /** The text of the card the file belongs to, and its whole byline: the reader shows them under the file, where the card shows only the start of the text. */
   text?: string;
   byline?: string;
+  /** When set, opens this repository commit in the quiet reader via GET /api/workspace/:id/commits/:repo/:sha. */
+  commit?: { repo: string; sha: string };
 }
 
 /** "by claude · 5 min ago", and who changed it since when someone did. */
@@ -83,3 +85,27 @@ export function firstControl(card: HTMLElement, selector = 'button, a[href]'): H
   }
   return null;
 }
+
+const hasControlChar = (text: string) => {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if ((code >= 0 && code <= 31) || code === 127) return true;
+  }
+  return false;
+};
+
+/**
+ * Parses a commit node ID (`commit:<repo>:<sha>[#<index>]`) into its repository and SHA.
+ * Returns null if the format does not match, or if repo contains slashes, backslashes,
+ * control characters, or is empty.
+ */
+export function parseCommitNodeId(id: string): { repo: string; sha: string } | null {
+  const match = /^commit:(.+):([0-9a-f]{7,64})(?:#[0-9]{1,3})?$/i.exec(id);
+  if (!match) return null;
+  const repo = match[1];
+  if (!repo || repo.length > 200 || repo === '.' || repo === '..' || repo.includes('/') || repo.includes('\\') || hasControlChar(repo)) {
+    return null;
+  }
+  return { repo, sha: match[2].toLowerCase() };
+}
+

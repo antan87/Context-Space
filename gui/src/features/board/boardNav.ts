@@ -5,7 +5,7 @@
  * exact node IDs with areaBoardLayout for seamless one-click jump from overview or across areas.
  */
 
-import { bylineText, type ReaderTarget } from './boardActions.js';
+import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
 import { stepsText, waitingText, type BoardArea } from './boardAreas.js';
 import { cardOrder, fileTypeOf, uniqueId, type FileType } from './boardLayout.js';
 
@@ -296,6 +296,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
     for (const repoEntry of area.repos) {
       repoEntry.commits.forEach((commit, index) => {
         const commitNodeId = repoEntry.cards[index]?.id ?? `commit:${repoEntry.repo.repo}:${commit.sha}`;
+        const parsedCommit = parseCommitNodeId(commitNodeId);
         const item: NavItem = {
           id: `commit:${area.id}:${commitNodeId}`,
           category: 'commits',
@@ -305,6 +306,16 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
           title: commit.subject,
           subtitle: mode === 'category' ? `${repoEntry.repo.repo} · ${area.data.title}` : `${repoEntry.repo.repo} · ${commit.author}`,
           badge: { text: commit.sha.slice(0, 7), variant: 'outline' },
+          ...(parsedCommit
+            ? {
+                readerTarget: {
+                  path: `${parsedCommit.repo} · ${parsedCommit.sha.slice(0, 7)}`,
+                  title: commit.subject,
+                  card: commitNodeId,
+                  commit: parsedCommit,
+                },
+              }
+            : {}),
           searchText: [commit.sha, commit.subject, commit.author, repoEntry.repo.repo, area.data.title].join(' ').toLowerCase(),
         };
         commitItems.push(item);

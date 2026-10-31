@@ -14,6 +14,8 @@ import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { documentFileUrl, type ReaderTarget } from './boardActions.js';
 import { LARGE_WINDOW, type ReaderLayout } from './boardReaderLayout.js';
+import { forgeDisplayName, safeForgeUrl, type CommitDetail } from './commitContext.js';
+import { CommitReaderView } from './CommitReaderView.js';
 
 /** How many frames the reader keeps trying to take the keyboard: something that is closing (a dialog) may hold it back for a moment. */
 const FOCUS_FRAMES = 30;
@@ -55,9 +57,9 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   const large = layout === 'large';
   // The canvas is out of reach, under the reader: in the window, and where the dock covers it.
   const covering = large || covers;
-  const { path, source } = target;
-  // What is open: a source document or a file.
-  const open = source ? `source:${source}` : path;
+  const { path, source, commit } = target;
+  // What is open: a commit, a source document, or a file.
+  const open = commit ? `commit:${commit.repo}:${commit.sha}` : source ? `source:${source}` : path;
 
   const preview = useQuery({
     queryKey: ['board-reader', workspaceId, open],
@@ -68,9 +70,25 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
       if (read.content === undefined) throw new Error('This source document is a link, not text.');
       return { name: path, kind: 'markdown', content: read.content };
     },
+    enabled: !commit,
     retry: false,
   });
   const data = preview.data ?? null;
+
+  const commitQuery = useQuery({
+    queryKey: ['board-commit', workspaceId, commit?.repo, commit?.sha],
+    queryFn: ({ signal }) =>
+      apiFetch<CommitDetail>(
+        `/api/workspace/${encodeURIComponent(workspaceId)}/commits/${encodeURIComponent(commit!.repo)}/${encodeURIComponent(commit!.sha)}`,
+        { signal },
+      ),
+    enabled: Boolean(commit),
+    retry: false,
+  });
+  const commitDetail = commitQuery.data ?? null;
+  const safeWebUrl = safeForgeUrl(commitDetail?.webUrl);
+  const forgeName = forgeDisplayName(commitDetail?.forge);
+
   // Rendered or raw is for what is open: another file starts rendered.
   const [rawOpen, setRawOpen] = useState<string | null>(null);
   // The card's text is one quiet line; when it has more, "More" opens it (up to a quarter of the reader) and "Less" closes it.
@@ -140,17 +158,27 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   const copyLabel = source ? 'Copy name' : 'Copy path';
   // Said for what was open when it was copied: another card starts without it.
   const [copiedFor, setCopiedFor] = useState<{ open: string; result: 'done' | 'failed' } | null>(null);
-  const copied = copiedFor?.open === open ? copiedFor.result : null;
-  const noun = source ? 'name' : 'path';
+  const copiedKey = `${request}:${open}`;
+  const copied = copiedFor?.open === copiedKey ? copiedFor.result : null;
+  const noun = commit ? 'SHA' : source ? 'name' : 'path';
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const copyPath = () => {
     const finish = (ok: boolean) => {
-      setCopiedFor({ open, result: ok ? 'done' : 'failed' });
+      setCopiedFor({ open: copiedKey, result: ok ? 'done' : 'failed' });
       clearTimeout(copyTimer.current);
       copyTimer.current = setTimeout(() => setCopiedFor(null), 1500);
     };
     safeCopyToClipboard(path).then(finish, () => finish(false));
+  };
+  const copySha = () => {
+    const shaToCopy = commitDetail?.sha ?? commit!.sha;
+    const finish = (ok: boolean) => {
+      setCopiedFor({ open: copiedKey, result: ok ? 'done' : 'failed' });
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopiedFor(null), 1500);
+    };
+    safeCopyToClipboard(shaToCopy).then(finish, () => finish(false));
   };
   const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground';
 
@@ -168,8 +196,14 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-3 pr-2">
         <div className="min-w-0 flex-1">
-          <h2 ref={title} tabIndex={-1} className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground" title={target.title}>{target.title}</h2>
-          <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{path}</p>
+          <h2 ref={title} tabIndex={-1} className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground" title={commitDetail?.subject ?? target.title}>{commitDetail?.subject ?? target.title}</h2>
+          {commit ? (
+            <p className="truncate font-mono text-xs leading-4 text-muted-foreground" title={`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}>
+              {`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}
+            </p>
+          ) : (
+            <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{path}</p>
+          )}
         </div>
         <Menu>
           <MenuTrigger className={quiet} aria-label="More actions" title="More actions">{copied === 'done' ? <Check aria-hidden="true" className="size-4" /> : copied === 'failed' ? <CircleAlert aria-hidden="true" className="size-4 opacity-70" /> : <MoreHorizontal aria-hidden="true" className="size-4" />}</MenuTrigger>
@@ -178,38 +212,72 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
             {large
               ? !covers && <MenuItem onClick={() => onLayout('side')}><PanelRight aria-hidden="true" />Show beside the board</MenuItem>
               : <MenuItem onClick={() => onLayout('large')}><Maximize2 aria-hidden="true" />Show large</MenuItem>}
-            <MenuItem onClick={() => onOpenInDocs(path)}><FileText aria-hidden="true" />Open in Docs</MenuItem>
-            {!source && kind === 'html' && <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}><SquareArrowOutUpRight aria-hidden="true" />Open in new window</MenuItem>}
-            {!source && kind === 'html' && <MenuSeparator />}
-            {canViewSource && <MenuItem onClick={() => setRawOpen(raw ? null : open)}>{raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}{raw ? 'View page' : 'View source'}</MenuItem>}
-            <MenuItem onClick={copyPath}><Copy aria-hidden="true" />{copyLabel}</MenuItem>
-            {!source && <MenuItem render={<a href={`${fileUrl}&download=1`} download={path.split('/').pop()} />}><Download aria-hidden="true" />Download</MenuItem>}
+            {commit ? (
+              <>
+                <MenuItem onClick={copySha}><Copy aria-hidden="true" />Copy sha</MenuItem>
+                {commitDetail?.pushed && safeWebUrl && forgeName && (
+                  <MenuItem render={<a href={safeWebUrl} target="_blank" rel="noopener noreferrer" />}>
+                    <SquareArrowOutUpRight aria-hidden="true" />Open on {forgeName}
+                  </MenuItem>
+                )}
+              </>
+            ) : (
+              <>
+                <MenuItem onClick={() => onOpenInDocs(path)}><FileText aria-hidden="true" />Open in Docs</MenuItem>
+                {!source && kind === 'html' && <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}><SquareArrowOutUpRight aria-hidden="true" />Open in new window</MenuItem>}
+                {!source && kind === 'html' && <MenuSeparator />}
+                {canViewSource && <MenuItem onClick={() => setRawOpen(raw ? null : open)}>{raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}{raw ? 'View page' : 'View source'}</MenuItem>}
+                <MenuItem onClick={copyPath}><Copy aria-hidden="true" />{copyLabel}</MenuItem>
+                {!source && <MenuItem render={<a href={`${fileUrl}&download=1`} download={path.split('/').pop()} />}><Download aria-hidden="true" />Download</MenuItem>}
+              </>
+            )}
           </MenuPopup>
         </Menu>
-        <span role="status" aria-live="polite" className="sr-only">{copied === 'done' ? `${noun === 'name' ? 'Name' : 'Path'} copied` : copied === 'failed' ? `Could not copy the ${noun}` : ''}</span>
+        <span role="status" aria-live="polite" className="sr-only">
+          {copied === 'done'
+            ? commit
+              ? 'SHA copied'
+              : `${noun === 'name' ? 'Name' : 'Path'} copied`
+            : copied === 'failed'
+              ? commit
+                ? 'Could not copy the SHA'
+                : `Could not copy the ${noun}`
+              : ''}
+        </span>
         <button type="button" className={quiet} aria-label="Close" title="Close" onClick={onClose}><X aria-hidden="true" className="size-4" /></button>
       </header>
       <div className="min-h-0 flex-1">
-        <DocumentViewer
-          key={open}
-          fill
-          fillFrame
-          chromeless
-          title={path}
-          preview={data}
-          raw={raw}
-          fileUrl={fileUrl}
-          links={links}
-          status={<>
-            {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
-            {preview.isError && <p role="alert" className="text-sm text-destructive">
-              {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
-              <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
-            </p>}
-          </>}
-        />
+        {commit ? (
+          <CommitReaderView
+            key={open}
+            workspaceId={workspaceId}
+            repo={commit.repo}
+            sha={commit.sha}
+            query={commitQuery}
+            onOpenFile={onOpenFile}
+          />
+        ) : (
+          <DocumentViewer
+            key={open}
+            fill
+            fillFrame
+            chromeless
+            title={path}
+            preview={data}
+            raw={raw}
+            fileUrl={fileUrl}
+            links={links}
+            status={<>
+              {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
+              {preview.isError && <p role="alert" className="text-sm text-destructive">
+                {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
+                <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
+              </p>}
+            </>}
+          />
+        )}
       </div>
-      {(target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">
+      {!commit && (target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">
         {target.text && <div
           id="board-reader-note"
           ref={noteRef}

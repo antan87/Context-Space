@@ -285,6 +285,70 @@ describe('buildBoardNav', () => {
       expect(filtered[0].title).toBe('Commits');
       expect(filtered[0].items[0].title).toBe('Add CSV stream formatter');
     });
+
+    it('normalizes uppercase commit SHAs in readerTarget.commit.sha', () => {
+      const testArea: BoardArea = {
+        ...sampleAreas[0],
+        repos: [
+          {
+            repo: { repo: 'billing', commits: [], more: 0 },
+            commits: [
+              {
+                sha: 'ABCDEF1234567890',
+                subject: 'Uppercase SHA commit',
+                author: 'Anna',
+                at: '2026-10-24T12:00:00Z',
+              },
+            ],
+            cards: [],
+          },
+        ],
+      };
+      const items = buildBoardNav([testArea], { mode: 'category' })
+        .flatMap((s) => s.items)
+        .filter((i) => i.category === 'commits');
+      expect(items).toHaveLength(1);
+      expect(items[0].readerTarget?.commit?.sha).toBe('abcdef1234567890');
+      expect(items[0].readerTarget?.path).toBe('billing · abcdef1');
+    });
+
+    it('omits readerTarget for invalid commit node IDs (such as repo ".." or "a/b")', () => {
+      const testArea: BoardArea = {
+        ...sampleAreas[0],
+        repos: [
+          {
+            repo: { repo: '..', commits: [], more: 0 },
+            commits: [
+              {
+                sha: 'a91f2e0c4d5b',
+                subject: 'Dot dot repo',
+                author: 'Anna',
+                at: '2026-10-24T12:00:00Z',
+              },
+            ],
+            cards: [],
+          },
+          {
+            repo: { repo: 'a/b', commits: [], more: 0 },
+            commits: [
+              {
+                sha: 'b2c3d4e5f678',
+                subject: 'Slash repo',
+                author: 'Anna',
+                at: '2026-10-24T12:00:00Z',
+              },
+            ],
+            cards: [],
+          },
+        ],
+      };
+      const items = buildBoardNav([testArea], { mode: 'category' })
+        .flatMap((s) => s.items)
+        .filter((i) => i.category === 'commits');
+      expect(items).toHaveLength(2);
+      expect(items[0].readerTarget).toBeUndefined();
+      expect(items[1].readerTarget).toBeUndefined();
+    });
   });
 
   describe('in area mode', () => {
@@ -439,6 +503,24 @@ describe('with the areas the Board builds', () => {
           expect(found?.closed.has(item.nodeId!) || found?.open(item.nodeId!).has(item.nodeId!), `${mode}: ${item.id} aims at ${item.nodeId}, which ${item.areaId} does not draw, even with its row open`).toBe(true);
         }
       }
+    }
+  });
+
+  it('attaches commit readerTarget with repo and sha to commit items', () => {
+    const areas = buildBoardAreas({ plan, documents, news, board });
+    const commitItems = buildBoardNav(areas, { mode: 'category' })
+      .flatMap((section) => section.items)
+      .filter((item) => item.category === 'commits');
+
+    expect(commitItems.length).toBeGreaterThan(0);
+    for (const item of commitItems) {
+      expect(item.readerTarget).toBeDefined();
+      expect(item.readerTarget?.commit).toBeDefined();
+      expect(item.readerTarget?.commit?.repo).toBe('billing');
+      expect(item.readerTarget?.commit?.sha).toMatch(/^[0-9a-f]{7,64}$/);
+      expect(item.readerTarget?.path).toBe(`billing · ${item.readerTarget?.commit?.sha.slice(0, 7)}`);
+      expect(item.readerTarget?.title).toBe(item.title);
+      expect(item.readerTarget?.card).toBe(item.nodeId);
     }
   });
 });
