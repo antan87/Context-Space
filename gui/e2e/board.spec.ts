@@ -2474,9 +2474,11 @@ test.describe('Board, rows by step', () => {
     await short.getByRole('heading').click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(reading).toHaveCount(0);
-    // A commit does nothing for now
+    // A commit opens in the reader
     await rowButton(page, /NexusFlow/).first().click();
     await inArea(page).getByRole('article', { name: /^a91f2e0/ }).first().click();
+    await expect(reading).toBeVisible();
+    await page.keyboard.press('Escape');
     await expect(reading).toHaveCount(0);
   });
 
@@ -3367,7 +3369,7 @@ test.describe('Board index sidebar', () => {
 
     // By an author: the commit that Anna wrote
     await search.fill('Anna');
-    await expect(nav.getByRole('button', { name: /Write the CSV writer/ })).toBeVisible();
+    await expect(nav.getByRole('button', { name: /^Write the CSV writer/ })).toBeVisible();
     await expect(nav.getByRole('button', { name: /Architecture picture/ })).toBeHidden();
     await expect(nav.getByRole('button', { name: /Export memory leak note/ })).toBeHidden();
 
