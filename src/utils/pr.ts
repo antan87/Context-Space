@@ -1,9 +1,10 @@
 /**
  * @module utils/pr
- * Pull-request helpers: detect the GitHub CLI, parse a git remote URL into its
- * host/owner/repo, and construct a "create PR / MR" compare URL for the common
- * forges. Pure functions (`parseRemoteUrl`, `buildCompareUrl`) are unit-tested;
- * `detectGh`/`createPrWithGh` shell out to `gh`.
+ * Pull-request and commit helpers: detect the GitHub CLI, parse a git remote URL
+ * into its host/owner/repo, and construct a "create PR / MR" compare URL or
+ * commit URL for the common forges. Pure functions (`parseRemoteUrl`,
+ * `buildCompareUrl`, `buildCommitUrl`) are unit-tested; `detectGh`/`createPrWithGh`
+ * shell out to `gh`.
  */
 
 import { execa } from 'execa';
@@ -133,6 +134,40 @@ export function buildCompareUrl(remote: ParsedRemote, baseBranch: string, headBr
       );
     case 'bitbucket':
       return `https://${remote.host}/${remote.owner}/${remote.repo}/pull-requests/new?source=${enc(headBranch)}&dest=${enc(baseBranch)}`;
+    default:
+      return null;
+  }
+}
+
+function encodePathSegments(rawPath: string): string {
+  return rawPath
+    .split('/')
+    .filter(Boolean)
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+}
+
+/**
+ * Builds a commit URL for a forge, or `null` for an unknown forge.
+ * Path segments are encoded safely.
+ */
+export function buildCommitUrl(remote: ParsedRemote, sha: string): string | null {
+  const enc = encodeURIComponent;
+  const owner = encodePathSegments(remote.owner);
+  const repo = enc(remote.repo);
+  const encSha = enc(sha);
+
+  switch (remote.kind) {
+    case 'github':
+      return `https://${remote.host}/${owner}/${repo}/commit/${encSha}`;
+    case 'gitlab':
+      return `https://${remote.host}/${owner}/${repo}/-/commit/${encSha}`;
+    case 'azure': {
+      const project = remote.project ? `${enc(remote.project)}/` : '';
+      return `https://dev.azure.com/${owner}/${project}_git/${repo}/commit/${encSha}`;
+    }
+    case 'bitbucket':
+      return `https://${remote.host}/${owner}/${repo}/commits/${encSha}`;
     default:
       return null;
   }

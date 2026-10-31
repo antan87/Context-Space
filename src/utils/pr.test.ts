@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseRemoteUrl, buildCompareUrl } from './pr.js';
+import { parseRemoteUrl, buildCompareUrl, buildCommitUrl } from './pr.js';
 
 describe('parseRemoteUrl', () => {
   const cases: Array<[string, { host: string; owner: string; repo: string; kind: string; project?: string }]> = [
@@ -54,5 +54,47 @@ describe('buildCompareUrl', () => {
   it('returns null for an unknown forge', () => {
     const r = parseRemoteUrl('https://git.internal.corp/team/repo.git')!;
     expect(buildCompareUrl(r, 'main', 'feature/x')).toBeNull();
+  });
+});
+
+describe('buildCommitUrl', () => {
+  it('builds a GitHub commit URL', () => {
+    const r = parseRemoteUrl('https://github.com/owner/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://github.com/owner/repo/commit/a1b2c3d4e5f6',
+    );
+  });
+
+  it('builds a GitLab commit URL', () => {
+    const r = parseRemoteUrl('https://gitlab.com/group/subgroup/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://gitlab.com/group/subgroup/repo/-/commit/a1b2c3d4e5f6',
+    );
+  });
+
+  it('builds an Azure DevOps commit URL', () => {
+    const r = parseRemoteUrl('https://dev.azure.com/myorg/myproject/_git/myrepo')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://dev.azure.com/myorg/myproject/_git/myrepo/commit/a1b2c3d4e5f6',
+    );
+  });
+
+  it('builds a Bitbucket commit URL', () => {
+    const r = parseRemoteUrl('git@bitbucket.org:team/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://bitbucket.org/team/repo/commits/a1b2c3d4e5f6',
+    );
+  });
+
+  it('returns null for an unknown forge', () => {
+    const r = parseRemoteUrl('https://git.internal.corp/team/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBeNull();
+  });
+
+  it('encodes special characters in path segments safely', () => {
+    const r = parseRemoteUrl('https://github.com/my%20org/my%20repo.git')!;
+    expect(buildCommitUrl(r, 'sha#123')).toBe(
+      'https://github.com/my%20org/my%20repo/commit/sha%23123',
+    );
   });
 });
