@@ -15,6 +15,8 @@ export type MockDataOptions = {
   harnessesData: any;
   workflowsTemplatesData: any;
   servicesData: any;
+  /** The full sidebar starts docked beside the page, as most specs expect. False starts on the slim rail, the app's default. */
+  sidebarDocked: boolean;
 };
 
 export const test = base.extend<MockDataOptions & { setupMocks: void }>({
@@ -78,6 +80,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
   }, { option: true }],
   workflowsTemplatesData: [{ templates: [] }, { option: true }],
   servicesData: [{ services: [], orchestrationTools: [], runningState: [], runningOrchestrators: [] }, { option: true }],
+  sidebarDocked: [true, { option: true }],
 
   setupMocks: [async ({
     page,
@@ -94,9 +97,19 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     harnessesData,
     workflowsTemplatesData,
     servicesData,
+    sidebarDocked,
   }, use) => {
     const json = (body: unknown) => async (route: Route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+
+    // Most specs drive the full sidebar, which the app only docks once pinned. Seeded on the first load of a tab only, so a
+    // spec that pins or collapses it keeps that choice through a reload.
+    await page.addInitScript((docked) => {
+      try {
+        if (docked && !sessionStorage.getItem('e2e-sidebar-seeded')) localStorage.setItem('ctxspace_sidebar_docked_v1', 'true');
+        sessionStorage.setItem('e2e-sidebar-seeded', '1');
+      } catch { /* no storage */ }
+    }, sidebarDocked);
 
     // How the plan works opens by itself on a first visit; a spec about it clears this.
     await page.addInitScript(() => { try { window.localStorage.setItem('contextspace.plan.how-it-works-seen', '1'); } catch { /* no storage */ } });

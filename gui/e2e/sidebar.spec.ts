@@ -132,6 +132,8 @@ test.describe('Advanced tools', () => {
       Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } });
     });
     await page.goto('/#/overview');
+    // Nothing can be saved, so the sidebar is the rail, and the full list opens as a sheet.
+    await page.getByRole('button', { name: 'Show workspaces (z)' }).click();
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'false');
     await toggle(page).click();
     await expect(toggle(page)).toHaveAttribute('aria-expanded', 'true');

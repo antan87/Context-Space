@@ -276,7 +276,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 }
 
 test.describe('constrained windows', () => {
-  test.use({ workspacesData: [workspace], viewport: { width: 900, height: 800 } });
+  test.use({ workspacesData: [workspace], sidebarDocked: false, viewport: { width: 900, height: 800 } });
 
   test('keep the task in view at 900×800 without horizontal scrolling', async ({ page }) => {
     await mockWorkspace(page);
@@ -289,16 +289,18 @@ test.describe('constrained windows', () => {
     for (const name of ['Plan', 'Code', 'Docs', 'Services']) {
       await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInViewport();
     }
-    // The rail still expands on request, by keyboard.
-    await page.getByRole('button', { name: /Expand/ }).focus();
+    // The full list still opens on request, by keyboard.
+    await page.getByRole('button', { name: 'Show workspaces (z)' }).focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByRole('button', { name: /^Collapse/ })).toBeVisible();
+    await expect(page.getByPlaceholder('Filter...')).toBeVisible();
   });
 
-  test('keep the full sidebar in a 1024-wide window', async ({ page }) => {
-    // Windows CI clamps the desktop window to a 1024×768 screen; the rail is only for narrower windows.
+  test('keep the slim rail in a 1024-wide window, with the full list one press away', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto('/#/overview');
+    await expect(page.locator('aside[data-sidebar="rail"]')).toBeVisible();
+    await expect(page.locator('aside[data-sidebar="full"]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show workspaces (z)' }).click();
     await expect(page.getByText('ContextSpace', { exact: true }).first()).toBeVisible();
   });
 

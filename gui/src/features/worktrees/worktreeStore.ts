@@ -1,11 +1,13 @@
 /**
- * State store for active worktree navigation, rail collapse ergonomics, and metadata overrides.
+ * State store for active worktree navigation, whether the full sidebar is docked, and metadata overrides.
  * File: gui/src/features/worktrees/worktreeStore.ts
  */
 import { useState, useCallback, useEffect } from 'react';
 import type { WorktreeDescriptor } from './types.js';
 
-const STORAGE_KEY_COLLAPSED = 'ctxspace_sidebar_collapsed';
+// The sidebar is the slim rail unless the person pinned the full list open. Only the pinned choice is stored (absent
+// means the rail), and the old `ctxspace_sidebar_collapsed` is no longer read: it meant the opposite default.
+const STORAGE_KEY_DOCKED = 'ctxspace_sidebar_docked_v1';
 const STORAGE_KEY_TITLES = 'ctxspace_worktree_titles';
 
 export interface WorktreeTitleOverride {
@@ -33,9 +35,9 @@ export function saveWorktreeTitle(worktreeId: string, title: string, intent?: st
 }
 
 export function useWorktreeNavigationState() {
-  const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
+  const [isDocked, setIsDocked] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY_COLLAPSED) === 'true';
+      return localStorage.getItem(STORAGE_KEY_DOCKED) === 'true';
     } catch {
       return false;
     }
@@ -55,30 +57,19 @@ export function useWorktreeNavigationState() {
         } catch (err) {
           void err;
         }
-      } else if (e.key === STORAGE_KEY_COLLAPSED) {
-        setIsCollapsed(e.newValue === 'true');
+      } else if (e.key === STORAGE_KEY_DOCKED) {
+        setIsDocked(e.newValue === 'true');
       }
     };
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
-  const toggleCollapsed = useCallback(() => {
-    setIsCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(STORAGE_KEY_COLLAPSED, String(next));
-      } catch (err) {
-        void err;
-      }
-      return next;
-    });
-  }, []);
-
-  const setCollapsed = useCallback((collapsed: boolean) => {
-    setIsCollapsed(collapsed);
+  const setDocked = useCallback((docked: boolean) => {
+    setIsDocked(docked);
     try {
-      localStorage.setItem(STORAGE_KEY_COLLAPSED, String(collapsed));
+      if (docked) localStorage.setItem(STORAGE_KEY_DOCKED, 'true');
+      else localStorage.removeItem(STORAGE_KEY_DOCKED);
     } catch (err) {
       void err;
     }
@@ -100,9 +91,8 @@ export function useWorktreeNavigationState() {
   }, []);
 
   return {
-    isCollapsed,
-    setIsCollapsed: setCollapsed,
-    toggleCollapsed,
+    isDocked,
+    setDocked,
     expandedRepos,
     toggleRepo,
     searchFilter,
