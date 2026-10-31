@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
 import { serve } from '@hono/node-server';
-import { registerViewRoutes } from './view-routes.js';
+import { registerViewRoutes, ESCAPE_MESSAGE, FIT_SCRIPT, createHtmlRelayStream } from './view-routes.js';
 import { ViewTokenStore } from '../services/workspace-file-stream.js';
 import * as fsSafety from '../resources/fs-safety.js';
 
@@ -444,6 +444,97 @@ describe('view-routes', () => {
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(res.headers.get('access-control-allow-credentials')).toBeNull();
       expect(res.headers.get('accept-ranges')).toBe('bytes');
+    });
+
+    it('exports ESCAPE_MESSAGE matching the frontend expectation', () => {
+      expect(ESCAPE_MESSAGE).toBe('contextspace:escape');
+    });
+
+    it('injects FIT_SCRIPT into HTML responses when Sec-Fetch-Dest: iframe or frame=1 is set', async () => {
+      const htmlContent = '<!doctype html><html><head><title>Test</title></head><body><h1>Hello</h1></body></html>';
+      await fs.writeFile(path.join(tmpDir, 'page.html'), htmlContent);
+      const linkRes = await app.request('/api/workspace/test-ws/documents/view-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'page.html' }),
+      });
+      const { url } = await linkRes.json();
+
+      // 1. Raw request without iframe header or frame=1
+      const rawRes = await app.request(url);
+      expect(rawRes.status).toBe(200);
+      expect(rawRes.headers.get('content-length')).toBe(String(Buffer.byteLength(htmlContent)));
+      const rawBody = await rawRes.text();
+      expect(rawBody).toBe(htmlContent);
+      expect(rawBody).not.toContain(FIT_SCRIPT);
+
+      // 2. Request with Sec-Fetch-Dest: iframe
+      const iframeRes = await app.request(url, {
+        headers: { 'sec-fetch-dest': 'iframe' },
+      });
+      expect(iframeRes.status).toBe(200);
+      expect(iframeRes.headers.get('content-length')).toBeNull(); // chunked
+      const iframeBody = await iframeRes.text();
+      expect(iframeBody).toContain(`<script>${FIT_SCRIPT}</script>`);
+      expect(iframeBody).toContain('<head><script>');
+
+      // 3. Request with ?frame=1
+      const queryRes = await app.request(`${url}?frame=1`);
+      expect(queryRes.status).toBe(200);
+      const queryBody = await queryRes.text();
+      expect(queryBody).toContain(`<script>${FIT_SCRIPT}</script>`);
+    });
+
+    it('sets Content-Disposition when ?download=1 is requested', async () => {
+      await fs.writeFile(path.join(tmpDir, 'report.html'), '<h1>Report</h1>');
+      const linkRes = await app.request('/api/workspace/test-ws/documents/view-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'report.html' }),
+      });
+      const { url } = await linkRes.json();
+
+      const dlRes = await app.request(`${url}?download=1`);
+      expect(dlRes.status).toBe(200);
+      expect(dlRes.headers.get('content-disposition')).toBe('attachment; filename="report.html"');
+    });
+
+    it('createHtmlRelayStream injects script correctly across various head/html formats', async () => {
+      async function streamToString(readable: ReadableStream<Uint8Array>): Promise<string> {
+        const reader = readable.getReader();
+        const chunks: Uint8Array[] = [];
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) chunks.push(value);
+        }
+        return Buffer.concat(chunks).toString('utf-8');
+      }
+
+      function toStream(text: string): ReadableStream<Uint8Array> {
+        const bytes = Buffer.from(text, 'utf-8');
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        });
+      }
+
+      // Case A: <head> with uppercase and attributes
+      const htmlA = '<html><HEAD class="dark"><title>Hi</title></HEAD><body></body></html>';
+      const outA = await streamToString(createHtmlRelayStream(toStream(htmlA), 'alert(1)'));
+      expect(outA).toBe('<html><HEAD class="dark"><script>alert(1)</script><title>Hi</title></HEAD><body></body></html>');
+
+      // Case B: no <head>, but <html>
+      const htmlB = '<html><body><h1>No head</h1></body></html>';
+      const outB = await streamToString(createHtmlRelayStream(toStream(htmlB), 'alert(1)'));
+      expect(outB).toBe('<html><script>alert(1)</script><body><h1>No head</h1></body></html>');
+
+      // Case C: bare HTML without html tag
+      const htmlC = '<div>Just a fragment</div>';
+      const outC = await streamToString(createHtmlRelayStream(toStream(htmlC), 'alert(1)'));
+      expect(outC).toBe('<script>alert(1)</script><div>Just a fragment</div>');
     });
   });
 });

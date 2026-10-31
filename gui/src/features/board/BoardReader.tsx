@@ -16,6 +16,7 @@ import { documentFileUrl, type ReaderTarget } from './boardActions.js';
 import { LARGE_WINDOW, type ReaderLayout } from './boardReaderLayout.js';
 import { forgeDisplayName, safeForgeUrl, type CommitDetail } from './commitContext.js';
 import { CommitReaderView } from './CommitReaderView.js';
+import { ReaderPage } from './ReaderPage.js';
 
 /** How many frames the reader keeps trying to take the keyboard: something that is closing (a dialog) may hold it back for a moment. */
 const FOCUS_FRAMES = 30;
@@ -60,6 +61,11 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   const { path, source, commit } = target;
   // What is open: a commit, a source document, or a file.
   const open = commit ? `commit:${commit.repo}:${commit.sha}` : source ? `source:${source}` : path;
+  const isHtml = !commit && !source && (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm'));
+  const [activeViewUrl, setActiveViewUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setActiveViewUrl(null);
+  }, [open]);
 
   const preview = useQuery({
     queryKey: ['board-reader', workspaceId, open],
@@ -70,7 +76,7 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
       if (read.content === undefined) throw new Error('This source document is a link, not text.');
       return { name: path, kind: 'markdown', content: read.content };
     },
-    enabled: !commit,
+    enabled: !commit && !isHtml,
     retry: false,
   });
   const data = preview.data ?? null;
@@ -153,7 +159,7 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   }, [covering, take]);
 
   const kind = data?.kind;
-  const canViewSource = kind === 'markdown' || kind === 'html';
+  const canViewSource = isHtml || kind === 'markdown' || kind === 'html';
   // A source document's "path" is its stored name.
   const copyLabel = source ? 'Copy name' : 'Copy path';
   // Said for what was open when it was copied: another card starts without it.
@@ -224,11 +230,36 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
             ) : (
               <>
                 <MenuItem onClick={() => onOpenInDocs(path)}><FileText aria-hidden="true" />Open in Docs</MenuItem>
-                {!source && kind === 'html' && <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}><SquareArrowOutUpRight aria-hidden="true" />Open in new window</MenuItem>}
-                {!source && kind === 'html' && <MenuSeparator />}
-                {canViewSource && <MenuItem onClick={() => setRawOpen(raw ? null : open)}>{raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}{raw ? 'View page' : 'View source'}</MenuItem>}
+                {!source && isHtml && (
+                  <MenuItem render={<a href={activeViewUrl ?? `${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
+                    <SquareArrowOutUpRight aria-hidden="true" />Open in browser
+                  </MenuItem>
+                )}
+                {!source && !isHtml && kind === 'html' && (
+                  <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
+                    <SquareArrowOutUpRight aria-hidden="true" />Open in new window
+                  </MenuItem>
+                )}
+                {!source && (isHtml || kind === 'html') && <MenuSeparator />}
+                {canViewSource && (
+                  <MenuItem onClick={() => setRawOpen(raw ? null : open)}>
+                    {raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}
+                    {raw ? 'View page' : 'View source'}
+                  </MenuItem>
+                )}
                 <MenuItem onClick={copyPath}><Copy aria-hidden="true" />{copyLabel}</MenuItem>
-                {!source && <MenuItem render={<a href={`${fileUrl}&download=1`} download={path.split('/').pop()} />}><Download aria-hidden="true" />Download</MenuItem>}
+                {!source && (
+                  <MenuItem
+                    render={
+                      <a
+                        href={isHtml && activeViewUrl ? `${activeViewUrl}?download=1` : `${fileUrl}&download=1`}
+                        download={path.split('/').pop()}
+                      />
+                    }
+                  >
+                    <Download aria-hidden="true" />Download
+                  </MenuItem>
+                )}
               </>
             )}
           </MenuPopup>
@@ -255,6 +286,14 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
             sha={commit.sha}
             query={commitQuery}
             onOpenFile={onOpenFile}
+          />
+        ) : isHtml ? (
+          <ReaderPage
+            key={open}
+            workspaceId={workspaceId}
+            path={path}
+            raw={raw}
+            onViewUrlReady={setActiveViewUrl}
           />
         ) : (
           <DocumentViewer

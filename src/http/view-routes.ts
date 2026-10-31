@@ -19,6 +19,119 @@ import {
 } from '../services/workspace-file-stream.js';
 
 /**
+ * What the trusted page's frame sends the app when Escape is pressed in it.
+ * Must match the message in gui/src/features/work-guidance/previewPolicy.ts.
+ */
+export const ESCAPE_MESSAGE = 'contextspace:escape';
+
+/**
+ * Injected into HTML documents served inside an iframe to fit wider pages and relay Escape.
+ */
+export const FIT_SCRIPT = `(function(){var frame=0,seen=new WeakSet(),watcher=window.ResizeObserver?new ResizeObserver(later):null;function watch(el){if(watcher&&!seen.has(el)){seen.add(el);watcher.observe(el)}}function fit(){var body=document.body,root=document.documentElement;if(!body)return;watch(root);watch(body);for(var i=0;i<body.children.length&&i<40;i++)watch(body.children[i]);body.style.zoom='';var room=root.clientWidth,wide=Math.max(root.scrollWidth,body.scrollWidth);if(room>0&&wide>room+1)body.style.zoom=String(Math.max(0.5,room/wide))}function later(){cancelAnimationFrame(frame);frame=requestAnimationFrame(fit)}addEventListener('resize',later);addEventListener('load',later,true);document.addEventListener('DOMContentLoaded',later);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(later);[150,600,1800].forEach(function(ms){setTimeout(later,ms)});addEventListener('keydown',function(event){if(event.key==='Escape'&&!event.defaultPrevented)parent.postMessage('${ESCAPE_MESSAGE}','*')})})()`;
+
+/**
+ * Creates a stream that injects FIT_SCRIPT into HTML responses right after <head> or <html>.
+ * Scans only up to 64 KB, then passes all subsequent chunks directly with zero overhead.
+ */
+export function createHtmlRelayStream(
+  sourceStream: ReadableStream<Uint8Array>,
+  scriptContent: string = FIT_SCRIPT,
+): ReadableStream<Uint8Array> {
+  const scriptTag = `<script>${scriptContent}</script>`;
+  const scriptBytes = Buffer.from(scriptTag, 'utf-8');
+  let injected = false;
+  let bufferedChunks: Uint8Array[] = [];
+  let bufferedLen = 0;
+  const MAX_HEAD_SCAN_BYTES = 64 * 1024;
+
+  const reader = sourceStream.getReader();
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (injected) {
+        const { value, done } = await reader.read();
+        if (done) {
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+        return;
+      }
+
+      while (!injected) {
+        const { value, done } = await reader.read();
+        if (done) {
+          const combined = Buffer.concat(bufferedChunks);
+          const str = combined.toString('utf-8');
+          const headIndex = str.search(/<head\b[^>]*>/i);
+          if (headIndex !== -1) {
+            const match = str.match(/<head\b[^>]*>/i)![0];
+            const insertPos = headIndex + match.length;
+            controller.enqueue(
+              Buffer.concat([
+                combined.subarray(0, insertPos),
+                scriptBytes,
+                combined.subarray(insertPos),
+              ]),
+            );
+          } else {
+            const htmlIndex = str.search(/<html\b[^>]*>/i);
+            if (htmlIndex !== -1) {
+              const match = str.match(/<html\b[^>]*>/i)![0];
+              const insertPos = htmlIndex + match.length;
+              controller.enqueue(
+                Buffer.concat([
+                  combined.subarray(0, insertPos),
+                  scriptBytes,
+                  combined.subarray(insertPos),
+                ]),
+              );
+            } else {
+              controller.enqueue(Buffer.concat([scriptBytes, combined]));
+            }
+          }
+          injected = true;
+          controller.close();
+          return;
+        }
+
+        bufferedChunks.push(value);
+        bufferedLen += value.length;
+
+        const combined = Buffer.concat(bufferedChunks);
+        const str = combined.toString('utf-8');
+        const headMatch = str.match(/<head\b[^>]*>/i);
+        if (headMatch && headMatch.index !== undefined) {
+          const insertPos = headMatch.index + headMatch[0].length;
+          const headChunk = Buffer.concat([
+            combined.subarray(0, insertPos),
+            scriptBytes,
+          ]);
+          controller.enqueue(headChunk);
+          const rest = combined.subarray(insertPos);
+          if (rest.length > 0) {
+            controller.enqueue(rest);
+          }
+          bufferedChunks = [];
+          injected = true;
+          return;
+        }
+
+        if (bufferedLen >= MAX_HEAD_SCAN_BYTES) {
+          controller.enqueue(Buffer.concat([scriptBytes, combined]));
+          bufferedChunks = [];
+          injected = true;
+          return;
+        }
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
+}
+
+/**
  * Validates that the Host header corresponds to loopback/localhost only.
  * Rejects external DNS hostnames like evil.test, arbitrary IPs, or unbracketed IPv6.
  */
@@ -243,11 +356,15 @@ export function registerViewRoutes(
         const start = range.start;
         const end = range.end;
         const contentLength = end - start + 1;
+        const isDownload = c.req.query('download') === '1';
         const headers: Record<string, string> = {
           ...commonHeaders,
           'Content-Type': mime,
           'Content-Range': `bytes ${start}-${end}/${opened.size}`,
           'Content-Length': String(contentLength),
+          ...(isDownload
+            ? { 'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"` }
+            : {}),
         };
         if (c.req.method === 'HEAD') {
           return new Response(null, { status: 206, headers });
@@ -257,18 +374,29 @@ export function registerViewRoutes(
         return new Response(stream, { status: 206, headers });
       }
 
+      const isIframe = c.req.header('sec-fetch-dest') === 'iframe' || c.req.query('frame') === '1';
+      const isHtml = mime.startsWith('text/html');
+      const isDownload = c.req.query('download') === '1';
+
       const headers: Record<string, string> = {
         ...commonHeaders,
         'Content-Type': mime,
-        'Content-Length': String(opened.size),
+        ...(isDownload
+          ? { 'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"` }
+          : {}),
       };
+
+      if (!isIframe || !isHtml) {
+        headers['Content-Length'] = String(opened.size);
+      }
 
       if (c.req.method === 'HEAD' || opened.size === 0) {
         return new Response(null, { status: 200, headers });
       }
 
       handedToStream = true;
-      const stream = createFileByteStream(opened.handle, 0, opened.size - 1, c.req.raw?.signal);
+      const rawStream = createFileByteStream(opened.handle, 0, opened.size - 1, c.req.raw?.signal);
+      const stream = isIframe && isHtml ? createHtmlRelayStream(rawStream) : rawStream;
       return new Response(stream, { status: 200, headers });
     } finally {
       if (!handedToStream) {

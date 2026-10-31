@@ -1,5 +1,6 @@
 import { createContext } from 'react';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
+import { apiFetch } from '../../lib/api/client.js';
 import { API_BASE } from '../../lib/apiBase.js';
 import { agoText } from '../plan/whatsNew.js';
 import { fileTitle } from './boardDock.js';
@@ -56,6 +57,28 @@ export const BoardReadingContext = createContext<string | null>(null);
 /** Where the app serves a file of the workspace from, as the documents panel reads it. */
 export const documentFileUrl = (workspaceId: string, path: string) =>
   `${API_BASE}/api/workspace/${encodeURIComponent(workspaceId)}/documents/file?name=${encodeURIComponent(path)}`;
+
+export interface DocumentViewLinkResult {
+  token: string;
+  url: string;
+  scope: string;
+}
+
+/** Requests a read-only scoped view token and URL (/view/<token>/<path>) from the backend. */
+export async function requestDocumentViewLink(
+  workspaceId: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<DocumentViewLinkResult> {
+  return apiFetch<DocumentViewLinkResult>(
+    `/api/workspace/${encodeURIComponent(workspaceId)}/documents/view-link`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+      signal,
+    },
+  );
+}
 
 /**
  * What the links in the text of a card may open: a file of the workspace opens in the reader, by its path from the workspace
