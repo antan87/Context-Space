@@ -1,14 +1,16 @@
 import * as path from 'node:path';
+import type * as fs from 'node:fs/promises';
 import { readPlanningNotes, savePlanningNotes } from '../core/planning-notes.js';
 import type { Hono, Context, Handler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { addWorkDocument, getWorkContext, readWorkDocument, updateWorkDocument, updateWorkGuidance } from '../core/work-guidance.js';
 import { loadWorkspaceLifecycle, updateLifecyclePlan } from '../core/lifecycle.js';
-import { createRootFolder, listRootDocuments, moveRootDocument, readRootDocument, writeRootDocument } from '../core/root-documents.js';
+import { createRootFolder, listRootDocuments, moveRootDocument, openRootDocumentForStream, previewRootDocument, readRootDocument, writeRootDocument } from '../core/root-documents.js';
 import { refreshPlanningContext } from '../core/planning-refresh.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
+import { createFileByteStream } from '../services/workspace-file-stream.js';
 
 /** The workspace-relative folders that hold a repository's checkout. A repository outside the workspace folder has none. */
 async function repositoryFolders(root: string): Promise<string[]> {
@@ -45,8 +47,7 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
     return listRootDocuments(root, folder, recursive, { repoFolders: await repositoryFolders(root) });
   }));
   app.get('/api/workspace/:id/documents/preview', handle(async (root, c) => {
-    const { bytes: _bytes, ...document } = await readRootDocument(root, c.req.query('name') ?? '');
-    return document;
+    return previewRootDocument(root, c.req.query('name') ?? '', { metaOnly: c.req.query('meta') === '1' });
   }));
   const documentBodyLimit = bodyLimit({ maxSize: 2_000_000 });
   app.put('/api/workspace/:id/documents', documentBodyLimit, handle(async (root, c) => {
@@ -70,15 +71,18 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
     return moveRootDocument(root, input.from, input.to);
   }));
   app.get('/api/workspace/:id/documents/file', async (c) => {
+    let docHandle: fs.FileHandle | undefined;
     try {
       const root = await resolveWorkspace(c.req.param('id'));
       if (!root) return c.json({ error: 'Workspace not found.' }, 404);
       const download = c.req.query('download') === '1';
       const open = c.req.query('open') === '1';
-      const document = await readRootDocument(root, c.req.query('name') ?? '', download);
-      c.header('Content-Type', document.mime);
+      const doc = await openRootDocumentForStream(root, c.req.query('name') ?? '');
+      docHandle = doc.handle;
+      c.header('Content-Type', doc.mime);
       c.header('X-Content-Type-Options', 'nosniff');
       c.header('Cache-Control', 'no-store');
+      c.header('Content-Length', String(doc.size));
       if (open) {
         // "Open in browser" renders the document as authored: scripts, remote stylesheets, webfonts
         // and images all work, which is the whole point, since the in-app preview deliberately
@@ -103,13 +107,21 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
         // Default delivery stays locked down: never executes, never renders in the app origin.
         c.header('Content-Security-Policy', "sandbox; default-src 'none'");
       }
-      const filename = document.name.split('/').pop() ?? document.name;
+      const filename = doc.name.split('/').pop() ?? doc.name;
       // `download=1` always attaches, `open=1` always renders, and otherwise only non-HTML,
       // non-download kinds render in place.
-      const inline = !download && (open || (document.kind !== 'download' && document.kind !== 'html'));
+      const inline = !download && (open || (doc.kind !== 'download' && doc.kind !== 'html'));
       c.header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(filename).replace(/'/g, '%27')}`);
-      return c.body(new Uint8Array(document.bytes));
+      if (doc.size === 0) {
+        await docHandle.close().catch(() => {});
+        return c.body(new Uint8Array(0));
+      }
+      const stream = createFileByteStream(doc.handle, 0, doc.size - 1, c.req.raw?.signal);
+      return c.body(stream as any);
     } catch (error) {
+      if (docHandle) {
+        await docHandle.close().catch(() => {});
+      }
       return c.json({ error: error instanceof Error ? error.message : 'Unable to open document.' }, 400);
     }
   });

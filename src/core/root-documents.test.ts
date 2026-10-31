@@ -1,8 +1,18 @@
-import { beforeEach, afterEach, expect, it } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { createRootFolder, listRootDocuments, moveRootDocument, openableDocumentName, readRootDocument, writeRootDocument } from './root-documents.js';
+import {
+  createRootFolder,
+  listRootDocuments,
+  moveRootDocument,
+  openableDocumentName,
+  openRootDocumentForStream,
+  previewRootDocument,
+  readRootDocument,
+  writeRootDocument,
+} from './root-documents.js';
+import * as fsSafety from '../resources/fs-safety.js';
 
 let root: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'root-docs-')); });
@@ -304,3 +314,78 @@ it('checks a document name by the rules the panel opens files by, without touchi
     expect(() => openableDocumentName(name), name).toThrow();
   }
 });
+
+it('previews binary files and metaOnly requests from fstat with zero bytes read and no 25 MB cap', async () => {
+  // Create a 30 MB PDF file using truncate
+  const pdfTarget = path.join(root, 'large.pdf');
+  const fh = await fs.open(pdfTarget, 'w');
+  await fh.truncate(30 * 1024 * 1024);
+  await fh.close();
+
+  // readRootDocument would throw 25 MB limit
+  await expect(readRootDocument(root, 'large.pdf')).rejects.toThrow('preview limit');
+
+  // Spy on readFileHandleAtMost to verify zero bytes read
+  const spy = vi.spyOn(fsSafety, 'readFileHandleAtMost');
+
+  // previewRootDocument on binary PDF succeeds without reading bytes
+  const preview = await previewRootDocument(root, 'large.pdf');
+  expect(preview).toMatchObject({
+    name: 'large.pdf',
+    kind: 'pdf',
+    mime: 'application/pdf',
+    size: 30 * 1024 * 1024,
+  });
+  expect(preview.content).toBeUndefined();
+  expect(spy).not.toHaveBeenCalled();
+
+  // Create a 5 MB text file
+  const htmlTarget = path.join(root, 'big.html');
+  const htmlFh = await fs.open(htmlTarget, 'w');
+  await htmlFh.truncate(5 * 1024 * 1024);
+  await htmlFh.close();
+
+  // Without metaOnly, a 5 MB text file exceeds MAX_TEXT_BYTES (1 MB)
+  await expect(previewRootDocument(root, 'big.html')).rejects.toThrow('preview limit');
+
+  // With metaOnly: true, it returns metadata immediately with zero bytes read
+  const metaOnlyPreview = await previewRootDocument(root, 'big.html', { metaOnly: true });
+  expect(metaOnlyPreview).toMatchObject({
+    name: 'big.html',
+    kind: 'html',
+    size: 5 * 1024 * 1024,
+  });
+  expect(metaOnlyPreview.content).toBeUndefined();
+  expect(spy).not.toHaveBeenCalled();
+
+  // Text preview within limit reads content
+  await fs.writeFile(path.join(root, 'small.md'), '# Small');
+  const textPreview = await previewRootDocument(root, 'small.md');
+  expect(textPreview).toMatchObject({
+    name: 'small.md',
+    kind: 'markdown',
+    content: '# Small',
+  });
+  expect(spy).toHaveBeenCalledTimes(1);
+
+  spy.mockRestore();
+});
+
+it('openRootDocumentForStream returns handle and metadata without buffering file', async () => {
+  const filePath = path.join(root, 'stream.png');
+  await fs.writeFile(filePath, Buffer.from('PNG_BYTES_HEADER'));
+
+  const doc = await openRootDocumentForStream(root, 'stream.png');
+  expect(doc.name).toBe('stream.png');
+  expect(doc.kind).toBe('image');
+  expect(doc.size).toBe(16);
+  expect(doc.handle).toBeDefined();
+
+  // Can read from handle directly and must close it
+  const buf = Buffer.alloc(16);
+  const { bytesRead } = await doc.handle.read(buf, 0, 16, 0);
+  expect(bytesRead).toBe(16);
+  expect(buf.toString('utf-8')).toBe('PNG_BYTES_HEADER');
+  await doc.handle.close();
+});
+

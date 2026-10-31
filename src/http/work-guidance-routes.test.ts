@@ -4,6 +4,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { registerWorkGuidanceRoutes } from './work-guidance-routes.js';
+import * as fsSafety from '../resources/fs-safety.js';
 
 vi.mock('../core/refresh.js', () => ({
   refreshWorkspace: vi.fn().mockResolvedValue({ workspacePath: '/tmp/test', analyzedRepos: [], reusedRepos: [], refreshedHandoff: false }),
@@ -188,3 +189,49 @@ it('saves documents, creates document folders, and moves documents via endpoints
   });
   expect(badRes.status).toBe(400);
 });
+
+it('previews binary and metaOnly documents without reading file bytes, and streams files directly', async () => {
+  // Create a 30 MB PDF
+  const pdfPath = path.join(root, 'large.pdf');
+  const fh = await fs.open(pdfPath, 'w');
+  await fh.truncate(30 * 1024 * 1024);
+  await fh.close();
+
+  const readSpy = vi.spyOn(fsSafety, 'readFileHandleAtMost');
+
+  // Binary preview returns metadata with zero bytes read
+  const previewRes = await app.request('/api/workspace/test/documents/preview?name=large.pdf');
+  expect(previewRes.status).toBe(200);
+  const preview = await previewRes.json();
+  expect(preview).toMatchObject({
+    name: 'large.pdf',
+    kind: 'pdf',
+    mime: 'application/pdf',
+    size: 30 * 1024 * 1024,
+  });
+  expect(preview.content).toBeUndefined();
+  expect(readSpy).not.toHaveBeenCalled();
+
+  // Text preview with ?meta=1 returns metadata with zero bytes read
+  await fs.writeFile(path.join(root, 'sample.html'), '<h1>Sample</h1>');
+  const metaRes = await app.request('/api/workspace/test/documents/preview?name=sample.html&meta=1');
+  expect(metaRes.status).toBe(200);
+  const metaJson = await metaRes.json();
+  expect(metaJson).toMatchObject({
+    name: 'sample.html',
+    kind: 'html',
+    size: 15,
+  });
+  expect(metaJson.content).toBeUndefined();
+  expect(readSpy).not.toHaveBeenCalled();
+
+  // /documents/file streams the PDF with correct headers
+  const fileRes = await app.request('/api/workspace/test/documents/file?name=large.pdf');
+  expect(fileRes.status).toBe(200);
+  expect(fileRes.headers.get('content-type')).toBe('application/pdf');
+  expect(fileRes.headers.get('content-length')).toBe(String(30 * 1024 * 1024));
+  expect(fileRes.headers.get('cache-control')).toBe('no-store');
+
+  readSpy.mockRestore();
+});
+

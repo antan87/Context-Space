@@ -266,3 +266,74 @@ export async function moveRootDocument(root: string, from: string, to: string) {
   await fs.rename(fromTarget, toTarget);
   return { from: fromNormalized, to: toNormalized };
 }
+
+export interface PreviewRootDocumentOptions {
+  metaOnly?: boolean;
+}
+
+export async function previewRootDocument(root: string, name: string, options?: PreviewRootDocumentOptions) {
+  const normalizedName = openableDocumentName(name);
+  const target = documentPath(root, normalizedName);
+  await assertNoLinkedPathComponents(root, target);
+  const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await assertFileHandleMatchesPath(handle, target);
+    await assertNoLinkedPathComponents(root, target);
+    const details = format(normalizedName)!;
+    const isText = details.kind === 'markdown' || details.kind === 'text' || details.kind === 'html';
+    const metaOnly = Boolean(options?.metaOnly) || !isText;
+
+    if (metaOnly) {
+      return {
+        name: normalizedName,
+        ...details,
+        size: Number(stat.size),
+        modifiedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+        content: undefined,
+      };
+    }
+
+    if (stat.size > BigInt(MAX_TEXT_BYTES)) {
+      throw new Error(`This document exceeds the ${MAX_TEXT_BYTES / 1024 / 1024} MB preview limit.`);
+    }
+
+    const bytes = await readFileHandleAtMost(handle, MAX_TEXT_BYTES + 1);
+    await assertNoLinkedPathComponents(root, target);
+    await assertFileHandleMatchesPath(handle, target);
+    if (bytes.length > MAX_TEXT_BYTES) {
+      throw new Error('The document grew beyond the size limit.');
+    }
+
+    return {
+      name: normalizedName,
+      ...details,
+      size: Number(stat.size),
+      modifiedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+      content: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function openRootDocumentForStream(root: string, name: string) {
+  const normalizedName = openableDocumentName(name);
+  const target = documentPath(root, normalizedName);
+  await assertNoLinkedPathComponents(root, target);
+  const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await assertFileHandleMatchesPath(handle, target);
+    await assertNoLinkedPathComponents(root, target);
+    const details = format(normalizedName)!;
+    return {
+      handle,
+      name: normalizedName,
+      ...details,
+      size: Number(stat.size),
+      modifiedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+    };
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw error;
+  }
+}
