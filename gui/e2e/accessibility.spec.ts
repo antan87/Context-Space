@@ -198,7 +198,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       for (const section of ['overview', 'plan', 'documents', 'changes']) {
         await page.goto(`/#/workspaces/demo/${section}`);
         await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-        await expect(page.getByRole('group', { name: 'Task status' })).toContainText('Checks failed');
+        await expect(page.locator('header').filter({ has: page.getByRole('heading', { level: 1 }) }).getByRole('link', { name: 'Checks failed' })).toBeVisible();
         if (section === 'documents') await expect(page.getByText('No documents in the workspace root yet.', { exact: false })).toBeVisible();
         await expectNoSeriousViolations(page, `workspace ${section}`);
       }

@@ -39,8 +39,15 @@ test('opens agent-created Markdown, HTML, PDF and Office documents from the root
   await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible();
   await page.getByRole('treeitem', { name: /agent findings.md/ }).click();
   await expect(page.getByRole('heading', { name: 'Agent findings', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'View source', exact: true }).click();
+  await page.getByRole('button', { name: 'More document actions' }).click();
+  await page.getByRole('menuitem', { name: 'View source', exact: true }).click();
   await expect(page.getByText('# Agent findings', { exact: false })).toBeVisible();
+  // While editing, Watch cannot be turned on or off.
+  await page.getByRole('button', { name: 'Edit document' }).click();
+  await page.getByRole('button', { name: 'More document actions' }).click();
+  await expect(page.getByRole('menuitemcheckbox', { name: 'Watch document for changes' })).toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.getByRole('treeitem', { name: /page.html/ }).click();
   const html = page.getByTitle('Preview of page.html');
   await expect(html).toBeVisible();
@@ -52,6 +59,10 @@ test('opens agent-created Markdown, HTML, PDF and Office documents from the root
   await expect(page.getByTitle('Preview of evidence.pdf')).toBeVisible();
   await page.getByRole('treeitem', { name: /brief.docx/ }).click();
   await expect(page.getByText('Preview is unavailable for this format.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'More document actions' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Download', exact: true })).toHaveAttribute('href', /name=brief.docx&download=1/);
+  await page.keyboard.press('Escape');
+  // With nothing to preview, Download is also in the row itself, beside where Edit would be.
   await expect(page.getByRole('link', { name: 'Download', exact: true })).toHaveAttribute('href', /name=brief.docx&download=1/);
   await page.getByLabel('Filter documents').fill('agent');
   await expect(page.getByRole('treeitem', { name: /evidence.pdf/ })).toHaveCount(0);
@@ -88,9 +99,27 @@ test('maximizes a document inside the app borders and restores focus on Escape',
   const expandedBox = await overlay.getByTitle('Preview of page.html').boundingBox();
   expect(expandedBox!.height).toBeGreaterThan(inlineBox!.height);
 
-  // Download and the raw toggle stay reachable while expanded.
-  await expect(overlay.getByRole('link', { name: 'Download', exact: true })).toBeVisible();
-  await expect(overlay.getByRole('button', { name: 'View source', exact: true })).toBeVisible();
+  // Download and the raw toggle stay reachable while expanded: the menu opens above the overlay, so a real click lands.
+  await overlay.getByRole('button', { name: 'More document actions' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Download', exact: true })).toBeVisible();
+  await page.getByRole('menuitem', { name: 'View source', exact: true }).click();
+  await expect(overlay.getByTitle('Preview of page.html')).toHaveCount(0);
+  await expect(overlay.getByText('Rendered HTML', { exact: false })).toBeVisible();
+  await overlay.getByRole('button', { name: 'More document actions' }).click();
+  await page.getByRole('menuitem', { name: 'View page', exact: true }).click();
+  await expect(overlay.getByTitle('Preview of page.html')).toBeVisible();
+  // Watch is a checkbox item: clicking it checks it, and the title shows the eye.
+  await overlay.getByRole('button', { name: 'More document actions' }).click();
+  const watch = page.getByRole('menuitemcheckbox', { name: 'Watch document for changes' });
+  await expect(watch).toHaveAttribute('aria-checked', 'false');
+  await expect(overlay.getByRole('img', { name: 'Watching for changes' })).toHaveCount(0);
+  await watch.click();
+  await expect(overlay.getByRole('img', { name: 'Watching for changes' })).toHaveAttribute('title', 'Watching for changes');
+  // A checkbox item leaves the menu open, now checked; Escape closes the menu but not the overlay.
+  await expect(watch).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menuitemcheckbox')).toHaveCount(0);
+  await expect(overlay).toBeVisible();
 
   // Never the browser Fullscreen API: the overlay is bounded by the app viewport.
   const viewport = page.viewportSize()!;
@@ -104,6 +133,45 @@ test('maximizes a document inside the app borders and restores focus on Escape',
   await expect(page.getByRole('button', { name: 'Expand document' })).toBeFocused();
   await expect(page.getByRole('button', { name: 'Expand document' })).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTitle('Preview of page.html')).toBeVisible();
+});
+
+test('Move or rename from the expanded view shows its dialog on top', async ({ page }) => {
+  const documents = [{ name: 'notes.md', kind: 'markdown', size: 20, modifiedAt: '2026-09-22T00:00:00.000Z' }];
+  await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents } }));
+  await page.route('**/api/workspace/demo/documents/preview?*', (route) => route.fulfill({ json: { ...documents[0], content: '# Notes' } }));
+  await page.goto('/#/workspaces/demo/documents');
+  await page.getByRole('treeitem', { name: /notes.md/ }).click();
+  await page.getByRole('button', { name: 'Expand document' }).click();
+  const overlay = page.getByTestId('document-viewer-expanded');
+  await overlay.getByRole('button', { name: 'More document actions' }).click();
+  await page.getByRole('menuitem', { name: 'Move or rename' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move or rename document' });
+  await expect(dialog).toBeVisible();
+  // Topmost: the point just inside the dialog's top edge belongs to the dialog.
+  const box = (await dialog.boundingBox())!;
+  const top = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[role="dialog"]')?.getAttribute('aria-label') ?? document.elementFromPoint(x, y)?.closest('[role="dialog"]')?.textContent?.slice(0, 20) ?? null, { x: box.x + box.width / 2, y: box.y + 20 });
+  expect(top).not.toBeNull();
+  expect(top).not.toBe('Expanded notes.md');
+  await expect(dialog.getByLabel('Document path')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  // The overlay collapsed with the menu, so focus returns to the inline menu button, not the body.
+  await expect(page.getByRole('button', { name: 'More document actions' })).toBeFocused();
+});
+
+test('Move or rename from the page view returns focus to the menu button', async ({ page }) => {
+  const documents = [{ name: 'notes.md', kind: 'markdown', size: 20, modifiedAt: '2026-09-22T00:00:00.000Z' }];
+  await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents } }));
+  await page.route('**/api/workspace/demo/documents/preview?*', (route) => route.fulfill({ json: { ...documents[0], content: '# Notes' } }));
+  await page.goto('/#/workspaces/demo/documents');
+  await page.getByRole('treeitem', { name: /notes.md/ }).click();
+  await page.getByRole('button', { name: 'More document actions' }).click();
+  await page.getByRole('menuitem', { name: 'Move or rename' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move or rename document' });
+  await expect(dialog.getByLabel('Document path')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'More document actions' })).toBeFocused();
 });
 
 test('fullscreen of a document covers the chat dock and viewport without chat overlapping', async ({ page }) => {
@@ -328,19 +396,22 @@ test('offers opening an HTML document in the real browser, and only for HTML', a
 
   await page.getByRole('treeitem', { name: /page.html/ }).click();
   await expect(page.getByTitle('Preview of page.html')).toBeVisible();
-  const open = page.getByRole('link', { name: 'Open in browser', exact: true });
+  await page.getByRole('button', { name: 'More document actions' }).click();
+  const open = page.getByRole('menuitem', { name: 'Open in browser', exact: true });
   await expect(open).toBeVisible();
   await expect(open).toHaveAttribute('href', /name=page.html&open=1/);
   // Renders in a new tab, and never hands the opener a handle on it.
   await expect(open).toHaveAttribute('target', '_blank');
   await expect(open).toHaveAttribute('rel', /noopener/);
   await expect(open).toHaveAttribute('rel', /noreferrer/);
+  await page.keyboard.press('Escape');
 
   // Markdown already renders in-app, so it does not get the escape hatch.
   await page.getByRole('treeitem', { name: /notes.md/ }).click();
   // Markdown renders through ChatMarkdown rather than a titled frame, so assert on its content.
   await expect(page.getByText('body', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open in browser', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'More document actions' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Open in browser', exact: true })).toHaveCount(0);
 });
 
 test('recovers from list and preview failures and discovers newly created files on refresh', async ({ page }) => {

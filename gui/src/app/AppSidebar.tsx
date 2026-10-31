@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef, type CSSProperties } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
 import {
   Menu as MenuIcon,
   FolderGit2,
@@ -97,6 +97,10 @@ export interface AppSidebarProps {
   /** Checks for a new version on request; updates never install without confirmation. */
   onCheckForUpdates?: () => void;
   checkingForUpdates?: boolean;
+  /** The update dot with its popover, shown beside the version while a new version waits. */
+  updateNotice?: ReactNode;
+  /** The update failed: the phone's menu button names it and shows the warning colour. */
+  updateFailed?: boolean;
   initialSearch?: string;
 }
 
@@ -109,6 +113,7 @@ function SidebarContents({
   onSelectWorkspace,
   onCheckForUpdates,
   checkingForUpdates = false,
+  updateNotice,
   initialSearch = '',
 }: AppSidebarProps) {
   const { pathname } = useLocation();
@@ -301,6 +306,7 @@ function SidebarContents({
           <Link to="/overview" aria-label={`${BRAND_NAME} overview`} title={`${BRAND_NAME} v${appVersion}`}>
             <ContextSpaceIcon size={24} className="rounded-md shadow-xs hover:scale-105 transition-transform" />
           </Link>
+          {updateNotice}
 
           <NavLink
             to="/overview"
@@ -474,6 +480,7 @@ function SidebarContents({
         </Link>
         <span className="flex items-center gap-0.5">
           <span className="text-[10px] font-mono text-muted-foreground">v{appVersion}</span>
+          {updateNotice}
           {onCheckForUpdates && (
             <IconButton label="Check for updates" icon={<RefreshCw className={checkingForUpdates ? 'animate-spin' : undefined} />} disabled={checkingForUpdates} onClick={onCheckForUpdates} className="text-muted-foreground" />
           )}
@@ -948,8 +955,9 @@ export function AppSidebar(props: AppSidebarProps) {
   return (
     <div className="fixed inset-x-0 top-0 z-40 flex h-12 items-center border-b border-border bg-card px-3 md:hidden">
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetTrigger className="inline-flex items-center gap-2 rounded-md px-2 py-2 text-sm font-medium" aria-label="Open navigation">
+        <SheetTrigger className="inline-flex items-center gap-2 rounded-md px-2 py-2 text-sm font-medium" aria-label={props.updateNotice ? `Open navigation, ${props.updateFailed ? 'update needs attention' : 'update available'}` : 'Open navigation'}>
           <MenuIcon size={20} /> {BRAND_NAME}
+          {props.updateNotice && <span aria-hidden="true" data-testid="mobile-update-dot" className={`size-2 rounded-full ${props.updateFailed ? 'bg-[var(--state-needs)]' : 'bg-primary'}`} />}
         </SheetTrigger>
         <SheetPopup
           side="left"

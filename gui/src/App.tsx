@@ -2,10 +2,10 @@ import { lazy, Suspense, useState, useEffect, useRef, useMemo } from 'react';
 import {
   AlertTriangle,
   RefreshCw,
-  Sparkles,
 } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AppSidebar } from './app/AppSidebar.js';
+import { UpdateNotice } from './app/UpdateNotice.js';
 import { defaultWorkspaceTarget } from './app/workspaceList.js';
 import { ToastStack, type Toast } from './app/ToastStack.js';
 import { VsCodeShell } from './app/VsCodeShell.js';
@@ -1134,6 +1134,23 @@ Core Instructions:
         activeWsId={activeWsId}
         onCheckForUpdates={() => { void handleCheckForUpdates(); }}
         checkingForUpdates={['checking', 'downloading'].includes(updateStatus?.nativeStatus ?? '')}
+        updateFailed={updateStep === 'error'}
+        updateNotice={updateStatus && updateStatus.updateAvailable && !updateDeferred ? (
+          <UpdateNotice
+            currentVersion={updateStatus.currentVersion}
+            latestVersion={updateStatus.latestVersion}
+            step={updateStep}
+            progress={updateStatus.progress}
+            error={updateStatus.error}
+            releaseNotes={updateStatus.releaseNotes}
+            releaseUrl={updateStatus.releaseUrl || GITHUB_RELEASE_URL}
+            canInstall={Boolean(nativeUpdateBridge)}
+            busy={updatingApp}
+            onDownload={() => { void handleAutoUpdate(); }}
+            onRestart={() => { void handleRestartUpdate(); }}
+            onLater={() => setUpdateDeferred(true)}
+          />
+        ) : undefined}
       />
 
       {/* Main Content Area */}
@@ -1158,82 +1175,6 @@ Core Instructions:
                 </button>
               </div>
             )}
-            {/* Update Notification Banner. Updates are always optional: Later
-                hides the banner for this session and no native installer is
-                exposed when this dashboard is running in a browser. */}
-            {updateStatus && updateStatus.updateAvailable && !updateDeferred && (
-              <div className="mb-6 p-4 bg-gradient-to-r from-amber-500/10 to-orange-600/10 border border-amber-500/30 rounded-xl shadow-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 backdrop-blur-sm">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-warning-foreground shrink-0">
-                    {updatingApp ? (
-                      <RefreshCw size={20} className="animate-spin text-warning-foreground" />
-                    ) : (
-                      <Sparkles size={20} />
-                    )}
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-warning-foreground">
-                      {updateStep === 'error' ? `${BRAND_NAME} update needs attention` : updateStep === 'downloaded' ? 'Update ready to install' : updateStep === 'downloading' ? 'Downloading update…' : `A new version of ${BRAND_NAME} is available!`}
-                    </h4>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {updateStep === 'error'
-                        ? (updateStatus.error || 'The update could not be completed. You can retry or use the release page.')
-                        : updateStep === 'downloaded'
-                          ? `Restart ${BRAND_NAME} when convenient to install it.`
-                          : updateStep === 'downloading'
-                            ? `Downloading from GitHub Releases… ${Math.round(updateStatus.progress || 0)}%`
-                            : `Upgrade from v${updateStatus.currentVersion} to v${updateStatus.latestVersion} to get the latest features and bug fixes.`}
-                    </p>
-                    {updateStep === 'downloading' && (
-                      <div className="mt-2 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-amber-950/50" aria-label="Update download progress">
-                        <div className="h-full bg-amber-400 transition-all" style={{ width: `${Math.max(0, Math.min(100, updateStatus.progress || 0))}%` }} />
-                      </div>
-                    )}
-                    {updateStatus.releaseNotes && (
-                      <details className="mt-2 max-w-xl text-xs text-muted-foreground">
-                        <summary className="cursor-pointer font-semibold text-amber-200">Release notes</summary>
-                        <p className="mt-1 whitespace-pre-wrap">{updateStatus.releaseNotes}</p>
-                      </details>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  {nativeUpdateBridge && updateStep === 'downloaded' && (
-                    <button
-                      onClick={handleRestartUpdate}
-                      className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold text-xs rounded-lg transition-all shadow-md cursor-pointer"
-                    >
-                      Restart &amp; Install
-                    </button>
-                  )}
-                  {nativeUpdateBridge && updateStep !== 'downloaded' && (
-                    <button
-                      onClick={handleAutoUpdate}
-                      disabled={updatingApp}
-                      className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold text-xs rounded-lg transition-all shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
-                    >
-                      {updateStep === 'error' ? 'Retry download' : updatingApp ? 'Downloading…' : 'Download update'}
-                    </button>
-                  )}
-                  <a
-                    href={updateStatus.releaseUrl || GITHUB_RELEASE_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-2 border border-amber-500/30 text-amber-200 hover:bg-amber-500/10 font-semibold text-xs rounded-lg transition-colors"
-                  >
-                    View release
-                  </a>
-                  <button
-                    onClick={() => setUpdateDeferred(true)}
-                    disabled={updatingApp}
-                    className="px-3 py-2 border border-border text-muted-foreground hover:text-foreground font-semibold text-xs rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    Later
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Offline / Backend Unreachable State */}
             {!config && (
               <div className="flex flex-col items-center justify-center py-40 gap-6">

@@ -21,7 +21,9 @@ test('reviews the actual worktree, switches diff mode, and copies refinement fee
   await page.goto('/#/workspaces/review/changes');
   await expect(page.getByRole('heading', { level: 1, name: 'review' })).toBeVisible();
   // The one workspace header reports the changes and links to where they are reviewed.
-  await expect(page.getByRole('group', { name: 'Task status' }).getByRole('link', { name: /Changes/ })).toContainText('1 file');
+  await page.getByRole('button', { name: 'Workspace actions' }).click();
+  await expect(page.getByRole('menuitem', { name: /Changes/ })).toContainText('1 file');
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Code/ })).toHaveAttribute('aria-current', 'page');
   const code = page.getByRole('region', { name: 'Workspace code' });
   await code.getByRole('treeitem', { name: /demo\.ts/ }).click();

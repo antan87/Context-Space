@@ -359,9 +359,9 @@ test.describe('the dock sits exactly over its slot', () => {
   test('keeps its header short: the facts live in the strip, not above it', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
     await expect(chatOf(page)).toBeVisible();
-    await expect(page.getByRole('group', { name: 'Task status' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /^(Checks|Not checked)/ })).toHaveCount(0);
     await page.goto('/#/workspaces/alpha/plan');
-    await expect(page.getByRole('group', { name: 'Task status' })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^(Checks|Not checked)/ })).toBeVisible();
   });
 });
 

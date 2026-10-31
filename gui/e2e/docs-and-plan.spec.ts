@@ -102,6 +102,7 @@ test.describe('Docs', () => {
     await page.goto('/#/workspaces/demo/documents');
     await docs(page).getByRole('button', { name: /^Delivery plan/ }).click();
     await expect(docs(page).getByRole('heading', { name: 'Delivery plan (contextspace-milestones.md)', exact: true })).toBeVisible();
+    expect((await docs(page).getByRole('heading', { name: 'Delivery plan (contextspace-milestones.md)', exact: true }).boundingBox())!.width).toBeGreaterThanOrEqual(120);
     // The document gets the narrow panel; the list is not stacked above it.
     const list = docs(page).getByRole('complementary', { name: 'Documents to open' });
     await expect(list).toBeHidden();

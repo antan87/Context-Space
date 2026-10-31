@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Copy, Download, Edit3, ExternalLink, Eye, FolderInput, Maximize2, Minimize2, Save, X } from 'lucide-react';
+import { Check, Code2, Copy, Download, Edit3, ExternalLink, Eye, FolderInput, Maximize2, Minimize2, MoreHorizontal, Save, X } from 'lucide-react';
 import { Button, buttonVariants } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
+import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
@@ -79,6 +80,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   const [moveError, setMoveError] = useState<string | null>(null);
   const inlineToggle = useRef<HTMLButtonElement>(null);
   const overlayToggle = useRef<HTMLButtonElement>(null);
+  const moreInline = useRef<HTMLButtonElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const wasExpanded = useRef(false);
   const mountedRef = useRef(true);
@@ -210,6 +212,8 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     if (!expanded) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // Escape inside an open menu closes the menu only.
+        if (event.defaultPrevented || document.querySelector('[data-slot="menu-popup"]')) return;
         event.stopPropagation();
         setExpanded(false);
         return;
@@ -278,7 +282,8 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       : <>{status}</>;
 
   const folder = (preview?.name ?? title).includes('/') ? (preview?.name ?? title).slice(0, (preview?.name ?? title).lastIndexOf('/') + 1) : '';
-  const iconLink = 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground';
+  /** A document with nothing to preview (a .docx): the body only offers the download, so the row does too. */
+  const noPreview = preview?.kind === 'download' && preview.content === undefined;
   /** The reader's one row: where the document is, then what can be done with it, as quiet icons. */
   const fillChrome = (expandedNow: boolean) => (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2 text-xs">
@@ -287,10 +292,16 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         {folder && <span className="text-muted-foreground">{folder}</span>}
         <span className="font-medium text-foreground">{title.slice(folder && title.startsWith(folder) ? folder.length : 0)}</span>
       </h3>
+      {watching && <span role="img" aria-label="Watching for changes" title="Watching for changes" className="inline-flex shrink-0 text-muted-foreground"><Eye aria-hidden="true" size={13} /></span>}
       {canEdit && !editing && (
         <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Edit document" title="Edit document" onClick={() => { setEditContent(preview?.content ?? ''); setEditing(true); }}>
           <Edit3 size={13} />
         </Button>
+      )}
+      {noPreview && downloadHref && !editing && (
+        <a href={downloadHref} download={preview?.name.split('/').pop() ?? title.split('/').pop()} className={cn(buttonVariants({ variant: 'ghost', size: 'xs' }), 'h-7 shrink-0 gap-1 px-2 text-xs')}>
+          <Download aria-hidden="true" size={13} />Download
+        </a>
       )}
       {editing && (
         <>
@@ -302,35 +313,32 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
           </Button>
         </>
       )}
-      {onToggleWatch && (
-        <Button size="xs" variant={watching ? 'secondary' : 'ghost'} className={cn('size-7 shrink-0 p-0', watching && 'text-emerald-500')}
-          disabled={editing}
-          aria-label={watching ? 'Watching document for changes (live reload)' : 'Watch document for changes'}
-          aria-pressed={watching}
-          title={editing ? 'Cannot watch while editing' : (watching ? 'Watching for changes (live reload active)' : 'Watch document for changes')}
-          onClick={onToggleWatch}>
-          <Eye size={13} />
-        </Button>
-      )}
-      {onToggleRaw && !editing && <Button size="xs" variant="ghost" className="shrink-0" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
-      <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label={copiedPath ? 'Path copied' : `Copy path ${pathToCopy}`} title={copiedPath ? 'Path copied to clipboard' : 'Copy path'} onClick={handleCopyPath}>
-        {copiedPath ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
-      </Button>
-      {onMove && !editing && (
-        <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Move or rename document" title="Move or rename document" onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setMoveOpen(true); }}>
-          <FolderInput size={13} />
-        </Button>
-      )}
-      {downloadHref && (
-        <a className={iconLink} href={downloadHref} download={preview?.name.split('/').pop() ?? title.split('/').pop()} aria-label="Download" title="Download">
-          <Download size={13} />
-        </a>
-      )}
-      {browserHref && (
-        <a className={iconLink} href={browserHref} target="_blank" rel="noopener noreferrer" aria-label="Open in browser" title="Open in your browser, where the document runs as authored">
-          <ExternalLink size={13} />
-        </a>
-      )}
+      {/* The rest sits in one menu so the title keeps its room in a narrow panel. */}
+      <Menu>
+        <MenuTrigger ref={expandedNow ? undefined : moreInline} aria-label="More document actions" title="More document actions" className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+          <MoreHorizontal aria-hidden="true" size={14} />
+        </MenuTrigger>
+        <MenuPopup align="end" className="w-60" positionerClassName={expandedNow ? 'z-[110]' : undefined}>
+          {onToggleWatch && (
+            <MenuCheckboxItem checked={watching} disabled={editing} onCheckedChange={() => onToggleWatch()} aria-label="Watch document for changes">
+              Watch for changes
+            </MenuCheckboxItem>
+          )}
+          {onToggleRaw && !editing && <MenuItem onClick={onToggleRaw}><Code2 aria-hidden="true" />{raw ? rawLabels[1] : rawLabels[0]}</MenuItem>}
+          <MenuItem onClick={handleCopyPath} aria-label={copiedPath ? 'Path copied' : `Copy path ${pathToCopy}`}>
+            {copiedPath ? <Check aria-hidden="true" className="text-emerald-500" /> : <Copy aria-hidden="true" />}{copiedPath ? 'Path copied' : 'Copy path'}
+          </MenuItem>
+          {onMove && !editing && (
+            <MenuItem onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setExpanded(false); setMoveOpen(true); }}><FolderInput aria-hidden="true" />Move or rename</MenuItem>
+          )}
+          {downloadHref && (
+            <MenuItem render={<a href={downloadHref} download={preview?.name.split('/').pop() ?? title.split('/').pop()} />}><Download aria-hidden="true" />Download</MenuItem>
+          )}
+          {browserHref && (
+            <MenuItem render={<a href={browserHref} target="_blank" rel="noopener noreferrer" />}><ExternalLink aria-hidden="true" />Open in browser</MenuItem>
+          )}
+        </MenuPopup>
+      </Menu>
       <Button ref={expandedNow ? overlayToggle : inlineToggle} size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Expand document" aria-pressed={expandedNow}
         title={expandedNow ? 'Collapse document' : 'Expand document'} onClick={() => setExpanded(value => !value)}>
         {expandedNow ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
@@ -371,7 +379,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
               className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground gap-1 shrink-0"
               aria-label="Move or rename document"
               title="Move or rename document"
-              onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setMoveOpen(true); }}
+              onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setExpanded(false); setMoveOpen(true); }}
             >
               <FolderInput size={compact ? 11 : 13} />
               <span className="text-[11px] hidden sm:inline">Move</span>
@@ -510,7 +518,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       )}
       {moveOpen && (
         <Dialog open={moveOpen} onOpenChange={(next) => !next && setMoveOpen(false)}>
-          <DialogPopup className="max-w-md">
+          <DialogPopup className="max-w-md" finalFocus={() => moreInline.current ?? true}>
             <DialogHeader>
               <DialogTitle>Move or rename document</DialogTitle>
               <DialogDescription>

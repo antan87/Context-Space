@@ -1,6 +1,5 @@
 import { lazy, Suspense, useState, useEffect, useCallback, type ComponentProps } from 'react';
 import {
-  MoreVertical,
   Archive,
   ArchiveRestore,
   Copy,
@@ -38,7 +37,6 @@ import { perfMark } from '../lib/perfMarks.js';
 import { BRAND_NAME, LEGACY_BRAND_NAME } from '../brand.js';
 import { ServiceConsole } from '../features/services/ServiceConsole.js';
 import { WorkspaceHeader } from '../features/workspace-shell/WorkspaceHeader.js';
-import { WorkspaceMarks } from '../features/workspace-shell/WorkspaceMarks.js';
 import { WorkspaceRail } from '../features/workspace-shell/WorkspaceRail.js';
 import { SECTION_LABELS, visibleSection, type WorkspaceSection } from '../features/workspace-shell/destinations.js';
 import { useLocation } from 'react-router-dom';
@@ -652,7 +650,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           mode={selectedMode}
           repoCount={selected.repos.length}
           changedFiles={st ? totalChangedFiles : null}
-          marks={archived ? undefined : <WorkspaceMarks workspaceId={selected.branchName} />}
+          warns={!archived}
           verification={cockpit.gateStatus}
           actions={<>
               {primaryEditor && !archived && (
@@ -706,7 +704,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                 )
               )}
 
-              <IconButton size="sm" label="Copy Context" icon={<Copy />} onClick={() => handleCopyPrompt(selected)} className="text-muted-foreground hover:text-foreground" />
 
               {/* A second workspace docks beside the chat on screen, so only that workspace offers it. */}
               {!archived && activeTab === selected.branchName && (
@@ -751,11 +748,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                 </Menu>
               )}
 
-              <Menu>
-                <MenuTrigger aria-label="Workspace actions" className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer">
-                  <MoreVertical size={13} />
-                </MenuTrigger>
-                <MenuPopup align="end" className="w-48">
+          </>}
+          menuItems={<>
                   <MenuItem onClick={() => handleCopyPrompt(selected)} className="flex items-center gap-2 text-xs py-1.5">
                     <Copy size={12} /> <span>Copy AI Context</span>
                   </MenuItem>
@@ -780,8 +774,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     <Trash2 size={12} />
                     <span>{deleteWsLoading === selected.branchName ? 'Deleting…' : 'Delete workspace…'}</span>
                   </MenuItem>
-                </MenuPopup>
-              </Menu>
           </>}
         />
         {/* Tab Navigation & Content Container */}

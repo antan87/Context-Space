@@ -124,7 +124,7 @@ test.describe('keyboard-only primary journey', () => {
 
     // Verify: run verification; the header reports the recorded result.
     await activate(page, page.getByRole('button', { name: 'Run verification', exact: true }));
-    await expect(page.getByRole('group', { name: 'Task status' })).toContainText('Checks passed');
+    await expect(page.locator('header').filter({ has: page.getByRole('heading', { level: 1 }) }).getByRole('link', { name: 'Checks passed' })).toBeVisible();
 
     // Review: open Code, review the commit, commit by keyboard.
     await activate(page, destinations.getByRole('link', { name: /^Code/ }));

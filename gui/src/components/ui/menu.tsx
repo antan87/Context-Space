@@ -26,8 +26,11 @@ function MenuPopup({
   alignOffset,
   side = "bottom",
   anchor,
+  positionerClassName,
   ...props
 }: MenuPrimitive.Popup.Props & {
+  /** Replaces the default stacking (z-50), for a menu opened inside a layer above it such as an expanded overlay. */
+  positionerClassName?: string;
   align?: MenuPrimitive.Positioner.Props["align"];
   sideOffset?: MenuPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
@@ -40,7 +43,7 @@ function MenuPopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className="z-50"
+        className={positionerClassName ?? "z-50"}
         data-slot="menu-positioner"
         side={side}
         sideOffset={sideOffset}

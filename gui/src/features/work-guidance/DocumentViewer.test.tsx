@@ -54,7 +54,7 @@ describe('DocumentViewer', () => {
     expect(html).toContain('text-emerald-500');
   });
 
-  it('renders Watch button in fillChrome mode', () => {
+  it('keeps Watch in the menu, not as a button, in fillChrome mode', () => {
     const onToggleWatch = vi.fn();
     const html = renderToStaticMarkup(
       createElement(DocumentViewer, {
@@ -68,8 +68,9 @@ describe('DocumentViewer', () => {
       }),
     );
 
-    expect(html).toContain('aria-label="Watch document for changes"');
-    expect(html).toContain('aria-pressed="false"');
+    // The watch toggle lives in the menu, so the title keeps its room.
+    expect(html).toContain('aria-label="More document actions"');
+    expect(html).not.toContain('aria-label="Watch document for changes"');
   });
 
   it('omits Watch button when onToggleWatch is not provided', () => {
@@ -104,7 +105,7 @@ describe('DocumentViewer', () => {
     expect(html).not.toContain('aria-label="Edit document"');
   });
 
-  it('disables Watch button during active editing in fillChrome mode', () => {
+  it('shows Save and hides Edit while editing in fillChrome mode (Watch is disabled then, asserted in root-documents.spec.ts)', () => {
     const onToggleWatch = vi.fn();
     const html = renderToStaticMarkup(
       createElement(DocumentViewer, {
@@ -119,10 +120,26 @@ describe('DocumentViewer', () => {
       }),
     );
 
-    expect(html).toContain('title="Cannot watch while editing"');
-    expect(html).toMatch(/<button\b[^>]*\sdisabled[=>][^>]*aria-label="Watching document for changes \(live reload\)"/);
+    expect(html).toContain('aria-label="More document actions"');
     expect(html).toContain('aria-label="Save document"');
     expect(html).not.toContain('aria-label="Edit document"');
+  });
+
+  it('shows a muted eye beside the title while watching, and none otherwise', () => {
+    const render = (watching: boolean) => renderToStaticMarkup(createElement(DocumentViewer, { title: 'test.md', preview: samplePreview, raw: false, fill: true, watching, onToggleWatch: vi.fn() }));
+    const on = render(true);
+    expect(on).toContain('role="img"');
+    expect(on).toContain('aria-label="Watching for changes"');
+    expect(on).toContain('title="Watching for changes"');
+    expect(render(false)).not.toContain('Watching for changes');
+  });
+
+  it('shows Download beside Edit when the document has no preview', () => {
+    const docx: DocumentPreviewData = { name: 'brief.docx', kind: 'download', size: 10 };
+    const html = renderToStaticMarkup(createElement(DocumentViewer, { title: 'brief.docx', preview: docx, raw: false, fill: true, downloadHref: '/dl/brief.docx' }));
+    expect(html).toMatch(/<a [^>]*href="\/dl\/brief.docx"[^>]*>.*?Download/);
+    const withPreview = renderToStaticMarkup(createElement(DocumentViewer, { title: 'test.md', preview: samplePreview, raw: false, fill: true, downloadHref: '/dl/test.md' }));
+    expect(withPreview).not.toContain('Download');
   });
 
   describe('scripts of an HTML document', () => {
