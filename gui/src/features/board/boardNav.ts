@@ -6,7 +6,7 @@
  */
 
 import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
-import { stepsText, waitingText, type BoardArea } from './boardAreas.js';
+import { overviewPlan, stepsText, waitingText, type BoardArea, type Size } from './boardAreas.js';
 import { cardOrder, fileTypeOf, uniqueId, type FileType } from './boardLayout.js';
 
 export type NavCategory = 'waiting' | 'areas' | 'pictures' | 'documents' | 'notes' | 'commits';
@@ -37,15 +37,29 @@ export const NAV_OPEN_KEY = 'contextspace_board_nav_open_v1';
 export const NAV_MODE_KEY = 'contextspace_board_nav_mode_v1';
 
 /**
- * Reads whether the sidebar was open from localStorage. Defaults to true (open on desktop)
- * unless explicitly saved as 'closed'.
+ * Reads what the person chose for the sidebar from localStorage: open (true), closed (false), or null when they have not chosen yet,
+ * which leaves it to `navStartsOpen`.
  */
-export function readNavOpen(): boolean {
+export function readNavChoice(): boolean | null {
   try {
-    return window.localStorage.getItem(NAV_OPEN_KEY) !== 'closed';
+    const saved = window.localStorage.getItem(NAV_OPEN_KEY);
+    return saved === 'open' ? true : saved === 'closed' ? false : null;
   } catch {
-    return true;
+    return null;
   }
+}
+
+/**
+ * Whether the sidebar starts open when the person has not chosen. It does, unless it would take the room the Areas need as cards:
+ * when the overview is rows with it open and cards with it closed, it starts closed, so the stage shows the Areas and not the same
+ * list twice. Where the sidebar overlays the board (a narrow section) it does not take any room, and it stays as it is. `section` is
+ * the size of the board's section.
+ */
+export function navStartsOpen(areas: BoardArea[], section: Size): boolean {
+  if (areas.length === 0 || section.width <= 0 || section.height <= 0 || sidebarDock(section.width).overlays) return true;
+  const open = overviewPlan(areas, { width: section.width - SIDEBAR.width, height: section.height }).form;
+  const closed = overviewPlan(areas, { width: section.width - SIDEBAR.railWidth, height: section.height }).form;
+  return !(open === 'rows' && closed === 'cards');
 }
 
 export function writeNavOpen(open: boolean): void {

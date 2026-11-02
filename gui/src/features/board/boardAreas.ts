@@ -6,7 +6,8 @@
  * is workspace content but no plan checkpoints.
  *
  * Each area partitions its related steps, waiting decisions, source documents, commits, and cards.
- * Level 0 and Level 1 are both proportioned and fitted to the screen without scrolling or panning.
+ * Level 0 and Level 1 are both fitted to the screen without scrolling or panning, and nothing is shrunk below a readable
+ * size: Level 0 is cards when they fit at that size, and one-line rows when they do not.
  */
 
 import type { Edge, Node } from '@xyflow/react';
@@ -28,8 +29,22 @@ import {
   type LaneCard,
   type Rect,
 } from './boardLayout.js';
+import { READABLE_ZOOM } from './boardRows.js';
 
-export const AREA_SIZE = { width: 320, height: 224, gapX: 32, gapY: 28 } as const;
+/** An Area card at Level 0. `height` is the least one (a title, its steps and nothing else): `areaCardHeight` is what the content needs. */
+export const AREA_SIZE = { width: 320, height: 100, gapX: 32, gapY: 24 } as const;
+
+/** The overview as one-line rows: the width a row is drawn at least and at most, its height, and the space between rows and between columns of them. */
+export const AREA_ROW = { minWidth: 320, maxWidth: 560, height: 40, gap: 4, gapX: 16 } as const;
+
+/** What the overview leaves free of its stage: a corner above for the pane's icons, the library's credit below, and room at the sides. */
+export const OVERVIEW_INSET = { top: 44, bottom: 32, side: 20 } as const;
+
+/** What an Area card is made of, in px at life size, for its height (`areaCardHeight`): the header line, a line of title, a line of text, and the bar of steps. */
+const CARD = { pad: 12, head: 20, gap: 6, line: 20, text: 16, steps: 30, pictures: 72, more: 8, footer: 33 } as const;
+/** The width of the text of a card, and how wide Inter draws a letter in em: narrow ones, wide ones, the rest. */
+const CARD_TEXT_WIDTH = AREA_SIZE.width - 2 * CARD.pad - 2;
+const EM = { narrow: 0.3, wide: 0.9, capital: 0.68, other: 0.54 } as const;
 
 export const stepsText = (data: { stepsDone: number; stepsTotal: number }) =>
   data.stepsTotal ? `${data.stepsDone} of ${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'}` : 'No steps';
@@ -65,6 +80,20 @@ export type AreaData = {
 };
 
 export type AreaNode = Node<AreaData, 'area'>;
+/** The same Area as one line of the overview. */
+export type AreaRowNode = Node<AreaData, 'areaRow'>;
+export type AreaFoldData = {
+  /** How many Areas it holds: the finished ones (`done`), or the finished ones and others that did not fit (`more`). */
+  count: number;
+  kind: 'done' | 'more';
+  /** Whether they are shown: the row is then the one that folds them again. */
+  expanded: boolean;
+  /** What a press on the row does. The layout leaves it out: the board puts it in. */
+  onToggle?: () => void;
+};
+/** The one last row of the overview that holds the Areas that did not fit. */
+export type AreaFoldNode = Node<AreaFoldData, 'areaFold'>;
+export type OverviewNode = AreaNode | AreaRowNode | AreaFoldNode;
 
 export interface BoardAreaRepo {
   repo: { repo: string; commits: NewsCommit[]; more: number; moreAtLeast?: boolean; problem?: string };
@@ -447,81 +476,204 @@ export function buildBoardAreas({
   return result;
 }
 
-/**
- * Calculates optimal grid columns for Level 0 overview matching available container aspect ratio.
- */
-export function chooseGridColumns(count: number, size: Size): number {
-  if (count <= 1) return 1;
-  if (size.width <= 0 || size.height <= 0) return Math.min(count, 3);
-
-  const availW = Math.max(1, size.width * 0.88);
-  const availH = Math.max(1, size.height * 0.84);
-  const targetRatio = availW / availH;
-
-  let bestCols = 1;
-  let bestZoom = -1;
-  let bestDiff = Infinity;
-
-  for (let cols = 1; cols <= count; cols++) {
-    const rows = Math.ceil(count / cols);
-    const w = cols * AREA_SIZE.width + (cols - 1) * AREA_SIZE.gapX;
-    const h = rows * AREA_SIZE.height + (rows - 1) * AREA_SIZE.gapY;
-    const fit = Math.min(availW / w, availH / h);
-    const zoom = Math.min(1, fit);
-    const ratio = w / h;
-    const diff = Math.abs(ratio - targetRatio);
-
-    if (count <= 3 && cols === count && availW >= w && zoom >= 0.999) {
-      bestCols = cols;
-      break;
-    }
-
-    if (zoom > bestZoom + 1e-5) {
-      bestZoom = zoom;
-      bestCols = cols;
-      bestDiff = diff;
-    } else if (Math.abs(zoom - bestZoom) <= 1e-5) {
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestCols = cols;
-      }
-    }
-  }
-
-  return bestCols;
+/** What an Area card counts, as words: "2 notes", "1 commit". Nothing that is zero. */
+export function areaCounts(data: AreaData): string[] {
+  const items: string[] = [];
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  if (data.noteCount > 0) items.push(plural(data.noteCount, 'note', 'notes'));
+  if (data.pictureCount > 0) items.push(plural(data.pictureCount, 'picture', 'pictures'));
+  if (data.fileCount > data.pictureCount) items.push(plural(data.fileCount - data.pictureCount, 'file', 'files'));
+  if (data.documentCount > 0) items.push(plural(data.documentCount, 'document', 'documents'));
+  if (data.commitCount > 0) items.push(plural(data.commitCount, 'commit', 'commits'));
+  return items;
 }
 
 /**
- * Lays out Level 0 Area nodes in a 2D screen-proportioned grid.
+ * How many lines a text takes in a card, 1 or 2 (a card cuts it at two): the width of its letters at that size, against the width of the
+ * card less a tenth, since a line breaks at a word. It is a guess made without the browser; a text that is a little long takes the room
+ * of a second line, and one that is a little short of the width stays on its one.
  */
-export function overviewLayout(areas: BoardArea[], size: Size): AreaNode[] {
-  if (areas.length === 0) return [];
-  const cols = chooseGridColumns(areas.length, size);
-  return areas.map((area, index) => {
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    const x = col * (AREA_SIZE.width + AREA_SIZE.gapX);
-    const y = row * (AREA_SIZE.height + AREA_SIZE.gapY);
-    return {
-      id: area.id,
-      type: 'area',
-      position: { x, y },
-      width: AREA_SIZE.width,
-      height: AREA_SIZE.height,
-      measured: { width: AREA_SIZE.width, height: AREA_SIZE.height },
-      data: area.data,
-      draggable: false,
-      selectable: false,
-      connectable: false,
-      deletable: false,
-    };
+function cardTextLines(text: string, size: number, weight = 1): 1 | 2 {
+  let em = 0;
+  for (const letter of text) {
+    em += /[WMm@]/.test(letter) ? EM.wide : /[A-Z]/.test(letter) ? EM.capital : /[ijl.,;:!'|tfrI ]/.test(letter) ? EM.narrow : EM.other;
+  }
+  return em * size * weight > CARD_TEXT_WIDTH * 0.92 ? 2 : 1;
+}
+
+/** How high an Area card needs to be for what it shows: its pictures or its preview, and its counts, only when it has them. */
+export function areaCardHeight(data: AreaData): number {
+  const title = cardTextLines(data.title, 14);
+  const middle = data.pictures.length > 0
+    ? CARD.pictures
+    : data.preview ? CARD.more + cardTextLines(data.preview, 13.5, 0.93) * CARD.text : 0;
+  const footer = areaCounts(data).length > 0 || data.warning ? CARD.footer : 0;
+  return 2 * CARD.pad + CARD.head + CARD.gap + title * CARD.line + (data.kind === 'work' ? 0 : CARD.steps) + middle + footer;
+}
+
+/** The room the overview's Areas have, in px of the stage: the stage less its insets. */
+function overviewRoom(size: Size) {
+  return { x: OVERVIEW_INSET.side, width: Math.max(1, size.width - 2 * OVERVIEW_INSET.side), top: OVERVIEW_INSET.top, height: Math.max(1, size.height - OVERVIEW_INSET.top - OVERVIEW_INSET.bottom) };
+}
+
+export interface OverviewPlan {
+  form: 'cards' | 'rows';
+  nodes: OverviewNode[];
+  /** Where the view stands to show every node whole, or null while the stage has no size. */
+  viewport: Viewport | null;
+}
+
+const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
+
+/** How high each line of cards is: as high as the highest card in it, so the cards of a line stand level and no line has blank space. */
+function cardLines(areas: BoardArea[], cols: number): number[] {
+  const heights: number[] = [];
+  areas.forEach((area, index) => {
+    const line = Math.floor(index / cols);
+    heights[line] = Math.max(heights[line] ?? AREA_SIZE.height, areaCardHeight(area.data));
   });
+  return heights;
+}
+
+/**
+ * The cards of the overview in the columns that show them all whole at a readable zoom (never below `READABLE_ZOOM`, never
+ * above life size), or null when no number of columns does. The one that is shown largest wins; the one closest to the stage's
+ * proportions when they are as large.
+ */
+function cardsPlan(areas: BoardArea[], size: Size): OverviewPlan | null {
+  const room = overviewRoom(size);
+  const targetRatio = room.width / room.height;
+  const extent = (cols: number) => {
+    const lines = cardLines(areas, cols);
+    return { lines, w: cols * AREA_SIZE.width + (cols - 1) * AREA_SIZE.gapX, h: lines.reduce((sum, line) => sum + line, 0) + (lines.length - 1) * AREA_SIZE.gapY };
+  };
+  let best: { cols: number; zoom: number; diff: number } | null = null;
+  for (let cols = 1; cols <= areas.length; cols++) {
+    const { w, h } = extent(cols);
+    const zoom = Math.min(1, room.width / w, room.height / h);
+    if (zoom < READABLE_ZOOM - 1e-9) continue;
+    const diff = Math.abs(w / h - targetRatio);
+    if (!best || zoom > best.zoom + 1e-5 || (Math.abs(zoom - best.zoom) <= 1e-5 && diff < best.diff)) best = { cols, zoom, diff };
+    // A few Areas that fit side by side at life size stand in one line
+    if (areas.length <= 3 && cols === areas.length && zoom >= 0.999) { best = { cols, zoom, diff }; break; }
+  }
+  if (!best) return null;
+  const { cols, zoom } = best;
+  const { lines, w, h } = extent(cols);
+  const tops = lines.map((_, line) => lines.slice(0, line).reduce((sum, above) => sum + above + AREA_SIZE.gapY, 0));
+  return {
+    form: 'cards',
+    nodes: areas.map((area, index): AreaNode => {
+      const line = Math.floor(index / cols);
+      return {
+        id: area.id,
+        type: 'area',
+        position: { x: (index % cols) * (AREA_SIZE.width + AREA_SIZE.gapX), y: tops[line]! },
+        width: AREA_SIZE.width,
+        height: lines[line]!,
+        measured: { width: AREA_SIZE.width, height: lines[line]! },
+        data: area.data,
+        ...FIXED,
+      };
+    }),
+    viewport: { x: (size.width - w * zoom) / 2, y: room.top + (room.height - h * zoom) / 2, zoom },
+  };
+}
+
+/** The id of the overview's one last row of folded Areas. */
+export const OVERVIEW_FOLD = 'overview:fold';
+
+/**
+ * One line to an Area at life size, in as few columns as show them all. When they are too many for the stage the finished ones
+ * fold into one last row ("N done"), and when that is not enough the ones at the end fold with them ("N more"), the one under way
+ * never. `expanded` shows them all, and the rows then go on below the stage: the view is for the person to move.
+ */
+function rowsPlan(areas: BoardArea[], size: Size, expanded: boolean): OverviewPlan {
+  const room = overviewRoom(size);
+  const step = AREA_ROW.height + AREA_ROW.gap;
+  const perColumn = Math.max(1, Math.floor((room.height + AREA_ROW.gap) / step));
+  const maxCols = Math.max(1, Math.floor((room.width + AREA_ROW.gapX) / (AREA_ROW.minWidth + AREA_ROW.gapX)));
+  const slots = perColumn * maxCols;
+
+  let shown = areas;
+  let folded: BoardArea[] = [];
+  if (areas.length > slots) {
+    const kept = new Set(areas.filter((area) => !area.data.done || area.data.current).map((area) => area.id));
+    // The last row takes one slot, so the Areas that stay are one fewer than the slots
+    const trailing = areas.filter((area) => kept.has(area.id) && !area.data.current).reverse();
+    for (const area of trailing) {
+      if (kept.size <= slots - 1) break;
+      kept.delete(area.id);
+    }
+    shown = areas.filter((area) => kept.has(area.id));
+    folded = areas.filter((area) => !kept.has(area.id));
+  }
+  const fold: AreaFoldData | null = folded.length > 0 ? { count: folded.length, kind: folded.every((area) => area.data.done) ? 'done' : 'more', expanded } : null;
+  const list = expanded ? areas : shown;
+  const lines = list.length + (fold ? 1 : 0);
+  const cols = Math.min(maxCols, Math.ceil(lines / perColumn));
+  const rows = Math.ceil(lines / cols);
+  const width = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (cols - 1) * AREA_ROW.gapX) / cols));
+  const place = (index: number) => ({ x: Math.floor(index / rows) * (width + AREA_ROW.gapX), y: (index % rows) * step });
+
+  const nodes: OverviewNode[] = list.map((area, index): AreaRowNode => ({
+    id: area.id,
+    type: 'areaRow',
+    position: place(index),
+    width,
+    height: AREA_ROW.height,
+    measured: { width, height: AREA_ROW.height },
+    data: area.data,
+    ...FIXED,
+  }));
+  if (fold) {
+    nodes.push({
+      id: OVERVIEW_FOLD,
+      type: 'areaFold',
+      position: place(list.length),
+      width,
+      height: AREA_ROW.height,
+      measured: { width, height: AREA_ROW.height },
+      data: fold,
+      ...FIXED,
+    } satisfies AreaFoldNode);
+  }
+  const total = cols * width + (cols - 1) * AREA_ROW.gapX;
+  return { form: 'rows', nodes, viewport: { x: room.x + (room.width - total) / 2, y: room.top, zoom: 1 } };
+}
+
+/**
+ * Lays out Level 0: the Areas as cards, as many columns as fit the stage at a readable size, and when they do not fit that
+ * way, as one-line rows (the narrow pane, the phone, many Areas). Pure: the form follows from the stage's size and the Areas.
+ */
+export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded?: boolean } = {}): OverviewPlan {
+  if (areas.length === 0) return { form: 'cards', nodes: [], viewport: null };
+  if (size.width <= 0 || size.height <= 0) {
+    // Not measured yet: a guess, drawn when the size is known
+    const cols = Math.min(areas.length, 3);
+    const lines = cardLines(areas, cols);
+    const nodes = areas.map((area, index): AreaNode => {
+      const line = Math.floor(index / cols);
+      const height = lines[line]!;
+      return {
+        id: area.id, type: 'area', position: { x: (index % cols) * (AREA_SIZE.width + AREA_SIZE.gapX), y: lines.slice(0, line).reduce((sum, above) => sum + above + AREA_SIZE.gapY, 0) },
+        width: AREA_SIZE.width, height, measured: { width: AREA_SIZE.width, height }, data: area.data, ...FIXED,
+      };
+    });
+    return { form: 'cards', nodes, viewport: null };
+  }
+  return cardsPlan(areas, size) ?? rowsPlan(areas, size, options.expanded ?? false);
+}
+
+/** The nodes of the overview (`overviewPlan`). */
+export function overviewLayout(areas: BoardArea[], size: Size, options: { expanded?: boolean } = {}): OverviewNode[] {
+  return overviewPlan(areas, size, options).nodes;
 }
 
 /**
  * Connects cross-area links at Level 0, deduplicating multiple lines between the same areas.
  */
-export function overviewEdges(areas: BoardArea[], nodes: AreaNode[], links: BoardLink[]): Edge[] {
+export function overviewEdges(areas: BoardArea[], nodes: OverviewNode[], links: BoardLink[]): Edge[] {
   if (!links.length || !areas.length || !nodes.length) return [];
   const ownerMap = new Map<string, string>();
   const titleMap = new Map<string, string>();
@@ -532,8 +684,10 @@ export function overviewEdges(areas: BoardArea[], nodes: AreaNode[], links: Boar
     }
   }
 
+  // Only cards are linked by lines: one-line rows have none between them
   const rects = new Map<string, Rect>();
   for (const n of nodes) {
+    if (n.type !== 'area') continue;
     rects.set(n.id, {
       x: n.position.x,
       y: n.position.y,
@@ -594,48 +748,3 @@ export function overviewEdges(areas: BoardArea[], nodes: AreaNode[], links: Boar
 
 export { READABLE_ZOOM, ROW_SIZE, WAITING_ROW, areaBoardLayout, areaLayout, areaOpenInfo, areaPlace, areaRowIds, areaRowOf, areaRows, areaStage, areaView } from './boardRows.js';
 export type { AreaBoardLayoutOptions, AreaRow, AreaStage } from './boardRows.js';
-
-/**
- * Computes a viewport such that all bounded nodes fit whole inside the container screen with no scrolling.
- */
-export function fitBoundsView(
-  nodes: Array<{ id: string; parentId?: string; position: { x: number; y: number }; width?: number; height?: number }>,
-  size: Size,
-  options?: { topInset?: number; bottomInset?: number; margin?: number },
-): Viewport | null {
-  if (nodes.length === 0 || size.width <= 0 || size.height <= 0) return null;
-
-  const topNodes = nodes.filter((n) => !n.parentId);
-  if (topNodes.length === 0) return null;
-
-  const calcBounds = (list: typeof topNodes) => {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const node of list) {
-      const w = node.width ?? BOARD_SIZE.card;
-      const h = node.height ?? 0;
-      if (node.position.x < minX) minX = node.position.x;
-      if (node.position.y < minY) minY = node.position.y;
-      if (node.position.x + w > maxX) maxX = node.position.x + w;
-      if (node.position.y + h > maxY) maxY = node.position.y + h;
-    }
-    return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
-  };
-
-  const padX = Math.max(24, size.width * (options?.margin ?? 0.05));
-  const padTop = options?.topInset ?? 44;
-  const padBottom = options?.bottomInset ?? 48;
-  const availW = Math.max(40, size.width - 2 * padX);
-  const availH = Math.max(40, size.height - padTop - padBottom);
-
-  const bounds = calcBounds(topNodes);
-  const zoom = Math.min(1, availW / bounds.width, availH / bounds.height);
-
-
-  const x = size.width / 2 - (bounds.x + bounds.width / 2) * zoom;
-  const y = padTop + availH / 2 - (bounds.y + bounds.height / 2) * zoom;
-
-  return { x, y, zoom };
-}

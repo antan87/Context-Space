@@ -337,16 +337,17 @@ test.describe('Commit cards in quiet reader', () => {
     await expect(readerTitle(page, 'Write the CSV writer')).toBeVisible();
     await expect(commitArticle).toHaveAttribute('aria-current', 'true');
 
-    // Verify reader header has ONLY 2 buttons and ZERO links
+    // Verify reader header has 3 buttons (More actions, Full screen, Close) and ZERO links when unpushed
     const header = reader(page).locator('header');
-    await expect(header.getByRole('button')).toHaveCount(2);
+    await expect(header.getByRole('button')).toHaveCount(3);
     await expect(header.getByRole('button').nth(0)).toHaveAccessibleName('More actions');
-    await expect(header.getByRole('button').nth(1)).toHaveAccessibleName('Close');
+    await expect(header.getByRole('button').nth(1)).toHaveAccessibleName('Full screen');
+    await expect(header.getByRole('button').nth(2)).toHaveAccessibleName('Close');
     await expect(header.getByRole('link')).toHaveCount(0);
     await expect(header).toContainText(`billing · ${detail.shortSha.slice(0, 7)}`);
 
-    // Verify reader has ONLY header's 2 buttons plus the file disclosure buttons (all collapsed)
-    await expect(reader(page).getByRole('button')).toHaveCount(2 + detail.files.length);
+    // Verify reader has header's 3 buttons plus the file disclosure buttons (all collapsed)
+    await expect(reader(page).getByRole('button')).toHaveCount(3 + detail.files.length);
     for (const file of detail.files) {
       const btn = reader(page).getByRole('button', { name: new RegExp(file.path) });
       await expect(btn).toHaveAttribute('aria-expanded', 'false');
@@ -467,6 +468,13 @@ test.describe('Commit cards in quiet reader', () => {
       await commitCard.getByRole('button', { name: 'Open Write the CSV writer' }).click();
       await expect(reader(page)).toBeVisible();
 
+      // Verify the visible vendor link badge in the header
+      const headerForgeBadge = reader(page).locator('header').getByRole('link', { name: new RegExp(forge.name.replace('Open on ', '')) });
+      await expect(headerForgeBadge).toBeVisible();
+      await expect(headerForgeBadge).toHaveAttribute('href', forge.url);
+      await expect(headerForgeBadge).toHaveAttribute('target', '_blank');
+      await expect(headerForgeBadge).toHaveAttribute('rel', 'noopener noreferrer');
+
       await moreButton(page).click();
       await expect(page.getByRole('menu')).toBeVisible();
       const forgeItem = menuItem(page, forge.name);
@@ -579,11 +587,11 @@ test.describe('Commit cards in quiet reader', () => {
     const errorCard = board(page).locator('#board-area .react-flow__node-commit').filter({ hasText: 'Failing commit' });
     await errorCard.getByRole('button', { name: 'Open Failing commit' }).click();
 
-    // Verify role="alert" shows 'Could not read this commit.' and reader still has 2 buttons
+    // Verify role="alert" shows 'Could not read this commit.' and reader has its 3 header buttons
     const alert = reader(page).getByRole('alert');
     await expect(alert).toBeVisible();
     await expect(alert).toHaveText('Could not read this commit.');
-    await expect(reader(page).getByRole('button')).toHaveCount(2);
+    await expect(reader(page).getByRole('button')).toHaveCount(3);
   });
 
   test('expands and folds single-file diffs in place, renders diff viewer, plain patch, and handles binary and oversized diffs', async ({ page }) => {
@@ -681,5 +689,99 @@ test.describe('Commit cards in quiet reader', () => {
     await expect(oversizedNote).toBeVisible();
     await expect(oversizedNote).toHaveText(/diff is too large to display/i);
     await expect(reader(page).getByRole('toolbar', { name: 'Diff' })).toHaveCount(0);
+  });
+
+  test('supports true fullscreen / maximize mode over the viewport and restores on toggle or Escape', async ({ page }) => {
+    const detail = makeCommitDetail({
+      sha: FULL_SHA,
+      shortSha: SHORT_SHA,
+      subject: 'Write the CSV writer',
+      author: 'Anna',
+      files: [{ path: 'src/export.ts', status: 'modified', additions: 10, deletions: 2 }],
+    });
+    await setupCommitBoard(page, detail, [], (file) => ({
+      repo: 'billing',
+      repoPath: '/tmp/demo/billing',
+      sha: FULL_SHA,
+      file,
+      diff: '@@ -1,2 +1,3 @@\n-old\n+new\n line',
+      fileContent: 'new\nline\n',
+      originalContent: 'old\nline\n',
+      symbols: [],
+    }));
+
+    const commitCard = board(page).locator('#board-area .react-flow__node-commit').filter({ hasText: 'Write the CSV writer' });
+    await commitCard.getByRole('button', { name: 'Open Write the CSV writer' }).click();
+    await expect(reader(page)).toBeVisible();
+
+    // 1. Initial state: not fullscreen
+    const fullscreenToggle = reader(page).locator('header').getByRole('button', { name: 'Full screen' });
+    await expect(fullscreenToggle).toBeVisible();
+    await expect(fullscreenToggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('[data-board-reader-fullscreen]')).toHaveCount(0);
+
+    // 2. Open a file diff to verify it stays open across maximize toggle
+    const fileRowBtn = reader(page).getByRole('button', { name: /src\/export\.ts/ });
+    await fileRowBtn.click();
+    await expect(fileRowBtn).toHaveAttribute('aria-expanded', 'true');
+    await expect(reader(page).getByRole('toolbar', { name: 'Diff' })).toBeVisible();
+
+    // 3. Click Full screen toggle
+    await fullscreenToggle.click();
+    const fullscreenContainer = page.locator('[data-board-reader-fullscreen]');
+    await expect(fullscreenContainer).toBeVisible();
+    await expect(fullscreenContainer).toHaveClass(/fixed inset-0 z-\[100\]/);
+
+    // Toggle button accessible name updates to 'Exit full screen'
+    const exitFullscreenBtn = fullscreenContainer.getByRole('button', { name: 'Exit full screen' });
+    await expect(exitFullscreenBtn).toBeVisible();
+    await expect(exitFullscreenBtn).toHaveAttribute('aria-pressed', 'true');
+
+    // File diff remains open in fullscreen mode
+    await expect(fullscreenContainer.getByRole('toolbar', { name: 'Diff' })).toBeVisible();
+
+    // 4. Verify portaled diff options menu opens ABOVE fullscreen reader (z-110 stacking)
+    const diffOptionsBtn = fullscreenContainer.getByRole('button', { name: 'More diff options' });
+    await diffOptionsBtn.click();
+    const diffMenu = page.getByRole('menu');
+    await expect(diffMenu).toBeVisible();
+    await expect(diffMenu.getByRole('menuitemcheckbox', { name: 'Ignore whitespace' })).toBeVisible();
+
+    // Press Escape: dismisses the open menu, reader remains maximized
+    await page.keyboard.press('Escape');
+    await expect(diffMenu).toHaveCount(0);
+    await expect(fullscreenContainer).toBeVisible();
+
+    // 5. Press Escape to exit fullscreen back to normal large layout
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-board-reader-fullscreen]')).toHaveCount(0);
+    await expect(reader(page)).toBeVisible();
+    const restoredFullscreenBtn = reader(page).locator('header').getByRole('button', { name: 'Full screen' });
+    await expect(restoredFullscreenBtn).toBeVisible();
+    // Focus was gracefully restored to the toggle button
+    await expect(restoredFullscreenBtn).toBeFocused();
+
+    // File diff still remains open in normal mode
+    await expect(reader(page).getByRole('toolbar', { name: 'Diff' })).toBeVisible();
+
+    // 6. Click Full screen again, then click Exit full screen button
+    await restoredFullscreenBtn.click();
+    await expect(page.locator('[data-board-reader-fullscreen]')).toBeVisible();
+    await page.locator('[data-board-reader-fullscreen]').getByRole('button', { name: 'Exit full screen' }).click();
+    await expect(page.locator('[data-board-reader-fullscreen]')).toHaveCount(0);
+    await expect(reader(page)).toBeVisible();
+
+    // 7. Maximize from 'side' layout: switch to side layout, maximize, and verify Escape restores to side
+    await moreButton(page).click();
+    await menuItem(page, 'Show beside the board').click();
+    // In side mode, section has border-l and no backdrop overlay
+    await expect(reader(page)).toHaveClass(/border-l/);
+
+    await reader(page).locator('header').getByRole('button', { name: 'Full screen' }).click();
+    await expect(page.locator('[data-board-reader-fullscreen]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-board-reader-fullscreen]')).toHaveCount(0);
+    await expect(reader(page)).toBeVisible();
+    await expect(reader(page)).toHaveClass(/border-l/);
   });
 });

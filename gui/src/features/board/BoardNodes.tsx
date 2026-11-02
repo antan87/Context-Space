@@ -10,7 +10,7 @@ import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, Dial
 import { cn } from '../../lib/utils.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
-import { stepsText, waitingText, type AreaNode } from './boardAreas.js';
+import { areaCounts, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { BOARD_SIZE, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
@@ -573,50 +573,38 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   </CardFrame>;
 }
 
-/** An area at Level 0: an interactive overview card summarizing a checkpoint or logical area. */
+/** How far an Area is, as words. */
+const areaSteps = (data: AreaData) => data.kind === 'plan'
+  ? (data.stepsTotal ? `${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'} outside the checkpoints` : 'Steps outside the checkpoints')
+  : stepsText(data);
+
+/** What names an Area to those who cannot see it: its title, its state, its steps, what waits, what it holds and any problem. */
+function areaLabel(data: AreaData): string {
+  const counts = areaCounts(data);
+  return summaryLabel([
+    data.title,
+    data.done ? 'done' : data.current ? 'current' : data.kind === 'checkpoint' ? 'not done' : undefined,
+    data.kind !== 'work' ? areaSteps(data).toLowerCase() : undefined,
+    data.waitingCount > 0 ? (data.waitingCount === 1 ? 'waits for you' : `${data.waitingCount} wait for you`) : undefined,
+    counts.length > 0 ? counts.join(', ') : undefined,
+    data.warning?.toLowerCase(),
+  ]);
+}
+
+/** What the card's text is, at 13.5 px so that it is still 12 px at the least zoom of the overview (0.9). */
+const AREA_TEXT = 'text-[13.5px] leading-4 text-muted-foreground';
+
+/** An area at Level 0: an interactive overview card summarizing a checkpoint or logical area. It shows only what the Area has. */
 export function BoardArea({ id, data }: NodeProps<AreaNode>) {
   const actions = useContext(BoardActionsContext);
   const [failedPics, setFailedPics] = useState<string[]>([]);
   const visiblePics = data.pictures.filter((pic) => !failedPics.includes(pic.path));
   const waiting = data.waitingCount;
   const border = waiting > 0 ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border';
-
-  const statusPart = data.done
-    ? 'done'
-    : data.current
-      ? 'current'
-      : data.kind === 'checkpoint'
-        ? 'not done'
-        : undefined;
-
-  const stepsLabel = data.kind === 'plan'
-    ? (data.stepsTotal ? `${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'} outside the checkpoints` : 'Steps outside the checkpoints')
-    : (data.stepsTotal ? `${data.stepsDone} of ${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'}` : 'No steps');
-
-  const stepsPart = data.kind !== 'work' ? stepsLabel.toLowerCase() : undefined;
-  const waitingPart = waiting > 0 ? (waiting === 1 ? 'waits for you' : `${waiting} wait for you`) : undefined;
-
-  const countItems: string[] = [];
-  if (data.noteCount > 0) countItems.push(`${data.noteCount} ${data.noteCount === 1 ? 'note' : 'notes'}`);
-  if (data.pictureCount > 0) countItems.push(`${data.pictureCount} ${data.pictureCount === 1 ? 'picture' : 'pictures'}`);
-  if (data.fileCount > data.pictureCount) {
-    const otherFiles = data.fileCount - data.pictureCount;
-    countItems.push(`${otherFiles} ${otherFiles === 1 ? 'file' : 'files'}`);
-  }
-  if (data.documentCount > 0) countItems.push(`${data.documentCount} ${data.documentCount === 1 ? 'document' : 'documents'}`);
-  if (data.commitCount > 0) countItems.push(`${data.commitCount} ${data.commitCount === 1 ? 'commit' : 'commits'}`);
-  const countsPart = countItems.length > 0 ? countItems.join(', ') : 'no items yet';
-
-  const label = summaryLabel([
-    data.title,
-    statusPart,
-    stepsPart,
-    waitingPart,
-    countsPart,
-    data.warning?.toLowerCase(),
-  ]);
-
+  const counts = areaCounts(data);
+  const stepsLabel = areaSteps(data);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
+  const footer = counts.length > 0 || Boolean(data.warning);
 
   return (
     <div className="relative h-full w-full rounded-2xl">
@@ -625,35 +613,33 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
       <button
         type="button"
         onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
-        aria-label={label}
+        aria-label={areaLabel(data)}
         className={cn(
-          'board-area nodrag nopan relative flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-card p-4 text-left text-card-foreground shadow-xs transition-colors hover:bg-accent/35',
+          'board-area nodrag nopan relative flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-card p-3 text-left text-card-foreground shadow-xs transition-colors hover:bg-accent/35',
           border,
         )}
       >
-        <span className="flex h-5 w-full items-center gap-1.5 whitespace-nowrap text-[12.5px] text-muted-foreground">
+        <span className={cn('flex h-5 w-full shrink-0 items-center gap-1.5 whitespace-nowrap', AREA_TEXT)}>
           {data.kind === 'checkpoint' && (
             data.done ? (
-              <Badge variant="success" className="board-area-badge">Done</Badge>
+              <Badge variant="success" className="board-area-badge sm:h-5 sm:text-[13.5px]">Done</Badge>
             ) : data.current ? (
-              <Badge variant="default" className="board-area-badge">Current</Badge>
-            ) : (
-              <Badge variant="outline" className="board-area-badge sm:text-[12.5px]">Not done</Badge>
-            )
+              <Badge variant="default" className="board-area-badge sm:h-5 sm:text-[13.5px]">Current</Badge>
+            ) : null
           )}
-          {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge">Plan</Badge>}
-          {data.kind === 'work' && <Badge variant="default" className="board-area-badge">Current</Badge>}
-          {waiting > 0 && <Badge variant="warning">{waitingText(waiting)}</Badge>}
+          {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge sm:h-5 sm:text-[13.5px]">Plan</Badge>}
+          {data.kind === 'work' && <Badge variant="default" className="board-area-badge sm:h-5 sm:text-[13.5px]">Current</Badge>}
+          {waiting > 0 && <Badge variant="warning" className="board-area-badge sm:h-5 sm:text-[13.5px]">{waitingText(waiting)}</Badge>}
           <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
         </span>
 
-        <span className="mt-1.5 line-clamp-2 block text-sm font-semibold leading-5 text-foreground" title={data.title}>
+        <span className="mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
           {data.title}
         </span>
 
         {data.kind !== 'work' && (
-          <span className="mt-1 block">
-            <span className="block truncate text-[12.5px] leading-4 text-muted-foreground">{stepsLabel}</span>
+          <span className="mt-1 block shrink-0">
+            <span className={cn('block truncate', AREA_TEXT)}>{stepsLabel}</span>
             <span aria-hidden="true" className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted">
               <span
                 className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')}
@@ -663,40 +649,93 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
           </span>
         )}
 
-        <span className="mt-2 flex min-h-0 flex-1 flex-col justify-center">
-          {visiblePics.length > 0 && actions ? (
-            <span className="flex h-16 items-center gap-2 overflow-hidden rounded-md">
-              {visiblePics.map((pic) => (
-                <img
-                  key={pic.path}
-                  src={documentFileUrl(actions.workspaceId, pic.path)}
-                  alt=""
-                  aria-hidden="true"
-                  loading="lazy"
-                  onError={() => {
-                    setFailedPics((prev) => (prev.includes(pic.path) ? prev : [...prev, pic.path]));
-                  }}
-                  className="h-full w-20 rounded border border-border/50 object-cover"
-                />
-              ))}
-            </span>
-          ) : data.preview ? (
-            <span className="line-clamp-2 block text-[12.5px] leading-4 text-muted-foreground">{data.preview}</span>
-          ) : null}
-        </span>
+        {visiblePics.length > 0 && actions ? (
+          <span className="mt-2 flex h-16 shrink-0 items-center gap-2 overflow-hidden rounded-md">
+            {visiblePics.map((pic) => (
+              <img
+                key={pic.path}
+                src={documentFileUrl(actions.workspaceId, pic.path)}
+                alt=""
+                aria-hidden="true"
+                loading="lazy"
+                onError={() => {
+                  setFailedPics((prev) => (prev.includes(pic.path) ? prev : [...prev, pic.path]));
+                }}
+                className="h-full w-20 rounded border border-border/50 object-cover"
+              />
+            ))}
+          </span>
+        ) : data.preview ? (
+          <span className={cn('mt-2 line-clamp-2 shrink-0', AREA_TEXT)}>{data.preview}</span>
+        ) : null}
 
-        <span className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-border/50 pt-2 text-[12.5px] text-muted-foreground">
-          {countItems.length > 0 ? (
-            <span className="truncate">{countItems.join(' · ')}</span>
-          ) : (
-            <span>Empty</span>
-          )}
-          {data.warning && (
-            <span className="text-destructive-foreground">{data.warning}</span>
-          )}
-        </span>
+        {footer && (
+          <>
+            <span aria-hidden="true" className="min-h-2 flex-1" />
+            <span className={cn('flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-border/50 pt-2', AREA_TEXT)}>
+              {counts.length > 0 && <span className="truncate">{counts.join(' · ')}</span>}
+              {data.warning && <span className="text-destructive-foreground">{data.warning}</span>}
+            </span>
+          </>
+        )}
       </button>
     </div>
+  );
+}
+
+/** Whether an Area is done, under way ("Now") or neither, as a mark that stays quiet: neither is the usual and says nothing. */
+function AreaMark({ data }: { data: AreaData }) {
+  if (data.done) return <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-state-done" />;
+  if (data.current) return <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center"><span className="board-now-dot size-2 rounded-full bg-state-now" /></span>;
+  return <Circle aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/50" />;
+}
+
+/** An area at Level 0 as one line, where the cards would not be readable: its state, its title, how far it is, and a thin bar. A press steps into it, as on the card. */
+export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
+  const actions = useContext(BoardActionsContext);
+  const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
+  return (
+    <div className="relative h-full w-full rounded-lg">
+      {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-lg" />}
+      <button
+        type="button"
+        onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+        aria-label={areaLabel(data)}
+        className="board-area nodrag nopan @container relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-lg bg-card px-3 text-left text-card-foreground transition-colors hover:bg-accent"
+      >
+        <AreaMark data={data} />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5 text-foreground" title={data.title}>{data.title}</span>
+        {data.current && <span className="shrink-0 text-xs font-medium text-state-now">Now</span>}
+        {data.waitingCount > 0 && (
+          <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
+            <span className="size-1.5 rounded-full bg-state-needs" />Waiting
+          </span>
+        )}
+        {data.kind !== 'work' && data.stepsTotal > 0 && (
+          <>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{data.stepsDone} of {data.stepsTotal}</span>
+            <span aria-hidden="true" className={cn('h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20', data.waitingCount > 0 && 'hidden @[24rem]:block')}>
+              <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
+            </span>
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** The last row of the overview: "N done" (or "N more") holds the Areas that did not fit, and opens them on a press. */
+export function BoardAreaFold({ data }: NodeProps<AreaFoldNode>) {
+  return (
+    <button
+      type="button"
+      aria-expanded={data.expanded}
+      onClick={data.onToggle}
+      className="board-area-fold nodrag nopan relative flex h-full w-full items-center gap-2.5 rounded-lg px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
+    >
+      {data.expanded ? <ChevronUp aria-hidden="true" className="size-4 shrink-0" /> : <ChevronDown aria-hidden="true" className="size-4 shrink-0" />}
+      {data.expanded ? 'Show fewer' : `${data.count} ${data.kind}`}
+    </button>
   );
 }
 

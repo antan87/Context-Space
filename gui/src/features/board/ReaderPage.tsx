@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '../../components/ui/button.js';
+import { API_BASE } from '../../lib/apiBase.js';
 import { requestDocumentViewLink, type DocumentViewLinkResult } from './boardActions.js';
 
 export interface ReaderPageProps {
@@ -20,25 +21,32 @@ export function ReaderPage({ workspaceId, path, raw, onViewUrlReady }: ReaderPag
     queryKey: ['document-view-link', workspaceId, path],
     queryFn: ({ signal }) => requestDocumentViewLink(workspaceId, path, signal),
     retry: 1,
+    staleTime: Infinity,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const viewUrl = viewLinkQuery.data?.url ?? null;
+  const absoluteViewUrl = viewUrl ? `${API_BASE}${viewUrl}` : null;
 
   useEffect(() => {
-    if (viewUrl && onViewUrlReady) {
-      onViewUrlReady(viewUrl);
+    if (absoluteViewUrl && onViewUrlReady) {
+      onViewUrlReady(absoluteViewUrl);
     }
-  }, [viewUrl, onViewUrlReady]);
+  }, [absoluteViewUrl, onViewUrlReady]);
 
   const rawTextQuery = useQuery<string, Error>({
-    queryKey: ['document-raw-text', viewUrl],
+    queryKey: ['document-raw-text', absoluteViewUrl],
     queryFn: async ({ signal }) => {
-      const res = await fetch(viewUrl!, { signal });
+      const res = await fetch(absoluteViewUrl!, { signal });
       if (!res.ok) throw new Error(`Could not load document source (${res.status}).`);
       return res.text();
     },
-    enabled: Boolean(raw && viewUrl),
+    enabled: Boolean(raw && absoluteViewUrl),
     retry: 1,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 
   if (viewLinkQuery.isPending) {
@@ -93,7 +101,7 @@ export function ReaderPage({ workspaceId, path, raw, onViewUrlReady }: ReaderPag
   return (
     <iframe
       title={`Preview of ${path}`}
-      src={`${viewUrl}?frame=1`}
+      src={`${absoluteViewUrl}?frame=1`}
       sandbox="allow-scripts allow-forms allow-modals allow-popups"
       referrerPolicy="no-referrer"
       className="size-full border-0 bg-white"

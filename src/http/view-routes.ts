@@ -30,6 +30,41 @@ export const ESCAPE_MESSAGE = 'contextspace:escape';
 export const FIT_SCRIPT = `(function(){var frame=0,seen=new WeakSet(),watcher=window.ResizeObserver?new ResizeObserver(later):null;function watch(el){if(watcher&&!seen.has(el)){seen.add(el);watcher.observe(el)}}function fit(){var body=document.body,root=document.documentElement;if(!body)return;watch(root);watch(body);for(var i=0;i<body.children.length&&i<40;i++)watch(body.children[i]);body.style.zoom='';var room=root.clientWidth,wide=Math.max(root.scrollWidth,body.scrollWidth);if(room>0&&wide>room+1)body.style.zoom=String(Math.max(0.5,room/wide))}function later(){cancelAnimationFrame(frame);frame=requestAnimationFrame(fit)}addEventListener('resize',later);addEventListener('load',later,true);document.addEventListener('DOMContentLoaded',later);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(later);[150,600,1800].forEach(function(ms){setTimeout(later,ms)});addEventListener('keydown',function(event){if(event.key==='Escape'&&!event.defaultPrevented)parent.postMessage('${ESCAPE_MESSAGE}','*')})})()`;
 
 /**
+ * Finds the byte offset where FIT_SCRIPT should be injected.
+ * Preferring, in order:
+ * 1. end of `<head ...>` tag
+ * 2. end of `<html ...>` tag
+ * 3. end of `<!doctype ...>` tag
+ * 4. 0
+ * Input string must be decoded using 'latin1' so that character indices correspond exactly to byte offsets.
+ */
+export function findInsertOffset(latin1Text: string): number {
+  const headMatch = latin1Text.match(/<head\b[^>]*>/i);
+  if (headMatch && headMatch.index !== undefined) {
+    return headMatch.index + headMatch[0].length;
+  }
+  const htmlMatch = latin1Text.match(/<html\b[^>]*>/i);
+  if (htmlMatch && htmlMatch.index !== undefined) {
+    return htmlMatch.index + htmlMatch[0].length;
+  }
+  const doctypeMatch = latin1Text.match(/<!doctype\b[^>]*>/i);
+  if (doctypeMatch && doctypeMatch.index !== undefined) {
+    return doctypeMatch.index + doctypeMatch[0].length;
+  }
+  return 0;
+}
+
+/**
+ * Formats Content-Disposition header with an ASCII fallback and RFC 5987/6266 UTF-8 filename*.
+ * Non-ASCII characters, double quotes, and backslashes are replaced by '_' in the fallback filename.
+ */
+export function formatContentDisposition(fileName: string): string {
+  const asciiFallback = fileName.replace(/[^\x20-\x7E]|["\\]/g, '_');
+  const encoded = encodeURIComponent(fileName);
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
+/**
  * Creates a stream that injects FIT_SCRIPT into HTML responses right after <head> or <html>.
  * Scans only up to 64 KB, then passes all subsequent chunks directly with zero overhead.
  */
@@ -62,34 +97,15 @@ export function createHtmlRelayStream(
         const { value, done } = await reader.read();
         if (done) {
           const combined = Buffer.concat(bufferedChunks);
-          const str = combined.toString('utf-8');
-          const headIndex = str.search(/<head\b[^>]*>/i);
-          if (headIndex !== -1) {
-            const match = str.match(/<head\b[^>]*>/i)![0];
-            const insertPos = headIndex + match.length;
-            controller.enqueue(
-              Buffer.concat([
-                combined.subarray(0, insertPos),
-                scriptBytes,
-                combined.subarray(insertPos),
-              ]),
-            );
-          } else {
-            const htmlIndex = str.search(/<html\b[^>]*>/i);
-            if (htmlIndex !== -1) {
-              const match = str.match(/<html\b[^>]*>/i)![0];
-              const insertPos = htmlIndex + match.length;
-              controller.enqueue(
-                Buffer.concat([
-                  combined.subarray(0, insertPos),
-                  scriptBytes,
-                  combined.subarray(insertPos),
-                ]),
-              );
-            } else {
-              controller.enqueue(Buffer.concat([scriptBytes, combined]));
-            }
-          }
+          const latin1 = combined.toString('latin1');
+          const insertPos = findInsertOffset(latin1);
+          controller.enqueue(
+            Buffer.concat([
+              combined.subarray(0, insertPos),
+              scriptBytes,
+              combined.subarray(insertPos),
+            ]),
+          );
           injected = true;
           controller.close();
           return;
@@ -99,8 +115,8 @@ export function createHtmlRelayStream(
         bufferedLen += value.length;
 
         const combined = Buffer.concat(bufferedChunks);
-        const str = combined.toString('utf-8');
-        const headMatch = str.match(/<head\b[^>]*>/i);
+        const latin1 = combined.toString('latin1');
+        const headMatch = latin1.match(/<head\b[^>]*>/i);
         if (headMatch && headMatch.index !== undefined) {
           const insertPos = headMatch.index + headMatch[0].length;
           const headChunk = Buffer.concat([
@@ -118,7 +134,14 @@ export function createHtmlRelayStream(
         }
 
         if (bufferedLen >= MAX_HEAD_SCAN_BYTES) {
-          controller.enqueue(Buffer.concat([scriptBytes, combined]));
+          const insertPos = findInsertOffset(latin1);
+          controller.enqueue(
+            Buffer.concat([
+              combined.subarray(0, insertPos),
+              scriptBytes,
+              combined.subarray(insertPos),
+            ]),
+          );
           bufferedChunks = [];
           injected = true;
           return;
@@ -324,6 +347,7 @@ export function registerViewRoutes(
     let handedToStream = false;
     try {
       const etag = computeFileEtag(opened.size, opened.mtimeNs);
+      const isHtml = mime.startsWith('text/html');
       const commonHeaders: Record<string, string> = {
         'Content-Security-Policy': 'sandbox allow-scripts allow-forms allow-modals allow-popups',
         'X-Content-Type-Options': 'nosniff',
@@ -332,6 +356,7 @@ export function registerViewRoutes(
         ETag: etag,
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
+        ...(isHtml ? { Vary: 'Sec-Fetch-Dest' } : {}),
       };
 
       if (matchesIfNoneMatch(c.req.header('if-none-match'), etag)) {
@@ -363,7 +388,7 @@ export function registerViewRoutes(
           'Content-Range': `bytes ${start}-${end}/${opened.size}`,
           'Content-Length': String(contentLength),
           ...(isDownload
-            ? { 'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"` }
+            ? { 'Content-Disposition': formatContentDisposition(fileName) }
             : {}),
         };
         if (c.req.method === 'HEAD') {
@@ -375,14 +400,13 @@ export function registerViewRoutes(
       }
 
       const isIframe = c.req.header('sec-fetch-dest') === 'iframe' || c.req.query('frame') === '1';
-      const isHtml = mime.startsWith('text/html');
       const isDownload = c.req.query('download') === '1';
 
       const headers: Record<string, string> = {
         ...commonHeaders,
         'Content-Type': mime,
         ...(isDownload
-          ? { 'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"` }
+          ? { 'Content-Disposition': formatContentDisposition(fileName) }
           : {}),
       };
 

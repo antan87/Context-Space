@@ -802,8 +802,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           {showPanel && (
           <div className="relative flex min-w-0 flex-1 flex-col">
             {/* What is open, and the way back to the chat, which is always one click: the cross, or the rail item again.
-                Code and Docs carry these in their own toolbars, so each spends one row on controls instead of two. */}
-            {subTab !== 'changes' && subTab !== 'documents' && (
+                Code, Docs and the Board carry these in their own toolbars or corners, so each spends no row on a title. */}
+            {subTab !== 'changes' && subTab !== 'documents' && subTab !== 'board' && (
             <div className="z-10 flex shrink-0 items-center gap-0.5 border-b border-border/60 bg-background/95 px-6 py-1.5 backdrop-blur">
               {/* A label, not a heading: the part below names itself, and its region carries the same name. On the plan, the
                   sessions sit beside it as tabs. */}
@@ -829,7 +829,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           {visitedSections.has('board') && !archived && (
             <div role="region" aria-label={SECTION_LABELS.board} hidden={subTab !== 'board'} className="min-h-0 flex-1">
               <Suspense fallback={<div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board</div>}>
-                <BoardSection key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} active={subTab === 'board'} />
+                <BoardSection key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} active={subTab === 'board'} panelActions={panelActions} />
               </Suspense>
             </div>
           )}

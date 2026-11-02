@@ -656,11 +656,6 @@
   --xy-background-color: var(--background);
   --xy-background-pattern-dots-color: var(--border);
   --xy-attribution-background-color: color-mix(in srgb, var(--card) 80%, transparent);
-  --xy-controls-button-background-color: var(--card);
-  --xy-controls-button-background-color-hover: var(--secondary);
-  --xy-controls-button-color: var(--foreground);
-  --xy-controls-button-color-hover: var(--foreground);
-  --xy-controls-button-border-color: var(--border);
   --xy-minimap-background-color: var(--card);
   --xy-minimap-mask-background-color: color-mix(in srgb, var(--background) 65%, transparent);
   --xy-minimap-mask-stroke-color: var(--primary);
@@ -669,8 +664,6 @@
 
 .board-flow .react-flow__attribution a { color: var(--muted-foreground); }
 .board-flow .react-flow__minimap { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.board-flow .react-flow__controls { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: none; }
-.board-flow .react-flow__controls-button:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 
 /* A map of the board: lanes faint, cards firmer, checkpoints by whether they are done, notes and files by the accent. */
 .board-flow .react-flow__minimap-node.board-mini-lane { fill: var(--secondary); }
@@ -795,8 +788,13 @@
 @media (prefers-reduced-motion: no-preference) {
   .board-flow-rows .react-flow__node { transition: transform 160ms ease-out, height 160ms ease-out; }
 }
-.board-flow .board-area:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.board-flow :is(.board-area, .board-area-fold):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .board-flow .react-flow__minimap-node.board-mini-area { fill: var(--primary); fill-opacity: 0.55; }
+
+/* When board reader is in fullscreen breakout, any portaled menu positioners sit above it (z-110) */
+body:has([data-board-reader-fullscreen]) [data-slot="menu-positioner"] {
+  z-index: 110 !important;
+}
 
 
 /* A card that opens on a press: it darkens to the accent, and stays opaque so the dot grid of the board never shows through. */

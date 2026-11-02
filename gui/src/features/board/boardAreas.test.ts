@@ -3,14 +3,22 @@ import type { WorkDocument } from '../../types.js';
 import type { PlanFileView } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import {
+  AREA_ROW,
   AREA_SIZE,
+  OVERVIEW_FOLD,
+  OVERVIEW_INSET,
   areaBoardLayout,
+  areaCardHeight,
+  areaCounts,
   buildBoardAreas,
-  chooseGridColumns,
-  fitBoundsView,
   overviewEdges,
   overviewLayout,
+  overviewPlan,
+  type AreaData,
+  type BoardArea,
+  type OverviewNode,
 } from './boardAreas.js';
+import { READABLE_ZOOM } from './boardRows.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
 
 describe('boardAreas', () => {
@@ -283,74 +291,185 @@ describe('boardAreas', () => {
     });
   });
 
-  describe('chooseGridColumns, overviewLayout & fitBoundsView', () => {
-    it('chooses appropriate columns across 1, 3, 8, and 12 areas', () => {
-      const size1440 = { width: 1440, height: 900 };
-      expect(chooseGridColumns(1, size1440)).toBe(1);
-      expect(chooseGridColumns(3, size1440)).toBe(3);
-      expect(chooseGridColumns(8, size1440)).toBeGreaterThanOrEqual(3);
-      expect(chooseGridColumns(12, size1440)).toBeGreaterThanOrEqual(3);
+  /** Areas as the overview draws them: `done` of the first ones are finished and the next one is under way. */
+  const manyAreas = (count: number, options: { done?: number; data?: Partial<AreaData> } = {}): BoardArea[] => Array.from({ length: count }, (_, i) => {
+    const done = i < (options.done ?? 0);
+    const data: AreaData = {
+      kind: 'checkpoint', title: `Checkpoint ${i + 1}: the work of one slice`, done, current: i === (options.done ?? 0), stepsDone: done ? 3 : 1, stepsTotal: 3,
+      waitingCount: 0, noteCount: 0, fileCount: 0, pictureCount: 0, documentCount: 0, commitCount: 0, archivedCount: 0, pictures: [], fresh: false, ...options.data,
+    };
+    return { id: `area-${i}`, kind: 'checkpoint', data, documents: [], repos: [], cards: [], archivedCount: 0, allMemberNodeIds: [`area-${i}`] };
+  });
+  /** An Area as it is in a workspace that is being worked on: a preview line and counts. */
+  const realistic: Partial<AreaData> = { preview: 'Which time zone should export timestamps use?', noteCount: 2, commitCount: 3 };
 
-      const sizeNarrow = { width: 820, height: 900 };
-      expect(chooseGridColumns(3, sizeNarrow)).toBeLessThanOrEqual(2);
+  const sizes = { laptop: { width: 1280, height: 700 }, pane: { width: 400, height: 700 }, phone: { width: 390, height: 650 } };
+
+  describe('overviewPlan', () => {
+    it('draws cards where they fit at a readable size, and one-line rows where they do not', () => {
+      expect(overviewPlan(manyAreas(1), sizes.laptop).form).toBe('cards');
+      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.laptop).form).toBe('cards');
+      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.pane).form).toBe('cards');
+      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.phone).form).toBe('cards');
+      // Eleven realistic cards fit the laptop in four columns, but not the pane or the phone at 0.9
+      expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.laptop).form).toBe('cards');
+      expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.pane).form).toBe('rows');
+      expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.phone).form).toBe('rows');
+      expect(overviewPlan(manyAreas(25, { data: realistic }), sizes.laptop).form).toBe('rows');
+      expect(overviewPlan(manyAreas(25), sizes.pane).form).toBe('rows');
+      expect(overviewPlan(manyAreas(25), sizes.phone).form).toBe('rows');
     });
 
-    it('proves 1, 3, 8, and 12 areas fit whole inside 1440x900 and 820x900 without overflow', () => {
-      const viewports = [
-        { width: 1440, height: 900 },
-        { width: 820, height: 900 },
-      ];
-      const counts = [1, 3, 8, 12];
-
-      for (const vp of viewports) {
-        for (const count of counts) {
-          const areas = Array.from({ length: count }, (_, i) => ({
-            id: `area-${i}`,
-            kind: 'checkpoint' as const,
-            data: {
-              kind: 'checkpoint' as const,
-              title: `Area ${i}`,
-              done: false,
-              current: i === 0,
-              stepsDone: 0,
-              stepsTotal: 2,
-              waitingCount: 0,
-              noteCount: 0,
-              fileCount: 0,
-              pictureCount: 0,
-              documentCount: 0,
-              commitCount: 0,
-              archivedCount: 0,
-              pictures: [],
-              fresh: false,
-            },
-            documents: [],
-            repos: [],
-            cards: [],
-            archivedCount: 0,
-            allMemberNodeIds: [`area-${i}`],
-          }));
-
-          const nodes = overviewLayout(areas, vp);
-          expect(nodes).toHaveLength(count);
-
-          const fit = fitBoundsView(nodes, vp);
-          expect(fit).not.toBeNull();
-          expect(fit!.zoom).toBeLessThanOrEqual(1);
-
-          for (const node of nodes) {
-            const screenLeft = node.position.x * fit!.zoom + fit!.x;
-            const screenRight = (node.position.x + (node.width ?? AREA_SIZE.width)) * fit!.zoom + fit!.x;
-            const screenTop = node.position.y * fit!.zoom + fit!.y;
-            const screenBottom = (node.position.y + (node.height ?? AREA_SIZE.height)) * fit!.zoom + fit!.y;
-
-            expect(screenLeft).toBeGreaterThanOrEqual(-0.01);
-            expect(screenRight).toBeLessThanOrEqual(vp.width + 0.01);
-            expect(screenTop).toBeGreaterThanOrEqual(-0.01);
-            expect(screenBottom).toBeLessThanOrEqual(vp.height + 0.01);
+    it('never draws cards below the readable zoom, nor above life size, and keeps every card whole in the stage', () => {
+      for (const size of [...Object.values(sizes), { width: 820, height: 900 }, { width: 1440, height: 900 }, { width: 640, height: 500 }]) {
+        for (const count of [1, 2, 3, 5, 8, 11, 12, 25]) {
+          for (const data of [{}, realistic]) {
+            const plan = overviewPlan(manyAreas(count, { data }), size);
+            if (plan.form !== 'cards') continue;
+            const { x, y, zoom } = plan.viewport!;
+            expect(zoom).toBeGreaterThanOrEqual(READABLE_ZOOM - 1e-9);
+            expect(zoom).toBeLessThanOrEqual(1);
+            expect(plan.nodes).toHaveLength(count);
+            for (const node of plan.nodes) {
+              expect(node.position.x * zoom + x).toBeGreaterThanOrEqual(OVERVIEW_INSET.side - 0.01);
+              expect((node.position.x + node.width!) * zoom + x).toBeLessThanOrEqual(size.width - OVERVIEW_INSET.side + 0.01);
+              expect(node.position.y * zoom + y).toBeGreaterThanOrEqual(OVERVIEW_INSET.top - 0.01);
+              expect((node.position.y + node.height!) * zoom + y).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
+            }
           }
         }
       }
+    });
+
+    it('stands a few cards in one line at life size, and uses the columns the width allows', () => {
+      const three = overviewPlan(manyAreas(3, { data: realistic }), sizes.laptop);
+      expect(three.nodes.map((node) => node.position.y)).toEqual([0, 0, 0]);
+      expect(three.viewport!.zoom).toBe(1);
+      const wide = overviewPlan(manyAreas(8, { data: realistic }), { width: 1440, height: 900 });
+      expect(wide.form).toBe('cards');
+      expect(new Set(wide.nodes.map((node) => node.position.x)).size).toBeGreaterThanOrEqual(3);
+    });
+
+    it('draws rows in the order of the Areas, one column in a narrow stage, with all of them in view and none above the other\'s place', () => {
+      for (const size of [sizes.pane, sizes.phone]) {
+        const plan = overviewPlan(manyAreas(11, { done: 4, data: realistic }), size);
+        expect(plan.form).toBe('rows');
+        expect(plan.nodes.map((node) => node.id)).toEqual(manyAreas(11).map((area) => area.id));
+        expect(plan.nodes.every((node) => node.type === 'areaRow' && node.height === AREA_ROW.height)).toBe(true);
+        expect(new Set(plan.nodes.map((node) => node.position.x)).size).toBe(1);
+        expect(plan.viewport!.zoom).toBe(1);
+        const ys = plan.nodes.map((node) => node.position.y);
+        expect(ys).toEqual([...ys].sort((a, b) => a - b));
+        const last = plan.nodes.at(-1)!;
+        expect(last.position.y + last.height! + plan.viewport!.y).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom);
+        expect(plan.viewport!.x + last.width!).toBeLessThanOrEqual(size.width);
+      }
+    });
+
+    it('puts the rows of a wide stage in more columns when one column would not hold them', () => {
+      const plan = overviewPlan(manyAreas(25), sizes.laptop);
+      expect(plan.form).toBe('rows');
+      const columns = new Set(plan.nodes.map((node) => node.position.x));
+      expect(columns.size).toBe(2);
+      expect(plan.nodes).toHaveLength(25);
+      expect(plan.nodes.some((node) => node.type === 'areaFold')).toBe(false);
+    });
+
+    it('folds the finished Areas into one last row when the rows do not fit, and opens them on request', () => {
+      const areas = manyAreas(25, { done: 15 });
+      const plan = overviewPlan(areas, sizes.phone);
+      expect(plan.form).toBe('rows');
+      const fold = plan.nodes.at(-1) as OverviewNode;
+      expect(fold.type).toBe('areaFold');
+      expect(fold.id).toBe(OVERVIEW_FOLD);
+      expect(fold.data).toEqual({ count: 15, kind: 'done', expanded: false });
+      // What is left is in order, the Area under way among it, and it all fits
+      expect(plan.nodes.slice(0, -1).map((node) => node.id)).toEqual(areas.slice(15).map((area) => area.id));
+      expect(plan.nodes.slice(0, -1).some((node) => node.type === 'areaRow' && node.data.current)).toBe(true);
+      const last = plan.nodes.at(-1)!;
+      expect(last.position.y + last.height! + plan.viewport!.y).toBeLessThanOrEqual(sizes.phone.height - OVERVIEW_INSET.bottom);
+
+      const open = overviewPlan(areas, sizes.phone, { expanded: true });
+      expect(open.nodes.filter((node) => node.type === 'areaRow')).toHaveLength(25);
+      expect(open.nodes.at(-1)!.data).toEqual({ count: 15, kind: 'done', expanded: true });
+    });
+
+    it('folds Areas at the end too, never the one under way, when the finished ones are not enough', () => {
+      const areas = manyAreas(40, { done: 3 });
+      const plan = overviewPlan(areas, sizes.phone);
+      const fold = plan.nodes.at(-1)!;
+      expect(fold.type).toBe('areaFold');
+      expect(fold.data).toMatchObject({ kind: 'more', expanded: false });
+      const rows = plan.nodes.slice(0, -1);
+      expect(rows.some((node) => node.id === 'area-3')).toBe(true);
+      expect(rows.every((node) => !(node.data as AreaData).done)).toBe(true);
+      expect(rows.length + (fold.data as { count: number }).count).toBe(40);
+      const last = fold;
+      expect(last.position.y + last.height! + plan.viewport!.y).toBeLessThanOrEqual(sizes.phone.height - OVERVIEW_INSET.bottom);
+    });
+
+    it('never folds the Area under way, even when it is the last of many', () => {
+      const areas = manyAreas(40).map((area, i) => ({ ...area, data: { ...area.data, current: i === 39 } }));
+      const plan = overviewPlan(areas, sizes.phone);
+      const fold = plan.nodes.at(-1)!;
+      expect(fold.type).toBe('areaFold');
+      const rows = plan.nodes.slice(0, -1);
+      expect(rows.at(-1)!.id).toBe('area-39');
+      expect(rows.find((node) => node.id === 'area-39')!.data).toMatchObject({ current: true });
+      expect(rows.length + (fold.data as { count: number }).count).toBe(40);
+      expect(plan.nodes.at(-1)!.position.y + AREA_ROW.height + plan.viewport!.y).toBeLessThanOrEqual(sizes.phone.height - OVERVIEW_INSET.bottom);
+    });
+
+    it('does not fold when every row fits, and has no lines between rows', () => {
+      const plan = overviewPlan(manyAreas(11, { done: 5 }), sizes.phone);
+      expect(plan.nodes.every((node) => node.type === 'areaRow')).toBe(true);
+      const areas = manyAreas(11);
+      expect(overviewEdges(areas, plan.nodes, [{ id: 'l', from: 'area-0', to: 'area-4' }])).toEqual([]);
+    });
+
+    it('guesses cards before the stage is measured, and is empty without Areas', () => {
+      expect(overviewPlan([], sizes.laptop)).toEqual({ form: 'cards', nodes: [], viewport: null });
+      const unknown = overviewPlan(manyAreas(5), { width: 0, height: 0 });
+      expect(unknown.form).toBe('cards');
+      expect(unknown.nodes).toHaveLength(5);
+      expect(unknown.viewport).toBeNull();
+    });
+
+    it('makes a card as high as its content needs and no higher, so a card with nothing attached has no blank space', () => {
+      const bare = manyAreas(1)[0]!.data;
+      const withPictures = { ...bare, pictures: [{ path: 'a.png', alt: 'A' }], pictureCount: 1, fileCount: 1 };
+      expect(areaCardHeight(bare)).toBeLessThan(AREA_SIZE.height + 30);
+      expect(areaCardHeight(withPictures)).toBeGreaterThan(areaCardHeight(bare) + 60);
+      expect(areaCardHeight({ ...bare, ...realistic })).toBeGreaterThan(areaCardHeight(bare));
+      expect(areaCardHeight({ ...bare, title: 'Short', stepsTotal: 0, kind: 'work' })).toBeLessThan(areaCardHeight(bare));
+      // The cards of one line stand level, as high as the highest, and a line without pictures is not made higher by another's
+      const plan = overviewPlan([{ ...manyAreas(1)[0]!, id: 'pics', data: withPictures }, ...manyAreas(2), ...manyAreas(3).map((area, i) => ({ ...area, id: `later-${i}` }))], { width: 1440, height: 1200 });
+      expect(plan.form).toBe('cards');
+      const lines = new Map<number, Set<number | undefined>>();
+      for (const node of plan.nodes) lines.set(node.position.y, (lines.get(node.position.y) ?? new Set()).add(node.height));
+      expect([...lines.values()].every((heights) => heights.size === 1)).toBe(true);
+      expect(plan.nodes[0]!.height).toBeGreaterThan(plan.nodes.at(-1)!.height! + 60);
+    });
+
+    it('guesses a second line of title from the width of its letters, as the browser draws them', () => {
+      const bare = manyAreas(1)[0]!.data;
+      const high = (title: string) => areaCardHeight({ ...bare, title });
+      // Measured in Inter 14 px semibold in a card 294 px wide: these are 224, 282, 317 and 560 px, and 160 px for 40 narrow letters
+      expect(high('Pictures are told apart from files')).toBe(high('Short'));
+      expect(high('Documents open in a reader beside the board')).toBeGreaterThan(high('Short'));
+      expect(high('W'.repeat(40))).toBeGreaterThan(high('Short'));
+      expect(high('i'.repeat(40))).toBe(high('Short'));
+    });
+
+    it('says what a card counts, and nothing that is zero', () => {
+      const bare = manyAreas(1)[0]!.data;
+      expect(areaCounts(bare)).toEqual([]);
+      expect(areaCounts({ ...bare, noteCount: 1, pictureCount: 2, fileCount: 3, documentCount: 4, commitCount: 1 })).toEqual(['1 note', '2 pictures', '1 file', '4 documents', '1 commit']);
+    });
+
+    it('lays out the nodes of the plan', () => {
+      const areas = manyAreas(3, { data: realistic });
+      expect(overviewLayout(areas, sizes.laptop)).toEqual(overviewPlan(areas, sizes.laptop).nodes);
     });
   });
 

@@ -5,7 +5,14 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
 import { serve } from '@hono/node-server';
-import { registerViewRoutes, ESCAPE_MESSAGE, FIT_SCRIPT, createHtmlRelayStream } from './view-routes.js';
+import {
+  registerViewRoutes,
+  ESCAPE_MESSAGE,
+  FIT_SCRIPT,
+  createHtmlRelayStream,
+  findInsertOffset,
+  formatContentDisposition,
+} from './view-routes.js';
 import { ViewTokenStore } from '../services/workspace-file-stream.js';
 import * as fsSafety from '../resources/fs-safety.js';
 
@@ -444,6 +451,19 @@ describe('view-routes', () => {
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(res.headers.get('access-control-allow-credentials')).toBeNull();
       expect(res.headers.get('accept-ranges')).toBe('bytes');
+      expect(res.headers.get('vary')).toBe('Sec-Fetch-Dest');
+
+      // Non-HTML file should not include Vary: Sec-Fetch-Dest
+      await fs.writeFile(path.join(tmpDir, 'data.json'), '{"ok":true}');
+      const jsonLinkRes = await app.request('/api/workspace/test-ws/documents/view-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'data.json' }),
+      });
+      const { url: jsonUrl } = await jsonLinkRes.json();
+      const jsonRes = await app.request(jsonUrl);
+      expect(jsonRes.status).toBe(200);
+      expect(jsonRes.headers.get('vary')).toBeNull();
     });
 
     it('exports ESCAPE_MESSAGE matching the frontend expectation', () => {
@@ -496,7 +516,31 @@ describe('view-routes', () => {
 
       const dlRes = await app.request(`${url}?download=1`);
       expect(dlRes.status).toBe(200);
-      expect(dlRes.headers.get('content-disposition')).toBe('attachment; filename="report.html"');
+      expect(dlRes.headers.get('content-disposition')).toBe(
+        'attachment; filename="report.html"; filename*=UTF-8\'\'report.html',
+      );
+    });
+
+    it('formats Content-Disposition with ASCII fallback and UTF-8 encoding for filenames with spaces and non-ASCII', async () => {
+      const fileName = 'my report räksmörgås.html';
+      await fs.writeFile(path.join(tmpDir, fileName), '<h1>Report</h1>');
+      const linkRes = await app.request('/api/workspace/test-ws/documents/view-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: fileName }),
+      });
+      const { url } = await linkRes.json();
+
+      const dlRes = await app.request(`${url}?download=1`);
+      expect(dlRes.status).toBe(200);
+      expect(dlRes.headers.get('content-disposition')).toBe(
+        `attachment; filename="my report r_ksm_rg_s.html"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      );
+
+      // Verify formatContentDisposition unit behavior with quotes and backslashes
+      expect(formatContentDisposition('quoted "file"\\name.html')).toBe(
+        'attachment; filename="quoted _file__name.html"; filename*=UTF-8\'\'quoted%20%22file%22%5Cname.html',
+      );
     });
 
     it('createHtmlRelayStream injects script correctly across various head/html formats', async () => {
@@ -535,6 +579,47 @@ describe('view-routes', () => {
       const htmlC = '<div>Just a fragment</div>';
       const outC = await streamToString(createHtmlRelayStream(toStream(htmlC), 'alert(1)'));
       expect(outC).toBe('<script>alert(1)</script><div>Just a fragment</div>');
+
+      // Finding 1: Multi-byte UTF-8 characters before <head> must not misalign byte offset
+      const htmlMultiByte = '<!-- ÅÄÖ — ✓ --><html><head><title>Unicode test</title></head><body>OK</body></html>';
+      const outMultiByte = await streamToString(createHtmlRelayStream(toStream(htmlMultiByte), 'alert(1)'));
+      expect(outMultiByte).toBe(
+        '<!-- ÅÄÖ — ✓ --><html><head><script>alert(1)</script><title>Unicode test</title></head><body>OK</body></html>',
+      );
+
+      // Finding 2: doctype + no head/html -> script right after doctype (prevents quirks mode)
+      const htmlDoctype = '<!doctype html><div class="content">No head or html tag</div>';
+      const outDoctype = await streamToString(createHtmlRelayStream(toStream(htmlDoctype), 'alert(1)'));
+      expect(outDoctype).toBe('<!doctype html><script>alert(1)</script><div class="content">No head or html tag</div>');
+
+      // Finding 2: <html> with head beyond 64 KB -> after <html>
+      const padding = '<!-- padding comment line -->\n'.repeat(2500); // ~75 KB
+      const chunk1 = Buffer.from(`<!doctype html><html>\n${padding}`, 'utf-8');
+      const chunk2 = Buffer.from('<head><title>Late head</title></head><body>Late</body></html>', 'utf-8');
+      const chunkedStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(chunk1);
+          controller.enqueue(chunk2);
+          controller.close();
+        },
+      });
+      const outLateHead = await streamToString(createHtmlRelayStream(chunkedStream, 'alert(1)'));
+      expect(outLateHead.startsWith('<!doctype html><html><script>alert(1)</script>\n')).toBe(true);
+
+      // Split <he|ad> across chunks
+      const split1 = Buffer.from('<!doctype html><html><he', 'utf-8');
+      const split2 = Buffer.from('ad><title>Split tag</title></head><body>Body</body></html>', 'utf-8');
+      const splitStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(split1);
+          controller.enqueue(split2);
+          controller.close();
+        },
+      });
+      const outSplit = await streamToString(createHtmlRelayStream(splitStream, 'alert(1)'));
+      expect(outSplit).toBe(
+        '<!doctype html><html><head><script>alert(1)</script><title>Split tag</title></head><body>Body</body></html>',
+      );
     });
   });
 });

@@ -1,8 +1,8 @@
 import '@xyflow/react/dist/style.css';
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Background, BackgroundVariant, ConnectionMode, Controls, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { Archive, Kanban, RefreshCw } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
@@ -25,12 +25,11 @@ import {
   areaView,
   READABLE_ZOOM,
   buildBoardAreas,
-  fitBoundsView,
   overviewEdges,
-  overviewLayout,
+  overviewPlan,
   stepsText,
   waitingText,
-  type AreaNode,
+  type OverviewNode,
 } from './boardAreas.js';
 import { useBoard } from './boardData.js';
 import { fileTitle, readerDock } from './boardDock.js';
@@ -38,7 +37,9 @@ import { boardEdges, type BoardNode } from './boardLayout.js';
 import {
   buildBoardNav,
   readNavMode,
-  readNavOpen,
+  navStartsOpen,
+  readNavChoice,
+  SIDEBAR,
   sidebarDock,
   totalBoardWaiting,
   writeNavMode,
@@ -46,12 +47,12 @@ import {
   type NavItem,
   type NavMode,
 } from './boardNav.js';
-import { BoardArea, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
+import { BoardArea, BoardAreaFold, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
 import { BoardReader } from './BoardReader.js';
 import { useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 
-const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea };
+const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaFold: BoardAreaFold };
 const AREA_NODE_TYPES: NodeTypes = {
   lane: BoardLane,
   checkpoint: BoardCheckpoint,
@@ -66,8 +67,6 @@ const AREA_NODE_TYPES: NodeTypes = {
   pager: BoardPager,
 };
 
-/** "Fit the board in view" shows everything, but never zoomed in past life size: a lone card is not blown up. */
-const FIT = { padding: 0.12, maxZoom: 1 } as const;
 const PAN_STEP = 96;
 /** How many frames a jump from the Board index waits for the card to be drawn in its Area, before it gives up. */
 const JUMP_FRAMES = 30;
@@ -76,18 +75,10 @@ const moveMs = (ms: number) => (window.matchMedia('(prefers-reduced-motion: redu
 /** Lines point from the thing that was linked to the thing it was linked to. */
 const EDGE_OPTIONS: DefaultEdgeOptions = { markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--muted-foreground)', width: 14, height: 14 } };
 
-const ARIA_LABELS = {
-  'controls.ariaLabel': 'Board controls',
-  'controls.zoomIn.ariaLabel': 'Zoom in',
-  'controls.zoomOut.ariaLabel': 'Zoom out',
-  'controls.fitView.ariaLabel': 'Fit the board in view',
-  'minimap.ariaLabel': 'Board overview',
-};
-
 /**
- * Arrow keys pan, plus and minus zoom, zero fits: the canvas is a keyboard stop of its own.
+ * Arrow keys pan and zero puts the board back where it fits: the canvas is a keyboard stop of its own. Nothing zooms.
  */
-function navigate(flow: ReactFlowInstance<any> | null, event: KeyboardEvent<HTMLDivElement>, onMoved: () => void) {
+function navigate(flow: ReactFlowInstance<any> | null, event: KeyboardEvent<HTMLDivElement>, onMoved: () => void, onFit: () => void) {
   const onNode = event.target instanceof HTMLElement && event.target.classList.contains('react-flow__node');
   if (!flow || (event.target !== event.currentTarget && !onNode) || event.altKey || event.ctrlKey || event.metaKey) return;
   const { x, y, zoom } = flow.getViewport();
@@ -97,9 +88,7 @@ function navigate(flow: ReactFlowInstance<any> | null, event: KeyboardEvent<HTML
     case 'ArrowRight': pan(-PAN_STEP, 0); break;
     case 'ArrowUp': pan(0, PAN_STEP); break;
     case 'ArrowDown': pan(0, -PAN_STEP); break;
-    case '+': case '=': void flow.zoomIn({ duration: moveMs(120) }); break;
-    case '-': case '_': void flow.zoomOut({ duration: moveMs(120) }); break;
-    case '0': void flow.fitView({ ...FIT, duration: moveMs(200) }); break;
+    case '0': onFit(); event.preventDefault(); return;
     default: return;
   }
   onMoved();
@@ -107,12 +96,12 @@ function navigate(flow: ReactFlowInstance<any> | null, event: KeyboardEvent<HTML
 }
 
 /**
- * Whether a press went to the canvas itself, the overview map or the zoom controls.
+ * Whether a press went to the canvas itself.
  */
 function isViewGesture(container: HTMLElement | null, target: EventTarget): boolean {
   if (!(target instanceof Element) || !container?.contains(target)) return false;
   if (target.closest('.react-flow__node button, .react-flow__node a, .react-flow__node [role="button"]')) return false;
-  return Boolean(target.closest('.react-flow__pane, .react-flow__minimap, .react-flow__controls'));
+  return Boolean(target.closest('.react-flow__pane'));
 }
 
 /**
@@ -175,14 +164,14 @@ function useLayoutElementSize(element: HTMLElement | null): { width: number; hei
 /**
  * The Board: a spatial 2-level surface where people and AIs collaborate.
  *
- * Level 0 ("Board"): Arranges workspace Areas (checkpoints, plan, work) in a 2D screen-proportioned
- * grid that fits whole on one screen without scrolling.
+ * Level 0 ("Board"): Arranges workspace Areas (checkpoints, plan, work) as cards in a grid, or as one-line rows
+ * where the cards would not be readable, so that they fit whole on one screen at a readable size.
  *
  * Level 1 (inside an Area): Stepping into an Area recedes Level 0 behind a dimmed scrim while the
  * Area surface grows smoothly from the clicked card's transform-origin to fit all items whole on one
  * screen without scrolling.
  */
-export function BoardSection({ workspaceId, workspacePath, active }: { workspaceId: string; workspacePath?: string; active: boolean }) {
+export function BoardSection({ workspaceId, workspacePath, active, panelActions }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode }) {
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
   const news = useWhatsNew(workspaceId);
@@ -218,13 +207,28 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   // Plane 0 (Overview) elements
   const [stageContainer, setStageContainer] = useState<HTMLDivElement | null>(null);
   const stageSize = useLayoutElementSize(stageContainer);
-  const overviewFlow = useRef<ReactFlowInstance<AreaNode> | null>(null);
-  const [overviewInstance, setOverviewInstance] = useState<ReactFlowInstance<AreaNode> | null>(null);
+  const overviewFlow = useRef<ReactFlowInstance<OverviewNode> | null>(null);
+  const [overviewInstance, setOverviewInstance] = useState<ReactFlowInstance<OverviewNode> | null>(null);
   const overviewTaken = useRef(false);
   const overviewTakenBefore = useRef(false);
+  // The Areas folded into the overview's last row, shown (not saved)
+  const [foldOpen, setFoldOpen] = useState(false);
 
-  const overviewNodes = useMemo(() => overviewLayout(areas, stageSize), [areas, stageSize]);
+  const overview = useMemo(() => overviewPlan(areas, stageSize, { expanded: foldOpen }), [areas, stageSize, foldOpen]);
+  const toggleFold = useCallback(() => {
+    // The rows are laid out again and the view follows them
+    overviewTaken.current = false;
+    setFoldOpen((open) => !open);
+  }, []);
+  const overviewNodes = useMemo<OverviewNode[]>(
+    () => overview.nodes.map((node): OverviewNode => (node.type === 'areaFold' ? { ...node, data: { ...node.data, onToggle: toggleFold } } : node)),
+    [overview.nodes, toggleFold],
+  );
   const overviewLines = useMemo(() => overviewEdges(areas, overviewNodes, board?.links ?? []), [areas, overviewNodes, board?.links]);
+  // Only rows fold, and only they scroll: cards that come back leave the folded Areas as they were
+  useEffect(() => {
+    if (overview.form !== 'rows' && foldOpen) setFoldOpen(false);
+  }, [overview.form, foldOpen]);
   const totalArchived = board?.cards.filter((card) => card.archived).length ?? 0;
 
   // Reader state
@@ -259,19 +263,42 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   const [boardRow, setBoardRow] = useState<HTMLDivElement | null>(null);
   const boardRowSize = useLayoutElementSize(boardRow);
   const navDock = sidebarDock(boardRowSize.width);
-  const [navOpen, setNavOpenState] = useState(readNavOpen);
+  // What the person chose (kept per device), else what suits the Areas: it starts closed when that turns the overview from rows into
+  // cards. That is decided once, when the Areas and the section's size are known and the index docks (where it overlays, it takes no
+  // room, so there is nothing to decide), and then left alone as the board changes. Until it is decided, and until the stage has the
+  // size it has with the index as decided, the board is laid out but not drawn: the index and the rows are not seen for a moment and
+  // then replaced by cards.
+  const [navChoice, setNavChoice] = useState(readNavChoice);
+  const [navAuto, setNavAuto] = useState<boolean | null>(null);
+  const [navShown, setNavShown] = useState(false);
+  const navOpen = navChoice ?? navAuto ?? true;
+  const navUndecided = navChoice === null && navAuto === null && !navDock.overlays;
+  // The plan, the documents and the notes make the Areas; the commits only add a line of counts to one, so the decision does not wait for them
+  const areasLoading = [plan, guidance, boardQuery].some((query) => !query.data && !query.isError);
+  useLayoutEffect(() => {
+    if (!navUndecided || areasLoading || areas.length === 0 || boardRowSize.width === 0) return;
+    setNavAuto(navStartsOpen(areas, boardRowSize));
+  }, [navUndecided, areasLoading, areas, boardRowSize]);
+  const stageWidth = boardRowSize.width - (navOpen ? SIDEBAR.width : SIDEBAR.railWidth);
+  const navSettling = navChoice === null && !navShown && !navDock.overlays;
+  useLayoutEffect(() => {
+    if (navSettling && !navUndecided && Math.abs(stageSize.width - stageWidth) <= 1 && stageSize.height > 0) setNavShown(true);
+  }, [navSettling, navUndecided, stageSize, stageWidth]);
+  useEffect(() => {
+    // The stage is sized by the layout: this only keeps the board from staying hidden if it ever is not
+    if (!navSettling || navUndecided) return;
+    const timer = setTimeout(() => setNavShown(true), 400);
+    return () => clearTimeout(timer);
+  }, [navSettling, navUndecided]);
   const [narrowNavOpen, setNarrowNavOpen] = useState(false);
   const navToggleRef = useRef<HTMLButtonElement>(null);
   const navFocusDue = useRef(false);
   const navExpanded = navDock.overlays ? narrowNavOpen : navOpen;
   const onToggleNavOpen = useCallback(() => {
     navFocusDue.current = true;
-    setNavOpenState((curr) => {
-      const next = !curr;
-      writeNavOpen(next);
-      return next;
-    });
-  }, []);
+    writeNavOpen(!navOpen);
+    setNavChoice(!navOpen);
+  }, [navOpen]);
   const openNarrowNav = useCallback(() => {
     navFocusDue.current = true;
     setNarrowNavOpen(true);
@@ -483,10 +510,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   }, [stepped?.phase, stepped?.areaId]);
 
   // Plane 0 Viewport auto-fitting
-  const overviewViewport = useMemo(
-    () => fitBoundsView(overviewNodes, stageSize, { topInset: totalArchived > 0 ? 52 : 28, bottomInset: 48 }),
-    [overviewNodes, stageSize, totalArchived],
-  );
+  const overviewViewport = overview.viewport;
 
   useEffect(() => {
     if (!overviewViewport || !overviewInstance || overviewTaken.current) return;
@@ -850,8 +874,15 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
 
   const backdropPress = useRef({ down: false, up: false });
 
+  // The pane's own icons (hide the chat, close) are the board's to show, since it has no title row of its own: quiet until pointed at or
+  // focused. At the overview they stand in its top-right corner, which the layout leaves free; inside an Area, at the end of its heading.
+  const paneIcons = panelActions && (
+    <div className="flex shrink-0 items-center gap-0.5 opacity-50 transition-opacity duration-150 focus-within:opacity-100 hover:opacity-100 pointer-coarse:opacity-100">{panelActions}</div>
+  );
+  const paneCorner = paneIcons && <div className="absolute right-2 top-1.5 z-10">{paneIcons}</div>;
+
   const notices = (problems.length > 0 || (loading && areas.length > 0)) && (
-    <div className="shrink-0 space-y-1.5 border-b border-border/60 px-4 py-2">
+    <div className={cn('shrink-0 space-y-1.5 border-b border-border/60 px-4 py-2', areas.length === 0 && panelActions && 'pr-24')}>
       {problems.map((part) => (
         <SourceProblem key={part.what} what={part.what} error={part.query.error} onRetry={() => void part.query.refetch()} />
       ))}
@@ -866,7 +897,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   let body;
   if (areas.length > 0) {
     body = (
-      <div ref={setBoardRow} className="relative flex min-h-0 flex-1 overflow-hidden">
+      <div ref={setBoardRow} className={cn('relative flex min-h-0 flex-1 overflow-hidden', navSettling && 'pointer-events-none opacity-0')} inert={navSettling ? true : undefined}>
         <BoardSidebar
           dock={navDock}
           open={navOpen}
@@ -913,8 +944,9 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
               if (!focusing.current) showFocused(overviewFlow.current, event, stageSize, () => { overviewTaken.current = true; });
             }}
           >
+            {stepped?.phase !== 'open' && paneCorner}
             {totalArchived > 0 && (
-              <div className="absolute left-3 top-3 z-10">
+              <div className="absolute left-3 top-2 z-10">
                 <Button
                   size="xs"
                   variant={showArchived ? 'secondary' : 'outline'}
@@ -927,44 +959,48 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
               </div>
             )}
             <BoardActionsContext value={overviewActions}>
-              <ReactFlow
-                id="board-overview-flow"
-                className="board-flow"
-                aria-label="Board overview canvas. Arrow keys pan, plus and minus zoom, zero fits the board in view. Press an area to step into it."
-                tabIndex={0}
-                nodes={overviewNodes}
-                edges={overviewLines}
-                nodeTypes={OVERVIEW_NODE_TYPES}
-                defaultEdgeOptions={EDGE_OPTIONS}
-                defaultViewport={overviewViewport ?? undefined}
-                connectionMode={ConnectionMode.Loose}
-                onInit={(instance) => {
-                  overviewFlow.current = instance;
-                  setOverviewInstance(instance);
-                }}
-                onKeyDown={(event) => {
-                  navigate(overviewFlow.current, event, () => { overviewTaken.current = true; });
-                }}
-                nodesDraggable={false}
-                nodesConnectable={false}
-                nodesFocusable={false}
-                edgesFocusable={false}
-                elementsSelectable={false}
-                deleteKeyCode={null}
-                panActivationKeyCode={null}
-                selectionKeyCode={null}
-                multiSelectionKeyCode={null}
-                zoomActivationKeyCode={null}
-                disableKeyboardA11y
-                zoomOnDoubleClick={false}
-                minZoom={0.1}
-                maxZoom={1.5}
-                attributionPosition="bottom-center"
-                ariaLabelConfig={ARIA_LABELS}
-              >
-                <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
-                <Controls showInteractive={false} fitViewOptions={FIT} />
-              </ReactFlow>
+                <ReactFlow
+                  id="board-overview-flow"
+                  className="board-flow"
+                  aria-label="Board overview canvas. Arrow keys pan, zero puts the board back in view. Press an area to step into it."
+                  tabIndex={0}
+                  nodes={overviewNodes}
+                  edges={overviewLines}
+                  nodeTypes={OVERVIEW_NODE_TYPES}
+                  defaultEdgeOptions={EDGE_OPTIONS}
+                  defaultViewport={overviewViewport ?? undefined}
+                  connectionMode={ConnectionMode.Loose}
+                  onInit={(instance) => {
+                    overviewFlow.current = instance;
+                    setOverviewInstance(instance);
+                  }}
+                  onKeyDown={(event) => {
+                    navigate(overviewFlow.current, event, () => { overviewTaken.current = true; }, () => {
+                      overviewTaken.current = false;
+                      if (overviewViewport) void overviewFlow.current?.setViewport(overviewViewport, { duration: moveMs(200) });
+                    });
+                  }}
+                  nodesDraggable={false}
+                  nodesConnectable={false}
+                  nodesFocusable={false}
+                  edgesFocusable={false}
+                  elementsSelectable={false}
+                  deleteKeyCode={null}
+                  panActivationKeyCode={null}
+                  selectionKeyCode={null}
+                  multiSelectionKeyCode={null}
+                  zoomActivationKeyCode={null}
+                  disableKeyboardA11y
+                  zoomOnScroll={false}
+                  zoomOnPinch={false}
+                  zoomOnDoubleClick={false}
+                  panOnScroll={foldOpen}
+                  minZoom={READABLE_ZOOM}
+                  maxZoom={1}
+                  attributionPosition="bottom-center"
+                >
+                  <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
+                </ReactFlow>
             </BoardActionsContext>
           </div>
         </div>
@@ -1002,7 +1038,7 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
                 stepped.phase === 'closing' ? 'board-area-exit' : 'board-area-enter',
               )}
             >
-              <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 px-4">
+              <header className="@container flex h-12 shrink-0 items-center gap-1.5 border-b border-border/60 px-3">
                 <Button
                   ref={backButtonRef}
                   type="button"
@@ -1015,40 +1051,41 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
                 </Button>
                 <h2
                   id={areaHeadingId}
-                  className="min-w-0 truncate text-sm font-semibold text-foreground"
+                  className="min-w-[7rem] truncate text-sm font-semibold text-foreground"
                   title={activeArea.data.title}
                 >
                   {activeArea.data.title}
                 </h2>
                 {activeArea.data.kind === 'checkpoint' && (
                   activeArea.data.done ? (
-                    <Badge variant="success" className="shrink-0">Done</Badge>
+                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="success">Done</Badge></span>
                   ) : activeArea.data.current ? (
-                    <Badge variant="default" className="shrink-0">Current</Badge>
+                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="default">Current</Badge></span>
                   ) : (
-                    <Badge variant="outline" className="shrink-0">Not done</Badge>
+                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="outline">Not done</Badge></span>
                   )
                 )}
-                {activeArea.data.kind === 'plan' && <Badge variant="outline" className="shrink-0">Plan</Badge>}
+                {activeArea.data.kind === 'plan' && <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="outline">Plan</Badge></span>}
                 {activeArea.data.waitingCount > 0 && !areaNodes.some((areaNode) => areaNode.id === activeArea.id) && (
-                  <Badge variant="warning" className="shrink-0">{waitingText(activeArea.data.waitingCount)}</Badge>
+                  <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="warning">{waitingText(activeArea.data.waitingCount)}</Badge></span>
                 )}
                 {activeArea.data.kind !== 'work' && (
-                  <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{stepsText(activeArea.data)}</span>
+                  <span className="sr-only shrink-0 whitespace-nowrap text-xs text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
                 )}
-                <div className="flex-1" />
                 {activeArea.archivedCount > 0 && (
                   <Button
                     size="xs"
                     variant={showArchived ? 'secondary' : 'outline'}
-                    className="shrink-0"
+                    className="ml-auto shrink-0"
                     aria-pressed={showArchived}
+                    aria-label={`Archived (${activeArea.archivedCount})`}
                     onClick={() => setShowArchived((s) => !s)}
                   >
                     <Archive aria-hidden="true" />
-                    Archived ({activeArea.archivedCount})
+                    <span className="hidden @[26rem]:inline">Archived </span>({activeArea.archivedCount})
                   </Button>
                 )}
+                {activeArea.archivedCount > 0 ? paneIcons : paneIcons && <div className="ml-auto flex">{paneIcons}</div>}
               </header>
               <div ref={setAreaRow} className="relative flex min-h-0 flex-1">
                 <div
@@ -1096,7 +1133,6 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
                           minZoom={READABLE_ZOOM}
                           maxZoom={READABLE_ZOOM}
                           attributionPosition="bottom-center"
-                          ariaLabelConfig={ARIA_LABELS}
                         >
                           <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
                         </ReactFlow>
@@ -1146,13 +1182,14 @@ export function BoardSection({ workspaceId, workspacePath, active }: { workspace
   return (
     <div
       ref={root}
-      className="flex h-full min-h-0 min-w-0 flex-col"
+      className="relative flex h-full min-h-0 min-w-0 flex-col"
       onClickCapture={(event) => {
         pressedLink.current = event.target instanceof Element ? event.target.closest<HTMLElement>('a') : null;
       }}
     >
       {notices}
       {body}
+      {areas.length === 0 && paneCorner}
     </div>
   );
 }

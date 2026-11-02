@@ -36,17 +36,38 @@ export function CommitReaderView({
   sha,
   query,
   onOpenFile,
+  selectedFile,
+  onSelectFile,
+  diffViewMode,
+  onDiffViewModeChange,
 }: {
   workspaceId: string;
   repo: string;
   sha: string;
   query: UseQueryResult<CommitDetail, Error>;
   onOpenFile: (path: string) => void;
+  selectedFile?: string | null;
+  onSelectFile?: (file: string | null) => void;
+  diffViewMode?: DiffViewMode | null;
+  onDiffViewModeChange?: (mode: DiffViewMode | null) => void;
 }) {
   const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
   const readerWidth = useElementWidth(containerEl);
-  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
-  const [userViewMode, setUserViewMode] = useState<DiffViewMode | null>(null);
+  const [internalOpenFilePath, setInternalOpenFilePath] = useState<string | null>(null);
+  const openFilePath = selectedFile !== undefined ? selectedFile : internalOpenFilePath;
+  const setOpenFilePath = (setter: string | null | ((prev: string | null) => string | null)) => {
+    const next = typeof setter === 'function' ? setter(openFilePath) : setter;
+    if (onSelectFile) onSelectFile(next);
+    else setInternalOpenFilePath(next);
+  };
+
+  const [internalUserViewMode, setInternalUserViewMode] = useState<DiffViewMode | null>(null);
+  const userViewMode = diffViewMode !== undefined ? diffViewMode : internalUserViewMode;
+  const setUserViewMode = (setter: DiffViewMode | null | ((prev: DiffViewMode | null) => DiffViewMode | null)) => {
+    const next = typeof setter === 'function' ? setter(userViewMode) : setter;
+    if (onDiffViewModeChange) onDiffViewModeChange(next);
+    else setInternalUserViewMode(next);
+  };
   const effectiveViewMode: DiffViewMode = userViewMode ?? (readerWidth >= 760 ? 'side-by-side' : 'unified');
   const configQuery = useConfig();
   const defaultEditor = configQuery.data?.config?.defaultEditor ?? null;
@@ -54,13 +75,22 @@ export function CommitReaderView({
   const fileButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const pendingFocusFileRef = useRef<string | null>(null);
 
+  const scrolledInitialRef = useRef(false);
   useLayoutEffect(() => {
-    if (!openFilePath || pendingFocusFileRef.current !== openFilePath) return;
-    pendingFocusFileRef.current = null;
-    const btn = fileButtonRefs.current.get(openFilePath);
-    if (btn) {
-      btn.focus({ preventScroll: true });
-      btn.scrollIntoView({ block: 'nearest' });
+    if (!openFilePath) return;
+    if (pendingFocusFileRef.current === openFilePath) {
+      pendingFocusFileRef.current = null;
+      const btn = fileButtonRefs.current.get(openFilePath);
+      if (btn) {
+        btn.focus({ preventScroll: true });
+        btn.scrollIntoView({ block: 'nearest' });
+      }
+    } else if (!scrolledInitialRef.current) {
+      scrolledInitialRef.current = true;
+      const btn = fileButtonRefs.current.get(openFilePath);
+      if (btn) {
+        btn.scrollIntoView({ block: 'nearest' });
+      }
     }
   }, [openFilePath]);
 

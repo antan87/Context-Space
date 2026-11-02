@@ -72,24 +72,6 @@ async function setupBrowsingBoard(page: Page, options: SetupBrowsingBoardOptions
       .then(d => { document.getElementById('data-container').textContent = d.message; })
       .catch(e => { document.getElementById('data-container').textContent = 'Fetch failed'; });
     
-    window.testApiRefusal = async () => {
-      try {
-        const res = await fetch('/api/workspaces');
-        return res.status;
-      } catch (err) {
-        return 'network_error';
-      }
-    };
-
-    window.testPostEditorRefusal = async () => {
-      try {
-        const res = await fetch('/api/open-editor', { method: 'POST', body: '{}' });
-        return res.status;
-      } catch (err) {
-        return 'network_error';
-      }
-    };
-
     window.testParentAccess = () => {
       try {
         return parent.document.title;
@@ -126,17 +108,6 @@ async function setupBrowsingBoard(page: Page, options: SetupBrowsingBoardOptions
 
   await page.addInitScript(() => {
     window.localStorage.setItem('contextspace_board_nav_open_v1', 'closed');
-  });
-
-  // Server security boundary: refuse cross-site or opaque origin (Origin: null) requests to /api/*
-  await page.route('**/api/**', async (route) => {
-    const headers = route.request().headers();
-    const secFetchSite = headers['sec-fetch-site'];
-    const origin = headers['origin'];
-    if (secFetchSite === 'cross-site' || origin === 'null') {
-      return route.fulfill({ status: 403, json: { error: 'Forbidden cross-site request.' } });
-    }
-    return route.fallback();
   });
 
   // Mock plan
@@ -300,6 +271,10 @@ test.describe('Board Browsing S2 (Browser Reader)', () => {
     await expect(reader(page)).toBeVisible();
     await expect(readerTitle(page, 'Overview Report')).toBeVisible();
 
+    const iframe = page.locator('iframe[title="Preview of overview.html"]');
+    const iframeSrc = await iframe.getAttribute('src');
+    expect(iframeSrc).toMatch(/^http:\/\/localhost:3000\/view\//);
+
     const frame = page.frameLocator('iframe[title="Preview of overview.html"]');
     await expect(frame.locator('#heading')).toBeVisible();
     await expect(frame.locator('#heading')).toHaveText('Report Overview');
@@ -328,7 +303,7 @@ test.describe('Board Browsing S2 (Browser Reader)', () => {
     await expect(link).toHaveAttribute('href', './page2.html');
   });
 
-  test('sandbox boundary keeps opaque origin: parent access throws and /api is refused', async ({ page }) => {
+  test('sandbox boundary keeps opaque origin: parent access throws', async ({ page }) => {
     await setupBrowsingBoard(page);
     await stepIntoArea(page, /Reports export to CSV/);
 
@@ -344,17 +319,9 @@ test.describe('Board Browsing S2 (Browser Reader)', () => {
     });
     expect(parentAccessResult).toBe('blocked');
 
-    // Verify cross-site /api/workspaces is refused
-    const apiResult = await frame.locator('body').evaluate(() => {
-      return (window as any).testApiRefusal();
-    });
-    expect(apiResult === 403 || apiResult === 'network_error').toBe(true);
-
-    // Verify cross-site POST to /api/open-editor is refused
-    const postResult = await frame.locator('body').evaluate(() => {
-      return (window as any).testPostEditorRefusal();
-    });
-    expect(postResult === 403 || postResult === 'network_error').toBe(true);
+    // Real server-side protection against cross-site /api requests (Sec-Fetch-Site: cross-site
+    // and Origin: null) is tested against the real server guard in src/server.test.ts
+    // ("refuses a request the browser says is cross-site...") and src/http/view-routes.test.ts.
   });
 
   test('loads a large HTML page (> 1 MB) without preview limit refusal', async ({ page }) => {

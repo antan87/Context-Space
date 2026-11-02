@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Check, CircleAlert, Code2, Copy, Download, Eye, FileText, Maximize2, MoreHorizontal, PanelRight, SquareArrowOutUpRight, X } from 'lucide-react';
+import { Check, CircleAlert, Code2, Copy, Download, Eye, FileText, Maximize2, Minimize2, MoreHorizontal, PanelRight, SquareArrowOutUpRight, X } from 'lucide-react';
 
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { Button } from '../../components/ui/button.js';
@@ -8,6 +9,7 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '../../com
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
+import type { DiffViewMode } from '../changes/types.js';
 import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
@@ -62,9 +64,10 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   // What is open: a commit, a source document, or a file.
   const open = commit ? `commit:${commit.repo}:${commit.sha}` : source ? `source:${source}` : path;
   const isHtml = !commit && !source && (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm'));
-  const [activeViewUrl, setActiveViewUrl] = useState<string | null>(null);
-  useEffect(() => {
-    setActiveViewUrl(null);
+  const [viewLink, setViewLink] = useState<{ open: string; url: string } | null>(null);
+  const activeViewUrl = viewLink?.open === open ? viewLink.url : null;
+  const handleViewUrlReady = useCallback((url: string) => {
+    setViewLink({ open, url });
   }, [open]);
 
   const preview = useQuery({
@@ -93,7 +96,38 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   });
   const commitDetail = commitQuery.data ?? null;
   const safeWebUrl = safeForgeUrl(commitDetail?.webUrl);
-  const forgeName = forgeDisplayName(commitDetail?.forge);
+  const forgeName = forgeDisplayName(commitDetail?.forge, safeWebUrl);
+
+  const [maximized, setMaximized] = useState(false);
+  const fullscreenToggleRef = useRef<HTMLButtonElement>(null);
+  const pendingFullscreenFocus = useRef(false);
+  const [commitSelectedFile, setCommitSelectedFile] = useState<string | null>(null);
+  const [commitViewMode, setCommitViewMode] = useState<DiffViewMode | null>(null);
+
+  // Reset selected commit file if open commit target changes
+  const lastCommitRef = useRef(commit ? `${commit.repo}:${commit.sha}` : null);
+  const currentCommitKey = commit ? `${commit.repo}:${commit.sha}` : null;
+  if (lastCommitRef.current !== currentCommitKey) {
+    lastCommitRef.current = currentCommitKey;
+    if (commitSelectedFile !== null) setCommitSelectedFile(null);
+  }
+
+  const toggleMaximized = useCallback(() => {
+    pendingFullscreenFocus.current = true;
+    setMaximized((prev) => !prev);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (pendingFullscreenFocus.current) {
+      pendingFullscreenFocus.current = false;
+      fullscreenToggleRef.current?.focus({ preventScroll: true });
+    }
+  }, [maximized]);
+
+  const handleClose = useCallback(() => {
+    setMaximized(false);
+    onClose();
+  }, [onClose]);
 
   // Rendered or raw is for what is open: another file starts rendered.
   const [rawOpen, setRawOpen] = useState<string | null>(null);
@@ -130,11 +164,30 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
     const onMessage = (event: MessageEvent) => {
       if (event.data !== ESCAPE_MESSAGE || !event.source) return;
       const frames = panel.current?.querySelectorAll('iframe') ?? [];
-      if (Array.from(frames).some((frame) => frame.contentWindow === event.source)) onClose();
+      if (Array.from(frames).some((frame) => frame.contentWindow === event.source)) {
+        if (maximized) setMaximized(false);
+        else onClose();
+      }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [onClose]);
+  }, [onClose, maximized]);
+
+  // Escape when maximized: returns back to previous layout (large or side).
+  // Escape that closes an open menu popup, find widget, or modal is theirs alone.
+  useEffect(() => {
+    if (!maximized) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (document.querySelector('[data-slot="menu-popup"], .find-widget.visible, .monaco-menu-container, [role="dialog"]:not([data-board-reader-fullscreen])')) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      pendingFullscreenFocus.current = true;
+      setMaximized(false);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [maximized]);
 
   const frame = useRef(0);
   const take = useCallback(() => {
@@ -188,36 +241,97 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   };
   const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground';
 
-  return <div
-    ref={panel}
-    // The press outside the window that closes it is BoardSection's: it reaches the sidebar and the Area header too.
-    className={large ? 'absolute inset-0 z-20 flex animate-fade-in items-center justify-center bg-background/50' : 'contents'}
-  >
+  const sectionNode = (
     <section
       aria-label="Reader"
       data-board-reader=""
-      className={cn('@container z-20 flex min-h-0 flex-col border-border bg-background',
-        large ? 'overflow-hidden rounded-xl border shadow-2xl' : covers ? 'absolute inset-0' : 'relative shrink-0 border-l shadow-lg')}
-      style={large ? { width: `${LARGE_WINDOW.width * 100}%`, height: `${LARGE_WINDOW.height * 100}%` } : covers ? undefined : { width }}
+      className={cn(
+        '@container flex min-h-0 flex-col bg-background',
+        maximized
+          ? 'h-full w-full'
+          : large
+            ? 'z-20 overflow-hidden rounded-xl border border-border shadow-2xl'
+            : covers
+              ? 'absolute inset-0 z-20 border-border'
+              : 'relative z-20 shrink-0 border-l border-border shadow-lg',
+      )}
+      style={
+        maximized
+          ? undefined
+          : large
+            ? { width: `${LARGE_WINDOW.width * 100}%`, height: `${LARGE_WINDOW.height * 100}%` }
+            : covers
+              ? undefined
+              : { width }
+      }
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-3 pr-2">
         <div className="min-w-0 flex-1">
-          <h2 ref={title} tabIndex={-1} className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground" title={commitDetail?.subject ?? target.title}>{commitDetail?.subject ?? target.title}</h2>
+          <h2
+            ref={title}
+            tabIndex={-1}
+            className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground"
+            title={commitDetail?.subject ?? target.title}
+          >
+            {commitDetail?.subject ?? target.title}
+          </h2>
           {commit ? (
-            <p className="truncate font-mono text-xs leading-4 text-muted-foreground" title={`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}>
-              {`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}
-            </p>
+            <div className="flex min-w-0 items-center gap-1.5 leading-4">
+              <p
+                className="truncate font-mono text-xs text-muted-foreground"
+                title={`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}
+              >
+                {`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}
+              </p>
+              {commitDetail?.pushed && safeWebUrl && forgeName && (
+                <a
+                  href={safeWebUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Open commit on ${forgeName}`}
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[11px] font-medium leading-none text-muted-foreground transition-colors hover:border-border hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  title={`Open commit on ${forgeName}`}
+                >
+                  <span>{forgeName}</span>
+                  <SquareArrowOutUpRight aria-hidden="true" className="size-2.5 opacity-70" />
+                </a>
+              )}
+            </div>
           ) : (
             <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{path}</p>
           )}
         </div>
         <Menu>
           <MenuTrigger className={quiet} aria-label="More actions" title="More actions">{copied === 'done' ? <Check aria-hidden="true" className="size-4" /> : copied === 'failed' ? <CircleAlert aria-hidden="true" className="size-4 opacity-70" /> : <MoreHorizontal aria-hidden="true" className="size-4" />}</MenuTrigger>
-          <MenuPopup align="end" className="w-56">
+          <MenuPopup align="end" className="w-56" positionerClassName={maximized ? 'z-[110]' : undefined}>
             {/* Beside the canvas only where there is room for both: where the dock would cover it, it is no better than the window. */}
             {large
-              ? !covers && <MenuItem onClick={() => onLayout('side')}><PanelRight aria-hidden="true" />Show beside the board</MenuItem>
-              : <MenuItem onClick={() => onLayout('large')}><Maximize2 aria-hidden="true" />Show large</MenuItem>}
+              ? !covers && (
+                  <MenuItem
+                    onClick={() => {
+                      if (maximized) {
+                        pendingFullscreenFocus.current = true;
+                        setMaximized(false);
+                      }
+                      onLayout('side');
+                    }}
+                  >
+                    <PanelRight aria-hidden="true" />Show beside the board
+                  </MenuItem>
+                )
+              : (
+                  <MenuItem
+                    onClick={() => {
+                      if (maximized) {
+                        pendingFullscreenFocus.current = true;
+                        setMaximized(false);
+                      }
+                      onLayout('large');
+                    }}
+                  >
+                    <Maximize2 aria-hidden="true" />Show large
+                  </MenuItem>
+                )}
             {commit ? (
               <>
                 <MenuItem onClick={copySha}><Copy aria-hidden="true" />Copy sha</MenuItem>
@@ -275,9 +389,34 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
                 : `Could not copy the ${noun}`
               : ''}
         </span>
-        <button type="button" className={quiet} aria-label="Close" title="Close" onClick={onClose}><X aria-hidden="true" className="size-4" /></button>
+        {(Boolean(commit) || maximized) && (
+          <button
+            ref={fullscreenToggleRef}
+            type="button"
+            className={quiet}
+            aria-label={maximized ? 'Exit full screen' : 'Full screen'}
+            title={maximized ? 'Exit full screen (Esc)' : 'Full screen'}
+            aria-pressed={maximized}
+            onClick={toggleMaximized}
+          >
+            {maximized ? (
+              <Minimize2 aria-hidden="true" className="size-4" />
+            ) : (
+              <Maximize2 aria-hidden="true" className="size-4" />
+            )}
+          </button>
+        )}
+        <button
+          type="button"
+          className={quiet}
+          aria-label="Close"
+          title="Close"
+          onClick={handleClose}
+        >
+          <X aria-hidden="true" className="size-4" />
+        </button>
       </header>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-hidden">
         {commit ? (
           <CommitReaderView
             key={open}
@@ -286,6 +425,10 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
             sha={commit.sha}
             query={commitQuery}
             onOpenFile={onOpenFile}
+            selectedFile={commitSelectedFile}
+            onSelectFile={setCommitSelectedFile}
+            diffViewMode={commitViewMode}
+            onDiffViewModeChange={setCommitViewMode}
           />
         ) : isHtml ? (
           <ReaderPage
@@ -293,7 +436,7 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
             workspaceId={workspaceId}
             path={path}
             raw={raw}
-            onViewUrlReady={setActiveViewUrl}
+            onViewUrlReady={handleViewUrlReady}
           />
         ) : (
           <DocumentViewer
@@ -333,5 +476,30 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
         {target.byline && <p className="ml-auto min-w-0 max-w-[40%] truncate text-[11px]" title={target.byline}>{target.byline}</p>}
       </footer>}
     </section>
-  </div>;
+  );
+
+  if (maximized && typeof document !== 'undefined') {
+    return createPortal(
+      <div
+        ref={panel}
+        data-board-reader-fullscreen=""
+        role="region"
+        aria-label="Fullscreen Reader"
+        className="fixed inset-0 z-[100] flex flex-col bg-background animate-fade-in"
+      >
+        {sectionNode}
+      </div>,
+      document.body,
+    );
+  }
+
+  return (
+    <div
+      ref={panel}
+      // The press outside the window that closes it is BoardSection's: it reaches the sidebar and the Area header too.
+      className={large ? 'absolute inset-0 z-20 flex animate-fade-in items-center justify-center bg-background/50' : 'contents'}
+    >
+      {sectionNode}
+    </div>
+  );
 }

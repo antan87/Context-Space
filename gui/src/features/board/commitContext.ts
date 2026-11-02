@@ -61,8 +61,8 @@ export interface CommitPictureLink {
   title: string;
 }
 
-/** Formats a known forge kind into its display name, or null for unknown/null. */
-export function forgeDisplayName(forge: ForgeKind | null | undefined): string | null {
+/** Formats a known forge kind into its display name, with fallback to inferring from webUrl or null. */
+export function forgeDisplayName(forge: ForgeKind | null | undefined, webUrl?: string | null): string | null {
   switch (forge) {
     case 'github':
       return 'GitHub';
@@ -72,8 +72,21 @@ export function forgeDisplayName(forge: ForgeKind | null | undefined): string | 
       return 'Azure DevOps';
     case 'bitbucket':
       return 'Bitbucket';
-    default:
-      return null;
+    default: {
+      if (!webUrl) return null;
+      try {
+        const host = new URL(webUrl).hostname.toLowerCase();
+        if (host.includes('github')) return 'GitHub';
+        if (host.includes('gitlab')) return 'GitLab';
+        if (host.includes('azure') || host.includes('visualstudio')) return 'Azure DevOps';
+        if (host.includes('bitbucket')) return 'Bitbucket';
+        const parts = host.replace(/^www\./, '').split('.');
+        const domain = parts.length > 1 ? parts[0] : host;
+        return domain ? domain.charAt(0).toUpperCase() + domain.slice(1) : null;
+      } catch {
+        return null;
+      }
+    }
   }
 }
 

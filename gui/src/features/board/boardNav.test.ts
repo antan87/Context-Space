@@ -7,7 +7,8 @@ import type { BoardCard, BoardView } from './boardData.js';
 import {
   buildBoardNav,
   readNavMode,
-  readNavOpen,
+  navStartsOpen,
+  readNavChoice,
   sidebarDock,
   totalBoardWaiting,
   writeNavMode,
@@ -55,15 +56,15 @@ describe('sidebarDock', () => {
 });
 
 describe('storage helpers', () => {
-  it('reads open by default unless set to closed', () => {
+  it('reads no choice until one is made, then what was chosen', () => {
     const data = stubStorage();
-    expect(readNavOpen()).toBe(true);
+    expect(readNavChoice()).toBeNull();
     writeNavOpen(false);
     expect(data.get(NAV_OPEN_KEY)).toBe('closed');
-    expect(readNavOpen()).toBe(false);
+    expect(readNavChoice()).toBe(false);
     writeNavOpen(true);
     expect(data.get(NAV_OPEN_KEY)).toBe('open');
-    expect(readNavOpen()).toBe(true);
+    expect(readNavChoice()).toBe(true);
   });
 
   it('reads mode category by default unless set to area', () => {
@@ -78,10 +79,42 @@ describe('storage helpers', () => {
 
   it('safely handles missing or failing storage', () => {
     stubStorage({}, true);
-    expect(readNavOpen()).toBe(true);
+    expect(readNavChoice()).toBeNull();
     expect(readNavMode()).toBe('category');
     expect(() => writeNavOpen(false)).not.toThrow();
     expect(() => writeNavMode('area')).not.toThrow();
+  });
+});
+
+describe('navStartsOpen', () => {
+  const areaOf = (i: number): BoardArea => ({
+    id: `area-${i}`, kind: 'checkpoint', documents: [], repos: [], cards: [], archivedCount: 0, allMemberNodeIds: [`area-${i}`],
+    data: {
+      kind: 'checkpoint', title: `Checkpoint ${i + 1}: the work of one slice`, done: false, current: i === 0, stepsDone: 1, stepsTotal: 3, waitingCount: 0, noteCount: 2, fileCount: 0,
+      pictureCount: 0, documentCount: 0, commitCount: 3, archivedCount: 0, pictures: [], preview: 'Which size can be read?', fresh: false,
+    },
+  });
+  const areas = (count: number) => Array.from({ length: count }, (_, i) => areaOf(i));
+
+  it('starts closed when the Areas are rows with it open and cards with it closed', () => {
+    expect(navStartsOpen(areas(11), { width: 1160, height: 756 })).toBe(false);
+    expect(navStartsOpen(areas(11), { width: 1200, height: 756 })).toBe(false);
+  });
+
+  it('starts open when closing it would not turn the rows into cards', () => {
+    // Cards fit with it open too, or they do not fit even with it closed
+    expect(navStartsOpen(areas(3), { width: 1160, height: 756 })).toBe(true);
+    expect(navStartsOpen(areas(11), { width: 1100, height: 700 })).toBe(true);
+    expect(navStartsOpen(areas(25), { width: 1160, height: 756 })).toBe(true);
+    expect(navStartsOpen(areas(11), { width: 2000, height: 1100 })).toBe(true);
+  });
+
+  it('leaves it alone where it overlays the board, and while nothing is known', () => {
+    expect(navStartsOpen(areas(11), { width: 900, height: 756 })).toBe(true);
+    expect(navStartsOpen(areas(11), { width: 400, height: 700 })).toBe(true);
+    expect(navStartsOpen(areas(11), { width: 390, height: 650 })).toBe(true);
+    expect(navStartsOpen(areas(11), { width: 0, height: 0 })).toBe(true);
+    expect(navStartsOpen([], { width: 1160, height: 756 })).toBe(true);
   });
 });
 
