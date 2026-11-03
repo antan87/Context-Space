@@ -749,6 +749,42 @@
   }
 }
 
+/* Follow the thread: selected card and its chain stay bright; unrelated cards dim */
+.board-flow[data-thread-active="true"] .react-flow__node {
+  transition: opacity 220ms ease, filter 220ms ease;
+}
+.board-flow[data-thread-active="true"] .react-flow__node:not([data-thread="active"]) {
+  opacity: 0.28;
+  filter: grayscale(40%);
+}
+.board-flow[data-thread-active="true"] .react-flow__node[data-thread="active"] {
+  opacity: 1;
+  filter: none;
+}
+.board-flow[data-thread-active="true"] .react-flow__node[data-thread-selected="true"] > :is(article, button, div) {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.board-flow[data-thread-active="true"] .react-flow__edge {
+  transition: opacity 220ms ease;
+}
+.board-flow[data-thread-active="true"] .react-flow__edge:not([data-thread="active"]) {
+  opacity: 0.15;
+}
+.board-flow[data-thread-active="true"] .react-flow__edge[data-thread="active"] path {
+  stroke: var(--primary) !important;
+  stroke-width: 2.5px !important;
+  opacity: 1 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-flow[data-thread-active="true"] .react-flow__node,
+  .board-flow[data-thread-active="true"] .react-flow__edge {
+    transition: none;
+  }
+}
+
 /* ─── Board Areas & Stepping In/Out (Level 0 and Level 1) ─────────────────── */
 .board-overview-plane {
   scale: 1;

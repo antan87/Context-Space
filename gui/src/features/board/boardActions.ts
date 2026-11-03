@@ -47,6 +47,8 @@ export interface BoardActions {
   setRowPage?: (rowId: string, page: number) => void;
   /** Steps into an area from Level 0 (Overview) into Level 1 (Area). */
   openArea?: (id: string, button: HTMLElement) => void;
+  /** Selects a card to follow its thread (lights up connected chain and dims the rest), or null to clear. */
+  selectThread?: (nodeId: string | null) => void;
 }
 
 export const BoardActionsContext = createContext<BoardActions | null>(null);

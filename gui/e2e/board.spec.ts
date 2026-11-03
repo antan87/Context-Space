@@ -4185,6 +4185,59 @@ test.describe('Board index sidebar', () => {
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await expect(toggle).toBeFocused();
   });
+
+  test('follows the thread: selecting a card lights up connected chain and dims the rest, clearing on Escape or canvas click', async ({ page }) => {
+    await routeBoard(page);
+    await routePictures(page);
+    await routeCards(page, boardFile({
+      cards: [
+        boardNote(1, { title: 'First connected note', area: 'checkpoint:reports-export-to-csv', step: 'step-1' }),
+        boardFileCard(2, 'docs/flow.png', { title: 'Second connected picture', area: 'checkpoint:reports-export-to-csv', step: 'step-1' }),
+        boardNote(3, { title: 'Unrelated note', area: 'checkpoint:reports-export-to-csv', step: 'step-2' }),
+      ],
+      links: [
+        boardLink(1, boardId(1), boardId(2), 'related'),
+      ],
+    }));
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    await stepIntoArea(page, /Reports export to CSV/);
+
+    const canvas = board(page);
+    const flow = canvas.locator('#board-area-flow');
+    const note1Node = canvas.locator(`.react-flow__node[data-id="${boardId(1)}"]`);
+    const note2Node = canvas.locator(`.react-flow__node[data-id="${boardId(2)}"]`);
+    const unrelatedNode = canvas.locator(`.react-flow__node[data-id="${boardId(3)}"]`);
+
+    // Initially thread is not active
+    await expect(flow).not.toHaveAttribute('data-thread-active', 'true');
+
+    // Click note 1 to follow thread
+    await note1Node.click();
+    await expect(flow).toHaveAttribute('data-thread-active', 'true');
+    await expect(note1Node).toHaveAttribute('data-thread-selected', 'true');
+    await expect(note1Node).toHaveAttribute('data-thread', 'active');
+    await expect(note2Node).toHaveAttribute('data-thread', 'active');
+    await expect(note2Node).not.toHaveAttribute('data-thread-selected', 'true');
+    await expect(unrelatedNode).not.toHaveAttribute('data-thread', 'active');
+
+    // Press Escape to clear thread
+    await page.keyboard.press('Escape');
+    await expect(flow).not.toHaveAttribute('data-thread-active', 'true');
+    await expect(note1Node).not.toHaveAttribute('data-thread', 'active');
+
+    // Jump from sidebar to note 1 also activates thread
+    const nav = page.getByRole('navigation', { name: 'Board index' });
+    await nav.getByRole('button', { name: /First connected note/ }).click();
+    await expect(flow).toHaveAttribute('data-thread-active', 'true');
+    await expect(note1Node).toHaveAttribute('data-thread-selected', 'true');
+    await expect(note2Node).toHaveAttribute('data-thread', 'active');
+    await expect(unrelatedNode).not.toHaveAttribute('data-thread', 'active');
+
+    // Click canvas pane to clear
+    await flow.locator('.react-flow__pane').click({ position: { x: 10, y: 10 } });
+    await expect(flow).not.toHaveAttribute('data-thread-active', 'true');
+  });
 });
 
 for (const colorScheme of ['light', 'dark'] as const) {

@@ -51,6 +51,7 @@ import { BoardArea, BoardAreaFold, BoardAreaRow, BoardCheckpoint, BoardCommit, B
 import { BoardReader } from './BoardReader.js';
 import { useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
+import { findThreadChain } from './boardThread.js';
 
 const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaFold: BoardAreaFold };
 const AREA_NODE_TYPES: NodeTypes = {
@@ -356,6 +357,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   const jumpFrames = useRef(0);
   const [jumpTick, setJumpTick] = useState(0);
 
+  // Follow the thread state: selected card and its connected chain (links, steps, commits)
+  const [threadSelectedId, setThreadSelectedId] = useState<string | null>(null);
+
   const clearJump = useCallback(() => {
     pendingJumpRef.current = null;
     jumpFrames.current = 0;
@@ -366,16 +370,34 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     clearJump();
     setNarrowNavOpen(false);
     if (reader) setReader(null);
+    setThreadSelectedId(null);
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
     }
+    const overviewNode = overviewNodes.find((n) => n.id === areaId);
+    if (overviewNode && overviewFlow.current) {
+      const cx = overviewNode.position.x + (overviewNode.width ?? 260) / 2;
+      const cy = overviewNode.position.y + (overviewNode.height ?? 160) / 2;
+      void overviewFlow.current.setCenter(cx, cy, { duration: moveMs(300) });
+    }
+    const nodeEl = stageContainer?.querySelector<HTMLElement>(`.react-flow__node[data-id="${areaId}"]`);
+    let origin = '12% 50%';
+    if (nodeEl && stageContainer) {
+      const btnRect = nodeEl.getBoundingClientRect();
+      const stageRect = stageContainer.getBoundingClientRect();
+      if (stageRect.width > 0 && stageRect.height > 0) {
+        const xPct = Math.round(((btnRect.left + btnRect.width / 2 - stageRect.left) / stageRect.width) * 100);
+        const yPct = Math.round(((btnRect.top + btnRect.height / 2 - stageRect.top) / stageRect.height) * 100);
+        origin = `${xPct}% ${yPct}%`;
+      }
+    }
     setStepped((curr) =>
       curr?.areaId === areaId && curr.phase === 'open'
         ? curr
-        : { areaId, origin: '12% 50%', phase: 'open' },
+        : { areaId, origin, phase: 'open' },
     );
-  }, [clearJump, reader, setReader, setNarrowNavOpen]);
+  }, [clearJump, reader, setReader, setNarrowNavOpen, overviewNodes, stageContainer]);
 
   const jumpToItem = useCallback((item: NavItem, openReader?: boolean) => {
     if (item.nodeId === null) {
@@ -390,6 +412,25 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
     }
+    if (!stepped && overviewFlow.current) {
+      const overviewNode = overviewNodes.find((n) => n.id === item.areaId);
+      if (overviewNode) {
+        const cx = overviewNode.position.x + (overviewNode.width ?? 260) / 2;
+        const cy = overviewNode.position.y + (overviewNode.height ?? 160) / 2;
+        void overviewFlow.current.setCenter(cx, cy, { duration: moveMs(300) });
+      }
+    }
+    const nodeEl = stageContainer?.querySelector<HTMLElement>(`.react-flow__node[data-id="${item.areaId}"]`);
+    let origin = '12% 50%';
+    if (nodeEl && stageContainer) {
+      const btnRect = nodeEl.getBoundingClientRect();
+      const stageRect = stageContainer.getBoundingClientRect();
+      if (stageRect.width > 0 && stageRect.height > 0) {
+        const xPct = Math.round(((btnRect.left + btnRect.width / 2 - stageRect.left) / stageRect.width) * 100);
+        const yPct = Math.round(((btnRect.top + btnRect.height / 2 - stageRect.top) / stageRect.height) * 100);
+        origin = `${xPct}% ${yPct}%`;
+      }
+    }
     const nextJump = {
       areaId: item.areaId,
       nodeId: item.nodeId,
@@ -402,9 +443,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     setStepped((curr) =>
       curr?.areaId === item.areaId && curr.phase === 'open'
         ? curr
-        : { areaId: item.areaId, origin: '12% 50%', phase: 'open' },
+        : { areaId: item.areaId, origin, phase: 'open' },
     );
-  }, [jumpToArea, stepped, setReader, setNarrowNavOpen]);
+  }, [jumpToArea, stepped, setReader, setNarrowNavOpen, overviewNodes, stageContainer]);
 
   // Stepped fallback redirect if active area disappeared
   useEffect(() => {
@@ -424,6 +465,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
 
   const stepInto = useCallback((areaId: string, buttonEl: HTMLElement) => {
     clearJump();
+    setThreadSelectedId(null);
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
@@ -440,6 +482,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     if (!curr || curr.phase === 'closing') return;
     focusTarget.current = curr.areaId;
     clearJump();
+    setThreadSelectedId(null);
     setReader(null);
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
@@ -675,6 +718,71 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     }
   }, [highlightedNode, areaCanvasContainer, areaNodes]);
 
+  const threadChain = useMemo(() => {
+    if (!threadSelectedId) return null;
+    return findThreadChain({
+      selectedId: threadSelectedId,
+      nodes: stepped ? areaNodes : (overviewNodes as unknown as BoardNode[]),
+      links: board?.links ?? [],
+      cards: board?.cards ?? [],
+    });
+  }, [threadSelectedId, stepped, areaNodes, overviewNodes, board]);
+
+  useLayoutEffect(() => {
+    const container = stepped ? areaCanvasContainer : stageContainer;
+    if (!container) return;
+    const flowEl = container.querySelector<HTMLElement>('.board-flow');
+    if (flowEl) {
+      if (threadSelectedId) {
+        flowEl.setAttribute('data-thread-active', 'true');
+      } else {
+        flowEl.removeAttribute('data-thread-active');
+      }
+    }
+    const nodes = container.querySelectorAll<HTMLElement>('.react-flow__node');
+    for (const el of Array.from(nodes)) {
+      const id = el.dataset.id;
+      if (!threadSelectedId || !threadChain) {
+        el.removeAttribute('data-thread');
+        el.removeAttribute('data-thread-selected');
+      } else if (id === threadSelectedId) {
+        el.setAttribute('data-thread', 'active');
+        el.setAttribute('data-thread-selected', 'true');
+      } else if (id && threadChain.has(id)) {
+        el.setAttribute('data-thread', 'active');
+        el.removeAttribute('data-thread-selected');
+      } else {
+        el.removeAttribute('data-thread');
+        el.removeAttribute('data-thread-selected');
+      }
+    }
+    const edges = container.querySelectorAll<SVGElement>('.react-flow__edge');
+    const currentEdges = stepped ? areaEdges : overviewLines;
+    for (const el of Array.from(edges)) {
+      const id = el.getAttribute('data-id') || el.id?.replace(/^react-flow__edge-/, '');
+      if (!threadSelectedId || !threadChain || !id) {
+        el.removeAttribute('data-thread');
+      } else {
+        const edgeData = currentEdges.find((e) => e.id === id);
+        if (edgeData && threadChain.has(edgeData.source) && threadChain.has(edgeData.target)) {
+          el.setAttribute('data-thread', 'active');
+        } else {
+          el.removeAttribute('data-thread');
+        }
+      }
+    }
+  }, [
+    threadSelectedId,
+    threadChain,
+    stepped,
+    areaCanvasContainer,
+    stageContainer,
+    areaNodes,
+    overviewNodes,
+    areaEdges,
+    overviewLines,
+  ]);
+
   // Executing pendingJump: a card in a folded row, behind "+N more" or on another page is drawn when its row is open at its page
   useEffect(() => {
     if (
@@ -722,6 +830,19 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
 
     // Trigger node highlight
     setHighlightedNode({ id: jump.nodeId, request: jump.request });
+
+    // Select thread
+    setThreadSelectedId(jump.nodeId);
+
+    // Smoothly fly view to the card if inside Area
+    if (areaInstance) {
+      const nodeData = areaNodes.find((n) => n.id === jump.nodeId);
+      if (nodeData && typeof nodeData.position?.x === 'number') {
+        const cx = nodeData.position.x + (nodeData.width ?? 200) / 2;
+        const cy = nodeData.position.y + (nodeData.height ?? 80) / 2;
+        void areaInstance.setCenter(cx, cy, { zoom: READABLE_ZOOM, duration: moveMs(300) });
+      }
+    }
 
     // The cards are not stops of their own (nothing is moved here), so the keyboard goes to the card's first control, or to the card itself
     const inner = firstControl(nodeEl);
@@ -839,6 +960,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
       const inside = target instanceof Node && Boolean(root.current?.contains(target));
       if (!inside && target !== document.body && target !== document.documentElement) return;
       event.preventDefault();
+      if (threadSelectedId) {
+        setThreadSelectedId(null);
+        return;
+      }
       if (openRef.current.rowId) {
         const row = openRef.current.rowId;
         keepFocusOn(row);
@@ -850,7 +975,24 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [stepped, reader, active, stepOut, navDock.overlays, narrowNavOpen, keepFocusOn]);
+  }, [stepped, reader, active, stepOut, navDock.overlays, narrowNavOpen, keepFocusOn, threadSelectedId]);
+
+  // Level 0 Escape clears thread selection
+  useEffect(() => {
+    if (stepped || !threadSelectedId || reader || !active) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (navDock.overlays && narrowNavOpen) return;
+      const target = event.target;
+      const inside = target instanceof Node && Boolean(root.current?.contains(target));
+      if (!inside && target !== document.body && target !== document.documentElement) return;
+      event.preventDefault();
+      setThreadSelectedId(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [stepped, threadSelectedId, reader, active, navDock.overlays, narrowNavOpen]);
 
   // Actions for Plane 0 & Plane 1
   const overviewActions = useMemo<BoardActions>(() => ({
@@ -860,6 +1002,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     openInReader: () => {},
     toggleGroup: () => {},
     keepFocus: () => {},
+    selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
   }), [workspaceId, workspacePath, stepInto]);
 
   const areaActions = useMemo<BoardActions>(() => ({
@@ -870,6 +1013,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     keepFocus: () => {},
     toggleRow,
     setRowPage,
+    selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
   }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage]);
 
   const backdropPress = useRef({ down: false, up: false });
@@ -974,6 +1118,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
                     overviewFlow.current = instance;
                     setOverviewInstance(instance);
                   }}
+                  onPaneClick={() => setThreadSelectedId(null)}
                   onKeyDown={(event) => {
                     navigate(overviewFlow.current, event, () => { overviewTaken.current = true; }, () => {
                       overviewTaken.current = false;
@@ -1117,6 +1262,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
                           onInit={(instance) => {
                             areaFlow.current = instance;
                             setAreaInstance(instance);
+                          }}
+                          onPaneClick={() => setThreadSelectedId(null)}
+                          onNodeClick={(_event, node) => {
+                            if (!['fold', 'more', 'pager'].includes(node.type ?? '')) {
+                              setThreadSelectedId((curr) => (curr === node.id ? null : node.id));
+                            }
                           }}
                           nodesDraggable={false}
                           nodesConnectable={false}
