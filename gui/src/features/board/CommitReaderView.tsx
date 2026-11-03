@@ -223,8 +223,8 @@ export function CommitReaderView({
           )}
           {pictures.length > 0 && (
             <div>
-              <p className="text-xs text-muted-foreground">{pictures.length === 1 ? 'Picture' : 'Pictures'}</p>
-              <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">{pictures.length === 1 ? 'Picture' : 'Pictures'}</p>
+              <ul className="mt-2 flex flex-wrap gap-3">
                 {pictures.map((pic) => (
                   <li key={pic.path}>
                     <a
@@ -235,10 +235,24 @@ export function CommitReaderView({
                           onOpenFile(pic.path);
                         }
                       }}
-                      className="inline-flex items-center gap-1.5 rounded-xs text-[13px] leading-5 text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                      className="group flex flex-col items-start gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-1.5 transition-colors hover:border-border hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-ring"
                     >
-                      <FileImage aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span>{pic.title}</span>
+                      <div className="relative h-24 w-40 overflow-hidden rounded-md border border-border/40 bg-background/50">
+                        <img
+                          src={documentFileUrl(workspaceId, pic.path)}
+                          alt=""
+                          aria-hidden="true"
+                          loading="lazy"
+                          className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      </div>
+                      <span className="flex max-w-40 items-center gap-1.5 truncate text-[13px] font-medium leading-5 text-foreground underline decoration-border underline-offset-4 group-hover:decoration-foreground">
+                        <FileImage aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{pic.title}</span>
+                      </span>
                     </a>
                   </li>
                 ))}

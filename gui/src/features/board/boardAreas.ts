@@ -15,6 +15,7 @@ import type { WorkDocument } from '../../types.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
+import { resolveCommitContext } from './commitContext.js';
 import {
   BOARD_LIMITS,
   BOARD_SIZE,
@@ -466,18 +467,31 @@ export function buildBoardAreas({
       commitCount += r.commits.length;
       commitMemberIds.push(...r.commitNodeIds);
       const laneId = uniqueId(`lane:commits:${repoName}`, laneTaken);
-      const cards: LaneCard[] = r.commits.map((commit, index) => ({
-        id: r.commitNodeIds[index] ?? uniqueId(`commit:${repoName}:${commit.sha}`, commitTaken),
-        type: 'commit',
-        height: BOARD_SIZE.commit,
-        data: {
-          sha: commit.sha.slice(0, 7),
-          subject: commit.subject,
-          author: commit.author,
-          at: commit.at,
-          fresh: isCommitFresh(commit.sha),
-        },
-      }));
+      const cards: LaneCard[] = r.commits.map((commit, index) => {
+        const commitCtx = resolveCommitContext({
+          repo: repoName,
+          sha: commit.sha,
+          plan,
+          board,
+        });
+        const pictures = commitCtx.pictures.slice(0, 3).map((pic) => ({
+          path: pic.path,
+          title: pic.title,
+        }));
+        return {
+          id: r.commitNodeIds[index] ?? uniqueId(`commit:${repoName}:${commit.sha}`, commitTaken),
+          type: 'commit',
+          height: BOARD_SIZE.commit,
+          data: {
+            sha: commit.sha.slice(0, 7),
+            subject: commit.subject,
+            author: commit.author,
+            at: commit.at,
+            fresh: isCommitFresh(commit.sha),
+            pictures: pictures.length > 0 ? pictures : undefined,
+          },
+        };
+      });
       repoEntries.push({ repo: r.repo, commits: r.commits, laneId, cards });
     }
 

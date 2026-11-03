@@ -139,7 +139,7 @@ export type DocumentData = {
   fresh?: boolean;
 };
 
-export type CommitData = { sha: string; subject: string; author: string; at: string; compact?: boolean; fresh?: boolean };
+export type CommitData = { sha: string; subject: string; author: string; at: string; compact?: boolean; fresh?: boolean; pictures?: Array<{ path: string; title?: string }> };
 /** What stands where a lane would be, when there is nothing to draw in it. */
 export type PlaceholderData = { text: string; compact?: boolean };
 

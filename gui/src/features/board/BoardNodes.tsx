@@ -355,6 +355,27 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
       ) : (
         <p className="line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</p>
       )}
+      {data.pictures && data.pictures.length > 0 && actions && (
+        <div className="flex items-center gap-1.5 overflow-hidden pt-0.5">
+          {data.pictures.map((pic) => (
+            <img
+              key={pic.path}
+              src={documentFileUrl(actions.workspaceId, pic.path)}
+              alt=""
+              aria-hidden="true"
+              title={pic.title}
+              loading="lazy"
+              className="h-6 w-9 shrink-0 rounded border border-border/40 object-cover bg-muted/20"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+          ))}
+          <span className="truncate font-mono text-[11px] text-muted-foreground">
+            {data.pictures.length} {data.pictures.length === 1 ? 'pic' : 'pics'}
+          </span>
+        </div>
+      )}
     </article>;
   }
   return <article
@@ -390,6 +411,27 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
       </button>
     ) : (
       <p className="line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</p>
+    )}
+    {data.pictures && data.pictures.length > 0 && actions && (
+      <div className="flex items-center gap-1.5 overflow-hidden pt-1">
+        {data.pictures.map((pic) => (
+          <img
+            key={pic.path}
+            src={documentFileUrl(actions.workspaceId, pic.path)}
+            alt=""
+            aria-hidden="true"
+            title={pic.title}
+            loading="lazy"
+            className="h-7 w-11 shrink-0 rounded border border-border/40 object-cover bg-muted/20"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+        ))}
+        <span className="truncate text-xs text-muted-foreground">
+          {data.pictures.length} {data.pictures.length === 1 ? 'picture' : 'pictures'}
+        </span>
+      </div>
     )}
   </article>;
 }
