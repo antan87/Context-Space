@@ -312,6 +312,15 @@ describe('buildBoardNav', () => {
       expect(filtered[0].items[0].title).toBe('Architecture Diagram');
     });
 
+    it('shows matched step in subtitle when an Area matches by step text rather than area title', () => {
+      const filtered = buildBoardNav(sampleAreas, { mode: 'category', query: 'Background job' });
+      const areaSection = filtered.find((s) => s.id === 'category:areas');
+      expect(areaSection).toBeDefined();
+      const areaItem = areaSection?.items.find((i) => i.id === 'area:checkpoint:export-csv');
+      expect(areaItem?.title).toBe('Export to CSV');
+      expect(areaItem?.subtitle).toBe('Matched step: Background job queue');
+    });
+
     it('filters commits by author or sha', () => {
       const filtered = buildBoardNav(sampleAreas, { mode: 'category', query: 'Anna' });
       expect(filtered).toHaveLength(1);
@@ -440,6 +449,79 @@ describe('buildBoardNav', () => {
       expect(sections[0].items[0].id).toBe('stepin:checkpoint:empty');
       expect(sections[0].items[0].nodeId).toBeNull();
       expect(sections[0].items[0].subtitle).toBe('Step into area');
+    });
+
+    it('shows matched step title and subtitle when an area matches by step and has no matching child cards', () => {
+      const areaWithStepsOnly: BoardArea = {
+        id: 'checkpoint:queue',
+        kind: 'checkpoint',
+        data: {
+          kind: 'checkpoint',
+          title: 'Job Processing',
+          done: false,
+          current: false,
+          stepsDone: 0,
+          stepsTotal: 1,
+          waitingCount: 0,
+          noteCount: 0,
+          fileCount: 0,
+          pictureCount: 0,
+          documentCount: 0,
+          commitCount: 0,
+          archivedCount: 0,
+          pictures: [],
+          fresh: false,
+        },
+        planItems: {
+          steps: [{ key: 'step-worker', text: 'Spin up celery worker pool', done: false }],
+          decisions: [],
+        },
+        documents: [],
+        repos: [],
+        cards: [],
+        archivedCount: 0,
+        allMemberNodeIds: ['checkpoint:queue'],
+      };
+
+      const sections = buildBoardNav([areaWithStepsOnly], { mode: 'area', query: 'celery worker' });
+      expect(sections).toHaveLength(1);
+      expect(sections[0].id).toBe('area:checkpoint:queue');
+      expect(sections[0].items).toHaveLength(1);
+      expect(sections[0].items[0].title).toBe('Spin up celery worker pool');
+      expect(sections[0].items[0].subtitle).toBe('Matched step · Step into area');
+    });
+
+    it('shows area title match subtitle when an area matches by title without child matches', () => {
+      const areaWithNoChildren: BoardArea = {
+        id: 'checkpoint:queue',
+        kind: 'checkpoint',
+        data: {
+          kind: 'checkpoint',
+          title: 'Job Processing',
+          done: false,
+          current: false,
+          stepsDone: 0,
+          stepsTotal: 0,
+          waitingCount: 0,
+          noteCount: 0,
+          fileCount: 0,
+          pictureCount: 0,
+          documentCount: 0,
+          commitCount: 0,
+          archivedCount: 0,
+          pictures: [],
+          fresh: false,
+        },
+        documents: [],
+        repos: [],
+        cards: [],
+        archivedCount: 0,
+        allMemberNodeIds: ['checkpoint:queue'],
+      };
+
+      const sections = buildBoardNav([areaWithNoChildren], { mode: 'area', query: 'Processing' });
+      expect(sections).toHaveLength(1);
+      expect(sections[0].items[0].subtitle).toBe('Matched area title · Step into area');
     });
   });
 });

@@ -171,6 +171,15 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
   const areaBuckets: AreaBucket[] = [];
 
   for (const area of areas) {
+    const matchingStep = (area.planItems?.steps ?? []).find((s) => matches(s.text.toLowerCase()));
+    const titleMatches = matches(area.data.title.toLowerCase());
+    const areaSubtitle =
+      tokens.length > 0 && !titleMatches && matchingStep
+        ? `Matched step: ${matchingStep.text}`
+        : area.data.kind === 'work'
+          ? 'Current work'
+          : stepsText(area.data);
+
     const bucket: AreaBucket = {
       area,
       areaEntry: {
@@ -180,7 +189,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
         areaTitle: area.data.title,
         nodeId: null,
         title: area.data.title,
-        subtitle: area.data.kind === 'work' ? 'Current work' : stepsText(area.data),
+        subtitle: areaSubtitle,
         badge:
           area.data.waitingCount > 0
             ? { text: waitingText(area.data.waitingCount), variant: 'warning' }
@@ -387,6 +396,19 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
       ];
     } else if (tokens.length > 0 && filteredChildItems.length === 0) {
       if (matches(b.areaEntry.searchText)) {
+        const areaTitleMatches = matches(b.area.data.title.toLowerCase());
+        const matchedStep = (b.area.planItems?.steps ?? []).find((s) => matches(s.text.toLowerCase()));
+        const itemTitle = matchedStep
+          ? matchedStep.text
+          : b.area.data.kind === 'work'
+            ? 'Current work'
+            : stepsText(b.area.data);
+        const itemSubtitle = matchedStep
+          ? 'Matched step · Step into area'
+          : areaTitleMatches
+            ? 'Matched area title · Step into area'
+            : 'Step into area';
+
         finalItems = [
           {
             id: `stepin:${b.area.id}`,
@@ -394,8 +416,8 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
             areaId: b.area.id,
             areaTitle: b.area.data.title,
             nodeId: null,
-            title: b.area.data.kind === 'work' ? 'Current work' : stepsText(b.area.data),
-            subtitle: 'Step into area',
+            title: itemTitle,
+            subtitle: itemSubtitle,
             searchText: b.areaEntry.searchText,
           },
         ];

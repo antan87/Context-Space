@@ -3947,6 +3947,11 @@ test.describe('Board index sidebar', () => {
     await expect(nav.getByRole('button', { name: /Architecture picture/ })).toBeHidden();
     await expect(nav.getByRole('button', { name: /Export memory leak note/ })).toBeHidden();
 
+    // By a step in an Area: shows why the Area matched
+    await search.fill('Query the report rows');
+    await expect(nav.getByRole('button', { name: /^Report rows load fast/ })).toBeVisible();
+    await expect(nav.getByText('Matched step: Query the report rows')).toBeVisible();
+
     await search.fill('nothing like this');
     await expect(nav.locator('[aria-live="polite"]')).toHaveText('No matches');
 
