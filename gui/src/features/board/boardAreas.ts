@@ -128,6 +128,45 @@ export interface BuildBoardAreasSources {
 }
 
 /**
+ * Resolves sets of fresh document names and commit SHAs from workspace news,
+ * so changed cards glow until seen.
+ */
+export function extractFreshSets(news?: WhatsNewView) {
+  const freshShas = new Set<string>();
+  const freshDocNames = new Set<string>();
+
+  if (news && !news.empty) {
+    for (const repo of news.commits ?? []) {
+      for (const commit of repo.commits ?? []) {
+        if (commit.sha) {
+          freshShas.add(commit.sha);
+          freshShas.add(commit.sha.slice(0, 7));
+        }
+      }
+    }
+    for (const doc of news.documents?.items ?? []) {
+      if (doc.name) {
+        freshDocNames.add(doc.name);
+        freshDocNames.add(doc.name.toLowerCase());
+      }
+    }
+  }
+
+  const isDocFresh = (doc: WorkDocument) => {
+    if (doc.filename && (freshDocNames.has(doc.filename) || freshDocNames.has(doc.filename.toLowerCase()))) return true;
+    if (doc.title && (freshDocNames.has(doc.title) || freshDocNames.has(doc.title.toLowerCase()))) return true;
+    return false;
+  };
+
+  const isCommitFresh = (sha?: string) => {
+    if (!sha) return false;
+    return freshShas.has(sha) || freshShas.has(sha.slice(0, 7));
+  };
+
+  return { freshShas, freshDocNames, isDocFresh, isCommitFresh };
+}
+
+/**
  * Builds the logical areas from workspace sources and partitions items (steps, documents, commits, cards)
  * to their owning area.
  */
@@ -141,6 +180,7 @@ export function buildBoardAreas({
 }: BuildBoardAreasSources): BoardArea[] {
   const taken = new Set<string>();
   const waitingKeys = new Set(plan?.waiting ?? []);
+  const { isDocFresh, isCommitFresh } = extractFreshSets(news);
 
   type AreaDraft = {
     id: string;
@@ -153,26 +193,26 @@ export function buildBoardAreas({
 
   const drafts: AreaDraft[] = [];
 
-  if (plan && (plan.steps.length > 0 || plan.decisions.some((decision) => waitingKeys.has(decision.key)))) {
-    const areaWaitingKeys = plan.decisions.filter((d) => waitingKeys.has(d.key)).map((d) => d.key);
+  if (plan && ((plan.steps?.length ?? 0) > 0 || (plan.decisions ?? []).some((decision) => waitingKeys.has(decision.key)))) {
+    const areaWaitingKeys = (plan.decisions ?? []).filter((d) => waitingKeys.has(d.key)).map((d) => d.key);
     drafts.push({
       id: uniqueId('plan:own', taken),
       kind: 'plan',
       title: 'Plan',
       done: false,
-      planItems: { steps: plan.steps, decisions: plan.decisions, waitingKeys: areaWaitingKeys },
+      planItems: { steps: plan.steps ?? [], decisions: plan.decisions ?? [], waitingKeys: areaWaitingKeys },
     });
   }
 
   for (const cp of plan?.checkpoints ?? []) {
-    const areaWaitingKeys = cp.decisions.filter((d) => waitingKeys.has(d.key)).map((d) => d.key);
+    const areaWaitingKeys = (cp.decisions ?? []).filter((d) => waitingKeys.has(d.key)).map((d) => d.key);
     drafts.push({
       id: uniqueId(`checkpoint:${cp.key}`, taken),
       kind: 'checkpoint',
       title: cp.title,
       done: cp.done,
       checkpointKey: cp.key,
-      planItems: { steps: cp.steps, decisions: cp.decisions, waitingKeys: areaWaitingKeys },
+      planItems: { steps: cp.steps ?? [], decisions: cp.decisions ?? [], waitingKeys: areaWaitingKeys },
     });
   }
 
@@ -327,6 +367,10 @@ export function buildBoardAreas({
     const partition = partitions.get(targetId) ?? partitions.get(currentAreaId)!;
     partition.documents.push(doc);
     partition.docNodeIds.push(docNodeId);
+    if (isDocFresh(doc)) {
+      partition.fresh = true;
+      partition.freshKey = doc.updatedAt ?? doc.id;
+    }
   }
 
   // 3. Commits routing
@@ -344,6 +388,11 @@ export function buildBoardAreas({
       const group = commitsByArea.get(targetId)!;
       group.commits.push(commit);
       group.nodeIds.push(commitNodeId);
+      if (isCommitFresh(commit.sha)) {
+        const partition = partitions.get(targetId) ?? partitions.get(currentAreaId)!;
+        partition.fresh = true;
+        partition.freshKey = commit.sha;
+      }
     }
 
     for (const [targetId, { commits: areaCommits, nodeIds }] of commitsByArea.entries()) {
@@ -421,7 +470,13 @@ export function buildBoardAreas({
         id: r.commitNodeIds[index] ?? uniqueId(`commit:${repoName}:${commit.sha}`, commitTaken),
         type: 'commit',
         height: BOARD_SIZE.commit,
-        data: { sha: commit.sha.slice(0, 7), subject: commit.subject, author: commit.author, at: commit.at },
+        data: {
+          sha: commit.sha.slice(0, 7),
+          subject: commit.subject,
+          author: commit.author,
+          at: commit.at,
+          fresh: isCommitFresh(commit.sha),
+        },
       }));
       repoEntries.push({ repo: r.repo, commits: r.commits, laneId, cards });
     }

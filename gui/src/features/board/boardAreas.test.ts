@@ -11,6 +11,7 @@ import {
   areaCardHeight,
   areaCounts,
   buildBoardAreas,
+  extractFreshSets,
   overviewEdges,
   overviewLayout,
   overviewPlan,
@@ -742,6 +743,133 @@ describe('boardAreas', () => {
       expect(cp1.data.pictures).toHaveLength(1);
       // Unconditionally computed preview matches the newest commit across repos even though repoB is second in news
       expect(cp1.data.preview).toBe('Newer commit in repoB');
+    });
+
+    it('marks Area and commit cards fresh when commits are in news', () => {
+      const plan: PlanFileView = {
+        title: 'Fresh Test',
+        overview: '',
+        checkpoints: [{ key: 'cp1', title: 'Checkpoint 1', done: false, steps: [] }],
+        steps: [],
+        decisions: [],
+        waiting: [],
+      };
+      const news: WhatsNewView = {
+        reader: 'user',
+        at: '2026-10-24T12:00:00Z',
+        from: '2026-10-24T10:00:00Z',
+        basis: 'last-look',
+        empty: false,
+        plan: { items: [], more: 0 },
+        documents: { items: [], more: 0 },
+        knowledge: { items: [], more: 0 },
+        problems: [],
+        commits: [
+          {
+            repo: 'repoA',
+            more: 0,
+            commits: [
+              { sha: 'abcdef1234567890', subject: 'Fresh commit', author: 'Anton', at: '2026-10-24T11:50:00Z' },
+            ],
+          },
+        ],
+      };
+
+      const areas = buildBoardAreas({ plan, news });
+      const cp1 = areas.find((a) => a.id === 'checkpoint:cp1')!;
+      expect(cp1.data.fresh).toBe(true);
+      expect(cp1.repos[0]?.cards[0]?.data && (cp1.repos[0].cards[0].data as any).fresh).toBe(true);
+    });
+
+    it('marks Area fresh when a document in the area is new in news', () => {
+      const plan: PlanFileView = {
+        title: 'Doc Fresh Test',
+        overview: '',
+        checkpoints: [{ key: 'cp1', title: 'Checkpoint 1', done: false, steps: [] }],
+        steps: [],
+        decisions: [],
+        waiting: [],
+      };
+      const documents: WorkDocument[] = [
+        {
+          id: 'doc-brief',
+          title: 'Project Brief',
+          filename: 'brief.md',
+          role: 'requirements',
+          status: 'approved',
+          scope: { milestoneId: 'cp1' },
+          createdAt: '2026-10-24T10:00:00Z',
+          updatedAt: '2026-10-24T11:45:00Z',
+        },
+      ];
+      const news: WhatsNewView = {
+        reader: 'user',
+        at: '2026-10-24T12:00:00Z',
+        from: '2026-10-24T10:00:00Z',
+        basis: 'last-look',
+        empty: false,
+        plan: { items: [], more: 0 },
+        documents: { items: [{ name: 'brief.md', kind: 'markdown', change: 'changed', at: '2026-10-24T11:45:00Z' }], more: 0 },
+        knowledge: { items: [], more: 0 },
+        problems: [],
+        commits: [],
+      };
+
+      const areas = buildBoardAreas({ plan, documents, news });
+      const cp1 = areas.find((a) => a.id === 'checkpoint:cp1')!;
+      expect(cp1.data.fresh).toBe(true);
+    });
+  });
+
+  describe('extractFreshSets', () => {
+    it('extracts fresh document names and commit SHAs from news', () => {
+      const news: WhatsNewView = {
+        reader: 'user',
+        at: '2026-10-24T12:00:00Z',
+        from: '2026-10-24T10:00:00Z',
+        basis: 'last-look',
+        empty: false,
+        plan: { items: [], more: 0 },
+        documents: { items: [{ name: 'spec.md', kind: 'markdown', change: 'added', at: '2026-10-24T11:00:00Z' }], more: 0 },
+        knowledge: { items: [], more: 0 },
+        problems: [],
+        commits: [
+          {
+            repo: 'core',
+            more: 0,
+            commits: [{ sha: 'fe0123456789abcd', subject: 'Fix', author: 'Dev', at: '2026-10-24T11:15:00Z' }],
+          },
+        ],
+      };
+
+      const { isDocFresh, isCommitFresh } = extractFreshSets(news);
+      expect(isDocFresh({ id: '1', title: 'Spec', filename: 'spec.md', role: 'design', status: 'draft', createdAt: '', updatedAt: '' })).toBe(true);
+      expect(isDocFresh({ id: '2', title: 'Other', filename: 'other.md', role: 'design', status: 'draft', createdAt: '', updatedAt: '' })).toBe(false);
+      expect(isCommitFresh('fe0123456789abcd')).toBe(true);
+      expect(isCommitFresh('fe01234')).toBe(true);
+      expect(isCommitFresh('9999999')).toBe(false);
+    });
+
+    it('returns false for everything when news is empty or undefined', () => {
+      const { isDocFresh: unDefDoc, isCommitFresh: unDefCommit } = extractFreshSets(undefined);
+      expect(unDefDoc({ id: '1', title: 'Spec', filename: 'spec.md', role: 'design', status: 'draft', createdAt: '', updatedAt: '' })).toBe(false);
+      expect(unDefCommit('fe01234')).toBe(false);
+
+      const emptyNews: WhatsNewView = {
+        reader: 'user',
+        at: '2026-10-24T12:00:00Z',
+        from: '2026-10-24T10:00:00Z',
+        basis: 'last-look',
+        empty: true,
+        plan: { items: [], more: 0 },
+        documents: { items: [], more: 0 },
+        knowledge: { items: [], more: 0 },
+        problems: [],
+        commits: [],
+      };
+      const { isDocFresh, isCommitFresh } = extractFreshSets(emptyNews);
+      expect(isDocFresh({ id: '1', title: 'Spec', filename: 'spec.md', role: 'design', status: 'draft', createdAt: '', updatedAt: '' })).toBe(false);
+      expect(isCommitFresh('fe01234')).toBe(false);
     });
   });
 });

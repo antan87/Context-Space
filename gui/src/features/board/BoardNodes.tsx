@@ -234,16 +234,27 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
   const web = data.url ? classifyMarkdownLink(data.url) : undefined;
   const href = web?.kind === 'external' && !web.href.startsWith('mailto:') ? web.href : undefined;
   const icon = <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />;
-  const title = <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</span>;
+  const title = (
+    <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold inline-flex items-center gap-1.5', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
+      {data.fresh && (
+        <>
+          <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+          <span className="sr-only">New since you looked. </span>
+        </>
+      )}
+      <span className="truncate">{data.title}</span>
+    </span>
+  );
   if (data.compact) {
     const opens = Boolean(actions && data.filename) || Boolean(href);
     return <article
       tabIndex={-1} aria-labelledby={titleId} aria-current={reading ? 'true' : undefined}
       onClick={opens ? (event) => brickPress(event, (card) => firstControl(card)) : undefined}
-      className={cn('flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border px-3 py-2 shadow-xs', CARD_FOCUS, opens && BRICK,
+      className={cn('relative flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border px-3 py-2 shadow-xs', CARD_FOCUS, opens && BRICK,
         data.dimmed ? 'border-dashed border-border bg-muted text-muted-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
     >
       <Anchors />
+      {data.fresh && <span aria-hidden="true" className="board-fresh" />}
       {data.filename
         ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} disabled={!actions}
           onClick={(event) => actions?.openInReader({ path: data.filename!, title: data.title, card: id, source: data.sourceId }, event.currentTarget)}
@@ -263,10 +274,11 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
   return <article
     tabIndex={-1}
     aria-labelledby={titleId} aria-current={reading ? 'true' : undefined}
-    className={cn('flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
+    className={cn('relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-lg border px-3 py-2.5 shadow-xs',
       data.dimmed ? 'border-dashed border-border bg-muted text-muted-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
   >
     <Anchors />
+    {data.fresh && <span aria-hidden="true" className="board-fresh" />}
     {data.filename
       ? <button
         type="button" className={OPENER} aria-label={`Open ${data.title}`} disabled={!actions}
@@ -313,12 +325,19 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
       aria-labelledby={shaId}
       aria-current={reading ? 'true' : undefined}
       onClick={opens ? (event) => brickPress(event, (card) => firstControl(card)) : undefined}
-      className={cn('flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-card-foreground shadow-xs', CARD_FOCUS, opens && BRICK, reading && 'ring-2 ring-primary')}
+      className={cn('relative flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-card-foreground shadow-xs', CARD_FOCUS, opens && BRICK, reading && 'ring-2 ring-primary')}
     >
       <Anchors />
+      {data.fresh && <span aria-hidden="true" className="board-fresh" />}
       <div className="flex h-5 items-center gap-2 text-[13px]">
         <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
         <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
+        {data.fresh && (
+          <>
+            <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+            <span className="sr-only">New since you looked. </span>
+          </>
+        )}
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
       </div>
@@ -342,12 +361,19 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
     tabIndex={-1}
     aria-labelledby={shaId}
     aria-current={reading ? 'true' : undefined}
-    className={cn('flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs', reading && 'ring-2 ring-primary')}
+    className={cn('relative flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-card-foreground shadow-xs', reading && 'ring-2 ring-primary')}
   >
     <Anchors />
+    {data.fresh && <span aria-hidden="true" className="board-fresh" />}
     <div className="flex h-4 items-center gap-2 text-xs">
       <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
       <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
+      {data.fresh && (
+        <>
+          <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+          <span className="sr-only">New since you looked. </span>
+        </>
+      )}
       <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
       {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
     </div>
@@ -457,6 +483,12 @@ function CardMark({ data, markId }: { data: CardData; markId: string }) {
     {data.pinned && <Pin aria-hidden="true" className="size-3 shrink-0 text-primary" />}
     {data.pinned && <span className="sr-only">Pinned. </span>}
     {data.archived && <span>Archived</span>}
+    {data.fresh && (
+      <>
+        <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+        <span className="sr-only">New since you looked. </span>
+      </>
+    )}
     <span id={markId} title={byline} className={cn('rounded-full px-1.5 text-[12.5px] leading-4', ai ? 'bg-state-ai/12 font-medium text-state-ai' : 'text-muted-foreground')}>
       <span aria-hidden="true">{ai ? 'AI' : 'you'}</span><span className="sr-only">{byline}</span>
     </span>
@@ -634,6 +666,9 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
         </span>
 
         <span className="mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
+          {data.fresh && !data.current && !data.done && (
+            <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+          )}
           {data.title}
         </span>
 
@@ -704,7 +739,12 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
         className="board-area nodrag nopan @container relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-lg bg-card px-3 text-left text-card-foreground transition-colors hover:bg-accent"
       >
         <AreaMark data={data} />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5 text-foreground" title={data.title}>{data.title}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5 text-foreground" title={data.title}>
+          {data.fresh && !data.current && !data.done && (
+            <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+          )}
+          {data.title}
+        </span>
         {data.current && <span className="shrink-0 text-xs font-medium text-state-now">Now</span>}
         {data.waitingCount > 0 && (
           <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
@@ -781,7 +821,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
       onClick={() => actions?.toggleRow?.(data.rowId)}
       className={cn('board-row-control nodrag nopan relative flex h-full w-full items-center gap-1.5 overflow-hidden text-left',
-        data.prominent ? 'rounded-xl border border-primary bg-primary/5 px-3 hover:bg-primary/10' : 'rounded-lg px-1 hover:bg-accent/30')}
+        data.prominent ? 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 hover:bg-primary/10 border-l-4 border-l-state-now' : 'rounded-lg px-1 hover:bg-accent/30')}
     >
       {body}
       <Chevron aria-hidden="true" className={cn('size-4 shrink-0 text-muted-foreground', data.prominent ? 'absolute right-3 top-1/2 -translate-y-1/2' : 'board-row-chevron')} />
@@ -802,7 +842,7 @@ export function BoardFoldRow({ data }: NodeProps<FoldNode>) {
       type="button" data-row-control={data.rowId} aria-expanded="false" aria-label={summaryLabel([data.title, data.summary, data.current && 'current step', data.note, data.warning?.toLowerCase()])}
       disabled={!actions} onClick={() => actions?.toggleRow?.(data.rowId)}
       className={cn('board-row-control nodrag nopan flex h-full w-full items-center gap-3 rounded-xl border px-3 text-left hover:bg-accent/30',
-        data.current ? 'border-primary bg-primary/5' : 'border-border/60 bg-card/50')}
+        data.current ? 'border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent border-l-4 border-l-state-now' : 'border-border/60 bg-card/50')}
     >
       <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[14px] font-semibold text-foreground" title={data.title}>{data.title}</span>
       {data.summary && !(tail && NOTHING.test(data.summary)) && <span className="shrink-0 whitespace-nowrap text-[13px] text-muted-foreground">{data.summary}</span>}

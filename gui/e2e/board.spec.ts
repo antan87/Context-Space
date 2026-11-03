@@ -935,6 +935,54 @@ test.describe('Board cards', () => {
     await expect(glow('Just made by claude')).toHaveCSS('animation-name', 'board-fresh-still');
   });
 
+  test('highlights documents and commits new since you looked from workspace news', async ({ page }) => {
+    await routeBoard(page);
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({
+      json: whatsNew({
+        documents: { items: [{ name: 'Export requirements', kind: 'markdown', change: 'changed', at: minutesAgo(5) }], more: 0 },
+        commits: [{ repo: 'billing api', more: 0, commits: [{ sha: 'a91f2e0c4d5b', author: 'Anna', subject: 'Write the CSV writer', at: minutesAgo(5) }] }],
+      }),
+    }));
+    await routeCards(page, boardFile({ cards: [] }));
+    await page.goto('/#/workspaces/demo/board');
+
+    // Level 0: The Area containing the fresh document and commit glows
+    const currentArea = board(page).locator('#board-overview .react-flow__node').filter({ hasText: 'Reports export to CSV' });
+    await expect(currentArea.locator('.board-fresh')).toHaveCount(1);
+
+    // Step into Area:
+    await stepIntoArea(page);
+    const canvas = board(page);
+
+    const docCard = canvas.getByRole('article', { name: 'Export requirements' });
+    await expect(docCard.locator('.board-fresh')).toHaveCount(1);
+    await expect(docCard.getByText('New since you looked.')).toBeAttached();
+
+    const commitCard = canvas.getByRole('article', { name: 'a91f2e0' });
+    await expect(commitCard.locator('.board-fresh')).toHaveCount(1);
+    await expect(commitCard.getByText('New since you looked.')).toBeAttached();
+  });
+
+  test('does not highlight cards when workspace news is empty (all seen)', async ({ page }) => {
+    await routeBoard(page);
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({
+      json: whatsNew({ empty: true, documents: { items: [], more: 0 }, commits: [] }),
+    }));
+    await routeCards(page, boardFile({ cards: [] }));
+    await page.goto('/#/workspaces/demo/board');
+
+    // Level 0: Area is not glowing
+    const currentArea = board(page).locator('#board-overview .react-flow__node').filter({ hasText: 'Reports export to CSV' });
+    await expect(currentArea.locator('.board-fresh')).toHaveCount(0);
+
+    // Step into Area:
+    await stepIntoArea(page);
+    const canvas = board(page);
+    const docCard = canvas.getByRole('article', { name: 'Export requirements' });
+    await expect(docCard.locator('.board-fresh')).toHaveCount(0);
+    await expect(docCard.getByText('New since you looked.')).toHaveCount(0);
+  });
+
   test('keeps every card in view whatever place it was given, and the keyboard reaches its buttons', async ({ page }) => {
     await routeBoard(page);
     await routeCards(page, boardFile({

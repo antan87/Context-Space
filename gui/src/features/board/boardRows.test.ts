@@ -271,6 +271,26 @@ describe('areaBoardLayout v2: height', () => {
     expect(areaRowIds(area(), { news: newsOf(2), size: big })).not.toContain('row:nope');
   });
 
+  it('marks document cards fresh when document is in news', () => {
+    const freshNews: WhatsNewView = {
+      reader: 'user',
+      at: '2026-10-24T12:00:00Z',
+      from: '2026-10-24T10:00:00Z',
+      basis: 'last-look',
+      empty: false,
+      plan: { items: [], more: 0 },
+      documents: { items: [{ name: 'Doc', kind: 'markdown', change: 'changed', at: '2026-10-24T11:45:00Z' }], more: 0 },
+      knowledge: { items: [], more: 0 },
+      problems: [],
+      commits: [],
+    };
+    const area = areaOf(planOf(4, 2, 2), [], { docs: [doc('d1', 'Doc')], news: freshNews });
+    const nodes = areaBoardLayout(area, { news: freshNews, size: big, openRow: 'lane:documents' });
+    const docNode = nodes.find((n) => n.type === 'document');
+    expect(docNode).toBeDefined();
+    expect((docNode!.data as any).fresh).toBe(true);
+  });
+
   it('keeps the view fixed at the readable zoom, with the rows starting at the top left', () => {
     expect(areaView()).toEqual({ x: ROW_SIZE.padX, y: ROW_SIZE.top, zoom: READABLE_ZOOM });
     expect(READABLE_ZOOM).toBeGreaterThanOrEqual(0.9);

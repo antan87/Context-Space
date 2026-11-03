@@ -14,7 +14,7 @@
 
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard } from './boardData.js';
-import type { BoardArea, Size, Viewport } from './boardAreas.js';
+import { extractFreshSets, type BoardArea, type Size, type Viewport } from './boardAreas.js';
 import {
   BOARD_SIZE,
   cardPlan,
@@ -200,12 +200,14 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
     const items = plans(loose);
     rest.push({ id: 'lane:board', kind: 'loose', title: 'Not tied to a step', caption: 'Notes and files from you and the AI', state: 'plain', items, summary: cardsText(items.length) });
   }
+  const { isDocFresh } = extractFreshSets(options.news);
   if (area.documents.length > 0) {
     const items: LaneCard[] = area.documents.map((doc) => compact({
       id: uniqueId(`document:${doc.id}`, taken), type: 'document' as const, height: BOARD_SIZE.document,
       data: {
         title: doc.title, role: doc.role, status: doc.status, summary: doc.summary, dimmed: doc.status === 'superseded', sourceId: doc.id,
         ...(doc.filename ? { filename: doc.filename } : {}), ...(doc.url ? { url: doc.url } : {}),
+        fresh: isDocFresh(doc),
       },
     }));
     rest.push({ id: 'lane:documents', kind: 'documents', title: 'Documents', caption: 'Source documents', state: 'plain', items, summary: documentsSummary(area.documents).headline });
