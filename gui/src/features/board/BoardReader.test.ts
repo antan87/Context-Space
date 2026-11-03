@@ -209,14 +209,14 @@ describe('BoardReader Header & Vendor Link', () => {
     expect(html).not.toContain('<span>GitHub</span>');
   });
 
-  it('keeps header quiet with only More actions and Close buttons for non-commit document previews', () => {
+  it('renders Full screen toggle and layout switch buttons for non-commit document previews', () => {
     const queryClient = createTestClient();
     const docTarget = {
       path: 'docs/architecture.md',
       title: 'Architecture overview',
     };
 
-    const html = renderToStaticMarkup(
+    const htmlLarge = renderToStaticMarkup(
       createElement(
         QueryClientProvider,
         { client: queryClient },
@@ -235,12 +235,71 @@ describe('BoardReader Header & Vendor Link', () => {
       ),
     );
 
-    expect(html).toContain('Architecture overview');
-    expect(html).toContain('docs/architecture.md');
-    expect(html).toContain('aria-label="More actions"');
-    expect(html).toContain('aria-label="Close"');
-    // Non-commit reader keeps original quiet header without extra toggle button
-    expect(html).not.toContain('aria-label="Full screen"');
+    expect(htmlLarge).toContain('Architecture overview');
+    expect(htmlLarge).toContain('docs/architecture.md');
+    expect(htmlLarge).toContain('aria-label="More actions"');
+    expect(htmlLarge).toContain('aria-label="Close"');
+    // Full screen toggle is now available for all documents
+    expect(htmlLarge).toContain('aria-label="Full screen"');
+
+    const htmlSide = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(BoardReader, {
+          workspaceId: 'demo-ws',
+          target: docTarget,
+          request: 1,
+          layout: 'side',
+          onLayout: () => {},
+          covers: false,
+          width: 480,
+          onClose: () => {},
+          onOpenInDocs: () => {},
+          onOpenFile: () => {},
+        }),
+      ),
+    );
+
+    // Full screen toggle is available in side layout too
+    expect(htmlSide).toContain('aria-label="Full screen"');
+  });
+
+  it('renders navigation controls when indexInfo contains multiple items', () => {
+    const queryClient = createTestClient();
+    const docTarget = {
+      path: 'docs/architecture.md',
+      title: 'Architecture overview',
+    };
+
+    const htmlWithNav = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(BoardReader, {
+          workspaceId: 'demo-ws',
+          target: docTarget,
+          request: 1,
+          layout: 'large',
+          onLayout: () => {},
+          covers: false,
+          width: 480,
+          onClose: () => {},
+          onOpenInDocs: () => {},
+          onOpenFile: () => {},
+          onNext: () => {},
+          onPrevious: () => {},
+          nextTitle: 'Next Doc',
+          previousTitle: 'Prev Doc',
+          indexInfo: { current: 2, total: 5 },
+        }),
+      ),
+    );
+
+    expect(htmlWithNav).toContain('aria-label="Item navigation"');
+    expect(htmlWithNav).toContain('2 / 5');
+    expect(htmlWithNav).toContain('aria-label="Previous: Prev Doc ([ or Alt+←])"');
+    expect(htmlWithNav).toContain('aria-label="Next: Next Doc (] or Alt+→)"');
   });
 
   it('infers forge name from webUrl when forge kind is unknown or null', () => {

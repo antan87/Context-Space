@@ -49,7 +49,7 @@ import {
 } from './boardNav.js';
 import { BoardArea, BoardAreaFold, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
 import { BoardReader } from './BoardReader.js';
-import { useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
+import { collectAreaReaderTargets, findReaderTargetIndex, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { findThreadChain } from './boardThread.js';
 
@@ -254,7 +254,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   const closeReader = useCallback(() => setReader(null), [setReader]);
   const changeLayout = useCallback((next: ReaderLayout) => setLayout(next), [setLayout]);
 
-  const openLinked = useCallback((path: string) => show({ path, title: fileTitle(path) }, opener.current), [show]);
+  const openLinked = useCallback((path: string) => {
+    const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
+    const matched = allTargets.find((t) => t.path === path);
+    show(matched ?? { path, title: fileTitle(path) }, opener.current);
+  }, [show, areas]);
   const openInDocs = useCallback((name: string) => {
     documentRequests.open(workspaceId, { name });
     goToWorkspace(navigateTo, workspaceId, 'documents');
@@ -994,6 +998,52 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [stepped, threadSelectedId, reader, active, navDock.overlays, narrowNavOpen]);
 
+  // Reader sequential element navigation within the active area
+  const areaReaderTargets = useMemo(() => (activeArea ? collectAreaReaderTargets(activeArea) : []), [activeArea]);
+
+  const currentReaderIndex = useMemo(() => {
+    if (!reader) return -1;
+    return findReaderTargetIndex(areaReaderTargets, reader.target);
+  }, [areaReaderTargets, reader]);
+
+  const hasPreviousTarget = currentReaderIndex > 0;
+  const hasNextTarget = currentReaderIndex >= 0 && currentReaderIndex < areaReaderTargets.length - 1;
+  const previousTarget = hasPreviousTarget ? areaReaderTargets[currentReaderIndex - 1] : null;
+  const nextTarget = hasNextTarget ? areaReaderTargets[currentReaderIndex + 1] : null;
+
+  const readerIndexInfo = currentReaderIndex >= 0 && areaReaderTargets.length > 0
+    ? { current: currentReaderIndex + 1, total: areaReaderTargets.length }
+    : undefined;
+
+  const navigateToReaderTarget = useCallback(
+    (target: ReaderTarget) => {
+      requests.current += 1;
+      setReader({ target, request: requests.current });
+
+      if (target.card) {
+        setHighlightedNode({ id: target.card, request: ++jumpSeq.current });
+        setThreadSelectedId(target.card);
+
+        if (activeArea && areaReady && !areaNodes.some((node) => node.id === target.card)) {
+          const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, target.card);
+          if (place) {
+            setOpenState(place.row ? { areaId: activeArea.id, rowId: place.row, page: place.page } : null);
+          }
+        }
+
+        if (areaInstance) {
+          const nodeData = areaNodes.find((n) => n.id === target.card);
+          if (nodeData && typeof nodeData.position?.x === 'number') {
+            const cx = nodeData.position.x + (nodeData.width ?? 200) / 2;
+            const cy = nodeData.position.y + (nodeData.height ?? 80) / 2;
+            void areaInstance.setCenter(cx, cy, { zoom: READABLE_ZOOM, duration: moveMs(200) });
+          }
+        }
+      }
+    },
+    [activeArea, areaReady, areaNodes, newsView, areaCanvasSize, areaInstance],
+  );
+
   // Actions for Plane 0 & Plane 1
   const overviewActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1304,6 +1354,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
                     onClose={closeReader}
                     onOpenInDocs={openInDocs}
                     onOpenFile={openLinked}
+                    onNext={nextTarget ? () => navigateToReaderTarget(nextTarget) : undefined}
+                    onPrevious={previousTarget ? () => navigateToReaderTarget(previousTarget) : undefined}
+                    nextTitle={nextTarget?.title}
+                    previousTitle={previousTarget?.title}
+                    indexInfo={readerIndexInfo}
                   />
                 )}
               </div>

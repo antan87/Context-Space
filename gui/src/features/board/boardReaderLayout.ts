@@ -5,6 +5,9 @@
  */
 
 import { useCallback, useState } from 'react';
+import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
+import type { BoardArea } from './boardAreas.js';
+import { cardOrder, uniqueId } from './boardLayout.js';
 
 export type ReaderLayout = 'large' | 'side';
 
@@ -39,4 +42,95 @@ export function useReaderLayout(): [ReaderLayout, (layout: ReaderLayout) => void
     writeLayout(next);
   }, []);
   return [layout, choose];
+}
+
+/** Checks whether two ReaderTarget references describe the exact same item. */
+export function isSameReaderTarget(a: ReaderTarget, b: ReaderTarget): boolean {
+  if (a.commit && b.commit) {
+    return a.commit.repo === b.commit.repo && a.commit.sha === b.commit.sha;
+  }
+  if (a.commit || b.commit) {
+    return false;
+  }
+  if (a.source && b.source) {
+    return a.source === b.source;
+  }
+  if (a.card && b.card) {
+    return a.card === b.card;
+  }
+  return a.path === b.path;
+}
+
+/**
+ * Collects all readable targets (documents, pictures, html pages, files, and commits) from an Area in stable reading order.
+ */
+export function collectAreaReaderTargets(area: BoardArea): ReaderTarget[] {
+  const targets: ReaderTarget[] = [];
+  const seen = new Set<string>();
+
+  const add = (target: ReaderTarget) => {
+    const key = target.commit
+      ? `commit:${target.commit.repo}:${target.commit.sha}`
+      : target.source
+        ? `source:${target.source}`
+        : target.card
+          ? `card:${target.card}`
+          : `path:${target.path}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      targets.push(target);
+    }
+  };
+
+  // 1. Source documents
+  const docTaken = new Set<string>();
+  for (const doc of area.documents) {
+    const docNodeId = uniqueId(`document:${doc.id}`, docTaken);
+    if (doc.filename) {
+      add({
+        path: doc.filename,
+        title: doc.title,
+        card: docNodeId,
+        source: doc.id,
+      });
+    }
+  }
+
+  // 2. Board Cards (files, pictures, HTML)
+  for (const card of cardOrder(area.cards)) {
+    if (card.kind === 'file') {
+      add({
+        path: card.path,
+        title: card.title,
+        card: card.id,
+        ...(card.description ? { text: card.description } : {}),
+        byline: bylineText(card),
+      });
+    }
+  }
+
+  // 3. Commits
+  for (const repoEntry of area.repos) {
+    repoEntry.commits.forEach((commit, index) => {
+      const commitNodeId = repoEntry.cards[index]?.id ?? `commit:${repoEntry.repo.repo}:${commit.sha}`;
+      const parsedCommit = parseCommitNodeId(commitNodeId);
+      if (parsedCommit) {
+        add({
+          path: `${parsedCommit.repo} · ${parsedCommit.sha.slice(0, 7)}`,
+          title: commit.subject,
+          card: commitNodeId,
+          commit: parsedCommit,
+        });
+      }
+    });
+  }
+
+  return targets;
+}
+
+/**
+ * Finds index of current ReaderTarget in the list of targets, matching exact commit, source, card, or path.
+ */
+export function findReaderTargetIndex(targets: ReaderTarget[], current: ReaderTarget): number {
+  return targets.findIndex((t) => isSameReaderTarget(t, current));
 }

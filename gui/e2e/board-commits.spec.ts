@@ -587,11 +587,12 @@ test.describe('Commit cards in quiet reader', () => {
     const errorCard = board(page).locator('#board-area .react-flow__node-commit').filter({ hasText: 'Failing commit' });
     await errorCard.getByRole('button', { name: 'Open Failing commit' }).click();
 
-    // Verify role="alert" shows 'Could not read this commit.' and reader has its 3 header buttons
+    // Verify role="alert" shows 'Could not read this commit.' and reader has its header controls
     const alert = reader(page).getByRole('alert');
     await expect(alert).toBeVisible();
     await expect(alert).toHaveText('Could not read this commit.');
-    await expect(reader(page).getByRole('button')).toHaveCount(3);
+    await expect(moreButton(page)).toBeVisible();
+    await expect(closeButton(page)).toBeVisible();
   });
 
   test('expands and folds single-file diffs in place, renders diff viewer, plain patch, and handles binary and oversized diffs', async ({ page }) => {

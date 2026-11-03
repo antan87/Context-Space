@@ -1,7 +1,23 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Check, CircleAlert, Code2, Copy, Download, Eye, FileText, Maximize2, Minimize2, MoreHorizontal, PanelRight, SquareArrowOutUpRight, X } from 'lucide-react';
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  Code2,
+  Copy,
+  Download,
+  Eye,
+  FileText,
+  Maximize2,
+  Minimize2,
+  MoreHorizontal,
+  PanelRight,
+  SquareArrowOutUpRight,
+  X,
+} from 'lucide-react';
 
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { Button } from '../../components/ui/button.js';
@@ -38,7 +54,24 @@ const FOCUS_FRAMES = 30;
  * `request` grows with every opening, so opening what is already shown still counts. Nothing of the document is put in the
  * board's own page: the viewer draws it, and HTML stays in its sandboxed frame.
  */
-export function BoardReader({ workspaceId, workspacePath, target, request, layout, onLayout, covers, width, onClose, onOpenInDocs, onOpenFile }: {
+export function BoardReader({
+  workspaceId,
+  workspacePath,
+  target,
+  request,
+  layout,
+  onLayout,
+  covers,
+  width,
+  onClose,
+  onOpenInDocs,
+  onOpenFile,
+  onNext,
+  onPrevious,
+  nextTitle,
+  previousTitle,
+  indexInfo,
+}: {
   workspaceId: string;
   workspacePath?: string;
   target: ReaderTarget;
@@ -53,6 +86,11 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
   onOpenInDocs: (path: string) => void;
   /** A link in the document to another file of the workspace. */
   onOpenFile: (path: string) => void;
+  onNext?: () => void;
+  onPrevious?: () => void;
+  nextTitle?: string;
+  previousTitle?: string;
+  indexInfo?: { current: number; total: number };
 }) {
   const title = useRef<HTMLHeadingElement>(null);
   /** What the reader is drawn in, directly in the section's row: the dimmed board behind the window, or nothing when docked. */
@@ -189,6 +227,38 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [maximized]);
 
+  // Keyboard navigation between elements: [ and ] or Alt+ArrowLeft and Alt+ArrowRight
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable ||
+          target.closest('.monaco-editor, [role="dialog"]:not([data-board-reader-fullscreen])'))
+      ) {
+        return;
+      }
+      if (event.defaultPrevented) return;
+
+      if (event.key === '[' || (event.altKey && event.key === 'ArrowLeft')) {
+        if (onPrevious) {
+          event.preventDefault();
+          onPrevious();
+        }
+      } else if (event.key === ']' || (event.altKey && event.key === 'ArrowRight')) {
+        if (onNext) {
+          event.preventDefault();
+          onNext();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onNext, onPrevious]);
+
   const frame = useRef(0);
   const take = useCallback(() => {
     cancelAnimationFrame(frame.current);
@@ -265,12 +335,18 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
               : { width }
       }
     >
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-3 pr-2">
-        <div className="min-w-0 flex-1">
+      <header
+        className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-3 pr-2 select-none"
+        onDoubleClick={(e) => {
+          if ((e.target as HTMLElement).closest('button, a, [role="button"], [role="menu"], input')) return;
+          toggleMaximized();
+        }}
+      >
+        <div className="order-1 min-w-0 flex-1">
           <h2
             ref={title}
             tabIndex={-1}
-            className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground"
+            className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground cursor-default"
             title={commitDetail?.subject ?? target.title}
           >
             {commitDetail?.subject ?? target.title}
@@ -301,95 +377,95 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
             <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{path}</p>
           )}
         </div>
-        <Menu>
-          <MenuTrigger className={quiet} aria-label="More actions" title="More actions">{copied === 'done' ? <Check aria-hidden="true" className="size-4" /> : copied === 'failed' ? <CircleAlert aria-hidden="true" className="size-4 opacity-70" /> : <MoreHorizontal aria-hidden="true" className="size-4" />}</MenuTrigger>
-          <MenuPopup align="end" className="w-56" positionerClassName={maximized ? 'z-[110]' : undefined}>
-            {/* Beside the canvas only where there is room for both: where the dock would cover it, it is no better than the window. */}
-            {large
-              ? !covers && (
-                  <MenuItem
-                    onClick={() => {
-                      if (maximized) {
-                        pendingFullscreenFocus.current = true;
-                        setMaximized(false);
+        <div className="order-3 flex items-center gap-1">
+          <Menu>
+            <MenuTrigger className={quiet} aria-label="More actions" title="More actions">{copied === 'done' ? <Check aria-hidden="true" className="size-4" /> : copied === 'failed' ? <CircleAlert aria-hidden="true" className="size-4 opacity-70" /> : <MoreHorizontal aria-hidden="true" className="size-4" />}</MenuTrigger>
+            <MenuPopup align="end" className="w-56" positionerClassName={maximized ? 'z-[110]' : undefined}>
+              {/* Beside the canvas only where there is room for both: where the dock would cover it, it is no better than the window. */}
+              {large
+                ? !covers && (
+                    <MenuItem
+                      onClick={() => {
+                        if (maximized) {
+                          pendingFullscreenFocus.current = true;
+                          setMaximized(false);
+                        }
+                        onLayout('side');
+                      }}
+                    >
+                      <PanelRight aria-hidden="true" />Show beside the board
+                    </MenuItem>
+                  )
+                : (
+                    <MenuItem
+                      onClick={() => {
+                        if (maximized) {
+                          pendingFullscreenFocus.current = true;
+                          setMaximized(false);
+                        }
+                        onLayout('large');
+                      }}
+                    >
+                      <Maximize2 aria-hidden="true" />Show large
+                    </MenuItem>
+                  )}
+              {commit ? (
+                <>
+                  <MenuItem onClick={copySha}><Copy aria-hidden="true" />Copy sha</MenuItem>
+                  {commitDetail?.pushed && safeWebUrl && forgeName && (
+                    <MenuItem render={<a href={safeWebUrl} target="_blank" rel="noopener noreferrer" />}>
+                      <SquareArrowOutUpRight aria-hidden="true" />Open on {forgeName}
+                    </MenuItem>
+                  )}
+                </>
+              ) : (
+                <>
+                  <MenuItem onClick={() => onOpenInDocs(path)}><FileText aria-hidden="true" />Open in Docs</MenuItem>
+                  {!source && isHtml && (
+                    <MenuItem render={<a href={activeViewUrl ?? `${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
+                      <SquareArrowOutUpRight aria-hidden="true" />Open in browser
+                    </MenuItem>
+                  )}
+                  {!source && !isHtml && kind === 'html' && (
+                    <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
+                      <SquareArrowOutUpRight aria-hidden="true" />Open in new window
+                    </MenuItem>
+                  )}
+                  {!source && (isHtml || kind === 'html') && <MenuSeparator />}
+                  {canViewSource && (
+                    <MenuItem onClick={() => setRawOpen(raw ? null : open)}>
+                      {raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}
+                      {raw ? 'View page' : 'View source'}
+                    </MenuItem>
+                  )}
+                  <MenuItem onClick={copyPath}><Copy aria-hidden="true" />{copyLabel}</MenuItem>
+                  {!source && (
+                    <MenuItem
+                      render={
+                        <a
+                          href={isHtml && activeViewUrl ? `${activeViewUrl}?download=1` : `${fileUrl}&download=1`}
+                          download={path.split('/').pop()}
+                        />
                       }
-                      onLayout('side');
-                    }}
-                  >
-                    <PanelRight aria-hidden="true" />Show beside the board
-                  </MenuItem>
-                )
-              : (
-                  <MenuItem
-                    onClick={() => {
-                      if (maximized) {
-                        pendingFullscreenFocus.current = true;
-                        setMaximized(false);
-                      }
-                      onLayout('large');
-                    }}
-                  >
-                    <Maximize2 aria-hidden="true" />Show large
-                  </MenuItem>
-                )}
-            {commit ? (
-              <>
-                <MenuItem onClick={copySha}><Copy aria-hidden="true" />Copy sha</MenuItem>
-                {commitDetail?.pushed && safeWebUrl && forgeName && (
-                  <MenuItem render={<a href={safeWebUrl} target="_blank" rel="noopener noreferrer" />}>
-                    <SquareArrowOutUpRight aria-hidden="true" />Open on {forgeName}
-                  </MenuItem>
-                )}
-              </>
-            ) : (
-              <>
-                <MenuItem onClick={() => onOpenInDocs(path)}><FileText aria-hidden="true" />Open in Docs</MenuItem>
-                {!source && isHtml && (
-                  <MenuItem render={<a href={activeViewUrl ?? `${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
-                    <SquareArrowOutUpRight aria-hidden="true" />Open in browser
-                  </MenuItem>
-                )}
-                {!source && !isHtml && kind === 'html' && (
-                  <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
-                    <SquareArrowOutUpRight aria-hidden="true" />Open in new window
-                  </MenuItem>
-                )}
-                {!source && (isHtml || kind === 'html') && <MenuSeparator />}
-                {canViewSource && (
-                  <MenuItem onClick={() => setRawOpen(raw ? null : open)}>
-                    {raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}
-                    {raw ? 'View page' : 'View source'}
-                  </MenuItem>
-                )}
-                <MenuItem onClick={copyPath}><Copy aria-hidden="true" />{copyLabel}</MenuItem>
-                {!source && (
-                  <MenuItem
-                    render={
-                      <a
-                        href={isHtml && activeViewUrl ? `${activeViewUrl}?download=1` : `${fileUrl}&download=1`}
-                        download={path.split('/').pop()}
-                      />
-                    }
-                  >
-                    <Download aria-hidden="true" />Download
-                  </MenuItem>
-                )}
-              </>
-            )}
-          </MenuPopup>
-        </Menu>
-        <span role="status" aria-live="polite" className="sr-only">
-          {copied === 'done'
-            ? commit
-              ? 'SHA copied'
-              : `${noun === 'name' ? 'Name' : 'Path'} copied`
-            : copied === 'failed'
+                    >
+                      <Download aria-hidden="true" />Download
+                    </MenuItem>
+                  )}
+                </>
+              )}
+            </MenuPopup>
+          </Menu>
+          <span role="status" aria-live="polite" className="sr-only">
+            {copied === 'done'
               ? commit
-                ? 'Could not copy the SHA'
-                : `Could not copy the ${noun}`
-              : ''}
-        </span>
-        {(Boolean(commit) || maximized) && (
+                ? 'SHA copied'
+                : `${noun === 'name' ? 'Name' : 'Path'} copied`
+              : copied === 'failed'
+                ? commit
+                  ? 'Could not copy the SHA'
+                  : `Could not copy the ${noun}`
+                : ''}
+          </span>
           <button
             ref={fullscreenToggleRef}
             type="button"
@@ -405,16 +481,46 @@ export function BoardReader({ workspaceId, workspacePath, target, request, layou
               <Maximize2 aria-hidden="true" className="size-4" />
             )}
           </button>
+          <button
+            type="button"
+            className={quiet}
+            aria-label="Close"
+            title="Close"
+            onClick={handleClose}
+          >
+            <X aria-hidden="true" className="size-4" />
+          </button>
+        </div>
+        {indexInfo && indexInfo.total > 1 && (
+          <div className="order-2 flex items-center gap-0.5 rounded-md border border-border/60 bg-muted/30 p-0.5" role="group" aria-label="Item navigation">
+            <button
+              type="button"
+              className={cn(quiet, 'size-6 disabled:opacity-30 disabled:pointer-events-none')}
+              aria-label={previousTitle ? `Previous: ${previousTitle} ([ or Alt+←])` : 'Previous item ([ or Alt+←])'}
+              title={previousTitle ? `Previous: ${previousTitle} ([ or Alt+←])` : 'Previous item ([ or Alt+←])'}
+              disabled={!onPrevious}
+              onClick={onPrevious}
+            >
+              <ChevronLeft aria-hidden="true" className="size-3.5" />
+            </button>
+            <span
+              className="px-1.5 font-mono text-[11px] font-medium tabular-nums text-muted-foreground select-none"
+              aria-label={`Item ${indexInfo.current} of ${indexInfo.total}`}
+            >
+              {indexInfo.current} / {indexInfo.total}
+            </span>
+            <button
+              type="button"
+              className={cn(quiet, 'size-6 disabled:opacity-30 disabled:pointer-events-none')}
+              aria-label={nextTitle ? `Next: ${nextTitle} (] or Alt+→)` : 'Next item (] or Alt+→)'}
+              title={nextTitle ? `Next: ${nextTitle} (] or Alt+→)` : 'Next item (] or Alt+→)'}
+              disabled={!onNext}
+              onClick={onNext}
+            >
+              <ChevronRight aria-hidden="true" className="size-3.5" />
+            </button>
+          </div>
         )}
-        <button
-          type="button"
-          className={quiet}
-          aria-label="Close"
-          title="Close"
-          onClick={handleClose}
-        >
-          <X aria-hidden="true" className="size-4" />
-        </button>
       </header>
       <div className="min-h-0 flex-1 overflow-hidden">
         {commit ? (
