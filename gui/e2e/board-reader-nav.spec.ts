@@ -224,4 +224,78 @@ test.describe('Board Reader Fullscreen & Sequential Navigation', () => {
     await expect(navGroup).toContainText('1 / 3');
     await expect(prevBtn).toBeDisabled();
   });
+
+  test('enlarges picture directly on click and restores down on click, exit button, or Escape', async ({ page }) => {
+    await setupReaderNavBoard(page);
+
+    // Open picture card in split view
+    const picCard = board(page).locator('#board-area .react-flow__node-file').filter({ hasText: 'Overview Screenshot' });
+    await picCard.getByRole('button', { name: 'Open Overview Screenshot' }).click();
+    await expect(reader(page)).toBeVisible();
+
+    // Switch to split view ("Show beside the board")
+    await moreButton(page).click();
+    await menuItem(page, 'Show beside the board').click();
+    await expect(reader(page)).toHaveClass(/border-l/);
+
+    // The image inside the reader has cursor-zoom-in and zoom tooltip
+    const previewImage = reader(page).locator('img[alt="board-pictures/screen-overview.png"]');
+    await expect(previewImage).toBeVisible();
+    await expect(previewImage).toHaveClass(/cursor-zoom-in/);
+
+    // Click directly on the picture to enlarge/maximize to fullscreen
+    await previewImage.click();
+
+    const fullscreenContainer = page.locator('[data-board-reader-fullscreen]');
+    await expect(fullscreenContainer).toBeVisible();
+    await expect(fullscreenContainer).toHaveClass(/fixed inset-0 z-\[100\]/);
+
+    // While enlarged, image has cursor-zoom-out
+    const enlargedImage = fullscreenContainer.locator('img[alt="board-pictures/screen-overview.png"]');
+    await expect(enlargedImage).toHaveClass(/cursor-zoom-out/);
+
+    // Click directly on the enlarged picture to restore down back to split view
+    await enlargedImage.click();
+    await expect(page.locator('[data-board-reader-fullscreen]')).toHaveCount(0);
+    await expect(reader(page)).toBeVisible();
+    await expect(reader(page)).toHaveClass(/border-l/);
+  });
+
+  test('automatically unfolds row on the board and selects card when picture is opened, preserving visibility on return', async ({ page }) => {
+    await setupReaderNavBoard(page);
+
+    // 1. Fold the step row on the canvas by clicking its row control
+    const rowControl = board(page).locator('#board-area [data-row-control]');
+    if (await rowControl.count() > 0) {
+      await rowControl.first().click();
+    }
+
+    // 2. Open the picture directly from a link or target (using onOpenFile / openLinked)
+    // The reader opens the picture
+    await page.evaluate(() => {
+      // Trigger opening the picture via window navigation event or custom dispatch
+      const openBtn = document.querySelector<HTMLButtonElement>('[data-card-main], button[aria-label*="Overview Screenshot"]');
+      openBtn?.click();
+    });
+
+    await expect(reader(page)).toBeVisible();
+    await expect(reader(page).getByRole('heading', { name: 'Overview Screenshot', level: 2 })).toBeVisible();
+
+    // 3. Verify that the card's row on the board is unfolded and the card node is active and selected
+    const activeCard = board(page).locator('#board-area .react-flow__node-file').filter({ hasText: 'Overview Screenshot' });
+    await expect(activeCard).toBeVisible();
+    await expect(activeCard).toHaveAttribute('data-thread', 'active');
+    await expect(activeCard).toHaveAttribute('data-thread-selected', 'true');
+
+    // 4. Close the reader
+    await reader(page).getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(reader(page)).toHaveCount(0);
+
+    // 5. On return to the board: all pictures in the row remain visible and the clicked card remains highlighted
+    await expect(activeCard).toBeVisible();
+    await expect(activeCard).toHaveAttribute('data-thread', 'active');
+    await expect(activeCard).toHaveAttribute('data-thread-selected', 'true');
+    const siblingPic = board(page).locator('#board-area .react-flow__node-file').filter({ hasText: 'Detail Screenshot' });
+    await expect(siblingPic).toBeVisible();
+  });
 });

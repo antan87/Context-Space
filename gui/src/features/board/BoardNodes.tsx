@@ -358,18 +358,28 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
       {data.pictures && data.pictures.length > 0 && actions && (
         <div className="flex items-center gap-1.5 overflow-hidden pt-0.5">
           {data.pictures.map((pic) => (
-            <img
+            <button
               key={pic.path}
-              src={documentFileUrl(actions.workspaceId, pic.path)}
-              alt=""
-              aria-hidden="true"
-              title={pic.title}
-              loading="lazy"
-              className="h-6 w-9 shrink-0 rounded border border-border/40 object-cover bg-muted/20"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
+              type="button"
+              className="cursor-pointer rounded border border-border/40 p-0 overflow-hidden hover:opacity-80 focus-visible:outline-2 focus-visible:outline-ring"
+              title={`View picture: ${pic.title}`}
+              aria-label={`View picture: ${pic.title}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                actions.openInReader({ path: pic.path, title: pic.title || pic.path }, e.currentTarget);
               }}
-            />
+            >
+              <img
+                src={documentFileUrl(actions.workspaceId, pic.path)}
+                alt=""
+                aria-hidden="true"
+                loading="lazy"
+                className="h-6 w-9 shrink-0 object-cover bg-muted/20"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            </button>
           ))}
           <span className="truncate font-mono text-[11px] text-muted-foreground">
             {data.pictures.length} {data.pictures.length === 1 ? 'pic' : 'pics'}
@@ -415,18 +425,29 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
     {data.pictures && data.pictures.length > 0 && actions && (
       <div className="flex items-center gap-1.5 overflow-hidden pt-1">
         {data.pictures.map((pic) => (
-          <img
+          <button
             key={pic.path}
-            src={documentFileUrl(actions.workspaceId, pic.path)}
-            alt=""
-            aria-hidden="true"
-            title={pic.title}
-            loading="lazy"
-            className="h-7 w-11 shrink-0 rounded border border-border/40 object-cover bg-muted/20"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
+            type="button"
+            className="cursor-pointer rounded border border-border/40 p-0 overflow-hidden hover:opacity-80 focus-visible:outline-2 focus-visible:outline-ring"
+            title={`View picture: ${pic.title}`}
+            aria-label={`View picture: ${pic.title}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              actions.openInReader({ path: pic.path, title: pic.title || pic.path }, e.currentTarget);
             }}
-          />
+          >
+            <img
+              src={documentFileUrl(actions.workspaceId, pic.path)}
+              alt=""
+              aria-hidden="true"
+              title={pic.title}
+              loading="lazy"
+              className="h-7 w-11 shrink-0 object-cover bg-muted/20"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+          </button>
         ))}
         <span className="truncate text-xs text-muted-foreground">
           {data.pictures.length} {data.pictures.length === 1 ? 'picture' : 'pictures'}
@@ -627,13 +648,14 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
       </div>
     </CardFrame>;
   }
-  return <CardFrame data={data} labelledBy={titleId} reading={reading}>
+  return <CardFrame data={data} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
     <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
     <div className="mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/60">
       {picture
         ? <img
           src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
-          loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-contain"
+          loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-contain cursor-pointer"
+          onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}
         />
         : <FileKind type={data.fileType} path={data.path} />}
     </div>

@@ -70,7 +70,7 @@ function collectHeadAssets(html: string, trusted: boolean): HeadAssets {
  * has an intrinsic height has to opt out of its capped height there, otherwise maximizing only
  * rescales a letterboxed frame.
  */
-export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillFrame = false, trusted = false, links }: { preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; fillFrame?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks }) {
+export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillFrame = false, trusted = false, links, onImageClick }: { preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; fillFrame?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks; onImageClick?: () => void }) {
   const htmlDocument = useMemo(() => {
     if (preview.kind !== 'html' || raw) return '';
     const source = preview.content ?? '';
@@ -91,6 +91,42 @@ export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillF
   if (preview.kind === 'html' && !raw) return <iframe title={`Preview of ${preview.name}`} sandbox={sandbox} referrerPolicy="no-referrer" srcDoc={htmlDocument} className={`${height} w-full rounded-lg border border-border bg-white shadow-xs`} />;
   if (preview.content !== undefined) return <pre className={cn('whitespace-pre-wrap break-words font-mono text-xs sm:text-sm rounded-lg border border-border bg-muted/20 p-4', expanded ? 'flex-1 min-h-0 overflow-auto' : 'overflow-x-auto')}>{preview.content}</pre>;
   if (preview.kind === 'pdf') return <iframe title={`Preview of ${preview.name}`} src={fileUrl} className={`${height} w-full rounded-lg border border-border`} />;
-  if (preview.kind === 'image') return <div className={cn('flex items-center justify-center rounded-lg border border-border/60 bg-muted/10 p-2 sm:p-4', expanded && 'h-full flex-1')}><img src={fileUrl} alt={preview.name} className={expanded ? 'mx-auto h-full w-auto max-w-full object-contain' : 'max-w-full max-h-[65vh] h-auto rounded'} /></div>;
+  if (preview.kind === 'image') {
+    return (
+      <div
+        className={cn(
+          'flex items-center justify-center rounded-lg border border-border/60 bg-muted/10 p-2 sm:p-4',
+          expanded && 'h-full flex-1',
+          onImageClick && 'cursor-pointer select-none',
+        )}
+        onClick={onImageClick}
+        role={onImageClick ? 'button' : undefined}
+        tabIndex={onImageClick ? 0 : undefined}
+        onKeyDown={
+          onImageClick
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onImageClick();
+                }
+              }
+            : undefined
+        }
+        aria-label={onImageClick ? (expanded ? 'Exit full screen (Esc)' : 'View full screen') : undefined}
+        title={onImageClick ? (expanded ? 'Click to exit full screen (Esc)' : 'Click to view full screen') : undefined}
+      >
+        <img
+          src={fileUrl}
+          alt={preview.name}
+          className={cn(
+            expanded
+              ? 'mx-auto h-full w-auto max-w-full object-contain cursor-zoom-out'
+              : 'max-w-full max-h-[65vh] h-auto rounded cursor-zoom-in',
+            !onImageClick && 'cursor-default',
+          )}
+        />
+      </div>
+    );
+  }
   return <div className="rounded-lg border border-dashed border-border p-8 text-center"><p className="text-sm text-muted-foreground">Preview is unavailable for this format. Download the document to open it in its application.</p></div>;
 }

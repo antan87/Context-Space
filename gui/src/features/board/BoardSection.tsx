@@ -49,7 +49,7 @@ import {
 } from './boardNav.js';
 import { BoardArea, BoardAreaFold, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
 import { BoardReader } from './BoardReader.js';
-import { collectAreaReaderTargets, findReaderTargetIndex, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
+import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { findThreadChain } from './boardThread.js';
 
@@ -643,17 +643,32 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     return () => cancelAnimationFrame(frame);
   }, [openerTick, areaNodes, findOpener, activeArea, areaReady, newsView, areaCanvasSize]);
 
+  const activeReaderCardId = useMemo(() => {
+    if (!reader?.target) return null;
+    if (reader.target.card) return reader.target.card;
+    if (activeArea) {
+      if (reader.target.path) {
+        const match = activeArea.cards.find((c) => 'path' in c && c.path === reader.target.path);
+        if (match) return match.id;
+      }
+      const allTargets = collectAreaReaderTargets(activeArea);
+      const found = allTargets.find((t) => isSameReaderTarget(t, reader.target));
+      if (found?.card) return found.card;
+    }
+    return null;
+  }, [reader?.target, activeArea]);
+
   // When the canvas changes size (the reader docks beside it, or leaves), the card the reader shows may no longer be drawn: its row is opened at the page it is on
   const areaSizeKey = `${areaCanvasSize.width}x${areaCanvasSize.height}`;
   const lastAreaSize = useRef(areaSizeKey);
   useEffect(() => {
     const changed = lastAreaSize.current !== areaSizeKey;
     lastAreaSize.current = areaSizeKey;
-    const card = reader?.target.card;
+    const card = activeReaderCardId;
     if (!changed || !card || !activeArea || !areaReady || areaNodes.some((areaNode) => areaNode.id === card)) return;
     const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, card);
     if (place) setOpenState(place.row ? { areaId: activeArea.id, rowId: place.row, page: place.page } : null);
-  }, [areaSizeKey, reader, activeArea, areaReady, areaNodes, newsView, areaCanvasSize]);
+  }, [areaSizeKey, activeReaderCardId, activeArea, areaReady, areaNodes, newsView, areaCanvasSize]);
 
   // Opening or closing a row: the control that was pressed is swapped for another node, so the keyboard is put on the row's control again
   const rowFocus = useRef<{ rowId: string; pressed: HTMLElement | null } | null>(null);
@@ -721,6 +736,27 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
       }
     }
   }, [highlightedNode, areaCanvasContainer, areaNodes]);
+
+  // Whenever the reader shows or navigates to a card or picture, ensure its containing row on the canvas
+  // is unfolded at the right page so all items/pictures in that row are visible, and highlight the card.
+  useEffect(() => {
+    if (!reader || !activeReaderCardId || !activeArea || !areaReady) return;
+
+    setThreadSelectedId(activeReaderCardId);
+    setHighlightedNode({ id: activeReaderCardId, request: ++jumpSeq.current });
+
+    const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, activeReaderCardId);
+    if (place?.row) {
+      const targetRow = place.row;
+      const targetPage = place.page;
+      setOpenState((curr) => {
+        if (curr && curr.areaId === activeArea.id && curr.rowId === targetRow && curr.page === targetPage) {
+          return curr;
+        }
+        return { areaId: activeArea.id, rowId: targetRow, page: targetPage };
+      });
+    }
+  }, [reader?.request, activeReaderCardId, activeArea, areaReady, newsView, areaCanvasSize]);
 
   const threadChain = useMemo(() => {
     if (!threadSelectedId) return null;
@@ -1018,30 +1054,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   const navigateToReaderTarget = useCallback(
     (target: ReaderTarget) => {
       requests.current += 1;
-      setReader({ target, request: requests.current });
-
-      if (target.card) {
-        setHighlightedNode({ id: target.card, request: ++jumpSeq.current });
-        setThreadSelectedId(target.card);
-
-        if (activeArea && areaReady && !areaNodes.some((node) => node.id === target.card)) {
-          const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, target.card);
-          if (place) {
-            setOpenState(place.row ? { areaId: activeArea.id, rowId: place.row, page: place.page } : null);
-          }
-        }
-
-        if (areaInstance) {
-          const nodeData = areaNodes.find((n) => n.id === target.card);
-          if (nodeData && typeof nodeData.position?.x === 'number') {
-            const cx = nodeData.position.x + (nodeData.width ?? 200) / 2;
-            const cy = nodeData.position.y + (nodeData.height ?? 80) / 2;
-            void areaInstance.setCenter(cx, cy, { zoom: READABLE_ZOOM, duration: moveMs(200) });
-          }
-        }
-      }
+      const resolvedCard = target.card ?? (activeArea ? collectAreaReaderTargets(activeArea).find((t) => isSameReaderTarget(t, target))?.card : undefined);
+      const resolvedTarget = resolvedCard ? { ...target, card: resolvedCard } : target;
+      setReader({ target: resolvedTarget, request: requests.current });
     },
-    [activeArea, areaReady, areaNodes, newsView, areaCanvasSize, areaInstance],
+    [activeArea],
   );
 
   // Actions for Plane 0 & Plane 1

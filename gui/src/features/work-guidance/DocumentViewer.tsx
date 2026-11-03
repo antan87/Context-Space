@@ -60,6 +60,10 @@ export interface DocumentViewerProps {
   onMove?: (to: string) => Promise<void> | void;
   /** Initial editing state (useful for tests or opening directly in edit mode) */
   initialEditing?: boolean;
+  /** Direct click handler for image preview (e.g. toggle full screen) */
+  onImageClick?: () => void;
+  /** Controlled image expanded state (e.g. driven by BoardReader fullscreen) */
+  imageExpanded?: boolean;
 }
 
 /**
@@ -68,7 +72,7 @@ export interface DocumentViewerProps {
  * browser Fullscreen API — so Download and the raw toggle stay reachable, and
  * docked side panels like the chat cannot overlap it.
  */
-export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['View source', 'View page'], onClose, compact = false, fill = false, fillFrame = false, chromeless = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false }: DocumentViewerProps) {
+export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['View source', 'View page'], onClose, compact = false, fill = false, fillFrame = false, chromeless = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false, onImageClick, imageExpanded }: DocumentViewerProps) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(initialEditing);
   const [editContent, setEditContent] = useState('');
@@ -273,12 +277,24 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     </div>
   );
 
+  const isImageExpanded = expanded || Boolean(imageExpanded);
+  const handleImageClick = onImageClick ?? (() => setExpanded((value) => !value));
+
   // The frame of a page or a PDF that has the body to itself, in a body that does not scroll.
   const framed = fill && fillFrame && !editing && !raw && (preview?.kind === 'html' || (preview?.kind === 'pdf' && preview.content === undefined));
   const body = (expandedNow: boolean) => editing
     ? editorView
     : preview
-      ? <DocumentPreview preview={preview} fileUrl={fileUrl} raw={raw} expanded={expandedNow} fillFrame={framed && !expandedNow} trusted links={links} />
+      ? <DocumentPreview
+          preview={preview}
+          fileUrl={fileUrl}
+          raw={raw}
+          expanded={expandedNow || isImageExpanded}
+          fillFrame={framed && !expandedNow}
+          trusted
+          links={links}
+          onImageClick={preview.kind === 'image' ? handleImageClick : undefined}
+        />
       : <>{status}</>;
 
   const folder = (preview?.name ?? title).includes('/') ? (preview?.name ?? title).slice(0, (preview?.name ?? title).lastIndexOf('/') + 1) : '';
@@ -473,7 +489,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       {fill ? (
         <div className={cn('flex h-full min-h-0 flex-col', expanded && 'hidden', className)}>
           {!chromeless && fillChrome(false)}
-          <div className={cn('min-h-0 flex-1 px-5 py-4', framed ? 'flex flex-col overflow-hidden' : 'overflow-auto')}>
+          <div className={cn('min-h-0 flex-1 px-5 py-4', framed || (isImageExpanded && preview?.kind === 'image') ? 'flex flex-col overflow-hidden' : 'overflow-auto')}>
             {guidance}
             {body(false)}
           </div>

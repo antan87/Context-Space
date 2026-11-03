@@ -555,6 +555,8 @@ export function BoardReader({
             raw={raw}
             fileUrl={fileUrl}
             links={links}
+            imageExpanded={maximized}
+            onImageClick={toggleMaximized}
             status={<>
               {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
               {preview.isError && <p role="alert" className="text-sm text-destructive">
