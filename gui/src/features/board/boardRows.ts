@@ -12,6 +12,7 @@
  * here ever needs the view to move.
  */
 
+import type { PlanProof } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard } from './boardData.js';
 import { extractFreshSets, type BoardArea, type Size, type Viewport } from './boardAreas.js';
@@ -133,7 +134,18 @@ export interface AreaRow {
 
 export const WAITING_ROW = 'row:waiting';
 
-interface Waiting { areaId: string; kind: 'checkpoint' | 'plan'; title: string; done: boolean; stepsDone: number; stepsTotal: number; decisions: Array<BoardDecision> }
+interface Waiting {
+  areaId: string;
+  kind: 'checkpoint' | 'plan';
+  title: string;
+  done: boolean;
+  stepsDone: number;
+  stepsTotal: number;
+  decisions: Array<BoardDecision>;
+  check?: string | null;
+  proof?: PlanProof;
+  checkpointKey?: string;
+}
 interface Model { waiting: Waiting | null; rows: AreaRow[] }
 
 const cardsText = (count: number) => (count === 0 ? 'No cards' : `${count} ${count === 1 ? 'card' : 'cards'}`);
@@ -150,7 +162,8 @@ function compact(item: LaneCard): LaneCard {
   return { ...item, height: ITEM_HEIGHT[item.type as keyof typeof ITEM_HEIGHT] ?? item.height, data: { ...item.data, compact: true } as LaneCard['data'] };
 }
 
-const waitingHeight = (shown: number, footer: boolean) => ROW_SIZE.waitingHead + shown * ROW_SIZE.decision + (footer ? ROW_SIZE.waitingMore : 0) + ROW_SIZE.waitingPad;
+const waitingHeight = (shown: number, footer: boolean, hasCheck = false) =>
+  ROW_SIZE.waitingHead + shown * ROW_SIZE.decision + (footer ? ROW_SIZE.waitingMore : 0) + ROW_SIZE.waitingPad + (hasCheck ? 36 : 0);
 const isCurrent = (row: AreaRow) => row.state === 'current' || row.state === 'next';
 const headerHeight = (row: AreaRow) => (isCurrent(row) ? ROW_SIZE.current : ROW_SIZE.header);
 
@@ -242,9 +255,12 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
 
   let waiting: Waiting | null = null;
   const waitingKeys = new Set(area.planItems?.waitingKeys ?? []);
-  if ((area.kind === 'checkpoint' || area.kind === 'plan') && waitingKeys.size > 0) {
+  const hasDecisions = waitingKeys.size > 0;
+  const hasCheck = area.kind === 'checkpoint' && area.check !== undefined && !area.data.done;
+  if ((area.kind === 'checkpoint' || area.kind === 'plan') && (hasDecisions || hasCheck)) {
     waiting = {
       areaId: area.id, kind: area.kind, title: area.data.title, done: area.data.done, stepsDone: area.data.stepsDone, stepsTotal: area.data.stepsTotal,
+      check: area.check, proof: area.proof, checkpointKey: area.checkpointKey,
       decisions: (area.planItems?.decisions ?? []).filter((decision) => waitingKeys.has(decision.key)).map(({ key, question, suggested, detail }) => ({
         key,
         question,
@@ -260,7 +276,7 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   const minTotal = () => {
     const count = (waiting ? 1 : 0) + (head ? 1 : 0) + withCards.length - demoted.length + rest.length + (noCards.length + demoted.length > 0 ? 1 : 0) + (finished.length > 0 ? 1 : 0);
     const folded = count - (waiting ? 1 : 0) - (head ? 1 : 0);
-    return (waiting ? waitingHeight(1, waiting.decisions.length > 1) : 0) + (head ? ROW_SIZE.current : 0) + folded * ROW_SIZE.compactFold + Math.max(0, count - 1) * ROW_SIZE.compactGap;
+    return (waiting ? waitingHeight(1, waiting.decisions.length > 1, Boolean(waiting.check && !waiting.done)) : 0) + (head ? ROW_SIZE.current : 0) + folded * ROW_SIZE.compactFold + Math.max(0, count - 1) * ROW_SIZE.compactGap;
   };
   const kept = [...withCards];
   while (kept.length > 0 && minTotal() + (ROW_SIZE.minOpen - ROW_SIZE.compactFold) > stage.height) {
@@ -330,7 +346,8 @@ function waitingPiece(waiting: Waiting, stage: AreaStage, shown: number, expande
   const total = waiting.decisions.length;
   const count = Math.min(total, expanded ? ROW_SIZE.waitingOpen : shown);
   const footer = expanded ? total > 1 : total > count;
-  const height = waitingHeight(count, footer);
+  const hasCheck = Boolean(waiting.check && !waiting.done);
+  const height = waitingHeight(count, footer, hasCheck);
   return {
     height,
     nodes: (y) => [{
@@ -338,6 +355,9 @@ function waitingPiece(waiting: Waiting, stage: AreaStage, shown: number, expande
       data: {
         kind: waiting.kind, open: true, openHeight: height, title: waiting.title, done: waiting.done, stepsDone: waiting.stepsDone, stepsTotal: waiting.stepsTotal,
         steps: [], moreSteps: 0, waiting: waiting.decisions.slice(0, count), moreWaiting: total - count, collapsible: false, waitingOnly: true, rowId: WAITING_ROW, waitingExpanded: expanded,
+        ...(waiting.check !== undefined ? { check: waiting.check } : {}),
+        ...(waiting.proof ? { proof: waiting.proof } : {}),
+        ...(waiting.checkpointKey ? { checkpointKey: waiting.checkpointKey } : {}),
       },
     } as CheckpointNode],
   };
@@ -346,11 +366,13 @@ function waitingPiece(waiting: Waiting, stage: AreaStage, shown: number, expande
 /** The waiting decisions folded to one line, while another row is open. */
 function waitingFold(waiting: Waiting, stage: AreaStage, fold: number): Piece {
   const total = waiting.decisions.length;
+  const title = total > 0 ? 'Waits for you' : 'Check';
+  const summary = total === 1 ? '' : total > 1 ? `${total} questions` : (waiting.check ? 'Check configured' : '');
   return {
     height: fold,
     nodes: (y) => [{
       id: waiting.areaId, type: 'fold', position: { x: 0, y }, width: stage.width, height: fold,
-      data: { rowId: WAITING_ROW, title: 'Waits for you', summary: total === 1 ? '' : `${total} questions`, current: false, note: waiting.decisions[0]?.question, holds: [] },
+      data: { rowId: WAITING_ROW, title, summary, current: false, note: waiting.decisions[0]?.question, holds: [] },
       ...FIXED,
     }],
   };
@@ -358,11 +380,13 @@ function waitingFold(waiting: Waiting, stage: AreaStage, fold: number): Piece {
 
 function headNode(row: AreaRow, y: number, width: number, expanded: boolean, empty: boolean): BoardNode {
   const prominent = isCurrent(row);
+  const stepKey = row.kind === 'step' ? row.id.replace(/^row:step:/, '') : undefined;
   return {
     id: row.id, type: 'step', position: { x: 0, y }, width, height: headerHeight(row),
     data: {
       rowId: row.id, title: row.title, ...(row.text !== undefined ? { text: row.text } : {}), ...(row.caption ? { caption: row.caption } : {}),
       summary: row.summary, state: row.state, expanded, prominent, empty,
+      ...(stepKey ? { stepKey } : {}),
     },
     ...FIXED,
   };
@@ -435,7 +459,7 @@ function linesOf(row: AreaRow, columns: number): Cell[][] {
   if (!row.groups) return chunk<Cell>(row.items, columns);
   const tile = (group: StepGroup, lead: boolean): Cell => ({
     id: `${row.id}:step:${group.key}`, type: 'step' as never, height: ITEM_HEIGHT.step, lead,
-    data: { rowId: row.id, title: row.kind === 'done' ? 'Done' : 'Step', text: group.text, summary: '', state: row.kind === 'done' ? 'done' : 'open', expanded: true, prominent: false, empty: false, static: true } as never,
+    data: { rowId: row.id, title: row.kind === 'done' ? 'Done' : 'Step', text: group.text, summary: '', state: row.kind === 'done' ? 'done' : 'open', expanded: true, prominent: false, empty: false, static: true, stepKey: group.key } as never,
   });
   const lines: Cell[][] = [];
   let listed: Cell[] = [];

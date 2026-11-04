@@ -12,7 +12,7 @@
 
 import type { Edge, Node } from '@xyflow/react';
 import type { WorkDocument } from '../../types.js';
-import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView } from '../plan/planFile.js';
+import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
 import { resolveCommitContext } from './commitContext.js';
@@ -107,8 +107,10 @@ export interface BoardArea {
   id: string;
   kind: 'checkpoint' | 'plan' | 'work';
   checkpointKey?: string;
+  check?: string | null;
+  proof?: PlanProof;
   data: AreaData;
-  planItems?: { steps: PlanFileStep[]; decisions: PlanFileDecision[]; waitingKeys?: string[] };
+  planItems?: { steps: PlanFileStep[]; decisions: PlanFileDecision[]; waitingKeys?: string[]; check?: string | null; proof?: PlanProof };
   documents: WorkDocument[];
   repos: BoardAreaRepo[];
   cards: BoardCard[];
@@ -189,7 +191,9 @@ export function buildBoardAreas({
     title: string;
     done: boolean;
     checkpointKey?: string;
-    planItems?: { steps: PlanFileStep[]; decisions: PlanFileDecision[]; waitingKeys?: string[] };
+    check?: string | null;
+    proof?: PlanProof;
+    planItems?: { steps: PlanFileStep[]; decisions: PlanFileDecision[]; waitingKeys?: string[]; check?: string | null; proof?: PlanProof };
   };
 
   const drafts: AreaDraft[] = [];
@@ -213,7 +217,9 @@ export function buildBoardAreas({
       title: cp.title,
       done: cp.done,
       checkpointKey: cp.key,
-      planItems: { steps: cp.steps ?? [], decisions: cp.decisions ?? [], waitingKeys: areaWaitingKeys },
+      check: cp.check,
+      proof: cp.proof,
+      planItems: { steps: cp.steps ?? [], decisions: cp.decisions ?? [], waitingKeys: areaWaitingKeys, check: cp.check, proof: cp.proof },
     });
   }
 
@@ -532,6 +538,8 @@ export function buildBoardAreas({
       id: draft.id,
       kind: draft.kind,
       checkpointKey: draft.checkpointKey,
+      check: draft.check,
+      proof: draft.proof,
       data,
       planItems: draft.planItems,
       documents: p.documents,

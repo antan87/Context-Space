@@ -152,6 +152,68 @@ export function useAnswerDecision(workspace: string) {
   });
 }
 
+/** Tick or untick a plan step directly, with optimistic update so the step status flips immediately on the board. */
+export function useTickPlanStep(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, done, expected }: { key: string; done: boolean; expected?: string }) =>
+      apiFetch<{ message: string; plan: PlanFileView }>(
+        `/api/workspace/${encodeURIComponent(workspace)}/plan/steps/${encodeURIComponent(key)}/tick`,
+        { method: 'POST', body: JSON.stringify({ done, ...(expected ? { expected } : {}) }) },
+      ),
+    onMutate: async ({ key, done }) => {
+      await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
+      const previous = queryClient.getQueryData<PlanFileView>(planFileKey(workspace));
+      if (previous) {
+        const updateStep = (s: PlanFileStep) => (s.key === key ? { ...s, done } : s);
+        const updatedCheckpoints = previous.checkpoints.map((cp) => ({
+          ...cp,
+          done: cp.key === key ? done : cp.done,
+          steps: cp.steps.map(updateStep),
+        }));
+        const updatedSteps = previous.steps.map(updateStep);
+        queryClient.setQueryData<PlanFileView>(planFileKey(workspace), {
+          ...previous,
+          checkpoints: updatedCheckpoints,
+          steps: updatedSteps,
+        });
+      }
+      return { previous };
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(planFileKey(workspace), result.plan);
+      void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(planFileKey(workspace), context.previous);
+      }
+      void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) });
+    },
+  });
+}
+
+/** Run a verification check for a checkpoint. */
+export function useRunCheckpointCheck(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key }: { key: string }) =>
+      apiFetch<{ message: string; plan: PlanFileView }>(
+        `/api/workspace/${encodeURIComponent(workspace)}/plan/checkpoints/${encodeURIComponent(key)}/check`,
+        { method: 'POST' },
+      ),
+    onSuccess: (result) => {
+      queryClient.setQueryData(planFileKey(workspace), result.plan);
+      void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) });
+    },
+  });
+}
+
 /** What a checkpoint's last check proved, and how it should look. Empty for a checkpoint without a check. */
 export function proofLook(checkpoint: Pick<PlanFileCheckpoint, 'check' | 'proof'>, now: Date = new Date()): { text: string; tone: 'done' | 'failed' | 'quiet' } | null {
   if (checkpoint.check === undefined && !checkpoint.proof) return null;

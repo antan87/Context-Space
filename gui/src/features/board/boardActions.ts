@@ -53,6 +53,14 @@ export interface BoardActions {
   answerDecision?: (key: string, answer: string, expected?: string) => Promise<boolean>;
   /** Errors encountered when answering decisions, keyed by decision key. */
   decisionErrors?: Record<string, string>;
+  /** Toggles a plan step (or checkpoint) done state directly from the board. */
+  toggleStep?: (key: string, done: boolean, expected?: string) => Promise<boolean>;
+  /** Runs a verification check for a checkpoint directly from the board. */
+  runCheck?: (checkpointKey: string) => Promise<boolean>;
+  /** Step keys currently busy mutating. */
+  busyStepKeys?: Set<string>;
+  /** Errors encountered when toggling steps or running checks, keyed by step/checkpoint key. */
+  stepErrors?: Record<string, string>;
 }
 
 export const BoardActionsContext = createContext<BoardActions | null>(null);

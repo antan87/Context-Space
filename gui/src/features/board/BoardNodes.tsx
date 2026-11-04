@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, PanelRightOpen, Pin, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, PanelRightOpen, Pin, ShieldCheck, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
@@ -219,11 +219,49 @@ function WaitingDecisionCard({ decision, onAnswer }: WaitingDecisionCardProps) {
   );
 }
 
+function CheckpointCheckFooter({ data, cpKey }: { data: CheckpointData; cpKey: string }) {
+  const actions = useContext(BoardActionsContext);
+  const isBusy = Boolean(cpKey && actions?.busyStepKeys?.has(cpKey));
+  const checkError = cpKey ? actions?.stepErrors?.[cpKey] : undefined;
+  const statusText = checkError ?? (data.proof?.canProgress
+    ? (data.proof.lastVerificationSha ? `Check passed on ${data.proof.lastVerificationSha.slice(0, 7)}` : 'Check passed')
+    : data.proof ? 'Check failed' : 'Check configured');
+  return (
+    <footer className="mt-auto flex items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-3 py-1.5">
+      <span
+        className={cn('truncate text-[12.5px]', checkError ? 'text-destructive font-medium' : 'text-muted-foreground')}
+        role={checkError ? 'alert' : undefined}
+        title={checkError ?? (typeof data.check === 'string' ? data.check : undefined)}
+      >
+        {statusText}
+      </span>
+      <button
+        type="button"
+        data-testid={`run-check-${cpKey}`}
+        disabled={!actions?.runCheck || isBusy}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (actions?.runCheck && cpKey && !isBusy) {
+            void actions.runCheck(cpKey);
+          }
+        }}
+        className={cn(
+          'nodrag nopan inline-flex min-h-6 items-center gap-1 rounded border border-border/80 bg-background px-2 py-0.5 text-[12.5px] font-medium text-foreground hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 transition-colors',
+          !isBusy && actions?.runCheck && 'cursor-pointer'
+        )}
+      >
+        <ShieldCheck className="size-3.5" />
+        <span>{isBusy ? 'Checking…' : 'Run check'}</span>
+      </button>
+    </footer>
+  );
+}
+
 /**
  * The decisions that wait for you, inside an Area: "Waits for you" and the first decisions, and a button that opens the rest (and, when
  * they are open, closes them again). The Area's own name is in the header above, and is not said again here.
  */
-function WaitingFrame({ data, border, titleId }: { data: CheckpointData; border: string; titleId: string }) {
+function WaitingFrame({ id, data, border, titleId }: { id?: string; data: CheckpointData; border: string; titleId: string }) {
   const actions = useContext(BoardActionsContext);
   const fallbackMutation = useAnswerDecision(actions?.workspaceId ?? '');
   const handleAnswer = async (key: string, answer: string, expected?: string) => {
@@ -238,22 +276,38 @@ function WaitingFrame({ data, border, titleId }: { data: CheckpointData; border:
   };
 
   const expanded = data.waitingExpanded === true;
+  const cpKey = data.checkpointKey ?? (id ? id.replace(/^area:checkpoint:|^checkpoint:/, '') : undefined);
+
   return <article tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}>
     <Anchors />
     <header className="flex h-8 shrink-0 items-center gap-1.5 px-3 pt-1">
-      <span aria-hidden="true" className="size-2 rounded-full bg-state-needs" />
-      <h2 id={titleId} className="text-[13px] font-semibold leading-5 text-foreground">Waits for you</h2>
+      {data.waiting.length > 0 ? (
+        <>
+          <span aria-hidden="true" className="size-2 rounded-full bg-state-needs" />
+          <h2 id={titleId} className="text-[13px] font-semibold leading-5 text-foreground">Waits for you</h2>
+        </>
+      ) : (
+        <>
+          <ShieldCheck aria-hidden="true" className="size-3.5 text-muted-foreground" />
+          <h2 id={titleId} className="text-[13px] font-semibold leading-5 text-foreground">Check</h2>
+        </>
+      )}
     </header>
-    <ul aria-label="Decisions waiting for you" className="nowheel min-h-0 flex-1 overflow-y-auto space-y-2 p-2.5">
-      {data.waiting.map((decision) => (
-        <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} />
-      ))}
-    </ul>
+    {data.waiting.length > 0 && (
+      <ul aria-label="Decisions waiting for you" className="nowheel min-h-0 flex-1 overflow-y-auto space-y-2 p-2.5">
+        {data.waiting.map((decision) => (
+          <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} />
+        ))}
+      </ul>
+    )}
     {(data.moreWaiting > 0 || expanded) && <button
       type="button" data-row-control={data.rowId} aria-expanded={expanded} disabled={!actions} onClick={() => data.rowId && actions?.toggleRow?.(data.rowId)}
       aria-label={expanded ? 'Show fewer decisions waiting for you' : `Show ${data.moreWaiting} more decisions waiting for you`}
       className="board-row-control nodrag nopan flex shrink-0 items-center justify-center border-t border-border/60 px-3 text-[12.5px] font-medium text-foreground hover:bg-accent/40" style={{ height: BOARD_SIZE.moreRow + 6 }}
     >{expanded ? 'Show fewer' : `+${data.moreWaiting} more`}</button>}
+    {data.check && !data.done && cpKey && (
+      <CheckpointCheckFooter data={data} cpKey={cpKey} />
+    )}
   </article>;
 }
 
@@ -290,7 +344,7 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
       <FrameFacts data={data} />
     </FoldedGroup>;
   }
-  if (data.waitingOnly) return <WaitingFrame data={data} border={border} titleId={titleId} />;
+  if (data.waitingOnly) return <WaitingFrame id={id} data={data} border={border} titleId={titleId} />;
   return <article
     tabIndex={-1}
     aria-labelledby={titleId}
@@ -314,17 +368,54 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
       {data.moreWaiting > 0 && <li className="flex items-center border-l-2 border-warning bg-warning/8 px-3 text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreWaiting} more waiting</li>}
     </ul>}
     {!data.waitingOnly && <ul className="px-3">
-      {data.steps.map((step) => <li key={step.key} className="flex items-center gap-2 text-[12.5px]" style={{ height: BOARD_SIZE.stepRow }}>
-        {step.done
-          ? <CircleCheck aria-hidden="true" className="size-3.5 shrink-0 text-success-foreground" />
-          : <Circle aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
-        <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={step.text}>
-          <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span>{step.text}
-        </span>
-      </li>)}
+      {data.steps.map((step) => {
+        const isBusy = Boolean(actions?.busyStepKeys?.has(step.key));
+        const stepError = actions?.stepErrors?.[step.key];
+        return (
+          <li key={step.key} className="flex items-center gap-2 text-[12.5px]" style={{ height: BOARD_SIZE.stepRow }}>
+            <button
+              type="button"
+              role="checkbox"
+              data-testid={`checkpoint-step-checkbox-${step.key}`}
+              aria-checked={step.done}
+              aria-label={step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`}
+              title={stepError ?? (step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`)}
+              disabled={!actions?.toggleStep || isBusy}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!isBusy) {
+                  void actions?.toggleStep?.(step.key, !step.done, step.text);
+                }
+              }}
+              className={cn(
+                'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+                step.done
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-muted-foreground/40 bg-background hover:border-primary',
+                isBusy && 'opacity-50 cursor-not-allowed',
+                !isBusy && actions?.toggleStep && 'cursor-pointer'
+              )}
+            >
+              {step.done ? (
+                <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
+                  <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+                </svg>
+              ) : null}
+            </button>
+            <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={step.text}>
+              <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span>{step.text}
+            </span>
+            {stepError && <span role="alert" className="shrink-0 text-[12.5px] text-destructive">{stepError}</span>}
+          </li>
+        );
+      })}
       {data.steps.length === 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.stepRow }}>No steps yet</li>}
       {data.moreSteps > 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreSteps} more</li>}
     </ul>}
+    {data.check && !data.done && (() => {
+      const cpKey = data.checkpointKey ?? id.replace(/^area:checkpoint:|^checkpoint:/, '');
+      return <CheckpointCheckFooter data={data} cpKey={cpKey} />;
+    })()}
   </article>;
 }
 
@@ -985,28 +1076,141 @@ const STATE_LABEL = { current: 'Now', next: 'Next', open: 'Step', done: 'Done', 
 export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   const actions = useContext(BoardActionsContext);
   const isStep = data.text !== undefined;
+  const isDone = data.state === 'done';
+  const isBusy = Boolean(data.stepKey && actions?.busyStepKeys?.has(data.stepKey));
+  const stepError = data.stepKey ? actions?.stepErrors?.[data.stepKey] : undefined;
   const label = [isStep ? `${STATE_LABEL[data.state]}: ${data.text}` : data.title, data.summary || data.caption].filter(Boolean).join(', ');
   const Chevron = data.expanded ? ChevronUp : ChevronDown;
+
   if (data.static) {
-    return <div className="flex h-full w-full flex-col justify-center overflow-hidden rounded-xl border border-border bg-card px-3 py-1 text-left">
+    return <div className="flex h-full w-full items-center gap-2 overflow-hidden rounded-xl border border-border bg-card px-3 py-1 text-left">
       <Anchors />
-      <span className="truncate text-[12.5px] leading-4 text-muted-foreground">{STATE_LABEL[data.state]}</span>
-      <span className="line-clamp-1 text-[13px] font-medium leading-[17px] text-foreground" title={data.text}>{data.text}</span>
+      {data.stepKey && (
+        <button
+          type="button"
+          role="checkbox"
+          data-testid={`step-checkbox-${data.stepKey}`}
+          aria-checked={isDone}
+          aria-label={isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`}
+          title={stepError ?? (isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`)}
+          disabled={!actions?.toggleStep || isBusy}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (data.stepKey && !isBusy) {
+              void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
+            }
+          }}
+          className={cn(
+            'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+            isDone
+              ? 'border-primary bg-primary text-primary-foreground'
+              : 'border-muted-foreground/40 bg-background hover:border-primary',
+            isBusy && 'opacity-50 cursor-not-allowed',
+            !isBusy && actions?.toggleStep && 'cursor-pointer'
+          )}
+        >
+          {isDone ? (
+            <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
+              <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+            </svg>
+          ) : null}
+        </button>
+      )}
+      <div className="min-w-0 flex-1 flex flex-col justify-center">
+        <span className="truncate text-[12.5px] leading-4 text-muted-foreground">
+          {STATE_LABEL[data.state]}
+          {stepError && <span role="alert" className="ml-1 text-[12.5px] text-destructive">{stepError}</span>}
+        </span>
+        <span className={cn('line-clamp-1 text-[13px] font-medium leading-[17px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={data.text}>{data.text}</span>
+      </div>
     </div>;
   }
+
+  const checkboxButton = isStep && data.stepKey ? (
+    <button
+      type="button"
+      role="checkbox"
+      data-testid={`step-checkbox-${data.stepKey}`}
+      aria-checked={isDone}
+      aria-label={isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`}
+      title={stepError ?? (isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`)}
+      disabled={!actions?.toggleStep || isBusy}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (data.stepKey && !isBusy) {
+          void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
+        }
+      }}
+      className={cn(
+        'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+        isDone
+          ? 'border-primary bg-primary text-primary-foreground'
+          : 'border-muted-foreground/40 bg-background hover:border-primary',
+        isBusy && 'opacity-50 cursor-not-allowed',
+        !isBusy && actions?.toggleStep && 'cursor-pointer'
+      )}
+    >
+      {isDone ? (
+        <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
+          <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+        </svg>
+      ) : null}
+    </button>
+  ) : null;
+
   const body = data.prominent
     ? <span className="flex min-w-0 flex-1 flex-col justify-center pr-6">
       <span className="flex items-center gap-1.5 whitespace-nowrap text-[13px] font-semibold leading-4 text-foreground">
         <span aria-hidden="true" className={cn('size-2 rounded-full', data.state === 'current' ? 'board-now-dot bg-state-now' : 'bg-muted-foreground/60')} />
         {STATE_LABEL[data.state]}
-        {data.empty && <span className="text-[13px] font-normal text-muted-foreground">{data.summary}</span>}
+        {stepError ? (
+          <span role="alert" className="text-[12.5px] font-normal text-destructive truncate">{stepError}</span>
+        ) : data.empty && (
+          <span className="text-[13px] font-normal text-muted-foreground">{data.summary}</span>
+        )}
       </span>
-      <span className="line-clamp-2 text-[14px] font-semibold leading-[18px] text-foreground" title={data.text}>{data.text}</span>
+      <span className={cn('line-clamp-2 text-[14px] font-semibold leading-[18px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={data.text}>{data.text}</span>
     </span>
-    : <span className="flex min-w-0 items-baseline gap-2">
-      <span className={cn('truncate text-[14px] font-semibold leading-5 text-foreground')} title={isStep ? data.text : data.title}>{isStep ? data.text : data.title}</span>
-      {(data.summary || data.caption) && <span className="shrink-0 whitespace-nowrap text-[13px] leading-5 text-muted-foreground" title={data.caption}>{data.summary}</span>}
+    : <span className="flex min-w-0 flex-1 items-baseline gap-2">
+      <span className={cn('truncate text-[14px] font-semibold leading-5', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={isStep ? data.text : data.title}>{isStep ? data.text : data.title}</span>
+      {stepError ? (
+        <span role="alert" className="shrink-0 whitespace-nowrap text-[12.5px] leading-5 text-destructive">{stepError}</span>
+      ) : (data.summary || data.caption) && (
+        <span className="shrink-0 whitespace-nowrap text-[13px] leading-5 text-muted-foreground" title={data.caption}>{data.summary}</span>
+      )}
     </span>;
+
+  if (isStep) {
+    return (
+      <div
+        className={cn(
+          'relative flex h-full w-full items-center gap-2 overflow-hidden text-left',
+          data.prominent
+            ? 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 border-l-4 border-l-state-now hover:bg-primary/5'
+            : 'rounded-lg px-1'
+        )}
+      >
+        <Anchors />
+        {checkboxButton}
+        <button
+          type="button"
+          data-row-control={data.rowId}
+          aria-expanded={data.expanded}
+          aria-label={label}
+          disabled={!actions}
+          onClick={() => actions?.toggleRow?.(data.rowId)}
+          className={cn(
+            'board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            !data.prominent && 'hover:bg-accent/30'
+          )}
+        >
+          {body}
+          <Chevron aria-hidden="true" className={cn('size-4 shrink-0 text-muted-foreground', data.prominent ? 'absolute right-0 top-1/2 -translate-y-1/2' : 'board-row-chevron')} />
+        </button>
+      </div>
+    );
+  }
+
   return <div className="relative h-full w-full">
     <Anchors />
     <button

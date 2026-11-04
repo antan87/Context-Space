@@ -17,7 +17,7 @@
 
 import type { Edge, Node } from '@xyflow/react';
 import type { WorkDocument } from '../../types.js';
-import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView } from '../plan/planFile.js';
+import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardPoint, BoardView } from './boardData.js';
 import { groupOpen, type Folds } from './boardFolds.js';
@@ -125,6 +125,12 @@ export type CheckpointData = {
   /** For the waiting frame inside an Area: the row it opens and closes, and whether it is open. */
   rowId?: string;
   waitingExpanded?: boolean;
+  /** Verification check command if configured for this checkpoint. */
+  check?: string | null;
+  /** Evidence from last check run. */
+  proof?: PlanProof;
+  /** Key of the checkpoint. */
+  checkpointKey?: string;
 };
 
 export type DocumentData = {
@@ -194,6 +200,8 @@ export type RowHeadData = {
   prominent: boolean;
   /** A tile that only tells (a finished step inside the opened done row), not a button. */
   static?: boolean;
+  /** Key of the plan step if this row represents a plan step. */
+  stepKey?: string;
 };
 /** A row folded to one line: its title and what it holds. Pressing it opens the row. */
 export type FoldData = { rowId: string; title: string; summary: string; current: boolean; warning?: string; /** The first thing the row holds that is worth saying, in the muted colour: red is for errors. */ note?: string; /** The first things the row holds, in a line, for the muted words after its name. */ preview?: string; /** The things of the row, which are not drawn: a line to one of them goes to the row. */ holds: string[] };
@@ -393,32 +401,36 @@ export function currentFrame<T extends CheckpointNode>(frames: T[]): T | undefin
 }
 
 /** How tall a frame is for this many steps and waiting decisions, each cut to its cap. A frame with no steps says so in one row. */
-export function frameHeight(stepCount: number, waitingCount: number, waitingOnly = false): number {
+export function frameHeight(stepCount: number, waitingCount: number, waitingOnly = false, hasCheck = false): number {
+  const pad = 12;
+  const checkHeight = hasCheck ? 36 : 0;
   if (waitingOnly) {
     const waitingShown = Math.min(waitingCount, BOARD_LIMITS.waiting);
-    return BOARD_SIZE.frameHeader + waitingShown * BOARD_SIZE.decisionRow + (waitingCount > waitingShown ? BOARD_SIZE.moreRow : 0) + pad;
+    return BOARD_SIZE.frameHeader + waitingShown * BOARD_SIZE.decisionRow + (waitingCount > waitingShown ? BOARD_SIZE.moreRow : 0) + pad + checkHeight;
   }
   const steps = Math.min(stepCount, BOARD_LIMITS.steps);
   const waiting = Math.min(waitingCount, BOARD_LIMITS.waiting);
   return BOARD_SIZE.frameHeader
     + waiting * BOARD_SIZE.decisionRow + (waitingCount > waiting ? BOARD_SIZE.moreRow : 0)
     + Math.max(1, steps) * BOARD_SIZE.stepRow + (stepCount > steps ? BOARD_SIZE.moreRow : 0)
-    + pad;
+    + pad
+    + checkHeight;
 }
 
 /** A frame of steps and the decisions that wait, for a checkpoint or for the plan's own loose items. It is drawn open; `fold` closes it. */
-export function frame(kind: CheckpointData['kind'], id: string, x: number, title: string, done: boolean, items: { steps: PlanFileStep[]; decisions: PlanFileDecision[] }, waitingKeys: Set<string>, collapsible?: boolean): CheckpointNode {
+export function frame(kind: CheckpointData['kind'], id: string, x: number, title: string, done: boolean, items: { steps: PlanFileStep[]; decisions: PlanFileDecision[]; check?: string | null; proof?: PlanProof; key?: string }, waitingKeys: Set<string>, collapsible?: boolean): CheckpointNode {
   const { done: stepsComplete, total } = stepsDone(items);
   const waiting = items.decisions.filter((decision) => waitingKeys.has(decision.key));
   const shownWaiting = waiting.slice(0, BOARD_LIMITS.waiting);
   const steps = items.steps.slice(0, BOARD_LIMITS.steps);
   const moreSteps = items.steps.length - steps.length;
   const moreWaiting = waiting.length - shownWaiting.length;
-  const height = frameHeight(items.steps.length, waiting.length);
+  const hasCheck = Boolean(items.check !== undefined && !done);
+  const height = frameHeight(items.steps.length, waiting.length, false, hasCheck);
   return {
     id, type: 'checkpoint', position: { x, y: 0 }, width: column, height, ...FIXED,
     data: {
-      kind, open: true, openHeight: frameHeight(items.steps.length, items.decisions.length), title, done, stepsDone: stepsComplete, stepsTotal: total,
+      kind, open: true, openHeight: frameHeight(items.steps.length, items.decisions.length, false, hasCheck), title, done, stepsDone: stepsComplete, stepsTotal: total,
       steps: steps.map(({ key, text, done: stepDone }) => ({ key, text, done: stepDone })), moreSteps,
       waiting: shownWaiting.map(({ key, question, suggested, detail }) => ({
         key,
@@ -427,6 +439,9 @@ export function frame(kind: CheckpointData['kind'], id: string, x: number, title
         ...(detail ? { detail } : {}),
       })), moreWaiting,
       ...(collapsible !== undefined ? { collapsible } : {}),
+      ...(items.check !== undefined ? { check: items.check } : {}),
+      ...(items.proof ? { proof: items.proof } : {}),
+      ...(items.key ? { checkpointKey: items.key } : {}),
     },
   };
 }

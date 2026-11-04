@@ -151,4 +151,64 @@ describe('plan routes', () => {
     });
     expect(blank.status).toBe(400);
   });
+
+  it('ticks and unticks a step directly via POST /api/workspace/:id/plan/steps/:key/tick', async () => {
+    // Tick with auto-resolved expected
+    const res = await app.request('/api/workspace/reports/plan/steps/write-the-csv-writer/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: true }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.message).toBe('Ticked "Write the CSV writer".');
+    expect(body.plan.checkpoints[0]?.steps[0]?.done).toBe(true);
+
+    const onDisk = await file();
+    expect(onDisk.checkpoints[0]?.steps[0]?.done).toBe(true);
+
+    // Untick with explicit expected
+    const untick = await app.request('/api/workspace/reports/plan/steps/write-the-csv-writer/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: false, expected: 'Write the CSV writer' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(untick.status).toBe(200);
+    const untickBody = await untick.json();
+    expect(untickBody.message).toBe('Unticked "Write the CSV writer".');
+    expect(untickBody.plan.checkpoints[0]?.steps[0]?.done).toBe(false);
+
+    // 404 when step key does not exist
+    const missing = await app.request('/api/workspace/reports/plan/steps/non-existent-step/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: true }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(missing.status).toBe(404);
+
+    // 409 when expected does not match
+    const conflict = await app.request('/api/workspace/reports/plan/steps/write-the-csv-writer/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: true, expected: 'Outdated step wording' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(conflict.status).toBe(409);
+  });
+
+  it('runs a checkpoint check via POST /api/workspace/:id/plan/checkpoints/:key/check', async () => {
+    check.result = { overallStatus: 'pass', canProgress: true, repos: [{ headSha: 'abc1234def' }] };
+    const res = await app.request('/api/workspace/reports/plan/checkpoints/reports-export-to-csv/check', {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.message).toBe('The check passed.');
+    expect(body.plan.checkpoints[0]?.proof).toMatchObject({ canProgress: true });
+
+    // 404 when checkpoint key does not exist
+    const missing = await app.request('/api/workspace/reports/plan/checkpoints/non-existent-checkpoint/check', {
+      method: 'POST',
+    });
+    expect(missing.status).toBe(404);
+  });
 });

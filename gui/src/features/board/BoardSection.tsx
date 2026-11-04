@@ -13,7 +13,7 @@ import { useWorkGuidance } from '../../lib/api/queries.js';
 import { cn } from '../../lib/utils.js';
 import { usePageVisible } from '../../lib/usePageVisible.js';
 import { goToWorkspace } from '../chat/chatRoute.js';
-import { useAnswerDecision, usePlanFile } from '../plan/planFile.js';
+import { useAnswerDecision, usePlanFile, useRunCheckpointCheck, useTickPlanStep } from '../plan/planFile.js';
 import { useWhatsNew } from '../plan/whatsNew.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests } from '../workspace-shell/openRequests.js';
@@ -53,7 +53,7 @@ import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, us
 import { BoardSidebar } from './BoardSidebar.js';
 import { findThreadChain } from './boardThread.js';
 
-const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaFold: BoardAreaFold };
+const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaFold: BoardAreaFold, checkpoint: BoardCheckpoint };
 const AREA_NODE_TYPES: NodeTypes = {
   lane: BoardLane,
   checkpoint: BoardCheckpoint,
@@ -1060,7 +1060,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   );
 
   const [decisionErrors, setDecisionErrors] = useState<Record<string, string>>({});
+  const [busyStepKeys, setBusyStepKeys] = useState<Set<string>>(new Set());
+  const [stepErrors, setStepErrors] = useState<Record<string, string>>({});
+
   const answerMutation = useAnswerDecision(workspaceId);
+  const tickStepMutation = useTickPlanStep(workspaceId);
+  const runCheckMutation = useRunCheckpointCheck(workspaceId);
+
   const answerDecision = useCallback(async (key: string, answer: string, expected?: string) => {
     setDecisionErrors((prev) => {
       if (!prev[key]) return prev;
@@ -1080,6 +1086,58 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     }
   }, [answerMutation]);
 
+  const toggleStep = useCallback(async (key: string, done: boolean, expected?: string) => {
+    setBusyStepKeys((prev) => new Set(prev).add(key));
+    setStepErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    try {
+      await tickStepMutation.mutateAsync({ key, done, expected });
+      return true;
+    } catch (err) {
+      setStepErrors((prev) => ({
+        ...prev,
+        [key]: err instanceof Error ? err.message : 'Could not update step.',
+      }));
+      return false;
+    } finally {
+      setBusyStepKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }, [tickStepMutation]);
+
+  const runCheck = useCallback(async (checkpointKey: string) => {
+    setBusyStepKeys((prev) => new Set(prev).add(checkpointKey));
+    setStepErrors((prev) => {
+      if (!prev[checkpointKey]) return prev;
+      const next = { ...prev };
+      delete next[checkpointKey];
+      return next;
+    });
+    try {
+      await runCheckMutation.mutateAsync({ key: checkpointKey });
+      return true;
+    } catch (err) {
+      setStepErrors((prev) => ({
+        ...prev,
+        [checkpointKey]: err instanceof Error ? err.message : 'Check failed.',
+      }));
+      return false;
+    } finally {
+      setBusyStepKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(checkpointKey);
+        return next;
+      });
+    }
+  }, [runCheckMutation]);
+
   // Actions for Plane 0 & Plane 1
   const overviewActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1091,7 +1149,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
     answerDecision,
     decisionErrors,
-  }), [workspaceId, workspacePath, stepInto, answerDecision, setThreadSelectedId, decisionErrors]);
+    toggleStep,
+    runCheck,
+    busyStepKeys,
+    stepErrors,
+  }), [workspaceId, workspacePath, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1104,7 +1166,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
     answerDecision,
     decisionErrors,
-  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors]);
+    toggleStep,
+    runCheck,
+    busyStepKeys,
+    stepErrors,
+  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors]);
 
   const backdropPress = useRef({ down: false, up: false });
 

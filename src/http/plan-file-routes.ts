@@ -65,4 +65,29 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
     const { message } = await changePlanFileForApp(root, { type: 'answer', key: decisionKey, answer: body.answer, expected });
     return { message, plan: await planFileForApp(root) };
   }));
+
+  app.post('/api/workspace/:id/plan/steps/:key/tick', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
+    const stepKey = key.parse(c.req.param('key'));
+    const body = z.object({ done: z.boolean(), expected: words(300).optional() }).strict().parse(await c.req.json());
+    let expected = body.expected;
+    if (!expected) {
+      const currentPlan = await planFileForApp(root);
+      const found = [...currentPlan.steps, ...currentPlan.checkpoints.flatMap((cp) => cp.steps)].find((s) => s.key === stepKey)
+        ?? currentPlan.checkpoints.find((cp) => cp.key === stepKey);
+      if (!found) throw new PlanFileError(`Nothing in ${PLAN_FILE} matches "${stepKey}" any more. Read the plan again.`, 'not_found');
+      expected = 'text' in found ? found.text : found.title;
+    }
+    const { message } = await changePlanFileForApp(root, { type: 'tick', key: stepKey, done: body.done, expected });
+    return { message, plan: await planFileForApp(root) };
+  }));
+
+  app.post('/api/workspace/:id/plan/checkpoints/:key/check', handle(async (root, c) => {
+    const checkpointKey = key.parse(c.req.param('key'));
+    const currentPlan = await planFileForApp(root);
+    if (!currentPlan.checkpoints.some((cp) => cp.key === checkpointKey)) {
+      throw new PlanFileError(`Nothing in ${PLAN_FILE} matches "${checkpointKey}" any more. Read the plan again.`, 'not_found');
+    }
+    const { message } = await changePlanFileForApp(root, { type: 'check', key: checkpointKey });
+    return { message, plan: await planFileForApp(root) };
+  }));
 }
