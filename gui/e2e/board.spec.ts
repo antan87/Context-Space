@@ -1935,9 +1935,10 @@ test.describe('Board, reader', () => {
       await opener(page, 'The CSV spec').click();
       await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
       const header = reader(page).locator('header');
-      await expect(header.getByRole('button')).toHaveCount(2);
-      await expect(header.getByRole('button').nth(0)).toHaveAccessibleName('More actions');
-      await expect(header.getByRole('button').nth(1)).toHaveAccessibleName('Close');
+      await expect(header.getByRole('button', { name: 'More actions' })).toBeVisible();
+      await expect(header.getByRole('button', { name: 'Close' })).toBeVisible();
+      await expect(header.getByRole('button', { name: /Full screen/ })).toBeVisible();
+      await expect(header.getByRole('button')).toHaveCount(5);
       await expect(header.getByRole('link')).toHaveCount(0);
       await expect(header).toContainText('docs/spec.md');
       // Nothing of the viewer's own row is left in the window: no path row, no second pair of buttons.

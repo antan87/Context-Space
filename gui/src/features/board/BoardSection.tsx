@@ -251,7 +251,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   }, [setReader]);
 
   const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from), [show]);
-  const closeReader = useCallback(() => setReader(null), [setReader]);
+  const closeReader = useCallback(() => {
+    setReader(null);
+    setThreadSelectedId(null);
+  }, [setReader]);
   const changeLayout = useCallback((next: ReaderLayout) => setLayout(next), [setLayout]);
 
   const openLinked = useCallback((path: string) => {
@@ -748,7 +751,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   useEffect(() => {
     if (!reader || !activeReaderCardId || !activeArea || !areaReady) return;
 
-    setThreadSelectedId(activeReaderCardId);
     setHighlightedNode({ id: activeReaderCardId, request: ++jumpSeq.current });
 
     const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, activeReaderCardId);
@@ -879,16 +881,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
 
     // Select thread
     setThreadSelectedId(jump.nodeId);
-
-    // Smoothly fly view to the card if inside Area
-    if (areaInstance) {
-      const nodeData = areaNodes.find((n) => n.id === jump.nodeId);
-      if (nodeData && typeof nodeData.position?.x === 'number') {
-        const cx = nodeData.position.x + (nodeData.width ?? 200) / 2;
-        const cy = nodeData.position.y + (nodeData.height ?? 80) / 2;
-        void areaInstance.setCenter(cx, cy, { zoom: READABLE_ZOOM, duration: moveMs(300) });
-      }
-    }
 
     // The cards are not stops of their own (nothing is moved here), so the keyboard goes to the card's first control, or to the card itself
     const inner = firstControl(nodeEl);
@@ -1362,7 +1354,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
                             setAreaInstance(instance);
                           }}
                           onPaneClick={() => setThreadSelectedId(null)}
-                          onNodeClick={(_event, node) => {
+                          onNodeClick={(event, node) => {
+                            const target = event.target as HTMLElement | null;
+                            if (target?.closest('button, a, input, textarea, select')) return;
                             if (!['fold', 'more', 'pager'].includes(node.type ?? '')) {
                               setThreadSelectedId((curr) => (curr === node.id ? null : node.id));
                             }

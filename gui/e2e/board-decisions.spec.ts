@@ -169,6 +169,7 @@ test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
 
     // Answer text input and Answer button are visible
     const input = frame.getByPlaceholder('Your answer');
+    await expect(input).toBeVisible();
     const answerBtn = frame.getByRole('button', { name: 'Answer' });
     await expect(answerBtn).toBeVisible();
     await expect(answerBtn).toBeDisabled(); // Empty input has disabled button

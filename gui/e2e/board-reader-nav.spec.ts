@@ -281,11 +281,10 @@ test.describe('Board Reader Fullscreen & Sequential Navigation', () => {
     await expect(reader(page)).toBeVisible();
     await expect(reader(page).getByRole('heading', { name: 'Overview Screenshot', level: 2 })).toBeVisible();
 
-    // 3. Verify that the card's row on the board is unfolded and the card node is active and selected
+    // 3. Verify that the card's row on the board is unfolded and the card node is active and highlighted
     const activeCard = board(page).locator('#board-area .react-flow__node-file').filter({ hasText: 'Overview Screenshot' });
     await expect(activeCard).toBeVisible();
-    await expect(activeCard).toHaveAttribute('data-thread', 'active');
-    await expect(activeCard).toHaveAttribute('data-thread-selected', 'true');
+    await expect(activeCard).toHaveAttribute('data-highlighted', 'true');
 
     // 4. Close the reader
     await reader(page).getByRole('button', { name: 'Close', exact: true }).click();
@@ -293,8 +292,7 @@ test.describe('Board Reader Fullscreen & Sequential Navigation', () => {
 
     // 5. On return to the board: all pictures in the row remain visible and the clicked card remains highlighted
     await expect(activeCard).toBeVisible();
-    await expect(activeCard).toHaveAttribute('data-thread', 'active');
-    await expect(activeCard).toHaveAttribute('data-thread-selected', 'true');
+    await expect(activeCard).toHaveAttribute('data-highlighted', 'true');
     const siblingPic = board(page).locator('#board-area .react-flow__node-file').filter({ hasText: 'Detail Screenshot' });
     await expect(siblingPic).toBeVisible();
   });

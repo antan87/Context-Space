@@ -52,13 +52,25 @@ export function isSameReaderTarget(a: ReaderTarget, b: ReaderTarget): boolean {
   if (a.commit || b.commit) {
     return false;
   }
+  if (Boolean(a.source) !== Boolean(b.source)) {
+    return false;
+  }
   if (a.source && b.source) {
     return a.source === b.source;
+  }
+  if (Boolean(a.card) !== Boolean(b.card)) {
+    return false;
   }
   if (a.card && b.card) {
     return a.card === b.card;
   }
-  return a.path === b.path;
+  if (Boolean(a.path) !== Boolean(b.path)) {
+    return false;
+  }
+  if (a.path && b.path) {
+    return a.path === b.path;
+  }
+  return false;
 }
 
 /**
