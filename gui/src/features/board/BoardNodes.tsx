@@ -1,14 +1,16 @@
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, PanelRightOpen, Pin, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, MoreHorizontal, PanelRightOpen, Pencil, Pin, ShieldCheck, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { cn } from '../../lib/utils.js';
+import { NoteDialog } from './NoteDialog.js';
 import { useAnswerDecision } from '../plan/planFile.js';
 import { suggestedAnswers } from '../plan/planView.js';
 import { agoText } from '../plan/whatsNew.js';
@@ -778,10 +780,10 @@ function CardMark({ data, markId }: { data: CardData; markId: string }) {
 }
 
 /** The frame every card shares. A card that is new, or was just changed by someone else, glows for a moment; the one open in the reader has a ring. */
-function CardFrame({ data, labelledBy, describedBy, reading = false, compact = false, onPress, children }: { data: CardData; labelledBy: string; describedBy?: string; reading?: boolean; compact?: boolean; onPress?: (event: MouseEvent<HTMLElement>) => void; children: ReactNode }) {
+function CardFrame({ data, labelledBy, describedBy, reading = false, compact = false, onPress, onDoubleClick, children }: { data: CardData; labelledBy: string; describedBy?: string; reading?: boolean; compact?: boolean; onPress?: (event: MouseEvent<HTMLElement>) => void; onDoubleClick?: (event: MouseEvent<HTMLElement>) => void; children: ReactNode }) {
   return <article
-    aria-labelledby={labelledBy} aria-describedby={describedBy} aria-current={reading ? 'true' : undefined} onClick={onPress}
-    className={cn('relative flex h-full w-full flex-col overflow-hidden rounded-lg border px-3 shadow-xs', compact ? 'py-2' : 'py-2.5', compact && CARD_FOCUS, onPress && BRICK,
+    aria-labelledby={labelledBy} aria-describedby={describedBy} aria-current={reading ? 'true' : undefined} onClick={onPress} onDoubleClick={onDoubleClick}
+    className={cn('group relative flex h-full w-full flex-col overflow-hidden rounded-lg border px-3 shadow-xs', compact ? 'py-2' : 'py-2.5', compact && CARD_FOCUS, onPress && BRICK,
       data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
   >
     <Anchors />
@@ -791,28 +793,145 @@ function CardFrame({ data, labelledBy, describedBy, reading = false, compact = f
 }
 
 /** A note someone put on the board: its title, the start of its text (Markdown, with links that work), who wrote it and when. The whole text is one button away. */
-export function BoardNote({ data }: NodeProps<NoteNode>) {
+export function BoardNote({ id, data }: NodeProps<NoteNode>) {
   const titleId = useId();
   const markId = useId();
+  const actions = useContext(BoardActionsContext);
+  const [editOpen, setEditOpen] = useState(false);
   const [titleRef, titleCut] = useCut<HTMLElement>(data.title);
   const [bodyRef, bodyCut] = useCut<HTMLDivElement>(data.text);
+
+  const noteActionsMenu = actions && (
+    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity pointer-coarse:opacity-100">
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-6 nodrag nopan text-muted-foreground hover:text-foreground"
+        aria-label={`Edit ${data.title}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setEditOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.stopPropagation();
+            setEditOpen(true);
+          }
+        }}
+      >
+        <Pencil className="size-3" aria-hidden="true" />
+      </Button>
+      <Menu>
+        <MenuTrigger
+          className="size-6 nodrag nopan inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
+          aria-label={`Actions for ${data.title}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="size-3.5" aria-hidden="true" />
+        </MenuTrigger>
+        <MenuPopup align="end" className="w-36 p-1">
+          <MenuItem
+            onClick={() => setEditOpen(true)}
+            className="flex items-center gap-2 text-[12.5px]"
+          >
+            <Pencil className="size-3.5" aria-hidden="true" />
+            <span>Edit note</span>
+          </MenuItem>
+          <MenuItem
+            onClick={() => void actions.updateNote?.(id, { pinned: !data.pinned })}
+            className="flex items-center gap-2 text-[12.5px]"
+          >
+            <Pin className="size-3.5" aria-hidden="true" />
+            <span>{data.pinned ? 'Unpin note' : 'Pin note'}</span>
+          </MenuItem>
+          <MenuItem
+            onClick={() => void actions.updateNote?.(id, { archived: !data.archived })}
+            className="flex items-center gap-2 text-[12.5px]"
+          >
+            <Archive className="size-3.5" aria-hidden="true" />
+            <span>{data.archived ? 'Restore note' : 'Archive note'}</span>
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
+    </div>
+  );
+
+  const dialog = actions && (
+    <NoteDialog
+      open={editOpen}
+      onOpenChange={setEditOpen}
+      note={{
+        id,
+        title: data.title,
+        body: data.text,
+        pinned: data.pinned,
+        archived: data.archived,
+        area: data.area,
+        step: data.step,
+      }}
+      areas={actions.availableAreas}
+      onSave={async (updates) => {
+        const ok = await actions.updateNote?.(id, updates);
+        return ok;
+      }}
+    />
+  );
+
   if (data.compact) {
     const cut = titleCut || bodyCut;
     const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
-    return <CardFrame data={data} labelledBy={titleId} describedBy={markId} compact onPress={cut ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
-      <div className="flex shrink-0 items-start gap-1.5">
-        <h2 className={cn('flex min-h-7 min-w-0 flex-1 items-center text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')}>{cut ? <ReadAll data={data} title={title} /> : title}</h2>
-        <CardMark data={data} markId={markId} />
-      </div>
-      <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="board-text-compact line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
-    </CardFrame>;
+    return (
+      <>
+        <CardFrame
+          data={data}
+          labelledBy={titleId}
+          describedBy={markId}
+          compact
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            setEditOpen(true);
+          }}
+        >
+          <div className="flex shrink-0 items-start gap-1.5">
+            <h2 className={cn('flex min-h-7 min-w-0 flex-1 items-center text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')}>
+              {cut ? <ReadAll data={data} title={title} /> : title}
+            </h2>
+            <div className="flex items-center gap-1 shrink-0">
+              <CardMark data={data} markId={markId} />
+              {noteActionsMenu}
+            </div>
+          </div>
+          <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="board-text-compact line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
+        </CardFrame>
+        {dialog}
+      </>
+    );
   }
-  return <CardFrame data={data} labelledBy={titleId}>
-    <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
-    <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-1 line-clamp-4 shrink-0 text-xs leading-[18px]" />
-    <div className="mt-auto" />
-    <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
-  </CardFrame>;
+
+  return (
+    <>
+      <CardFrame
+        data={data}
+        labelledBy={titleId}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          setEditOpen(true);
+        }}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-1.5">
+          <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
+            {data.title}
+          </h2>
+          {noteActionsMenu}
+        </div>
+        <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-1 line-clamp-4 shrink-0 text-[12.5px] leading-[18px]" />
+        <div className="mt-auto" />
+        <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
+      </CardFrame>
+      {dialog}
+    </>
+  );
 }
 
 /** What stands in a file card where a picture would: the kind of file, and where it is. */

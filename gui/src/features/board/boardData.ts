@@ -4,7 +4,7 @@
  * nothing is trusted just for arriving: the reply is rebuilt field by field and anything unusable is dropped.
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client.js';
 
 /** The same limits as the backend, so a reply cannot make the board draw more than the board allows. */
@@ -187,3 +187,92 @@ export function useBoard(workspace: string | null, options: { poll?: boolean } =
     refetchInterval: options.poll ? 30_000 : false,
   });
 }
+
+export interface AddNoteChangeInput {
+  title: string;
+  body?: string;
+  area?: string;
+  step?: string;
+  pinned?: boolean;
+}
+
+export interface UpdateNoteChangeInput {
+  title?: string;
+  body?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  area?: string | null;
+  step?: string | null;
+}
+
+export function addNoteChange(note: AddNoteChangeInput) {
+  return {
+    op: 'add_card' as const,
+    kind: 'note' as const,
+    title: note.title.trim(),
+    ...(note.body !== undefined ? { body: note.body } : {}),
+    ...(note.area && isBoardAreaId(note.area) ? { area: note.area } : {}),
+    ...(note.step ? { step: note.step } : {}),
+    ...(note.pinned !== undefined ? { pinned: note.pinned } : {}),
+  };
+}
+
+export function updateNoteChange(id: string, updates: UpdateNoteChangeInput) {
+  return {
+    op: 'update_card' as const,
+    id,
+    ...(updates.title !== undefined ? { title: updates.title.trim() } : {}),
+    ...(updates.body !== undefined ? { body: updates.body } : {}),
+    ...(updates.pinned !== undefined ? { pinned: updates.pinned } : {}),
+    ...(updates.archived !== undefined ? { archived: updates.archived } : {}),
+    ...(updates.area !== undefined
+      ? { area: updates.area === null ? null : (isBoardAreaId(updates.area) ? updates.area : undefined) }
+      : {}),
+    ...(updates.step !== undefined ? { step: updates.step } : {}),
+  };
+}
+
+export function deleteNoteChange(id: string) {
+  return {
+    op: 'remove_card' as const,
+    id,
+  };
+}
+
+export interface BoardChangePayload {
+  changes: unknown[];
+  revision?: number;
+}
+
+/**
+ * Changes the board with small operations (add/update/remove card, move, link, unlink).
+ * On success, updates the query cache `boardKey(workspace)` with `cleanBoard(result)`.
+ */
+export function useChangeBoard(workspace: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: BoardChangePayload | { changes: unknown[] } | unknown[]) => {
+      if (!workspace) throw new Error('Workspace is required to change the board.');
+      const body = Array.isArray(payload) ? { changes: payload } : payload;
+      const result = await apiFetch<unknown>(
+        `/api/workspace/${encodeURIComponent(workspace)}/board/changes`,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        },
+      );
+      return cleanBoard(result);
+    },
+    onSuccess: (board) => {
+      if (workspace) {
+        queryClient.setQueryData(boardKey(workspace), board);
+      }
+    },
+    onError: () => {
+      if (workspace) {
+        void queryClient.invalidateQueries({ queryKey: boardKey(workspace) });
+      }
+    },
+  });
+}
+

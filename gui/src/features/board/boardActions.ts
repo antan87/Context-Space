@@ -61,6 +61,18 @@ export interface BoardActions {
   busyStepKeys?: Set<string>;
   /** Errors encountered when toggling steps or running checks, keyed by step/checkpoint key. */
   stepErrors?: Record<string, string>;
+  /** Adds a new note card to the board. Returns true if successful. */
+  addNote?: (note: { title: string; body?: string; area?: string; step?: string; pinned?: boolean }) => Promise<boolean>;
+  /** Updates an existing note card on the board. Returns true if successful. */
+  updateNote?: (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null }) => Promise<boolean>;
+  /** Removes a card from the board. Returns true if successful. */
+  deleteNote?: (id: string) => Promise<boolean>;
+  /** Available areas on the board for area/step picking in note dialogs. */
+  availableAreas?: Array<{
+    id: string;
+    title: string;
+    steps?: Array<{ key: string; text: string; done?: boolean }>;
+  }>;
 }
 
 export const BoardActionsContext = createContext<BoardActions | null>(null);

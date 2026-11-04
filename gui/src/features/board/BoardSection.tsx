@@ -3,7 +3,7 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
-import { Archive, Kanban, RefreshCw } from 'lucide-react';
+import { Archive, Kanban, Plus, RefreshCw } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -31,7 +31,8 @@ import {
   waitingText,
   type OverviewNode,
 } from './boardAreas.js';
-import { useBoard } from './boardData.js';
+import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard } from './boardData.js';
+import { NoteDialog } from './NoteDialog.js';
 import { fileTitle, readerDock } from './boardDock.js';
 import { boardEdges, type BoardNode } from './boardLayout.js';
 import {
@@ -1138,6 +1139,70 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     }
   }, [runCheckMutation]);
 
+  const changeBoardMutation = useChangeBoard(workspaceId);
+
+  const addNote = useCallback(async (note: { title: string; body?: string; area?: string; step?: string; pinned?: boolean }) => {
+    try {
+      await changeBoardMutation.mutateAsync({ changes: [addNoteChange(note)] });
+      return true;
+    } catch (err) {
+      console.error('Failed to add note:', err);
+      return false;
+    }
+  }, [changeBoardMutation]);
+
+  const updateNote = useCallback(async (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null }) => {
+    try {
+      await changeBoardMutation.mutateAsync({ changes: [updateNoteChange(id, updates)] });
+      return true;
+    } catch (err) {
+      console.error('Failed to update note:', err);
+      return false;
+    }
+  }, [changeBoardMutation]);
+
+  const deleteNote = useCallback(async (id: string) => {
+    try {
+      await changeBoardMutation.mutateAsync({ changes: [deleteNoteChange(id)] });
+      return true;
+    } catch (err) {
+      console.error('Failed to delete note:', err);
+      return false;
+    }
+  }, [changeBoardMutation]);
+
+  const availableAreas = useMemo(() => areas
+    .filter((a) => isBoardAreaId(a.id))
+    .map((a) => ({
+      id: a.id,
+      title: a.data.title,
+      steps: a.planItems?.steps?.map((s) => ({ key: s.key, text: s.text, done: s.done })),
+    })), [areas]);
+
+  const [createNoteOpen, setCreateNoteOpen] = useState(false);
+  const [createNoteDefaults, setCreateNoteDefaults] = useState<{ areaId?: string; stepKey?: string }>({});
+
+  const openCreateNoteDialog = useCallback((defaultAreaId?: string, defaultStepKey?: string) => {
+    let targetAreaId = defaultAreaId && isBoardAreaId(defaultAreaId) ? defaultAreaId : undefined;
+    if (!targetAreaId) {
+      if (stepped && activeArea && isBoardAreaId(activeArea.id)) {
+        targetAreaId = activeArea.id;
+      } else {
+        const currentCheckpoint = areas.find((a) => a.data.kind === 'checkpoint' && a.data.current && isBoardAreaId(a.id));
+        if (currentCheckpoint) {
+          targetAreaId = currentCheckpoint.id;
+        } else if (areas.some((a) => a.id === 'plan:own')) {
+          targetAreaId = 'plan:own';
+        } else {
+          const firstValid = areas.find((a) => isBoardAreaId(a.id));
+          targetAreaId = firstValid ? firstValid.id : undefined;
+        }
+      }
+    }
+    setCreateNoteDefaults({ areaId: targetAreaId, stepKey: defaultStepKey });
+    setCreateNoteOpen(true);
+  }, [stepped, activeArea, areas]);
+
   // Actions for Plane 0 & Plane 1
   const overviewActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1153,7 +1218,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     runCheck,
     busyStepKeys,
     stepErrors,
-  }), [workspaceId, workspacePath, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors]);
+    addNote,
+    updateNote,
+    deleteNote,
+    availableAreas,
+  }), [workspaceId, workspacePath, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1170,16 +1239,38 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     runCheck,
     busyStepKeys,
     stepErrors,
-  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors]);
+    addNote,
+    updateNote,
+    deleteNote,
+    availableAreas,
+  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
 
   const backdropPress = useRef({ down: false, up: false });
+
+  const noteButton = (defaultAreaId?: string) => (
+    <Button
+      size="sm"
+      variant="outline"
+      className="nodrag nopan gap-1.5 text-[12.5px] font-medium"
+      onClick={() => openCreateNoteDialog(defaultAreaId)}
+    >
+      <Plus className="size-4" aria-hidden="true" />
+      <span className="sr-only">+ </span>
+      Note
+    </Button>
+  );
 
   // The pane's own icons (hide the chat, close) are the board's to show, since it has no title row of its own: quiet until pointed at or
   // focused. At the overview they stand in its top-right corner, which the layout leaves free; inside an Area, at the end of its heading.
   const paneIcons = panelActions && (
     <div className="flex shrink-0 items-center gap-0.5 opacity-50 transition-opacity duration-150 focus-within:opacity-100 hover:opacity-100 pointer-coarse:opacity-100">{panelActions}</div>
   );
-  const paneCorner = paneIcons && <div className="absolute right-2 top-1.5 z-10">{paneIcons}</div>;
+  const paneCorner = (
+    <div className="absolute right-2 top-1.5 z-10 flex items-center gap-1.5">
+      {noteButton()}
+      {paneIcons}
+    </div>
+  );
 
   const notices = (problems.length > 0 || (loading && areas.length > 0)) && (
     <div className={cn('shrink-0 space-y-1.5 border-b border-border/60 px-4 py-2', areas.length === 0 && panelActions && 'pr-24')}>
@@ -1373,20 +1464,23 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
                 {activeArea.data.kind !== 'work' && (
                   <span className="sr-only shrink-0 whitespace-nowrap text-xs text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
                 )}
-                {activeArea.archivedCount > 0 && (
-                  <Button
-                    size="xs"
-                    variant={showArchived ? 'secondary' : 'outline'}
-                    className="ml-auto shrink-0"
-                    aria-pressed={showArchived}
-                    aria-label={`Archived (${activeArea.archivedCount})`}
-                    onClick={() => setShowArchived((s) => !s)}
-                  >
-                    <Archive aria-hidden="true" />
-                    <span className="hidden @[26rem]:inline">Archived </span>({activeArea.archivedCount})
-                  </Button>
-                )}
-                {activeArea.archivedCount > 0 ? paneIcons : paneIcons && <div className="ml-auto flex">{paneIcons}</div>}
+                <div className="ml-auto flex items-center gap-1.5">
+                  {noteButton(activeArea.id)}
+                  {activeArea.archivedCount > 0 && (
+                    <Button
+                      size="xs"
+                      variant={showArchived ? 'secondary' : 'outline'}
+                      className="shrink-0"
+                      aria-pressed={showArchived}
+                      aria-label={`Archived (${activeArea.archivedCount})`}
+                      onClick={() => setShowArchived((s) => !s)}
+                    >
+                      <Archive aria-hidden="true" />
+                      <span className="hidden @[26rem]:inline">Archived </span>({activeArea.archivedCount})
+                    </Button>
+                  )}
+                  {paneIcons}
+                </div>
               </header>
               <div ref={setAreaRow} className="relative flex min-h-0 flex-1">
                 <div
@@ -1489,6 +1583,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
           <EmptyMedia variant="icon"><Kanban aria-hidden="true" /></EmptyMedia>
           <EmptyDescription>Nothing on the board yet. The plan, documents and commits of this workspace appear here, and so do the notes and files you and the AI add.</EmptyDescription>
         </EmptyHeader>
+        <div className="mt-2">
+          {noteButton()}
+        </div>
       </Empty>
     );
   }
@@ -1504,6 +1601,22 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
       {notices}
       {body}
       {areas.length === 0 && paneCorner}
+      <NoteDialog
+        open={createNoteOpen}
+        onOpenChange={setCreateNoteOpen}
+        defaultAreaId={createNoteDefaults.areaId}
+        defaultStepKey={createNoteDefaults.stepKey}
+        areas={availableAreas}
+        onSave={async (newNote) => {
+          return addNote({
+            title: newNote.title,
+            body: newNote.body,
+            pinned: newNote.pinned,
+            area: newNote.area ?? undefined,
+            step: newNote.step ?? undefined,
+          });
+        }}
+      />
     </div>
   );
 }

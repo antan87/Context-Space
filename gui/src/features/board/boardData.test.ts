@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOARD_DATA_LIMITS, cleanBoard, cleanCardPath, isBoardAreaId, isBoardNodeId } from './boardData.js';
+import { BOARD_DATA_LIMITS, addNoteChange, cleanBoard, cleanCardPath, deleteNoteChange, isBoardAreaId, isBoardNodeId, updateNoteChange } from './boardData.js';
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const AT = '2026-10-23T09:00:00.000Z';
@@ -180,3 +180,73 @@ describe('cleanCardPath', () => {
     }
   });
 });
+
+describe('board change builders', () => {
+  it('builds add_card note operation', () => {
+    expect(addNoteChange({
+      title: '  My note  ',
+      body: 'Some body text',
+      area: 'checkpoint:reports',
+      step: 'step-1',
+      pinned: true,
+    })).toEqual({
+      op: 'add_card',
+      kind: 'note',
+      title: 'My note',
+      body: 'Some body text',
+      area: 'checkpoint:reports',
+      step: 'step-1',
+      pinned: true,
+    });
+
+    expect(addNoteChange({ title: 'Minimal' })).toEqual({
+      op: 'add_card',
+      kind: 'note',
+      title: 'Minimal',
+    });
+
+    expect(addNoteChange({ title: 'Invalid area', area: 'area:work' })).toEqual({
+      op: 'add_card',
+      kind: 'note',
+      title: 'Invalid area',
+    });
+  });
+
+  it('builds update_card operation', () => {
+    const id = uuid(42);
+    expect(updateNoteChange(id, {
+      title: 'Updated title',
+      body: 'Updated body',
+      pinned: false,
+      archived: true,
+      area: 'checkpoint:reports',
+      step: 'step-1',
+    })).toEqual({
+      op: 'update_card',
+      id,
+      title: 'Updated title',
+      body: 'Updated body',
+      pinned: false,
+      archived: true,
+      area: 'checkpoint:reports',
+      step: 'step-1',
+    });
+
+    expect(updateNoteChange(id, {
+      step: null,
+    })).toEqual({
+      op: 'update_card',
+      id,
+      step: null,
+    });
+  });
+
+  it('builds remove_card operation', () => {
+    const id = uuid(99);
+    expect(deleteNoteChange(id)).toEqual({
+      op: 'remove_card',
+      id,
+    });
+  });
+});
+

@@ -172,6 +172,8 @@ export type CardData = {
   fresh: boolean;
   /** Drawn as it is inside an Area: the compact variant of the card. */
   compact?: boolean;
+  area?: string;
+  step?: string;
 };
 export type NoteData = CardData;
 export type FileCardData = CardData & { path: string; fileType: FileType };
@@ -317,6 +319,8 @@ export function cardPlan(card: BoardCard, now: number): CardPlan {
   const common = {
     title: card.title, pinned: card.pinned, archived: card.archived, by: card.by, at: card.at, updatedBy: card.updatedBy, updatedAt: card.updatedAt,
     fresh: !card.archived && isFresh(card, now),
+    area: card.area,
+    step: card.step,
   };
   const z = card.pinned ? Z.pinned : Z.card;
   return card.kind === 'note'
