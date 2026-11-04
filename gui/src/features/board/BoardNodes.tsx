@@ -1,6 +1,6 @@
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, Terminal, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
@@ -217,6 +217,24 @@ function WaitingDecisionCard({ decision, onAnswer }: WaitingDecisionCardProps) {
         <p role="alert" className="pl-5 text-[12.5px] text-destructive">
           {displayError}
         </p>
+      )}
+
+      {actions?.askInCLI && !actions.readOnly && (
+        <div className="flex justify-end pl-5">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              const q = decision.question.replace(/[*_`#]/g, '').trim() || decision.question;
+              actions.askInCLI?.(q);
+            }}
+            className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded px-2 text-[12px] text-muted-foreground hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
+            title={`Ask about "${decision.question.replace(/[*_`#]/g, '').trim() || decision.question}" in CLI`}
+          >
+            <span>Ask in CLI</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+        </div>
       )}
     </li>
   );
@@ -803,6 +821,23 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         </span>
       </div>
     )}
+    {actions?.askInCLI && !actions.readOnly && (
+      <div className="flex justify-end pt-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            const commitSummary = data.subject ? `${data.sha}: ${data.subject}` : `commit ${data.sha}`;
+            actions.askInCLI?.(commitSummary);
+          }}
+          className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded px-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors cursor-pointer"
+          title={`Ask about commit ${data.sha} in CLI`}
+        >
+          <span>Ask in CLI</span>
+          <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+    )}
   </article>;
 }
 
@@ -980,6 +1015,18 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
             <Archive className="size-3.5" aria-hidden="true" />
             <span>{data.archived ? 'Restore note' : 'Archive note'}</span>
           </MenuItem>
+          {actions.askInCLI && (
+            <MenuItem
+              onClick={() => {
+                const noteSummary = data.title?.trim() || data.text?.slice(0, 60).trim() || 'note';
+                actions.askInCLI?.(noteSummary);
+              }}
+              className="flex items-center gap-2 text-[12.5px]"
+            >
+              <Terminal className="size-3.5" aria-hidden="true" />
+              <span>Ask in CLI</span>
+            </MenuItem>
+          )}
         </MenuPopup>
       </Menu>
     </div>
@@ -1057,7 +1104,24 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
         </div>
         <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-1 line-clamp-4 shrink-0 text-[12.5px] leading-[18px]" />
         <div className="mt-auto" />
-        <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
+        <div className="flex items-center justify-between gap-1 pt-1">
+          <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
+          {actions?.askInCLI && !actions.readOnly && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const noteSummary = data.title?.trim() || data.text?.slice(0, 60).trim() || 'note';
+                actions.askInCLI?.(noteSummary);
+              }}
+              className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] shrink-0 items-center gap-1 rounded px-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors cursor-pointer"
+              title={`Ask about "${data.title || 'note'}" in CLI`}
+            >
+              <span>Ask in CLI</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          )}
+        </div>
       </CardFrame>
       {dialog}
     </>
@@ -1133,6 +1197,21 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
     <div className="flex h-7 shrink-0 items-center gap-1">
       <Button size="xs" variant="outline" className="nodrag nopan" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" />Open</Button>
       {(titleCut || textCut) && <ReadAll data={data} />}
+      {actions?.askInCLI && !actions.readOnly && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            const fileSummary = data.title?.trim() || data.path?.trim() || 'file';
+            actions.askInCLI?.(fileSummary);
+          }}
+          className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] ml-auto items-center gap-1 rounded px-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors cursor-pointer"
+          title={`Ask about "${data.title || data.path || 'file'}" in CLI`}
+        >
+          <span>Ask in CLI</span>
+          <span aria-hidden="true">↗</span>
+        </button>
+      )}
     </div>
   </CardFrame>;
 }

@@ -1,4 +1,4 @@
-import { useRef, type ComponentProps } from 'react';
+import { useRef, useEffect, type ComponentProps } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { History, ListTree } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
@@ -9,6 +9,7 @@ import { hasModifier, modifierLabel, usePaneHotkey } from './usePaneHotkey.js';
 import { SessionDeck } from './SessionDeck.js';
 import { WhereAreWeNotices, WhereAreWeSummary } from '../progress/WhereAreWeStrip.js';
 import { useWhereAreWe } from '../progress/useWhereAreWe.js';
+import { registerPromptFiller } from './promptFill.js';
 
 /**
  * A workspace's chat: where the work stands in the toolbar of its terminal sessions, and what waits for the
@@ -30,6 +31,12 @@ export function TerminalWorkspace({ workspacePath, repoPaths, ...props }: Pick<C
   const fillPromptRef = useRef<((text: string) => boolean) | null>(null);
   // How the strip hears that the developer replied in the chat, so it can close the question the AI asked.
   const replyRef = useRef<((target: string) => void) | null>(null);
+
+  useEffect(() => {
+    return registerPromptFiller(props.workspace, (text: string) => {
+      return fillPromptRef.current?.(text) ?? false;
+    });
+  }, [props.workspace]);
 
   const toggleSection = (target: 'changes' | 'documents' | 'sessions') => {
     goToWorkspace(navigate, props.workspace, section === target ? 'chat' : target);

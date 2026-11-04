@@ -174,7 +174,7 @@ function useLayoutElementSize(element: HTMLElement | null): { width: number; hei
  * Area surface grows smoothly from the clicked card's transform-origin to fit all items whole on one
  * screen without scrolling.
  */
-export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean }) {
+export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false, askInCLI }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean; askInCLI?: (context: string) => void }) {
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
   const news = useWhatsNew(workspaceId);
@@ -1233,7 +1233,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     updateNote,
     deleteNote,
     availableAreas,
-  }), [workspaceId, workspacePath, readOnly, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
+    askInCLI,
+  }), [workspaceId, workspacePath, readOnly, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1255,7 +1256,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     updateNote,
     deleteNote,
     availableAreas,
-  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
+    askInCLI,
+  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const backdropPress = useRef({ down: false, up: false });
 
@@ -1367,6 +1369,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 <ReactFlow
                   id="board-overview-flow"
                   className="board-flow"
+                  proOptions={{ hideAttribution: true }}
                   aria-label="Board overview canvas. Arrow keys pan, zero puts the board back in view. Press an area to step into it."
                   tabIndex={0}
                   nodes={overviewNodes}
@@ -1614,6 +1617,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                         <ReactFlow
                           id="board-area-flow"
                           className="board-flow board-flow-rows"
+                          proOptions={{ hideAttribution: true }}
                           aria-label="Area canvas. Press a step, a folded row or a plus button to open that row."
                           tabIndex={0}
                           nodes={areaNodes}
@@ -1679,6 +1683,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     nextTitle={nextTarget?.title}
                     previousTitle={previousTarget?.title}
                     indexInfo={readerIndexInfo}
+                    onAskInCLI={askInCLI}
                   />
                 )}
               </div>

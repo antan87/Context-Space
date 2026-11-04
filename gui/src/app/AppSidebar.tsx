@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useCallback, useRef, type CSSProperties, 
 import {
   Menu as MenuIcon,
   FolderGit2,
-  Workflow,
   Boxes,
   Settings as SettingsIcon,
   BookOpen,
@@ -14,7 +13,6 @@ import {
   ArrowUpDown,
   Check,
   Activity,
-  Users,
   History,
   PanelLeftClose,
   PanelLeftOpen,
@@ -50,7 +48,6 @@ import { LiveDot, LiveMarker } from '../features/chat/LiveMarker.js';
 import type { Feature, WorkspaceStatus } from '../types.js';
 import { RepositoriesPanel, RepositoriesToggle } from './WorkspaceRepositories.js';
 import { SidebarResizeHandle } from './SidebarResizeHandle.js';
-import { useAdvancedToolsOpen } from './advancedTools.js';
 import { hasUnpreparedRepo } from '../features/worktrees/normalizeWorktrees.js';
 import { normalizeWorktreeGroups } from '../features/worktrees/normalizeWorktrees.js';
 import { hasBranchDrift } from '../features/worktrees/branchDrift.js';
@@ -77,19 +74,11 @@ interface NavItem {
 }
 
 const SETUP_ITEMS: NavItem[] = [
-  { label: 'Projects', description: 'Saved repository groups', to: '/projects', icon: FolderGit2, match: (p) => p.startsWith('/projects') },
-  { label: 'Skills & agents', description: 'Assistant instructions', to: '/skills', icon: Boxes, match: (p) => p.startsWith('/skills') || p.startsWith('/agents') },
-];
-
-const ADVANCED_ITEMS: NavItem[] = [
-  { label: 'Workrooms', description: 'Coordinate related work', to: '/workrooms', icon: Users, match: (p) => p.startsWith('/workrooms') },
-  { label: 'Strategies', description: 'Reusable workflows', to: '/workflows', icon: Workflow, match: (p) => p.startsWith('/workflows') || p.startsWith('/strategies') },
+  { label: 'Skills & agents', description: 'Assistant instructions and defaults', to: '/skills', icon: Boxes, match: (p) => p.startsWith('/skills') || p.startsWith('/agents') },
 ];
 
 /** Whatever is open as a modal that `z` must not act behind: a native dialog (Jump to), an expanded view (aria-modal), a Base UI dialog or alert dialog popup, or any sheet popup. The sidebar's own sheet matches too; the `z` handler skips this check while that sheet is open, since `z` closes it. */
 const OPEN_MODAL = 'dialog[open], [aria-modal="true"], [data-slot$="dialog-popup"], [data-slot="sheet-popup"]';
-
-const ADVANCED_TOOLS_ID = 'sidebar-advanced-tools';
 
 export interface AppSidebarProps {
   appVersion: string;
@@ -197,7 +186,6 @@ function SidebarContents({
   const isSessionsListOpen = sessionsExpanded;
   const isWorkspacesListOpen = workspacesExpanded;
   const [appearanceExpanded, setAppearanceExpanded] = useState(false);
-  const { open: advancedOpen, toggle: toggleAdvanced } = useAdvancedToolsOpen(ADVANCED_ITEMS.some((item) => item.match(pathname)));
 
   // Worktree & Rail State. On a desktop the sidebar is the slim rail. The full list opens over the page as a sheet, so the
   // page never changes size, or the person pins it open and it docks beside the page. A narrow window (split screen,
@@ -920,7 +908,7 @@ function SidebarContents({
         {activeWorkspace && <PrepareRepoDialog wsId={activeWorkspace.branchName} repoName={preparingRepo} onClose={() => setPreparingRepo(null)} />}
 
         <div className="border-t border-border/60 pt-2">
-          <p className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">Reusable setup</p>
+          <p className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">Administration</p>
           {SETUP_ITEMS.map((item) => {
             const Icon = item.icon;
             return <NavLink key={item.to} to={item.to} aria-label={item.label} className={linkClass(item.match(pathname))}>
@@ -928,21 +916,6 @@ function SidebarContents({
               <span className="min-w-0"><span className="block">{item.label}</span><span className="block text-[10px] font-normal text-muted-foreground">{item.description}</span></span>
             </NavLink>;
           })}
-          <button type="button" onClick={toggleAdvanced} aria-expanded={advancedOpen} aria-controls={ADVANCED_TOOLS_ID}
-            className="flex w-full items-center gap-1 rounded px-2 pb-1 pt-3 text-left text-[10px] font-medium text-muted-foreground hover:text-foreground">
-            <ChevronDown size={11} aria-hidden="true" className={cn('shrink-0 transition-transform duration-200', !advancedOpen && '-rotate-90')} />
-            Advanced tools
-          </button>
-          {/* Kept in the page while folded away, so the button's aria-controls never points at nothing. */}
-          <div id={ADVANCED_TOOLS_ID} hidden={!advancedOpen}>
-            {ADVANCED_ITEMS.map((item) => {
-              const Icon = item.icon;
-              return <NavLink key={item.to} to={item.to} aria-label={item.label} className={linkClass(item.match(pathname))}>
-                <Icon size={14} />
-                <span className="min-w-0"><span className="block">{item.label}</span><span className="block text-[10px] font-normal text-muted-foreground">{item.description}</span></span>
-              </NavLink>;
-            })}
-          </div>
         </div>
 
         <div className="mt-auto border-t border-border/60 pt-2">

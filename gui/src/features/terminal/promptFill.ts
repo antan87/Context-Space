@@ -24,3 +24,21 @@ export function toPromptText(text: unknown): string {
   const cut = /[\ud800-\udbff]/.test(plain[PROMPT_FILL_LIMIT - 1]!) ? PROMPT_FILL_LIMIT - 1 : PROMPT_FILL_LIMIT;
   return plain.slice(0, cut).trimEnd();
 }
+
+const registeredFillers = new Map<string, (text: string) => boolean>();
+
+/** Registers a prompt filler function for a workspace, returning an unregister callback. */
+export function registerPromptFiller(workspace: string, filler: (text: string) => boolean): () => void {
+  registeredFillers.set(workspace, filler);
+  return () => {
+    if (registeredFillers.get(workspace) === filler) {
+      registeredFillers.delete(workspace);
+    }
+  };
+}
+
+/** Types text into the terminal prompt of the given workspace if available. */
+export function fillPromptForWorkspace(workspace: string, text: string): boolean {
+  const filler = registeredFillers.get(workspace);
+  return filler ? filler(text) : false;
+}

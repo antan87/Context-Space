@@ -35,18 +35,18 @@ describe('workspace sections', () => {
 });
 
 describe('railSectionsFor', () => {
-  it('offers the parts a developer works in, with board right after overview and plan deprecated', () => {
+  it('offers the parts a developer works in: streamlined to overview, board, sessions, and skills', () => {
     expect(railSectionsFor(false)).toEqual([
       'overview',
       'board',
       'sessions',
-      'changes',
-      'documents',
       'skills',
-      'services',
     ]);
     expect(railSectionsFor(false)).not.toContain('plan');
     expect(railSectionsFor(false)).not.toContain('chat');
+    expect(railSectionsFor(false)).not.toContain('changes');
+    expect(railSectionsFor(false)).not.toContain('documents');
+    expect(railSectionsFor(false)).not.toContain('services');
     expect(railSectionsFor(false)).not.toContain('knowledge');
   });
 
@@ -68,8 +68,8 @@ describe('railSectionsFor', () => {
     expect(visibleSection('skills', false)).toBe('skills');
   });
 
-  it('shows an archived workspace its record, its board and its documents, and nothing to act on', () => {
-    expect(railSectionsFor(true)).toEqual(['overview', 'board', 'documents']);
+  it('shows an archived workspace its record and its board, and nothing to act on', () => {
+    expect(railSectionsFor(true)).toEqual(['overview', 'board']);
     // Its knowledge is still open to read, in Docs or at its old address.
     expect(visibleSection('knowledge', true)).toBe('knowledge');
   });

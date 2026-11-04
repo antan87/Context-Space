@@ -115,6 +115,7 @@ import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
 import { ChatMarkdown } from '../components/ChatMarkdown.js';
+import { fillPromptForWorkspace } from '../features/terminal/promptFill.js';
 
 type SubTab = WorkspaceSection;
 
@@ -224,6 +225,91 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     target.addEventListener('pointerup', stop);
     target.addEventListener('pointercancel', stop);
   };
+
+  const handleModeChange = useCallback((mode: 'board' | 'split' | 'terminal') => {
+    if (!selected) return;
+    if (mode === 'board') {
+      chatLayout.setHidden(true);
+      onSelectTab(selected.branchName, 'board');
+    } else if (mode === 'split') {
+      if (!roomBeside) return;
+      chatLayout.setHidden(false);
+      onSelectTab(selected.branchName, 'board');
+    } else if (mode === 'terminal') {
+      onSelectTab(selected.branchName, 'chat');
+    }
+  }, [selected, roomBeside, onSelectTab]);
+
+  const askInCLI = useCallback((context: string) => {
+    if (!selected) return;
+    const promptText = `Regarding ${context}: `;
+
+    if (!roomBeside) {
+      onSelectTab(selected.branchName, 'chat');
+    } else {
+      if (layout.hidden || subTab !== 'board') {
+        chatLayout.setHidden(false);
+        if (subTab !== 'board') {
+          onSelectTab(selected.branchName, 'board');
+        }
+      }
+    }
+
+    const start = Date.now();
+    const tryFill = () => {
+      const filled = fillPromptForWorkspace(selected.branchName, promptText);
+      if (!filled && Date.now() - start < 2000) {
+        setTimeout(tryFill, 50);
+      }
+    };
+    tryFill();
+  }, [selected, roomBeside, layout.hidden, subTab, onSelectTab]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.isComposing) return;
+      const isCtrl = event.ctrlKey;
+      const isCmd = event.metaKey;
+      if (!isCtrl && !isCmd) return;
+
+      if (!event.altKey && !event.shiftKey) {
+        if ((isCtrl || isCmd) && (event.key === '1' || event.code === 'Digit1')) {
+          event.preventDefault();
+          handleModeChange('board');
+          return;
+        }
+        if ((isCtrl || isCmd) && (event.key === '2' || event.code === 'Digit2')) {
+          event.preventDefault();
+          handleModeChange('split');
+          return;
+        }
+        if ((isCtrl || isCmd) && (event.key === '3' || event.code === 'Digit3')) {
+          event.preventDefault();
+          handleModeChange('terminal');
+          return;
+        }
+      }
+
+      const isToggleKey =
+        ((isCtrl || isCmd) && (event.key === '`' || event.code === 'Backquote')) ||
+        (isCmd && (event.key.toLowerCase() === 'j' || event.code === 'KeyJ'));
+
+      if (isToggleKey && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        const isHidden = chatLayout.get().hidden;
+        if (subTab === 'board' && isHidden) {
+          handleModeChange('split');
+        } else if (subTab === 'board' && !isHidden) {
+          handleModeChange('board');
+        } else {
+          handleModeChange('split');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleModeChange, subTab]);
 
   const [isLegacy, setIsLegacy] = useState(false);
   const [migrating, setMigrating] = useState(false);
@@ -640,6 +726,13 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       {!archived && <IconButton size="sm" label="Close this panel and give the chat the whole screen" icon={<X />} onClick={() => onSelectTab(selected.branchName, 'chat')} />}
     </>;
 
+    const currentMode: 'board' | 'split' | 'terminal' | null =
+      subTab === 'chat'
+        ? 'terminal'
+        : subTab === 'board'
+          ? (!roomBeside || layout.hidden ? 'board' : 'split')
+          : null;
+
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-col w-full">
         <WorkspaceHeader
@@ -653,6 +746,64 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           warns={!archived}
           verification={cockpit.gateStatus}
           actions={<>
+              {!archived && (
+                <div
+                  role="group"
+                  aria-label="View mode"
+                  className="inline-flex h-7 items-center rounded-lg border border-border/40 bg-muted/30 p-0.5 text-xs font-medium"
+                >
+                  <button
+                    type="button"
+                    data-testid="view-mode-board"
+                    aria-pressed={currentMode === 'board'}
+                    onClick={() => handleModeChange('board')}
+                    className={cn(
+                      'inline-flex h-6 items-center gap-1 rounded-md px-2 transition-all cursor-pointer',
+                      currentMode === 'board'
+                        ? 'bg-background text-foreground shadow-xs font-semibold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                    )}
+                    title="Board (Ctrl+1)"
+                  >
+                    <span aria-hidden="true">◨</span>
+                    <span>Board</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="view-mode-split"
+                    aria-pressed={currentMode === 'split'}
+                    disabled={!roomBeside}
+                    onClick={() => handleModeChange('split')}
+                    className={cn(
+                      'inline-flex h-6 items-center gap-1 rounded-md px-2 transition-all cursor-pointer',
+                      currentMode === 'split'
+                        ? 'bg-background text-foreground shadow-xs font-semibold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                      !roomBeside && 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
+                    )}
+                    title={roomBeside ? 'Split (Ctrl+2)' : 'Split view requires at least 1000px screen width'}
+                  >
+                    <span aria-hidden="true">◫</span>
+                    <span>Split</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="view-mode-terminal"
+                    aria-pressed={currentMode === 'terminal'}
+                    onClick={() => handleModeChange('terminal')}
+                    className={cn(
+                      'inline-flex h-6 items-center gap-1 rounded-md px-2 transition-all cursor-pointer',
+                      currentMode === 'terminal'
+                        ? 'bg-background text-foreground shadow-xs font-semibold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                    )}
+                    title="Terminal (Ctrl+3)"
+                  >
+                    <span aria-hidden="true">◧</span>
+                    <span>Terminal</span>
+                  </button>
+                </div>
+              )}
               {primaryEditor && !archived && (
                 availableEditors.length > 1 ? (
                   <div className="inline-flex h-7 items-center rounded-md border border-border/40 bg-muted/20 text-xs transition-colors">
@@ -834,7 +985,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           {visitedSections.has('board') && (
             <div role="region" aria-label={SECTION_LABELS.board} hidden={subTab !== 'board'} className="min-h-0 flex-1">
               <Suspense fallback={<div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board</div>}>
-                <BoardSection key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} active={subTab === 'board'} panelActions={panelActions} readOnly={archived} />
+                <BoardSection key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} active={subTab === 'board'} panelActions={panelActions} readOnly={archived} askInCLI={archived ? undefined : askInCLI} />
               </Suspense>
             </div>
           )}

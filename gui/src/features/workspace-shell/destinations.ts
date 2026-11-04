@@ -39,21 +39,19 @@ export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan
 /**
  * What can open beside the chat, in the rail's order:
  * Overview (workspace summary and mapped repositories), Board (the plan, documents and commits on a canvas),
- * Sessions (CLI sessions and history), Code (changes), Docs, Skills, and Services.
- * Knowledge keeps its address and is read in Docs or directly via URL, but has no place on the rail.
+ * Sessions (CLI sessions and history), and Skills (workspace assistant instructions).
+ * Legacy sections (code changes, documents, services, plan) keep their URLs for deep link compatibility,
+ * but the streamlined rail focuses on the workspace board, skills, and sessions.
  */
 export const RAIL_SECTIONS: readonly WorkspaceSection[] = [
   'overview',
   'board',
   'sessions',
-  'changes',
-  'documents',
   'skills',
-  'services',
 ];
 
-/** The rail of an archived workspace is its record, its board and its documents. */
-const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'board', 'documents'];
+/** The rail of an archived workspace is its record and its board. */
+const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'board'];
 
 /**
  * What the rail offers for active and archived workspaces.

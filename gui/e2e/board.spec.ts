@@ -243,14 +243,18 @@ async function dragBy(page: Page, target: Locator, dx: number, dy: number, optio
 }
 
 test.describe('Board', () => {
-  test('opens from the rail, right after Plan, on its own address', async ({ page }) => {
+  test('opens from the rail, right after Overview, on its own address, with legacy plan aliased', async ({ page }) => {
     await routeBoard(page);
-    await page.goto('/#/workspaces/demo/plan');
-    await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Plan', 'Board', 'Sessions', 'Code', 'Docs', 'Skills', 'Services']);
+    await page.goto('/#/workspaces/demo/overview');
+    await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Sessions', 'Skills']);
     await workspaceNav(page).getByRole('link', { name: 'Board' }).click();
     await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
     await expect(workspaceNav(page).getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
     await expect(board(page).locator('.board-overview-plane button.board-area').filter({ hasText: 'Reports export to CSV' })).toBeVisible();
+
+    // Legacy /plan URL opens the board as well
+    await page.goto('/#/workspaces/demo/plan');
+    await expect(workspaceNav(page).getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
   });
 
   test('groups work into areas with status badges, step progress and item counts, fitting whole on screen', async ({ page }) => {
@@ -3254,8 +3258,8 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await expect(board(page).getByText('Empty', { exact: true })).toHaveCount(0);
       await expect(board(page).getByRole('button', { name: /^Zoom (in|out)$|^Fit the board in view$/ })).toHaveCount(0);
       await expect(board(page).locator('.react-flow__controls')).toHaveCount(0);
-      // The credit stays, and nothing is drawn over it
-      await expect(board(page).locator('#board-overview .react-flow__attribution')).toBeVisible();
+      // The attribution watermark is hidden on the board
+      await expect(board(page).locator('#board-overview .react-flow__attribution')).toHaveCount(0);
     });
   }
 

@@ -75,6 +75,8 @@ export interface BoardActions {
     title: string;
     steps?: Array<{ key: string; text: string; done?: boolean }>;
   }>;
+  /** Prefills the CLI terminal with a card context and switches to split view if needed. */
+  askInCLI?: (context: string) => void;
 }
 
 export const BoardActionsContext = createContext<BoardActions | null>(null);

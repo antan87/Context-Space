@@ -16,6 +16,7 @@ import {
   MoreHorizontal,
   PanelRight,
   SquareArrowOutUpRight,
+  Terminal,
   X,
 } from 'lucide-react';
 
@@ -71,6 +72,7 @@ export function BoardReader({
   nextTitle,
   previousTitle,
   indexInfo,
+  onAskInCLI,
 }: {
   workspaceId: string;
   workspacePath?: string;
@@ -91,6 +93,7 @@ export function BoardReader({
   nextTitle?: string;
   previousTitle?: string;
   indexInfo?: { current: number; total: number };
+  onAskInCLI?: (context: string) => void;
 }) {
   const title = useRef<HTMLHeadingElement>(null);
   /** What the reader is drawn in, directly in the section's row: the dimmed board behind the window, or nothing when docked. */
@@ -378,6 +381,23 @@ export function BoardReader({
           )}
         </div>
         <div className="order-3 flex items-center gap-1">
+          {onAskInCLI && (
+            <button
+              type="button"
+              onClick={() => {
+                const summary = commitDetail?.subject
+                  ? `${commitDetail.shortSha || commit?.sha}: ${commitDetail.subject}`
+                  : target.title || path;
+                onAskInCLI(summary);
+              }}
+              className="nodrag nopan inline-flex h-7 items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 text-xs font-medium text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-colors cursor-pointer"
+              title="Ask about this document in CLI"
+            >
+              <Terminal className="size-3.5" aria-hidden="true" />
+              <span>Ask in CLI</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          )}
           <Menu>
             <MenuTrigger className={quiet} aria-label="More actions" title="More actions">{copied === 'done' ? <Check aria-hidden="true" className="size-4" /> : copied === 'failed' ? <CircleAlert aria-hidden="true" className="size-4 opacity-70" /> : <MoreHorizontal aria-hidden="true" className="size-4" />}</MenuTrigger>
             <MenuPopup align="end" className="w-56" positionerClassName={maximized ? 'z-[110]' : undefined}>

@@ -164,8 +164,9 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
       const data = toPromptText(text);
       const term = renderer.current;
       if (!data || !term || term.options.disableStdin || socket.current?.readyState !== WebSocket.OPEN) return false;
-      send({ type: 'input', data });
-      if (activeRef.current) term.focus();
+      const sendData = typeof text === 'string' && text.endsWith(' ') && !data.endsWith(' ') ? `${data} ` : data;
+      send({ type: 'input', data: sendData });
+      term.focus();
       return true;
     };
     return () => { fillPromptRef.current = null; };
