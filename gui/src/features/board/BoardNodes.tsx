@@ -7,11 +7,14 @@ import { classifyMarkdownLink } from '../../components/markdownLinks.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
+import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { cn } from '../../lib/utils.js';
+import { useAnswerDecision } from '../plan/planFile.js';
+import { suggestedAnswers } from '../plan/planView.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { areaCounts, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
-import { BOARD_SIZE, imageAlt, moreText, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
+import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
@@ -114,24 +117,137 @@ const planSubtitle = (data: CheckpointData, open: boolean) =>
   open ? 'Steps and decisions outside the checkpoints'
     : data.stepsTotal ? `${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'} outside the checkpoints` : 'Decisions outside the checkpoints';
 
+interface WaitingDecisionCardProps {
+  decision: BoardDecision;
+  onAnswer: (key: string, answer: string, expected?: string) => Promise<boolean>;
+}
+
+function WaitingDecisionCard({ decision, onAnswer }: WaitingDecisionCardProps) {
+  const actions = useContext(BoardActionsContext);
+  const [customAnswer, setCustomAnswer] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const displayError = error ?? actions?.decisionErrors?.[decision.key];
+
+  const options = useMemo(() => {
+    if (decision.suggested && decision.suggested.length > 0) return decision.suggested;
+    if (decision.detail) {
+      const line = decision.detail.split('\n').find((l) => /^(?:suggested answers|suggested)\s*:/i.test(l.trim()));
+      if (line) {
+        return line.trim().replace(/^(?:suggested answers|suggested)\s*:\s*/i, '').split(' · ').map((s) => s.trim()).filter(Boolean);
+      }
+    }
+    return suggestedAnswers(decision.detail);
+  }, [decision.suggested, decision.detail]);
+
+  const submitAnswer = async (answer: string) => {
+    const text = answer.trim();
+    if (!text || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const ok = await onAnswer(decision.key, text, decision.question);
+      if (!ok) setError('Could not save answer.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save answer.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <li
+      data-testid={`decision-card-${decision.key}`}
+      className="nodrag nopan flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/8 p-2.5 text-foreground transition-colors shadow-2xs"
+    >
+      <div className="flex items-start gap-2">
+        <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
+        <span className="text-[12.5px] font-medium leading-snug break-words" title={decision.question}>
+          <span className="sr-only">Waiting for you: </span>
+          <InlinePlanMarkdown content={decision.question} />
+        </span>
+      </div>
+
+      {options.length > 0 && (
+        <div role="group" aria-label="Suggested answers" className="flex flex-wrap gap-1.5 pl-5">
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              disabled={saving}
+              onClick={() => void submitAnswer(option)}
+              className="nodrag nopan inline-flex min-h-6 items-center rounded-md border border-border/80 bg-background/80 hover:bg-accent px-2 text-[12.5px] font-medium text-foreground transition-colors cursor-pointer disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <form
+        aria-busy={saving}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submitAnswer(customAnswer);
+        }}
+        className="nodrag nopan flex items-center gap-1.5 pl-5"
+      >
+        <input
+          type="text"
+          value={customAnswer}
+          disabled={saving}
+          onChange={(e) => setCustomAnswer(e.target.value)}
+          placeholder="Your answer"
+          aria-label={`Your answer to ${decision.question.replace(/\*\*|`/g, '')}`}
+          className="nodrag nopan h-7 min-w-0 flex-1 rounded border border-input bg-background/90 px-2 text-[12.5px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          disabled={saving || !customAnswer.trim()}
+          className="nodrag nopan inline-flex h-7 shrink-0 items-center justify-center rounded bg-primary px-2.5 text-[12.5px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:pointer-events-none transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+        >
+          {saving ? 'Saving…' : 'Answer'}
+        </button>
+      </form>
+
+      {displayError && (
+        <p role="alert" className="pl-5 text-[12.5px] text-destructive">
+          {displayError}
+        </p>
+      )}
+    </li>
+  );
+}
+
 /**
  * The decisions that wait for you, inside an Area: "Waits for you" and the first decisions, and a button that opens the rest (and, when
  * they are open, closes them again). The Area's own name is in the header above, and is not said again here.
  */
 function WaitingFrame({ data, border, titleId }: { data: CheckpointData; border: string; titleId: string }) {
   const actions = useContext(BoardActionsContext);
+  const fallbackMutation = useAnswerDecision(actions?.workspaceId ?? '');
+  const handleAnswer = async (key: string, answer: string, expected?: string) => {
+    if (actions?.answerDecision) {
+      return actions.answerDecision(key, answer, expected);
+    }
+    if (actions?.workspaceId) {
+      await fallbackMutation.mutateAsync({ key, answer, expected });
+      return true;
+    }
+    return false;
+  };
+
   const expanded = data.waitingExpanded === true;
   return <article tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}>
     <Anchors />
-    <header className="flex h-8 items-center gap-1.5 px-3 pt-1">
+    <header className="flex h-8 shrink-0 items-center gap-1.5 px-3 pt-1">
       <span aria-hidden="true" className="size-2 rounded-full bg-state-needs" />
       <h2 id={titleId} className="text-[13px] font-semibold leading-5 text-foreground">Waits for you</h2>
     </header>
-    <ul aria-label="Decisions waiting for you" className="min-h-0 flex-1">
-      {data.waiting.map((decision) => <li key={decision.key} className="flex items-start gap-2 border-l-2 border-warning bg-warning/8 px-3 py-1 text-[12.5px] leading-4 text-foreground" style={{ height: BOARD_SIZE.decisionRow }}>
-        <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
-        <span className="line-clamp-2" title={decision.question}>{decision.question}</span>
-      </li>)}
+    <ul aria-label="Decisions waiting for you" className="nowheel min-h-0 flex-1 overflow-y-auto space-y-2 p-2.5">
+      {data.waiting.map((decision) => (
+        <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} />
+      ))}
     </ul>
     {(data.moreWaiting > 0 || expanded) && <button
       type="button" data-row-control={data.rowId} aria-expanded={expanded} disabled={!actions} onClick={() => data.rowId && actions?.toggleRow?.(data.rowId)}
@@ -147,6 +263,19 @@ function WaitingFrame({ data, border, titleId }: { data: CheckpointData; border:
  */
 export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
   const titleId = useId();
+  const actions = useContext(BoardActionsContext);
+  const fallbackMutation = useAnswerDecision(actions?.workspaceId ?? '');
+  const handleAnswer = async (key: string, answer: string, expected?: string) => {
+    if (actions?.answerDecision) {
+      return actions.answerDecision(key, answer, expected);
+    }
+    if (actions?.workspaceId) {
+      await fallbackMutation.mutateAsync({ key, answer, expected });
+      return true;
+    }
+    return false;
+  };
+
   const waiting = data.waiting.length + data.moreWaiting;
   const border = waiting ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border';
   if (!data.open) {
@@ -178,11 +307,10 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
       <FrameFacts data={data} />
       {data.collapsible !== false && <FoldButton id={id} title={data.title} />}
     </header>
-    {data.waiting.length > 0 && <ul aria-label="Decisions waiting for you">
-      {data.waiting.map((decision) => <li key={decision.key} className="flex items-start gap-2 border-l-2 border-warning bg-warning/8 px-3 py-1 text-[12.5px] leading-4 text-foreground" style={{ height: BOARD_SIZE.decisionRow }}>
-        <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
-        <span className="line-clamp-2" title={decision.question}><span className="sr-only">Waiting for you: </span>{decision.question}</span>
-      </li>)}
+    {data.waiting.length > 0 && <ul aria-label="Decisions waiting for you" className="nowheel min-h-0 max-h-60 overflow-y-auto space-y-2 p-2.5">
+      {data.waiting.map((decision) => (
+        <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} />
+      ))}
       {data.moreWaiting > 0 && <li className="flex items-center border-l-2 border-warning bg-warning/8 px-3 text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreWaiting} more waiting</li>}
     </ul>}
     {!data.waitingOnly && <ul className="px-3">

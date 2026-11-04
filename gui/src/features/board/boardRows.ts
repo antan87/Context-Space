@@ -22,6 +22,7 @@ import {
   documentsSummary,
   moreText,
   uniqueId,
+  type BoardDecision,
   type BoardNode,
   type CheckpointNode,
   type LaneCard,
@@ -61,7 +62,7 @@ export const ROW_SIZE = {
   bottom: 36,
   /** The decisions that wait for you. */
   waitingHead: 32,
-  decision: 40,
+  decision: 50,
   waitingMore: 28,
   waitingPad: 8,
   waitingShown: 2,
@@ -132,7 +133,7 @@ export interface AreaRow {
 
 export const WAITING_ROW = 'row:waiting';
 
-interface Waiting { areaId: string; kind: 'checkpoint' | 'plan'; title: string; done: boolean; stepsDone: number; stepsTotal: number; decisions: Array<{ key: string; question: string }> }
+interface Waiting { areaId: string; kind: 'checkpoint' | 'plan'; title: string; done: boolean; stepsDone: number; stepsTotal: number; decisions: Array<BoardDecision> }
 interface Model { waiting: Waiting | null; rows: AreaRow[] }
 
 const cardsText = (count: number) => (count === 0 ? 'No cards' : `${count} ${count === 1 ? 'card' : 'cards'}`);
@@ -244,7 +245,12 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   if ((area.kind === 'checkpoint' || area.kind === 'plan') && waitingKeys.size > 0) {
     waiting = {
       areaId: area.id, kind: area.kind, title: area.data.title, done: area.data.done, stepsDone: area.data.stepsDone, stepsTotal: area.data.stepsTotal,
-      decisions: (area.planItems?.decisions ?? []).filter((decision) => waitingKeys.has(decision.key)).map(({ key, question }) => ({ key, question })),
+      decisions: (area.planItems?.decisions ?? []).filter((decision) => waitingKeys.has(decision.key)).map(({ key, question, suggested, detail }) => ({
+        key,
+        question,
+        ...(suggested && suggested.length > 0 ? { suggested } : {}),
+        ...(detail ? { detail } : {}),
+      })),
     };
   }
 

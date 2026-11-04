@@ -109,6 +109,49 @@ export function useChangePlanFile(workspace: string) {
   });
 }
 
+/** Answer a decision directly, with optimistic removal from waiting so it immediately clears from lanes and boards. */
+export function useAnswerDecision(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, answer, expected }: { key: string; answer: string; expected?: string }) =>
+      apiFetch<{ message: string; plan: PlanFileView }>(
+        `/api/workspace/${encodeURIComponent(workspace)}/plan/decisions/${encodeURIComponent(key)}/answer`,
+        { method: 'POST', body: JSON.stringify({ answer, ...(expected ? { expected } : {}) }) },
+      ),
+    onMutate: async ({ key, answer }) => {
+      await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
+      const previous = queryClient.getQueryData<PlanFileView>(planFileKey(workspace));
+      if (previous) {
+        const updateDecision = (d: PlanFileDecision) => (d.key === key ? { ...d, done: true, answer } : d);
+        const updatedCheckpoints = previous.checkpoints.map((cp) => ({
+          ...cp,
+          decisions: cp.decisions.map(updateDecision),
+        }));
+        const updatedDecisions = previous.decisions.map(updateDecision);
+        const updatedWaiting = previous.waiting.filter((k) => k !== key);
+        queryClient.setQueryData<PlanFileView>(planFileKey(workspace), {
+          ...previous,
+          checkpoints: updatedCheckpoints,
+          decisions: updatedDecisions,
+          waiting: updatedWaiting,
+        });
+      }
+      return { previous };
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(planFileKey(workspace), result.plan);
+      void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(planFileKey(workspace), context.previous);
+      }
+      void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) });
+    },
+  });
+}
+
 /** What a checkpoint's last check proved, and how it should look. Empty for a checkpoint without a check. */
 export function proofLook(checkpoint: Pick<PlanFileCheckpoint, 'check' | 'proof'>, now: Date = new Date()): { text: string; tone: 'done' | 'failed' | 'quiet' } | null {
   if (checkpoint.check === undefined && !checkpoint.proof) return null;

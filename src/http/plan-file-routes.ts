@@ -6,7 +6,7 @@
 import type { Hono, Context, Handler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
-import { PlanFileError } from '../core/plan-file.js';
+import { PLAN_FILE, PlanFileError } from '../core/plan-file.js';
 import { changePlanFileForApp, planFileForApp } from '../core/plan-file-app.js';
 
 const key = z.string().min(1).max(100);
@@ -49,6 +49,20 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
   app.post('/api/workspace/:id/plan', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
     const { change } = z.object({ change: planFileChangeSchema }).strict().parse(await c.req.json());
     const { message } = await changePlanFileForApp(root, change);
+    return { message, plan: await planFileForApp(root) };
+  }));
+
+  app.post('/api/workspace/:id/plan/decisions/:key/answer', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
+    const decisionKey = key.parse(c.req.param('key'));
+    const body = z.object({ answer: words(2000), expected: words(300).optional() }).strict().parse(await c.req.json());
+    let expected = body.expected;
+    if (!expected) {
+      const currentPlan = await planFileForApp(root);
+      const found = [...currentPlan.decisions, ...currentPlan.checkpoints.flatMap((cp) => cp.decisions)].find((d) => d.key === decisionKey);
+      if (!found) throw new PlanFileError(`Nothing in ${PLAN_FILE} matches "${decisionKey}" any more. Read the plan again.`, 'not_found');
+      expected = found.question;
+    }
+    const { message } = await changePlanFileForApp(root, { type: 'answer', key: decisionKey, answer: body.answer, expected });
     return { message, plan: await planFileForApp(root) };
   }));
 }

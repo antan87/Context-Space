@@ -13,7 +13,7 @@ import { useWorkGuidance } from '../../lib/api/queries.js';
 import { cn } from '../../lib/utils.js';
 import { usePageVisible } from '../../lib/usePageVisible.js';
 import { goToWorkspace } from '../chat/chatRoute.js';
-import { usePlanFile } from '../plan/planFile.js';
+import { useAnswerDecision, usePlanFile } from '../plan/planFile.js';
 import { useWhatsNew } from '../plan/whatsNew.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests } from '../workspace-shell/openRequests.js';
@@ -244,7 +244,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   const show = useCallback((target: ReaderTarget, from: HTMLElement | null) => {
     opener.current = from ?? pressedLink.current;
     const node = opener.current?.closest('.react-flow__node')?.getAttribute('data-id');
-    const label = opener.current?.getAttribute('aria-label');
+    const label = opener.current?.getAttribute('aria-label') ?? (opener.current instanceof HTMLAnchorElement ? opener.current.textContent?.trim() : null);
     openerWas.current = node && label ? { node, label } : null;
     requests.current += 1;
     setReader({ target, request: requests.current });
@@ -401,7 +401,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
         ? curr
         : { areaId, origin, phase: 'open' },
     );
-  }, [clearJump, reader, setReader, setNarrowNavOpen, overviewNodes, stageContainer]);
+  }, [clearJump, reader, setReader, setNarrowNavOpen, overviewNodes, stageContainer, setThreadSelectedId]);
 
   const jumpToItem = useCallback((item: NavItem, openReader?: boolean) => {
     if (item.nodeId === null) {
@@ -479,7 +479,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     const xPct = stageRect && stageRect.width > 0 ? Math.round(((btnRect.left + btnRect.width / 2 - stageRect.left) / stageRect.width) * 100) : 50;
     const yPct = stageRect && stageRect.height > 0 ? Math.round(((btnRect.top + btnRect.height / 2 - stageRect.top) / stageRect.height) * 100) : 50;
     setStepped({ areaId, origin: `${xPct}% ${yPct}%`, phase: 'open' });
-  }, [stageContainer, clearJump]);
+  }, [stageContainer, clearJump, setThreadSelectedId]);
 
   const stepOut = useCallback(() => {
     const curr = steppedRef.current;
@@ -501,7 +501,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
       closeTimer.current = null;
       setStepped(null);
     }, 210);
-  }, [setReader, clearJump]);
+  }, [setReader, clearJump, setThreadSelectedId]);
 
   const [areaCanvasContainer, setAreaCanvasContainer] = useState<HTMLDivElement | null>(null);
   // Focus restoration when reader closes. Declared before the step-in/step-out focus effects below: when a jump closes the
@@ -511,8 +511,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   /** The control to put the keyboard on when the reader has closed and the card it came from is not drawn yet (the rows are laid out again). */
   const openerRetry = useRef<{ was: { node: string; label: string }; until: number; placed: boolean } | null>(null);
   const [openerTick, setOpenerTick] = useState(0);
-  const findOpener = useCallback((was: { node: string; label: string }) => Array.from(areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
-    .find((el) => el.dataset.id === was.node)?.querySelector<HTMLElement>(`[aria-label="${was.label.replace(/["\\]/g, '\\$&')}"]`) ?? null, [areaCanvasContainer]);
+  const findOpener = useCallback((was: { node: string; label: string }) => {
+    const nodeEl = Array.from(areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
+      .find((el) => el.dataset.id === was.node);
+    if (!nodeEl) return null;
+    return nodeEl.querySelector<HTMLElement>(`[aria-label="${was.label.replace(/["\\]/g, '\\$&')}"]`)
+      ?? Array.from(nodeEl.querySelectorAll<HTMLAnchorElement>('a')).find((a) => a.textContent?.trim() === was.label)
+      ?? null;
+  }, [areaCanvasContainer]);
   useLayoutEffect(() => {
     if (reader) { wasReaderOpen.current = true; return; }
     if (!wasReaderOpen.current) return;
@@ -656,7 +662,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
       if (found?.card) return found.card;
     }
     return null;
-  }, [reader?.target, activeArea]);
+  }, [reader, activeArea]);
 
   // When the canvas changes size (the reader docks beside it, or leaves), the card the reader shows may no longer be drawn: its row is opened at the page it is on
   const areaSizeKey = `${areaCanvasSize.width}x${areaCanvasSize.height}`;
@@ -756,7 +762,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
         return { areaId: activeArea.id, rowId: targetRow, page: targetPage };
       });
     }
-  }, [reader?.request, activeReaderCardId, activeArea, areaReady, newsView, areaCanvasSize]);
+  }, [reader, activeReaderCardId, activeArea, areaReady, newsView, areaCanvasSize]);
 
   const threadChain = useMemo(() => {
     if (!threadSelectedId) return null;
@@ -1061,6 +1067,27 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     [activeArea],
   );
 
+  const [decisionErrors, setDecisionErrors] = useState<Record<string, string>>({});
+  const answerMutation = useAnswerDecision(workspaceId);
+  const answerDecision = useCallback(async (key: string, answer: string, expected?: string) => {
+    setDecisionErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    try {
+      await answerMutation.mutateAsync({ key, answer, expected });
+      return true;
+    } catch (err) {
+      setDecisionErrors((prev) => ({
+        ...prev,
+        [key]: err instanceof Error ? err.message : 'Could not save answer.',
+      }));
+      throw err;
+    }
+  }, [answerMutation]);
+
   // Actions for Plane 0 & Plane 1
   const overviewActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1070,7 +1097,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     toggleGroup: () => {},
     keepFocus: () => {},
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
-  }), [workspaceId, workspacePath, stepInto]);
+    answerDecision,
+    decisionErrors,
+  }), [workspaceId, workspacePath, stepInto, answerDecision, setThreadSelectedId, decisionErrors]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1081,7 +1110,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     toggleRow,
     setRowPage,
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
-  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage]);
+    answerDecision,
+    decisionErrors,
+  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors]);
 
   const backdropPress = useRef({ down: false, up: false });
 

@@ -111,4 +111,44 @@ describe('plan routes', () => {
     expect(checkpoint.decisions.map((decision) => decision.question)).toEqual(['Export archived reports?', 'Which delimiter?']);
     expect((await post({ type: 'add', step: '' })).status).toBe(400);
   });
+
+  it('answers a decision directly via POST /api/workspace/:id/plan/decisions/:key/answer and updates PLAN.md on disk', async () => {
+    const res = await app.request('/api/workspace/reports/plan/decisions/export-archived-reports/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: 'Yes, include archived' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.message).toBe('Answered "Export archived reports?".');
+    expect(body.plan.waiting).toEqual([]);
+    const updatedPlan = await file();
+    const dec = updatedPlan.checkpoints[0]?.decisions[0];
+    expect(dec?.done).toBe(true);
+    expect(dec?.answer).toBe('Yes, include archived');
+
+    // 404 when decision key is not found
+    const missing = await app.request('/api/workspace/reports/plan/decisions/non-existent-key/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: 'Some answer' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(missing.status).toBe(404);
+
+    // 409 when expected does not match current plan question
+    const conflict = await app.request('/api/workspace/reports/plan/decisions/export-archived-reports/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: 'No', expected: 'Stale question from yesterday?' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(conflict.status).toBe(409);
+
+    // 400 when answer is blank
+    const blank = await app.request('/api/workspace/reports/plan/decisions/export-archived-reports/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: '   ' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(blank.status).toBe(400);
+  });
 });

@@ -94,7 +94,12 @@ export type LaneData = {
 };
 
 export type BoardStep = { key: string; text: string; done: boolean };
-export type BoardDecision = { key: string; question: string };
+export type BoardDecision = {
+  key: string;
+  question: string;
+  suggested?: string[];
+  detail?: string;
+};
 
 export type CheckpointData = {
   /** `plan`: the plan's own steps and decisions, which sit outside every checkpoint. It is never done. */
@@ -415,7 +420,12 @@ export function frame(kind: CheckpointData['kind'], id: string, x: number, title
     data: {
       kind, open: true, openHeight: frameHeight(items.steps.length, items.decisions.length), title, done, stepsDone: stepsComplete, stepsTotal: total,
       steps: steps.map(({ key, text, done: stepDone }) => ({ key, text, done: stepDone })), moreSteps,
-      waiting: shownWaiting.map(({ key, question }) => ({ key, question })), moreWaiting,
+      waiting: shownWaiting.map(({ key, question, suggested, detail }) => ({
+        key,
+        question,
+        ...(suggested?.length ? { suggested } : {}),
+        ...(detail ? { detail } : {}),
+      })), moreWaiting,
       ...(collapsible !== undefined ? { collapsible } : {}),
     },
   };
