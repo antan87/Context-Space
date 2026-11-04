@@ -207,7 +207,7 @@ export function WhereAreWeNotices({ strip }: { strip: WhereAreWe }) {
         <AiClosedBar
           workspace={strip.workspace} entry={close} title={closedTitle} more={closes.length - 1}
           onReopen={(reason) => strip.reopenInPlan(close.itemId, reason)} onSeen={strip.seeCloses}
-          onOpenPlan={() => strip.navigate(`/workspaces/${encodeURIComponent(strip.workspace)}/plan`)}
+          onOpenPlan={() => strip.navigate(`/workspaces/${encodeURIComponent(strip.workspace)}/board`)}
         />
       ) : null}
       {notice && <p aria-hidden="true" className="border-b border-border bg-card px-3 py-1 text-[11px] text-muted-foreground">{notice}</p>}

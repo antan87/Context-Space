@@ -7,13 +7,14 @@ import { Archive, Kanban, Plus, RefreshCw } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { Input } from '../../components/ui/input.js';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../../components/ui/empty.js';
 import { Spinner } from '../../components/ui/spinner.js';
 import { useWorkGuidance } from '../../lib/api/queries.js';
 import { cn } from '../../lib/utils.js';
 import { usePageVisible } from '../../lib/usePageVisible.js';
 import { goToWorkspace } from '../chat/chatRoute.js';
-import { useAnswerDecision, usePlanFile, useRunCheckpointCheck, useTickPlanStep } from '../plan/planFile.js';
+import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useTickPlanStep } from '../plan/planFile.js';
 import { useWhatsNew } from '../plan/whatsNew.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests } from '../workspace-shell/openRequests.js';
@@ -173,7 +174,7 @@ function useLayoutElementSize(element: HTMLElement | null): { width: number; hei
  * Area surface grows smoothly from the clicked card's transform-origin to fit all items whole on one
  * screen without scrolling.
  */
-export function BoardSection({ workspaceId, workspacePath, active, panelActions }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode }) {
+export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean }) {
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
   const news = useWhatsNew(workspaceId);
@@ -488,6 +489,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   const stepOut = useCallback(() => {
     const curr = steppedRef.current;
     if (!curr || curr.phase === 'closing') return;
+    setAreaAddStepOpen(false);
+    setAreaAddStepText('');
+    setAreaAddStepError(null);
     focusTarget.current = curr.areaId;
     clearJump();
     setThreadSelectedId(null);
@@ -577,6 +581,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   // Plane 1 (Inside Area) elements
   const activeArea = areas.find((a) => a.id === stepped?.areaId);
   const areaHeadingId = useId();
+
+  const [areaAddStepOpen, setAreaAddStepOpen] = useState(false);
+  const [areaAddStepText, setAreaAddStepText] = useState('');
+  const [areaAddStepError, setAreaAddStepError] = useState<string | null>(null);
+  const areaSubmittingRef = useRef(false);
+  const changePlanMutation = useChangePlanFile(workspaceId);
 
   const [areaRow, setAreaRow] = useState<HTMLDivElement | null>(null);
   const areaSection = useLayoutElementSize(areaRow);
@@ -1207,6 +1217,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
   const overviewActions = useMemo<BoardActions>(() => ({
     workspaceId,
     workspacePath,
+    readOnly,
     openArea: stepInto,
     openInReader: () => {},
     toggleGroup: () => {},
@@ -1222,11 +1233,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     updateNote,
     deleteNote,
     availableAreas,
-  }), [workspaceId, workspacePath, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
+  }), [workspaceId, workspacePath, readOnly, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
     workspacePath,
+    readOnly,
     openInReader,
     toggleGroup: () => {},
     keepFocus: () => {},
@@ -1243,21 +1255,23 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
     updateNote,
     deleteNote,
     availableAreas,
-  }), [workspaceId, workspacePath, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
+  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas]);
 
   const backdropPress = useRef({ down: false, up: false });
 
   const noteButton = (defaultAreaId?: string) => (
-    <Button
-      size="sm"
-      variant="outline"
-      className="nodrag nopan gap-1.5 text-[12.5px] font-medium"
-      onClick={() => openCreateNoteDialog(defaultAreaId)}
-    >
-      <Plus className="size-4" aria-hidden="true" />
-      <span className="sr-only">+ </span>
-      Note
-    </Button>
+    readOnly ? null : (
+      <Button
+        size="sm"
+        variant="outline"
+        className="nodrag nopan gap-1.5 text-[12.5px] font-medium"
+        onClick={() => openCreateNoteDialog(defaultAreaId)}
+      >
+        <Plus className="size-4" aria-hidden="true" />
+        <span className="sr-only">+ </span>
+        Note
+      </Button>
+    )
   );
 
   // The pane's own icons (hide the chat, close) are the board's to show, since it has no title row of its own: quiet until pointed at or
@@ -1462,9 +1476,42 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
                   <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="warning">{waitingText(activeArea.data.waitingCount)}</Badge></span>
                 )}
                 {activeArea.data.kind !== 'work' && (
-                  <span className="sr-only shrink-0 whitespace-nowrap text-xs text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
+                  <>
+                    <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
+                    {!readOnly && (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        data-testid="area-add-step-trigger"
+                        className="nodrag nopan min-h-[24px] text-[12.5px] text-muted-foreground hover:text-foreground gap-1 px-1.5 cursor-pointer shrink-0"
+                        onClick={() => {
+                          setAreaAddStepOpen(true);
+                          setAreaAddStepError(null);
+                        }}
+                      >
+                        <Plus className="size-3.5" aria-hidden="true" />
+                        <span>Add step</span>
+                      </Button>
+                    )}
+                  </>
                 )}
                 <div className="ml-auto flex items-center gap-1.5">
+                  {activeArea.data.kind !== 'work' && !readOnly && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      data-testid="area-add-step-button"
+                      className="nodrag nopan gap-1.5 text-[12.5px] font-medium min-h-[24px] cursor-pointer"
+                      onClick={() => {
+                        setAreaAddStepOpen(true);
+                        setAreaAddStepError(null);
+                      }}
+                    >
+                      <Plus className="size-4" aria-hidden="true" />
+                      <span className="sr-only">+ </span>
+                      Step
+                    </Button>
+                  )}
                   {noteButton(activeArea.id)}
                   {activeArea.archivedCount > 0 && (
                     <Button
@@ -1482,6 +1529,77 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions 
                   {paneIcons}
                 </div>
               </header>
+              {areaAddStepOpen && (
+                <div data-testid="area-add-step-panel" className="border-b border-border bg-card px-3 py-2">
+                  <form
+                    data-testid="area-add-step-form"
+                    className="flex flex-wrap items-center gap-2"
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const step = areaAddStepText.trim();
+                      if (!step || changePlanMutation.isPending || areaSubmittingRef.current) return;
+                      areaSubmittingRef.current = true;
+                      setAreaAddStepError(null);
+                      try {
+                        const cpKey = activeArea.checkpointKey ?? (activeArea.data.kind === 'checkpoint' ? activeArea.id.replace(/^area:checkpoint:|^checkpoint:/, '') : undefined);
+                        await changePlanMutation.mutateAsync({
+                          type: 'add',
+                          step,
+                          ...(cpKey ? { checkpoint: cpKey } : {}),
+                        });
+                        setAreaAddStepText('');
+                        setAreaAddStepOpen(false);
+                      } catch (err) {
+                        setAreaAddStepError(err instanceof Error ? err.message : 'Could not add step.');
+                      } finally {
+                        areaSubmittingRef.current = false;
+                      }
+                    }}
+                  >
+                    <Input
+                      autoFocus
+                      data-testid="area-add-step-input"
+                      aria-label="New step description"
+                      placeholder={`Add step to ${activeArea.data.title}…`}
+                      value={areaAddStepText}
+                      onChange={(e) => setAreaAddStepText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          setAreaAddStepOpen(false);
+                          setAreaAddStepText('');
+                          setAreaAddStepError(null);
+                        }
+                      }}
+                      className="min-h-[28px] h-7 flex-1 text-[12.5px] px-2.5 py-1 min-w-[200px]"
+                    />
+                    <Button
+                      size="xs"
+                      type="submit"
+                      data-testid="area-add-step-submit"
+                      disabled={changePlanMutation.isPending || !areaAddStepText.trim()}
+                      className="min-h-[24px] text-[12.5px] px-3 cursor-pointer"
+                    >
+                      {changePlanMutation.isPending ? 'Adding…' : 'Add'}
+                    </Button>
+                    <Button
+                      size="xs"
+                      type="button"
+                      variant="ghost"
+                      data-testid="area-add-step-cancel"
+                      onClick={() => {
+                        setAreaAddStepOpen(false);
+                        setAreaAddStepText('');
+                        setAreaAddStepError(null);
+                      }}
+                      className="min-h-[24px] text-[12.5px] px-2.5 cursor-pointer"
+                    >
+                      Cancel
+                    </Button>
+                    {areaAddStepError && <p role="alert" className="w-full text-[12.5px] text-destructive">{areaAddStepError}</p>}
+                  </form>
+                </div>
+              )}
               <div ref={setAreaRow} className="relative flex min-h-0 flex-1">
                 <div
                   className="relative min-w-0 flex-1"

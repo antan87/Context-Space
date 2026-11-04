@@ -22,29 +22,28 @@ export const SECTION_LABELS: Record<WorkspaceSection, string> = {
 const ALL_SECTIONS = new Set<string>(Object.keys(SECTION_LABELS));
 
 /**
- * No segment opens the plan. An unknown one (an old or mistyped link) falls back
+ * No segment opens the board. Legacy 'plan' aliases to 'board'. An unknown one (an old or mistyped link) falls back
  * to the overview instead of a blank page.
  */
 export function parseSection(segment: string | undefined | null): WorkspaceSection {
-  if (!segment) return 'plan';
+  if (!segment || segment === 'plan') return 'board';
   return ALL_SECTIONS.has(segment) ? segment as WorkspaceSection : 'overview';
 }
 
 /**
  * An archived workspace shows its record, not the places where work happens:
- * no changes, services, sessions or skills to act on.
+ * no changes, services, sessions or skills to act on. The board remains available to inspect the canvas.
  */
-export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan', 'documents', 'knowledge'];
+export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan', 'board', 'documents', 'knowledge'];
 
 /**
  * What can open beside the chat, in the rail's order:
- * Overview (workspace summary and mapped repositories), Plan, Board (the plan, documents and commits on a canvas),
+ * Overview (workspace summary and mapped repositories), Board (the plan, documents and commits on a canvas),
  * Sessions (CLI sessions and history), Code (changes), Docs, Skills, and Services.
  * Knowledge keeps its address and is read in Docs or directly via URL, but has no place on the rail.
  */
 export const RAIL_SECTIONS: readonly WorkspaceSection[] = [
   'overview',
-  'plan',
   'board',
   'sessions',
   'changes',
@@ -53,8 +52,8 @@ export const RAIL_SECTIONS: readonly WorkspaceSection[] = [
   'services',
 ];
 
-/** The rail of an archived workspace is its record, its plan and its documents. */
-const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'plan', 'documents'];
+/** The rail of an archived workspace is its record, its board and its documents. */
+const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'board', 'documents'];
 
 /**
  * What the rail offers for active and archived workspaces.

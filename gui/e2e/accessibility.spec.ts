@@ -26,6 +26,7 @@ async function mockWorkspace(page: Page) {
   } }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
   await page.route('**/api/workspace/demo/changes', (route) => route.fulfill({ json: { changes: [{ repoName: 'api', repoPath: '/dev/api', files: [{ file: 'cache.ts', type: 'modified', additions: 4, deletions: 1 }] }] } }));
+  await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: { file: 'contextspace-board.json', revision: 1, positions: {}, cards: [] } }));
 }
 
 /**
@@ -85,7 +86,7 @@ async function checkChatBeside(page: Page, label: string) {
   await page.goto('/#/workspaces/demo/plan');
   await expect(page.getByRole('region', { name: 'Where are we', exact: true })).toContainText('Needs you');
   await expect(page.getByRole('separator', { name: 'Resize the chat' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Goal', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
   await expectNoSeriousViolations(page, `${label} chat beside the plan`);
   await page.goto('/#/workspaces/demo/changes');
   await expect(page.getByRole('separator', { name: 'Resize the chat' })).toBeVisible();
@@ -286,7 +287,7 @@ test.describe('constrained windows', () => {
     const main = await page.getByRole('main').boundingBox();
     expect(main!.width).toBeGreaterThanOrEqual(800);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(900);
-    for (const name of ['Plan', 'Code', 'Docs', 'Services']) {
+    for (const name of ['Board', 'Code', 'Docs', 'Services']) {
       await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInViewport();
     }
     // The full list still opens on request, by keyboard.

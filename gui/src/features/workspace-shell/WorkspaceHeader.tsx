@@ -83,11 +83,11 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
             <span className="truncate">{branchName}</span>
             {copied ? <Check aria-hidden="true" size={12} className="shrink-0 text-[var(--state-done)]" /> : <Copy aria-hidden="true" size={12} className="shrink-0 opacity-0 transition-opacity group-hover/branch:opacity-100 group-focus-visible/branch:opacity-100" />}
           </button>}
-          {/* Where the task stands: one chip. On a phone the plan says it. */}
+          {/* Where the task stands: one chip. On a phone the board says it. */}
           {!compact && (now || done) && <div ref={chipSlot} aria-label="Task status" role="group" className="@container hidden min-w-0 max-w-[28ch] grow basis-0 sm:flex">
             {now ? (
               <Link
-                to={`${base}/plan`}
+                to={`${base}/board`}
                 className="hidden h-6 min-w-0 items-center gap-1.5 rounded-md border border-border/40 bg-muted/20 px-2 text-xs transition-colors hover:border-border/70 hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring @[8.5rem]:inline-flex"
               >
                 <span className="text-muted-foreground">Now</span>{' '}
@@ -101,7 +101,7 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
         <div className="flex shrink-0 items-center gap-1.5">
           {!compact && (
             <Link
-              to={`${base}/plan`}
+              to={`${base}/board`}
               title={verificationTitle(verification)}
               className={cn(
                 'relative grid size-6 place-items-center rounded-md transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring',
@@ -126,13 +126,13 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
               <MenuItem aria-disabled="true" closeOnClick={false} className="flex items-center gap-2 py-1.5 text-xs font-normal text-muted-foreground">
                 <FolderGit2 aria-hidden="true" size={12} /> <span>{place}</span>
               </MenuItem>
-              {now && !chipFits && <MenuItem onClick={() => navigate(`${base}/plan`)} className="flex items-center gap-2 py-1.5 text-xs">
+              {now && !chipFits && <MenuItem onClick={() => navigate(`${base}/board`)} className="flex items-center gap-2 py-1.5 text-xs">
                 <Circle aria-hidden="true" size={12} /> <span className="shrink-0 text-muted-foreground">Now ·</span> <span className="min-w-0 truncate" title={now.title}><InlinePlanMarkdown content={now.title} /></span>
               </MenuItem>}
-              {next && <MenuItem onClick={() => navigate(`${base}/plan`)} className="flex items-center gap-2 py-1.5 text-xs">
+              {next && <MenuItem onClick={() => navigate(`${base}/board`)} className="flex items-center gap-2 py-1.5 text-xs">
                 <ArrowRight aria-hidden="true" size={12} /> <span className="shrink-0 text-muted-foreground">Next</span> <span className="min-w-0 truncate" title={next.title}><InlinePlanMarkdown content={next.title} /></span>
               </MenuItem>}
-              {!next && done && <MenuItem onClick={() => navigate(`${base}/plan`)} className="flex items-center gap-2 py-1.5 text-xs">
+              {!next && done && <MenuItem onClick={() => navigate(`${base}/board`)} className="flex items-center gap-2 py-1.5 text-xs">
                 <ListChecks aria-hidden="true" size={12} /> <span className="text-muted-foreground">Checkpoints</span> <span>All done</span>
               </MenuItem>}
               {branchName && <MenuItem onClick={() => void copyBranch()} className="flex items-center gap-2 py-1.5 text-xs sm:hidden">

@@ -418,7 +418,8 @@ export function frameHeight(stepCount: number, waitingCount: number, waitingOnly
     + waiting * BOARD_SIZE.decisionRow + (waitingCount > waiting ? BOARD_SIZE.moreRow : 0)
     + Math.max(1, steps) * BOARD_SIZE.stepRow + (stepCount > steps ? BOARD_SIZE.moreRow : 0)
     + pad
-    + checkHeight;
+    + checkHeight
+    + BOARD_SIZE.stepRow;
 }
 
 /** A frame of steps and the decisions that wait, for a checkpoint or for the plan's own loose items. It is drawn open; `fold` closes it. */

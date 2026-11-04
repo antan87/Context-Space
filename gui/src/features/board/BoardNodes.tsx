@@ -1,17 +1,18 @@
 import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, MoreHorizontal, PanelRightOpen, Pencil, Pin, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { Input } from '../../components/ui/input.js';
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { cn } from '../../lib/utils.js';
 import { NoteDialog } from './NoteDialog.js';
-import { useAnswerDecision } from '../plan/planFile.js';
+import { useAnswerDecision, useChangePlanFile } from '../plan/planFile.js';
 import { suggestedAnswers } from '../plan/planView.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
@@ -240,7 +241,7 @@ function CheckpointCheckFooter({ data, cpKey }: { data: CheckpointData; cpKey: s
       <button
         type="button"
         data-testid={`run-check-${cpKey}`}
-        disabled={!actions?.runCheck || isBusy}
+        disabled={!actions?.runCheck || isBusy || Boolean(actions?.readOnly)}
         onClick={(e) => {
           e.stopPropagation();
           if (actions?.runCheck && cpKey && !isBusy) {
@@ -313,6 +314,127 @@ function WaitingFrame({ id, data, border, titleId }: { id?: string; data: Checkp
   </article>;
 }
 
+export function AddStepInline({
+  checkpointKey,
+  workspaceId,
+  defaultOpen = false,
+}: {
+  checkpointKey?: string;
+  workspaceId?: string;
+  defaultOpen?: boolean;
+}) {
+  const actions = useContext(BoardActionsContext);
+  const [open, setOpen] = useState(defaultOpen);
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
+  const changePlan = useChangePlanFile(workspaceId ?? '');
+  const busy = changePlan.isPending;
+
+  if (actions?.readOnly) return null;
+
+  if (!open) {
+    return (
+      <div className="pt-0.5 pb-1">
+        <button
+          type="button"
+          data-testid={`checkpoint-add-step-trigger${checkpointKey ? `-${checkpointKey}` : ''}`}
+          aria-label="Add a step"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+            setError(null);
+          }}
+          className="nodrag nopan inline-flex min-h-[24px] items-center gap-1 rounded px-1.5 py-0.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer"
+        >
+          <Plus aria-hidden="true" className="size-3.5 shrink-0" />
+          <span>Add step</span>
+        </button>
+      </div>
+    );
+  }
+
+  const submit = async () => {
+    const step = text.trim();
+    if (!step || busy || submittingRef.current) return;
+    if (!workspaceId) {
+      setError('No workspace selected.');
+      return;
+    }
+    submittingRef.current = true;
+    setError(null);
+    try {
+      await changePlan.mutateAsync({
+        type: 'add',
+        step,
+        ...(checkpointKey ? { checkpoint: checkpointKey } : {}),
+      });
+      setText('');
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not add step.');
+    } finally {
+      submittingRef.current = false;
+    }
+  };
+
+  return (
+    <form
+      data-testid={`checkpoint-add-step-form${checkpointKey ? `-${checkpointKey}` : ''}`}
+      className="nodrag nopan pt-1 pb-1 space-y-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center gap-1.5">
+        <Input
+          autoFocus
+          data-testid="checkpoint-add-step-input"
+          aria-label="The new step"
+          placeholder="What needs doing…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              setOpen(false);
+              setText('');
+              setError(null);
+            }
+          }}
+          className="min-h-[28px] h-7 flex-1 text-[12.5px] px-2 py-1"
+        />
+        <Button
+          size="xs"
+          type="submit"
+          data-testid="checkpoint-add-step-submit"
+          disabled={busy || !text.trim()}
+          className="min-h-[24px] text-[12.5px] px-2.5 py-0.5 cursor-pointer"
+        >
+          {busy ? 'Adding…' : 'Add'}
+        </Button>
+        <Button
+          size="xs"
+          type="button"
+          variant="ghost"
+          data-testid="checkpoint-add-step-cancel"
+          onClick={() => {
+            setOpen(false);
+            setText('');
+            setError(null);
+          }}
+          className="min-h-[24px] text-[12.5px] px-2 py-0.5 cursor-pointer"
+        >
+          Cancel
+        </Button>
+      </div>
+      {error && <p role="alert" className="text-[12.5px] text-destructive">{error}</p>}
+    </form>
+  );
+}
+
 /**
  * One checkpoint of PLAN.md: whether it is done, how far its steps are, what waits for the user, and the first steps.
  * Folded, it is the header alone, as one button that opens it.
@@ -347,6 +469,9 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
     </FoldedGroup>;
   }
   if (data.waitingOnly) return <WaitingFrame id={id} data={data} border={border} titleId={titleId} />;
+
+  const cpKey = data.checkpointKey ?? (data.kind === 'plan' ? undefined : id.replace(/^area:checkpoint:|^checkpoint:/, ''));
+
   return <article
     tabIndex={-1}
     aria-labelledby={titleId}
@@ -369,54 +494,57 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
       ))}
       {data.moreWaiting > 0 && <li className="flex items-center border-l-2 border-warning bg-warning/8 px-3 text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreWaiting} more waiting</li>}
     </ul>}
-    {!data.waitingOnly && <ul className="px-3">
-      {data.steps.map((step) => {
-        const isBusy = Boolean(actions?.busyStepKeys?.has(step.key));
-        const stepError = actions?.stepErrors?.[step.key];
-        return (
-          <li key={step.key} className="flex items-center gap-2 text-[12.5px]" style={{ height: BOARD_SIZE.stepRow }}>
-            <button
-              type="button"
-              role="checkbox"
-              data-testid={`checkpoint-step-checkbox-${step.key}`}
-              aria-checked={step.done}
-              aria-label={step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`}
-              title={stepError ?? (step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`)}
-              disabled={!actions?.toggleStep || isBusy}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!isBusy) {
-                  void actions?.toggleStep?.(step.key, !step.done, step.text);
-                }
-              }}
-              className={cn(
-                'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-                step.done
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-muted-foreground/40 bg-background hover:border-primary',
-                isBusy && 'opacity-50 cursor-not-allowed',
-                !isBusy && actions?.toggleStep && 'cursor-pointer'
-              )}
-            >
-              {step.done ? (
-                <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-                  <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-                </svg>
-              ) : null}
-            </button>
-            <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={step.text}>
-              <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span>{step.text}
-            </span>
-            {stepError && <span role="alert" className="shrink-0 text-[12.5px] text-destructive">{stepError}</span>}
-          </li>
-        );
-      })}
-      {data.steps.length === 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.stepRow }}>No steps yet</li>}
-      {data.moreSteps > 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreSteps} more</li>}
-    </ul>}
+    {!data.waitingOnly && <div className="nowheel min-h-0 flex-1 overflow-y-auto px-3">
+      <ul>
+        {data.steps.map((step) => {
+          const isBusy = Boolean(actions?.busyStepKeys?.has(step.key));
+          const stepError = actions?.stepErrors?.[step.key];
+          return (
+            <li key={step.key} className="flex items-center gap-2 text-[12.5px]" style={{ height: BOARD_SIZE.stepRow }}>
+              <button
+                type="button"
+                role="checkbox"
+                data-testid={`checkpoint-step-checkbox-${step.key}`}
+                aria-checked={step.done}
+                aria-label={step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`}
+                title={stepError ?? (step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`)}
+                disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isBusy) {
+                    void actions?.toggleStep?.(step.key, !step.done, step.text);
+                  }
+                }}
+                className={cn(
+                  'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+                  step.done
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-muted-foreground/40 bg-background hover:border-primary',
+                  isBusy && 'opacity-50 cursor-not-allowed',
+                  !isBusy && actions?.toggleStep && 'cursor-pointer'
+                )}
+              >
+                {step.done ? (
+                  <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
+                    <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+                  </svg>
+                ) : null}
+              </button>
+              <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={step.text}>
+                <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span>{step.text}
+              </span>
+              {stepError && <span role="alert" className="shrink-0 text-[12.5px] text-destructive">{stepError}</span>}
+            </li>
+          );
+        })}
+        {data.steps.length === 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.stepRow }}>No steps yet</li>}
+        {data.moreSteps > 0 && <li className="flex items-center text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreSteps} more</li>}
+      </ul>
+      {!actions?.readOnly && <AddStepInline checkpointKey={cpKey} workspaceId={actions?.workspaceId} />}
+    </div>}
     {data.check && !data.done && (() => {
-      const cpKey = data.checkpointKey ?? id.replace(/^area:checkpoint:|^checkpoint:/, '');
-      return <CheckpointCheckFooter data={data} cpKey={cpKey} />;
+      const checkKey = cpKey ?? id.replace(/^area:checkpoint:|^checkpoint:/, '');
+      return <CheckpointCheckFooter data={data} cpKey={checkKey} />;
     })()}
   </article>;
 }
@@ -801,7 +929,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
   const [titleRef, titleCut] = useCut<HTMLElement>(data.title);
   const [bodyRef, bodyCut] = useCut<HTMLDivElement>(data.text);
 
-  const noteActionsMenu = actions && (
+  const noteActionsMenu = actions && !actions.readOnly && (
     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity pointer-coarse:opacity-100">
       <Button
         type="button"
@@ -889,6 +1017,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           describedBy={markId}
           compact
           onDoubleClick={(event) => {
+            if (actions?.readOnly) return;
             event.stopPropagation();
             setEditOpen(true);
           }}
@@ -915,6 +1044,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
         data={data}
         labelledBy={titleId}
         onDoubleClick={(event) => {
+          if (actions?.readOnly) return;
           event.stopPropagation();
           setEditOpen(true);
         }}

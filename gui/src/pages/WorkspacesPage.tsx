@@ -812,6 +812,11 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               {panelActions}
             </div>
             )}
+            {archived && (
+              <div className="px-6 pt-3 shrink-0">
+                <ArchivedNotice workspace={selected} onRestore={() => void handleRestore()} restoring={restoring} />
+              </div>
+            )}
           {/* Code fills the panel: its tree and its file scroll on their own, so it is not inside the page's scroll.
               It stays mounted once opened, so going to the plan and back keeps the open file and the folders. */}
           {visitedSections.has('changes') && !archived && (
@@ -826,10 +831,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           )}
           {/* The board fills the panel too: its canvas pans and zooms on its own, so it is not inside the page's scroll. It
               stays mounted once opened, so coming back keeps where the canvas was looking. */}
-          {visitedSections.has('board') && !archived && (
+          {visitedSections.has('board') && (
             <div role="region" aria-label={SECTION_LABELS.board} hidden={subTab !== 'board'} className="min-h-0 flex-1">
               <Suspense fallback={<div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board</div>}>
-                <BoardSection key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} active={subTab === 'board'} panelActions={panelActions} />
+                <BoardSection key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} active={subTab === 'board'} panelActions={panelActions} readOnly={archived} />
               </Suspense>
             </div>
           )}
@@ -855,8 +860,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               </button>
             </div>
           )}
-
-          {archived && <ArchivedNotice workspace={selected} onRestore={() => void handleRestore()} restoring={restoring} />}
 
           <div role="region" aria-label={SECTION_LABELS[subTab]} className="pb-6">
               {subTab === 'overview' && archived && <ArchivedWorkspaceView workspace={selected} />}

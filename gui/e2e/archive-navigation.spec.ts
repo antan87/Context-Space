@@ -118,10 +118,10 @@ test('an open session is reached from an archived record on its own home, the pl
   await expect(archivedNotice(page)).toBeVisible();
   await sidebar.locator('[data-sidebar-session="live"]').click();
 
-  // Not /overview, which an active workspace has no place for on its rail: its home, the plan.
-  await expect(page).toHaveURL(/#\/workspaces\/live(\/plan)?$/);
+  // Not /overview, which an active workspace has no place for on its rail: its home, the board.
+  await expect(page).toHaveURL(/#\/workspaces\/live(\/(plan|board))?$/);
   await expect(archivedNotice(page)).toHaveCount(0);
-  await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Plan' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
 });
 
 test.describe('deleting the workspace on screen', () => {
@@ -287,8 +287,8 @@ test.describe('archiving a workspace that has a session', () => {
 
     // From "next", the way on is "third": the archived record is not a session to land on.
     await page.keyboard.press('Alt+ArrowDown');
-    await expect(page).toHaveURL(/#\/workspaces\/third\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/third\/(plan|board)$/);
     await page.keyboard.press('Alt+ArrowDown');
-    await expect(page).toHaveURL(/#\/workspaces\/next\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/next\/(plan|board)$/);
   });
 });

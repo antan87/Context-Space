@@ -67,6 +67,8 @@ export interface BoardActions {
   updateNote?: (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null }) => Promise<boolean>;
   /** Removes a card from the board. Returns true if successful. */
   deleteNote?: (id: string) => Promise<boolean>;
+  /** Whether the board is in read-only mode (e.g. for archived workspaces). */
+  readOnly?: boolean;
   /** Available areas on the board for area/step picking in note dialogs. */
   availableAreas?: Array<{
     id: string;
