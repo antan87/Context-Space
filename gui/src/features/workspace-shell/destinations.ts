@@ -22,11 +22,11 @@ export const SECTION_LABELS: Record<WorkspaceSection, string> = {
 const ALL_SECTIONS = new Set<string>(Object.keys(SECTION_LABELS));
 
 /**
- * No segment opens the board. Legacy 'plan' aliases to 'board'. An unknown one (an old or mistyped link) falls back
- * to the overview instead of a blank page.
+ * No segment opens the board. Legacy 'plan', 'changes', 'documents', and 'services' alias to 'board'.
+ * An unknown one (an old or mistyped link) falls back to the overview instead of a blank page.
  */
 export function parseSection(segment: string | undefined | null): WorkspaceSection {
-  if (!segment || segment === 'plan') return 'board';
+  if (!segment || segment === 'plan' || segment === 'changes' || segment === 'documents' || segment === 'services') return 'board';
   return ALL_SECTIONS.has(segment) ? segment as WorkspaceSection : 'overview';
 }
 

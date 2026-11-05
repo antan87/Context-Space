@@ -6,12 +6,15 @@ describe('workspace sections', () => {
     expect(Object.keys(SECTION_LABELS).sort()).toEqual(['board', 'changes', 'chat', 'documents', 'knowledge', 'overview', 'plan', 'services', 'sessions', 'skills']);
   });
 
-  it('keep old tab URLs working, aliasing plan to board', () => {
-    for (const legacy of ['overview', 'board', 'documents', 'changes', 'services', 'sessions', 'knowledge', 'skills']) {
-      expect(parseSection(legacy)).toBe(legacy);
+  it('keep old tab URLs working, aliasing deprecated sections to board', () => {
+    for (const active of ['overview', 'board', 'sessions', 'knowledge', 'skills']) {
+      expect(parseSection(active)).toBe(active);
     }
-    // Plan tab is deprecated and aliases to board
+    // Plan, changes, documents, and services tabs are deprecated and alias to board
     expect(parseSection('plan')).toBe('board');
+    expect(parseSection('changes')).toBe('board');
+    expect(parseSection('documents')).toBe('board');
+    expect(parseSection('services')).toBe('board');
     // An unknown segment lands on the overview. No segment at all opens the board, the workspace's home.
     expect(parseSection('diff')).toBe('overview');
     expect(parseSection(undefined)).toBe('board');
@@ -60,9 +63,10 @@ describe('railSectionsFor', () => {
     expect(visibleSection('board', false)).toBe('board');
   });
 
-  it('keeps old addresses working: sections parse to themselves or alias plan to board', () => {
-    for (const section of ['overview', 'sessions', 'skills', 'knowledge', 'services', 'board'] as const) expect(parseSection(section)).toBe(section);
+  it('keeps old addresses working: active sections parse to themselves, deprecated alias to board', () => {
+    for (const section of ['overview', 'sessions', 'skills', 'knowledge', 'board'] as const) expect(parseSection(section)).toBe(section);
     expect(parseSection('plan')).toBe('board');
+    expect(parseSection('services')).toBe('board');
     // Not on the rail does not mean hidden: an active workspace still shows them.
     expect(visibleSection('sessions', false)).toBe('sessions');
     expect(visibleSection('skills', false)).toBe('skills');

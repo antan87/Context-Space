@@ -164,8 +164,8 @@ test.describe('Plan Tab Deprecation & Board Redirection (Slice 1.3)', () => {
     const stepped = page.locator('#board-area');
     await expect(stepped).toBeVisible();
 
-    // Verify stepped area displays Add step trigger
-    const addStepTrigger = stepped.locator('[data-testid="area-add-step-trigger"]');
+    // Verify stepped area displays Add step button
+    const addStepTrigger = stepped.locator('[data-testid="area-add-step-button"]');
     await expect(addStepTrigger).toBeVisible();
 
     // Click trigger to expand form

@@ -1,11 +1,9 @@
 import { useRef, useEffect, type ComponentProps } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { History, ListTree } from 'lucide-react';
-import { Button } from '../../components/ui/button.js';
+import { History } from 'lucide-react';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { goToWorkspace, parseWorkspacePath } from '../chat/chatRoute.js';
 import { useOpenFileReference } from '../workspace-shell/useOpenFileReference.js';
-import { hasModifier, modifierLabel, usePaneHotkey } from './usePaneHotkey.js';
 import { SessionDeck } from './SessionDeck.js';
 import { WhereAreWeNotices, WhereAreWeSummary } from '../progress/WhereAreWeStrip.js';
 import { useWhereAreWe } from '../progress/useWhereAreWe.js';
@@ -38,33 +36,11 @@ export function TerminalWorkspace({ workspacePath, repoPaths, ...props }: Pick<C
     });
   }, [props.workspace]);
 
-  const toggleSection = (target: 'changes' | 'documents' | 'sessions') => {
+  const toggleSection = (target: 'sessions') => {
     goToWorkspace(navigate, props.workspace, section === target ? 'chat' : target);
   };
 
-  // Bound to modified keys so they still work while the PTY owns the keyboard. Gated on `active`:
-  // the dock keeps every open tab mounted, and an ungated listener would act for all of them.
-  //
-  // Code answers to Ctrl/Cmd+Shift+E. Shift+C is accepted as an alias, but the terminal claims that
-  // combination for copy-selection, so the alias only resolves when focus is outside the PTY.
-  usePaneHotkey((event) => {
-    if (!hasModifier(event, { shift: true })) return;
-    const key = event.key.toLowerCase();
-    if (key === 'e' || key === 'c') {
-      event.preventDefault();
-      toggleSection('changes');
-    } else if (key === 'd') {
-      event.preventDefault();
-      toggleSection('documents');
-    }
-  }, { enabled: props.active });
-
-  const mod = modifierLabel();
   const inspectorControls = [
-    <Button key="code" size="xs" variant={section === 'changes' ? 'secondary' : 'ghost'} aria-pressed={section === 'changes'}
-      aria-keyshortcuts="Control+Shift+E Meta+Shift+E" title={`Show the code beside the chat (${mod}+Shift+E)`} onClick={() => toggleSection('changes')}>
-      <ListTree className="size-3" />Code
-    </Button>,
     <IconButton key="history" label="Session history" aria-pressed={section === 'sessions'} onClick={() => toggleSection('sessions')}
       icon={<History />} className={section === 'sessions' ? 'bg-secondary text-foreground' : 'text-muted-foreground'} />,
   ];

@@ -763,17 +763,20 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
   >
     <Anchors />
     {data.fresh && <span aria-hidden="true" className="board-fresh" />}
-    <div className="flex h-4 items-center gap-2 text-xs">
-      <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-      <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
-      {data.fresh && (
-        <>
-          <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
-          <span className="sr-only">New since you looked. </span>
-        </>
-      )}
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
-      {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
+    <div className="flex h-4 items-center justify-between gap-2 text-xs">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+        <code id={shaId} className="shrink-0 font-mono text-primary font-medium">{data.sha}</code>
+        {data.fresh && (
+          <>
+            <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+            <span className="sr-only">New since you looked. </span>
+          </>
+        )}
+        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
+        {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
+      </div>
+      <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">commit</span>
     </div>
     {commit ? (
       <button
@@ -822,7 +825,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
       </div>
     )}
     {actions?.askInCLI && !actions.readOnly && (
-      <div className="flex justify-end pt-1">
+      <div className="flex justify-end pt-1 border-t border-border/40">
         <button
           type="button"
           onClick={(e) => {
@@ -830,7 +833,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
             const commitSummary = data.subject ? `${data.sha}: ${data.subject}` : `commit ${data.sha}`;
             actions.askInCLI?.(commitSummary);
           }}
-          className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded px-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors cursor-pointer"
+          className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
           title={`Ask about commit ${data.sha} in CLI`}
         >
           <span>Ask in CLI</span>
@@ -946,7 +949,7 @@ function CardMark({ data, markId }: { data: CardData; markId: string }) {
 function CardFrame({ data, labelledBy, describedBy, reading = false, compact = false, onPress, onDoubleClick, children }: { data: CardData; labelledBy: string; describedBy?: string; reading?: boolean; compact?: boolean; onPress?: (event: MouseEvent<HTMLElement>) => void; onDoubleClick?: (event: MouseEvent<HTMLElement>) => void; children: ReactNode }) {
   return <article
     aria-labelledby={labelledBy} aria-describedby={describedBy} aria-current={reading ? 'true' : undefined} onClick={onPress} onDoubleClick={onDoubleClick}
-    className={cn('group relative flex h-full w-full flex-col overflow-hidden rounded-lg border px-3 shadow-xs', compact ? 'py-2' : 'py-2.5', compact && CARD_FOCUS, onPress && BRICK,
+    className={cn('group relative flex h-full w-full flex-col overflow-hidden rounded-xl border px-3.5 shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80', compact ? 'py-2' : 'py-2.5', compact && CARD_FOCUS, onPress && BRICK,
       data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
   >
     <Anchors />
@@ -1100,11 +1103,14 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
             {data.title}
           </h2>
-          {noteActionsMenu}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">note</span>
+            {noteActionsMenu}
+          </div>
         </div>
         <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-1 line-clamp-4 shrink-0 text-[12.5px] leading-[18px]" />
         <div className="mt-auto" />
-        <div className="flex items-center justify-between gap-1 pt-1">
+        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-border/40">
           <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
           {actions?.askInCLI && !actions.readOnly && (
             <button
@@ -1114,7 +1120,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
                 const noteSummary = data.title?.trim() || data.text?.slice(0, 60).trim() || 'note';
                 actions.askInCLI?.(noteSummary);
               }}
-              className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] shrink-0 items-center gap-1 rounded px-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors cursor-pointer"
+              className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] shrink-0 items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
               title={`Ask about "${data.title || 'note'}" in CLI`}
             >
               <span>Ask in CLI</span>
@@ -1154,11 +1160,11 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
     const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
     return <CardFrame data={data} labelledBy={titleId} describedBy={markId} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
       <div className="flex min-h-0 flex-1 gap-3">
-        <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/60">
+        <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
           {picture
             ? <img
               src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
-              loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-contain"
+              loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-cover"
             />
             : <div className="flex size-full flex-col items-center justify-center gap-0.5 px-1 text-center">
               <Icon aria-hidden="true" className="size-6 text-muted-foreground" />
@@ -1181,37 +1187,51 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
     </CardFrame>;
   }
   return <CardFrame data={data} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
-    <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
-    <div className="mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/60">
+    <div className="flex shrink-0 items-start justify-between gap-1.5">
+      <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-[13px] font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
+      <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">
+        {data.fileType === 'image' ? 'picture' : data.fileType}
+      </span>
+    </div>
+    <div className="group/thumb relative mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
       {picture
-        ? <img
-          src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
-          loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-contain cursor-pointer"
-          onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}
-        />
+        ? <>
+          <img
+            src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
+            loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-cover transition-transform duration-200 group-hover/thumb:scale-105 cursor-pointer"
+            onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}
+          />
+          <span className="absolute bottom-1 right-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover/thumb:opacity-100 pointer-events-none">
+            Double-click to enlarge
+          </span>
+        </>
         : <FileKind type={data.fileType} path={data.path} />}
     </div>
-    <CardText ref={textRef} text={data.text} cut={textCut} className="mt-1.5 line-clamp-3 shrink-0 text-xs leading-[18px]" />
+    {data.text && <CardText ref={textRef} text={data.text} cut={textCut} className="mt-1 line-clamp-2 shrink-0 text-xs leading-[16px]" />}
     <div className="mt-auto" />
-    <Byline data={data} />
-    <div className="flex h-7 shrink-0 items-center gap-1">
-      <Button size="xs" variant="outline" className="nodrag nopan" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" />Open</Button>
-      {(titleCut || textCut) && <ReadAll data={data} />}
-      {actions?.askInCLI && !actions.readOnly && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            const fileSummary = data.title?.trim() || data.path?.trim() || 'file';
-            actions.askInCLI?.(fileSummary);
-          }}
-          className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] ml-auto items-center gap-1 rounded px-1.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors cursor-pointer"
-          title={`Ask about "${data.title || data.path || 'file'}" in CLI`}
-        >
-          <span>Ask in CLI</span>
-          <span aria-hidden="true">↗</span>
-        </button>
-      )}
+    <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-border/40">
+      <span className="truncate text-[11px] text-muted-foreground" title={bylineText(data) || 'live visual snapshot'}>
+        {bylineText(data) || 'live visual snapshot'}
+      </span>
+      <div className="flex items-center gap-1 shrink-0">
+        <Button size="xs" variant="ghost" className="nodrag nopan h-6 px-1.5 text-[11px]" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" className="size-3" />Open</Button>
+        {(titleCut || textCut) && <ReadAll data={data} />}
+        {actions?.askInCLI && !actions.readOnly && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              const fileSummary = data.title?.trim() || data.path?.trim() || 'file';
+              actions.askInCLI?.(fileSummary);
+            }}
+            className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
+            title={`Ask about "${data.title || data.path || 'file'}" in CLI`}
+          >
+            <span>Ask in CLI</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+        )}
+      </div>
     </div>
   </CardFrame>;
 }

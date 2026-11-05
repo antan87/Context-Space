@@ -35,7 +35,6 @@ import type { Feature, WorkspaceStatus, RepoInfo, DomainPack, ResolvedCategoryRu
 import { API_BASE } from '../lib/apiBase.js';
 import { perfMark } from '../lib/perfMarks.js';
 import { BRAND_NAME, LEGACY_BRAND_NAME } from '../brand.js';
-import { ServiceConsole } from '../features/services/ServiceConsole.js';
 import { WorkspaceHeader } from '../features/workspace-shell/WorkspaceHeader.js';
 import { WorkspaceRail } from '../features/workspace-shell/WorkspaceRail.js';
 import { SECTION_LABELS, visibleSection, type WorkspaceSection } from '../features/workspace-shell/destinations.js';
@@ -104,13 +103,7 @@ import { useFloatingChat } from '../features/chat/floatingChatStore.js';
 import { ChatDockSlot } from '../features/chat/ChatDockSlot.js';
 import { CHAT_LAYOUT, chatLayout, hasRoomBeside, useChatLayout } from '../features/chat/chatLayout.js';
 import { useElementWidth } from '../lib/useElementWidth.js';
-import { CodeSection } from '../features/changes/CodeSection.js';
 import { KnowledgeBase } from '../features/knowledge/KnowledgeBase.js';
-import { WorkspaceChecks } from '../features/plan/WorkspaceChecks.js';
-import { RootDocumentsPanel } from '../features/work-guidance/RootDocumentsPanel.js';
-import { WorkspaceWorkPanel } from '../features/work-guidance/WorkspaceWorkPanel.js';
-import { HomePlan } from '../features/workspace-home/HomePlan.js';
-import { SinceYouLooked } from '../features/plan/SinceYouLooked.js';
 import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
@@ -152,7 +145,7 @@ interface WorkspacesPageProps {
   showToast?: (message: string, type?: 'success' | 'error' | 'info', duration?: number) => void;
   sessionProps: Omit<ComponentProps<typeof SessionHistory>, 'ws'>;
   /** What Code needs to commit, finish and sync, plus the change listing the overview counts files from. */
-  changesProps: Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast'> & { gitChanges: { repoName: string; files?: unknown[] }[] };
+  changesProps?: { gitChanges?: { repoName: string; files?: unknown[] }[]; [key: string]: unknown };
   knowledgeProps: Omit<ComponentProps<typeof KnowledgeBase>, 'ws'>;
   /** The generated plan summary, which the overview reads, and how to reload it after a plan change. */
 }
@@ -213,7 +206,10 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     target.setPointerCapture(event.pointerId);
     const move = (next: PointerEvent) => {
       const bounds = body.getBoundingClientRect();
-      if (bounds.width > 0) chatLayout.setPercent(((next.clientX - bounds.left) / bounds.width) * 100);
+      if (bounds.width > 0) {
+        const rightWidth = bounds.right - next.clientX;
+        chatLayout.setPercent((rightWidth / bounds.width) * 100);
+      }
     };
     const stop = (end: PointerEvent) => {
       if (target.hasPointerCapture(end.pointerId)) target.releasePointerCapture(end.pointerId);
@@ -638,7 +634,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     }
   };
 
-  const { gitChanges: overviewChanges, ...codeSectionProps } = changesProps;
+  const overviewChanges = changesProps?.gitChanges;
   const repoRows = selected
     ? selected.repos.map((rp) => {
         const name = repoName(rp);
@@ -929,32 +925,11 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
         />
         {/* Tab Navigation & Content Container */}
         <div ref={setBody} className="flex min-h-0 flex-1 pb-14 md:pb-0">
-          {showChat && (
-            <div className="h-full min-h-0 min-w-0" style={{ flex: showPanel ? `0 0 ${layout.percent}%` : '1 1 100%' }}>
-              {/* The chat is not rendered here: it lives above the router and sits over this box, so it stays alive. */}
-              <ChatDockSlot />
-            </div>
-          )}
-          {showChat && showPanel && (
-            <div
-              role="separator" tabIndex={0} aria-orientation="vertical" aria-label="Resize the chat"
-              aria-valuemin={CHAT_LAYOUT.minPercent} aria-valuemax={CHAT_LAYOUT.maxPercent} aria-valuenow={layout.percent}
-              className="group z-10 -mx-0.5 flex w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-border/60 hover:bg-primary/40 focus-visible:bg-primary/50 focus-visible:outline-hidden"
-              title="Drag, or use the arrow keys, to give the chat more or less room"
-              onPointerDown={dragDivider}
-              onKeyDown={(event) => {
-                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-                event.preventDefault();
-                // From the stored width, not the rendered one: a held key repeats faster than the page renders.
-                chatLayout.setPercent(chatLayout.get().percent + (event.key === 'ArrowRight' ? 3 : -3));
-              }}
-            />
-          )}
           {showPanel && (
-          <div className="relative flex min-w-0 flex-1 flex-col">
+          <div className="relative flex min-w-0 flex-1 flex-col" style={{ flex: showChat ? `0 0 ${100 - layout.percent}%` : '1 1 100%' }}>
             {/* What is open, and the way back to the chat, which is always one click: the cross, or the rail item again.
                 Code, Docs and the Board carry these in their own toolbars or corners, so each spends no row on a title. */}
-            {subTab !== 'changes' && subTab !== 'documents' && subTab !== 'board' && (
+            {subTab !== 'board' && (
             <div className="z-10 flex shrink-0 items-center gap-0.5 border-b border-border/60 bg-background/95 px-6 py-1.5 backdrop-blur">
               {/* A label, not a heading: the part below names itself, and its region carries the same name. On the plan, the
                   sessions sit beside it as tabs. */}
@@ -968,19 +943,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                 <ArchivedNotice workspace={selected} onRestore={() => void handleRestore()} restoring={restoring} />
               </div>
             )}
-          {/* Code fills the panel: its tree and its file scroll on their own, so it is not inside the page's scroll.
-              It stays mounted once opened, so going to the plan and back keeps the open file and the folders. */}
-          {visitedSections.has('changes') && !archived && (
-            <div role="region" aria-label={SECTION_LABELS.changes} hidden={subTab !== 'changes'} className="min-h-0 flex-1">
-              <CodeSection key={selected.branchName} ws={selected} active={subTab === 'changes'} {...codeSectionProps} showToast={showToast} panelActions={panelActions} />
-            </div>
-          )}
-          {visitedSections.has('documents') && (
-            <div role="region" aria-label={SECTION_LABELS.documents} hidden={subTab !== 'documents'} className="min-h-0 flex-1">
-              <RootDocumentsPanel key={selected.branchName} workspaceId={selected.branchName} workspacePath={selected.workspacePath} panelActions={panelActions} />
-            </div>
-          )}
-          {/* The board fills the panel too: its canvas pans and zooms on its own, so it is not inside the page's scroll. It
+          {/* The board fills the panel: its canvas pans and zooms on its own, so it is not inside the page's scroll. It
               stays mounted once opened, so coming back keeps where the canvas was looking. */}
           {visitedSections.has('board') && (
             <div role="region" aria-label={SECTION_LABELS.board} hidden={subTab !== 'board'} className="min-h-0 flex-1">
@@ -989,7 +952,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               </Suspense>
             </div>
           )}
-          <div hidden={subTab === 'changes' || subTab === 'documents' || subTab === 'board'} className="min-h-0 flex-1 overflow-y-auto">
+          <div hidden={subTab === 'board'} className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-6 pb-12 pt-5">
           {/* Legacy Migration Alert Banner */}
           {isLegacy && (
@@ -1020,7 +983,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {/* Stat 1: Git Status */}
                     <div
-                      onClick={() => onSelectTab(selected.branchName, 'changes')}
+                      onClick={() => onSelectTab(selected.branchName, 'board')}
                       className="px-4 py-3 rounded-xl border border-border/80 bg-card/70 hover:bg-card hover:border-primary/40 transition-all cursor-pointer shadow-xs flex items-center justify-between"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
@@ -1586,27 +1549,36 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               )}
               {subTab === 'knowledge' && <KnowledgeBase ws={selected} {...knowledgeProps} readOnly={archived} />}
               {subTab === 'skills' && <WorkspaceSkillsTab ws={selected} showToast={showToast} />}
-              {visitedSections.has('plan') && <div hidden={subTab !== 'plan'}>
-                {/* One key for the whole tab: siblings that share a key are never removed, so each switch left the
-                    previous workspace's brief and plan on screen, still polling. */}
-                <div key={selected.branchName} className="min-w-0 space-y-6">
-                <SinceYouLooked workspaceId={selected.branchName} readOnly={archived} />
-                {/* The plan first: it opens with the goal and holds the checkpoints. The brief and the checks follow. */}
-                <HomePlan workspaceId={selected.branchName} workspacePath={selected.workspacePath} readOnly={archived} />
-                <WorkspaceWorkPanel workspaceId={selected.branchName} readOnly={archived} />
-                <WorkspaceChecks workspaceId={selected.branchName} readOnly={archived} />
-                </div>
-              </div>}
-              {subTab === 'services' && <ServiceConsole ws={selected} />}
           </div>
         </div>
           </div>
           </div>
           )}
+          {showChat && showPanel && (
+            <div
+              role="separator" tabIndex={0} aria-orientation="vertical" aria-label="Resize the workspace panes"
+              aria-valuemin={CHAT_LAYOUT.minPercent} aria-valuemax={CHAT_LAYOUT.maxPercent} aria-valuenow={Math.round(layout.percent)}
+              className="group z-10 -mx-0.5 flex w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-border/60 hover:bg-primary/40 focus-visible:bg-primary/50 focus-visible:outline-hidden"
+              title="Drag, or use the arrow keys, to resize the panes"
+              onPointerDown={dragDivider}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                event.preventDefault();
+                chatLayout.setPercent(chatLayout.get().percent + (event.key === 'ArrowRight' ? -3 : 3));
+              }}
+            />
+          )}
+          {showChat && (
+            <div className="h-full min-h-0 min-w-0" style={{ flex: showPanel ? `0 0 ${layout.percent}%` : '1 1 100%' }}>
+              {/* The chat is not rendered here: it lives above the router and sits over this box, so it stays alive. */}
+              <ChatDockSlot />
+            </div>
+          )}
           <WorkspaceRail
             workspaceId={selected.branchName}
             section={subTab}
             archived={archived}
+            compact={Boolean(showChat && showPanel)}
             badges={{
               changes: totalChangedFiles,
               sessions: runningCount > 0 ? runningCount : undefined,

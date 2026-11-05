@@ -1479,24 +1479,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="warning">{waitingText(activeArea.data.waitingCount)}</Badge></span>
                 )}
                 {activeArea.data.kind !== 'work' && (
-                  <>
-                    <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
-                    {!readOnly && (
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        data-testid="area-add-step-trigger"
-                        className="nodrag nopan min-h-[24px] text-[12.5px] text-muted-foreground hover:text-foreground gap-1 px-1.5 cursor-pointer shrink-0"
-                        onClick={() => {
-                          setAreaAddStepOpen(true);
-                          setAreaAddStepError(null);
-                        }}
-                      >
-                        <Plus className="size-3.5" aria-hidden="true" />
-                        <span>Add step</span>
-                      </Button>
-                    )}
-                  </>
+                  <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
                 )}
                 <div className="ml-auto flex items-center gap-1.5">
                   {activeArea.data.kind !== 'work' && !readOnly && (
