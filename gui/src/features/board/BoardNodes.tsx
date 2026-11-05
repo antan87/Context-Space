@@ -7,7 +7,7 @@ import { classifyMarkdownLink } from '../../components/markdownLinks.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
-import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
+import { Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { cn } from '../../lib/utils.js';
@@ -1415,6 +1415,97 @@ export function BoardAreaFold({ data }: NodeProps<AreaFoldNode>) {
 
 const STATE_LABEL = { current: 'Now', next: 'Next', open: 'Step', done: 'Done', plain: '' } as const;
 
+/** A dialog showing the untruncated step title, its status, and controls to toggle or close. */
+function StepDetailDialog({
+  stepKey,
+  title,
+  state,
+  stepError,
+  isDone,
+  isBusy,
+  onToggle,
+  children,
+}: {
+  stepKey?: string;
+  title: string;
+  state: 'current' | 'next' | 'open' | 'done' | 'plain';
+  stepError?: string;
+  isDone: boolean;
+  isBusy: boolean;
+  onToggle?: () => void;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <button
+            type="button"
+            data-card-main
+            data-testid={stepKey ? `step-trigger-${stepKey}` : 'step-trigger'}
+            className="nodrag nopan flex min-w-0 flex-1 flex-col justify-center text-left rounded-md px-1 py-0.5 outline-hidden transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer"
+            aria-label={`View step: ${title}`}
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+          />
+        }
+      >
+        {children}
+      </DialogTrigger>
+      <DialogPopup className="max-w-lg" data-testid="step-detail-dialog">
+        <DialogHeader>
+          <div className="flex items-center gap-2">
+            <Badge variant={isDone ? 'success' : 'outline'}>
+              {isDone ? 'Done' : 'Open'}
+            </Badge>
+            {state === 'current' && <Badge variant="secondary">Current</Badge>}
+            <DialogTitle className="text-sm font-semibold text-muted-foreground">
+              Step details
+            </DialogTitle>
+          </div>
+          <DialogDescription className="sr-only">
+            {isDone ? 'Completed step details' : 'Open step details'}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="space-y-3">
+            <div className="break-words text-base leading-relaxed text-foreground select-text font-normal">
+              <InlinePlanMarkdown content={title} />
+            </div>
+            {stepError && (
+              <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                {stepError}
+              </div>
+            )}
+          </div>
+        </DialogPanel>
+        <DialogFooter variant="bare">
+          {onToggle && (
+            <Button
+              type="button"
+              size="sm"
+              variant={isDone ? 'outline' : 'default'}
+              disabled={isBusy}
+              data-testid="step-dialog-toggle"
+              onClick={() => {
+                onToggle();
+              }}
+            >
+              {isDone ? 'Mark as open' : 'Mark as done'}
+            </Button>
+          )}
+          <DialogClose render={<Button type="button" variant="ghost" size="sm" data-testid="step-dialog-close" />}>
+            Close
+          </DialogClose>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 /**
  * The header of a row, which stands above its things as a line of its own: its name and what it holds, as a button that opens the row
  * where it stands and closes it when it is open already; its chevron shows when the keyboard or the pointer is on it. The header of the
@@ -1431,47 +1522,80 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   const Chevron = data.expanded ? ChevronUp : ChevronDown;
 
   if (data.static) {
-    return <div className="flex h-full w-full items-center gap-2 overflow-hidden rounded-xl border border-border bg-card px-3 py-1 text-left">
-      <Anchors />
-      {data.stepKey && (
-        <button
-          type="button"
-          role="checkbox"
-          data-testid={`step-checkbox-${data.stepKey}`}
-          aria-checked={isDone}
-          aria-label={isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`}
-          title={stepError ?? (isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`)}
-          disabled={!actions?.toggleStep || isBusy}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (data.stepKey && !isBusy) {
-              void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
-            }
-          }}
-          className={cn(
-            'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-            isDone
-              ? 'border-primary bg-primary text-primary-foreground'
-              : 'border-muted-foreground/40 bg-background hover:border-primary',
-            isBusy && 'opacity-50 cursor-not-allowed',
-            !isBusy && actions?.toggleStep && 'cursor-pointer'
-          )}
+    const stepText = data.text ?? data.title;
+    return (
+      <div
+        className={cn(
+          'nodrag nopan relative flex h-full w-full items-center gap-2 overflow-hidden rounded-xl border border-border bg-card px-3 py-1 text-left',
+          CARD_FOCUS,
+          BRICK
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          brickPress(e, (card) => firstControl(card, '[data-card-main]'));
+        }}
+      >
+        <Anchors />
+        {data.stepKey && (
+          <button
+            type="button"
+            role="checkbox"
+            data-testid={`step-checkbox-${data.stepKey}`}
+            aria-checked={isDone}
+            aria-label={isDone ? `Mark "${stepText}" not done` : `Mark "${stepText}" done`}
+            title={stepError ?? (isDone ? `Mark "${stepText}" not done` : `Mark "${stepText}" done`)}
+            disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (data.stepKey && !isBusy && !actions?.readOnly) {
+                void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
+              }
+            }}
+            className={cn(
+              'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+              isDone
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-muted-foreground/40 bg-background hover:border-primary',
+              isBusy && 'opacity-50 cursor-not-allowed',
+              !isBusy && actions?.toggleStep && !actions?.readOnly && 'cursor-pointer'
+            )}
+          >
+            {isDone ? (
+              <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
+                <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+              </svg>
+            ) : null}
+          </button>
+        )}
+        <StepDetailDialog
+          stepKey={data.stepKey}
+          title={stepText}
+          state={data.state}
+          stepError={stepError}
+          isDone={isDone}
+          isBusy={isBusy}
+          onToggle={
+            !actions?.readOnly && data.stepKey && actions?.toggleStep
+              ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text)
+              : undefined
+          }
         >
-          {isDone ? (
-            <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-              <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-            </svg>
-          ) : null}
-        </button>
-      )}
-      <div className="min-w-0 flex-1 flex flex-col justify-center">
-        <span className="truncate text-[12.5px] leading-4 text-muted-foreground">
-          {STATE_LABEL[data.state]}
-          {stepError && <span role="alert" className="ml-1 text-[12.5px] text-destructive">{stepError}</span>}
-        </span>
-        <span className={cn('line-clamp-1 text-[13px] font-medium leading-[17px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={data.text}>{data.text}</span>
+          <span className="truncate text-[12.5px] leading-4 text-muted-foreground">
+            {STATE_LABEL[data.state]}
+            {stepError && <span role="alert" className="ml-1 text-[12.5px] text-destructive">{stepError}</span>}
+          </span>
+          <span
+            className={cn(
+              'line-clamp-1 text-[13px] font-medium leading-[17px]',
+              isDone ? 'text-muted-foreground line-through' : 'text-foreground'
+            )}
+            title={stepText}
+          >
+            {stepText}
+          </span>
+        </StepDetailDialog>
       </div>
-    </div>;
+    );
   }
 
   const checkboxButton = isStep && data.stepKey ? (
@@ -1482,10 +1606,10 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       aria-checked={isDone}
       aria-label={isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`}
       title={stepError ?? (isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`)}
-      disabled={!actions?.toggleStep || isBusy}
+      disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
       onClick={(e) => {
         e.stopPropagation();
-        if (data.stepKey && !isBusy) {
+        if (data.stepKey && !isBusy && !actions?.readOnly) {
           void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
         }
       }}
@@ -1495,7 +1619,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
           ? 'border-primary bg-primary text-primary-foreground'
           : 'border-muted-foreground/40 bg-background hover:border-primary',
         isBusy && 'opacity-50 cursor-not-allowed',
-        !isBusy && actions?.toggleStep && 'cursor-pointer'
+        !isBusy && actions?.toggleStep && !actions?.readOnly && 'cursor-pointer'
       )}
     >
       {isDone ? (

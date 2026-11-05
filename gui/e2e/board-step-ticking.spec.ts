@@ -368,4 +368,173 @@ test.describe('Board Interactive Step Ticking (Milestone 1, Slice 1.2)', () => {
     // Error alert is displayed to user
     await expect(stepped.getByRole('alert')).toContainText('Check execution failed: process timed out.');
   });
+
+  test('clicking a static step card opens full-text dialog, shows status, and does not activate thread selection', async ({ page }) => {
+    const initialPlan = planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Reports export to CSV', {
+          check: 'npm test',
+          steps: [
+            step('Write the CSV writer with streaming support and high-performance chunking', true),
+            step('Background job queue for large exports', false),
+          ],
+        }),
+      ],
+    });
+
+    const tracker = await routeBoard(page, { initialPlan });
+    await page.goto('/#/workspaces/demo/board');
+
+    // Step into area
+    const areaBtn = page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' });
+    await areaBtn.click();
+    const stepped = page.locator('#board-area');
+    await expect(stepped).toBeVisible();
+
+    // Open the done fold
+    const doneRow = stepped.locator('[data-row-control="row:done"]');
+    await doneRow.click();
+
+    // Step trigger button is visible inside the opened row
+    const stepTrigger = stepped.locator('[data-testid="step-trigger-write-the-csv-writer-with-streaming-support-and-high-performance-chunking"]');
+    await expect(stepTrigger).toBeVisible();
+
+    // Clicking anywhere on the card tile (even on its padding/edge) opens the dialog via brickPress
+    const card = stepTrigger.locator('xpath=..');
+    await card.click({ position: { x: 6, y: 6 } });
+
+    // Step detail dialog is open
+    const dialog = page.locator('[data-testid="step-detail-dialog"]');
+    await expect(dialog).toBeVisible();
+
+    // Displays untruncated full title inside the scrollable panel
+    await expect(dialog).toContainText('Write the CSV writer with streaming support and high-performance chunking');
+
+    // Displays status badge ("Done")
+    await expect(dialog.getByText('Done', { exact: true })).toBeVisible();
+
+    // Verify clicking did NOT trigger thread selection on the board canvas
+    const flowContainer = page.locator('#board-area-flow');
+    await expect(flowContainer).not.toHaveAttribute('data-thread-active', 'true');
+
+    // Close via footer Close button
+    const closeBtn = dialog.locator('[data-testid="step-dialog-close"]');
+    await closeBtn.click();
+    await expect(dialog).not.toBeVisible();
+
+    // Reopen and close via top-right 'X' close button, verifying focus returns to trigger
+    await stepTrigger.click();
+    await expect(dialog).toBeVisible();
+    const xCloseBtn = dialog.locator('button[aria-label="Close"]');
+    await xCloseBtn.click();
+    await expect(dialog).not.toBeVisible();
+    await expect(stepTrigger).toBeFocused();
+
+    // Reopen and close via backdrop click
+    await stepTrigger.click();
+    await expect(dialog).toBeVisible();
+    const backdrop = page.locator('[data-slot="dialog-backdrop"]');
+    await backdrop.click({ position: { x: 10, y: 10 }, force: true });
+    await expect(dialog).not.toBeVisible();
+
+    // Trigger can be reopened and closed via Escape
+    await stepTrigger.click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();
+    await expect(stepTrigger).toBeFocused();
+  });
+
+  test('step dialog renders rich markdown and clicking checkbox toggles without opening dialog', async ({ page }) => {
+    const initialPlan = planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Reports export to CSV', {
+          check: 'npm test',
+          steps: [
+            step('Create `parser.ts` with **high throughput** and [specs](https://example.com)', true),
+          ],
+        }),
+      ],
+    });
+
+    const tracker = await routeBoard(page, { initialPlan });
+    await page.goto('/#/workspaces/demo/board');
+
+    const areaBtn = page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' });
+    await areaBtn.click();
+    const stepped = page.locator('#board-area');
+    await expect(stepped).toBeVisible();
+
+    const doneRow = stepped.locator('[data-row-control="row:done"]');
+    await doneRow.click();
+
+    const stepTrigger = stepped.locator('[data-testid^="step-trigger-create-parser-ts"]');
+    await expect(stepTrigger).toBeVisible();
+
+    // Clicking the step trigger opens the dialog with markdown formatting
+    await stepTrigger.click();
+    const dialog = page.locator('[data-testid="step-detail-dialog"]');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('code')).toContainText('parser.ts');
+    await expect(dialog.locator('strong')).toContainText('high throughput');
+    const link = dialog.locator('a');
+    await expect(link).toContainText('specs');
+    await expect(link).toHaveAttribute('href', 'https://example.com');
+
+    // Close the dialog
+    await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();
+
+    // Clicking the checkbox on the card toggles the step WITHOUT opening the dialog
+    const checkbox = stepped.locator('[data-testid^="step-checkbox-create-parser-ts"]');
+    await checkbox.click();
+    await expect(dialog).not.toBeVisible();
+    await expect.poll(() => tracker.getTicks().length).toBe(1);
+  });
+
+  test('keyboard access opens dialog via Enter and toggles step inside dialog', async ({ page }) => {
+    const initialPlan = planFile({
+      title: 'Reports CSV export',
+      checkpoints: [
+        checkpoint('Reports export to CSV', {
+          check: 'npm test',
+          steps: [
+            step('Write the CSV writer with streaming support and high-performance chunking', true),
+          ],
+        }),
+      ],
+    });
+
+    const tracker = await routeBoard(page, { initialPlan });
+    await page.goto('/#/workspaces/demo/board');
+
+    const areaBtn = page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' });
+    await areaBtn.click();
+    const stepped = page.locator('#board-area');
+    await expect(stepped).toBeVisible();
+
+    const doneRow = stepped.locator('[data-row-control="row:done"]');
+    await doneRow.click();
+
+    const stepTrigger = stepped.locator('[data-testid="step-trigger-write-the-csv-writer-with-streaming-support-and-high-performance-chunking"]');
+    await stepTrigger.focus();
+    await page.keyboard.press('Enter');
+
+    const dialog = page.locator('[data-testid="step-detail-dialog"]');
+    await expect(dialog).toBeVisible();
+
+    // Toggle from inside the dialog
+    const toggleBtn = dialog.locator('[data-testid="step-dialog-toggle"]');
+    await expect(toggleBtn).toContainText('Mark as open');
+    await toggleBtn.click();
+
+    // Verify tick was sent to backend
+    await expect.poll(() => tracker.getTicks().length).toBe(1);
+    expect(tracker.getTicks()[0]).toMatchObject({
+      key: 'write-the-csv-writer-with-streaming-support-and-high-performance-chunking',
+      done: false,
+    });
+  });
 });
