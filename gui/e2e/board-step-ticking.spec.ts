@@ -383,7 +383,7 @@ test.describe('Board Interactive Step Ticking (Milestone 1, Slice 1.2)', () => {
       ],
     });
 
-    const tracker = await routeBoard(page, { initialPlan });
+    await routeBoard(page, { initialPlan });
     await page.goto('/#/workspaces/demo/board');
 
     // Step into area

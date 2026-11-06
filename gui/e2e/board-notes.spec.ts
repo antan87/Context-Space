@@ -182,8 +182,6 @@ test.describe('Canvas Note Creation & In-Place Editing (Milestone 2, Slice 2.1)'
     await bodyTextarea.fill('### Important considerations\n\n- Stream CSV rows\n- Avoid buffering large files');
 
     // Capture screenshot of Note Dialog
-    await page.screenshot({ path: '/home/anton-patron/Dev/workspaces/new-canvas-interaction/board-pictures/live-board-note-dialog.png' });
-    await page.screenshot({ path: '/home/anton-patron/.gemini/antigravity-cli/brain/479352b4-55ad-4858-b77c-8d4608fbaa81/live-board-note-dialog.png' });
 
     // Submit dialog via Add note button
     const submitBtn = dialog.getByRole('button', { name: 'Add note' });
@@ -218,8 +216,6 @@ test.describe('Canvas Note Creation & In-Place Editing (Milestone 2, Slice 2.1)'
     await expect(noteCard.locator('[title*="by you"]')).toBeVisible();
 
     // Capture screenshot of note rendered on the board canvas
-    await page.screenshot({ path: '/home/anton-patron/Dev/workspaces/new-canvas-interaction/board-pictures/live-board-note-created.png' });
-    await page.screenshot({ path: '/home/anton-patron/.gemini/antigravity-cli/brain/479352b4-55ad-4858-b77c-8d4608fbaa81/live-board-note-created.png' });
   });
 
   test('editing an existing note updates title and markdown immediately', async ({ page }) => {

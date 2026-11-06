@@ -370,14 +370,10 @@ test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
     const card = stepped.locator('[data-testid^="decision-card-"]');
     await expect(card).toBeVisible();
 
-    await page.screenshot({ path: '/home/anton-patron/Dev/workspaces/new-canvas-interaction/board-pictures/live-board-decision-card.png' });
-    await page.screenshot({ path: '/home/anton-patron/.gemini/antigravity-cli/brain/479352b4-55ad-4858-b77c-8d4608fbaa81/live-board-decision-card.png' });
 
     // Click an option button
     await card.getByRole('button', { name: 'UTC' }).click();
     await expect(card).toHaveCount(0);
 
-    await page.screenshot({ path: '/home/anton-patron/Dev/workspaces/new-canvas-interaction/board-pictures/live-board-decision-answered.png' });
-    await page.screenshot({ path: '/home/anton-patron/.gemini/antigravity-cli/brain/479352b4-55ad-4858-b77c-8d4608fbaa81/live-board-decision-answered.png' });
   });
 });

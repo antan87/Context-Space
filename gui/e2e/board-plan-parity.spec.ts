@@ -133,8 +133,6 @@ test.describe('Plan Tab Deprecation & Board Redirection (Slice 1.3)', () => {
     await expect(boardRailItem).toBeVisible();
     await expect(boardRailItem).toHaveAttribute('aria-current', 'page');
 
-    await page.screenshot({ path: '/home/anton-patron/Dev/workspaces/new-canvas-interaction/board-pictures/live-board-default-landing.png' });
-    await page.screenshot({ path: '/home/anton-patron/.gemini/antigravity-cli/brain/479352b4-55ad-4858-b77c-8d4608fbaa81/live-board-default-landing.png' });
   });
 
   test('navigating to legacy /workspaces/:id/plan aliases and resolves directly to Board', async ({ page }) => {
@@ -181,8 +179,6 @@ test.describe('Plan Tab Deprecation & Board Redirection (Slice 1.3)', () => {
 
     // Type new step text and submit
     await input.fill('Write gzip compressor');
-    await page.screenshot({ path: '/home/anton-patron/Dev/workspaces/new-canvas-interaction/board-pictures/live-board-add-step.png' });
-    await page.screenshot({ path: '/home/anton-patron/.gemini/antigravity-cli/brain/479352b4-55ad-4858-b77c-8d4608fbaa81/live-board-add-step.png' });
     await stepped.locator('[data-testid="area-add-step-submit"]').click();
 
     // Form should close after successful submission
