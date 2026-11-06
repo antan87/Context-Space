@@ -17,6 +17,7 @@ import { suggestedAnswers } from '../plan/planView.js';
 import { plainText, stripHeadingColon } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
+import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { areaCounts, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
 import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
@@ -160,8 +161,6 @@ function focusAfterAnswer(card: HTMLElement, nextTestId: string | null, ownKey: 
 }
 
 
-/** How long after an answer the other answers of the same frame ignore a press: a double press is not a second answer. */
-const ANSWER_HOLD_OFF_MS = 500;
 const lastAnswerOnFrame = new WeakMap<object, number>();
 const frameOf = (element: Element) => element.closest('#board-area') ?? document;
 
@@ -183,7 +182,13 @@ function guardPress(event: { type: string; nativeEvent: Event; target: EventTarg
   const frame = frameOf(event.currentTarget);
   const drop = decided ?? (repeated || performance.now() - (lastAnswerOnFrame.get(frame) ?? -Infinity) < ANSWER_HOLD_OFF_MS);
   decisions.set(event.nativeEvent, drop);
-  if (drop) { event.preventDefault(); event.stopPropagation(); return; }
+  if (drop) {
+    event.preventDefault(); event.stopPropagation();
+    // The mouse-down of a dropped click has already put the focus on this card's answer, with no ring: a later Enter would answer unread.
+    // The keyboard goes to the card itself (the click comes after the mouse-down, so the browser's own focus has happened).
+    if (event.type === 'click' && event.currentTarget.contains(button) && document.activeElement === button) event.currentTarget.focus({ preventScroll: true });
+    return;
+  }
   if (event.type === 'click' && decided === undefined) lastAnswerOnFrame.set(frame, performance.now());
 }
 const decisions = new WeakMap<Event, boolean>();
@@ -555,26 +560,32 @@ function WaitingFrame({ id, data, border, titleId, width }: { id?: string; data:
   }, [lost]);
 
   const expanded = data.waitingExpanded === true;
+  // A paged frame has its pager on the header line, at the right: the header keeps that room, and a notice that does not fit in what is left goes on a line of its own.
+  const paged = expanded && data.moreWaiting > 0;
+  const pagerRoom = paged ? ROW_SIZE.pager + ROW_SIZE.gap + 4 : 0;
+  const noticeApart = lost && paged && (width ?? ROW_SIZE.decisionWidth) < 540;
+  const notice = <p role="status" title="The question changed in the plan; your answer was not sent." className={cn('min-w-0 break-words text-[12.5px] leading-[14px] text-muted-foreground', noticeApart ? 'shrink-0 px-3 pb-0.5' : 'ml-1 flex-1')}>Question changed; answer not sent</p>;
   const cpKey = data.checkpointKey ?? (id ? id.replace(/^area:checkpoint:|^checkpoint:/, '') : undefined);
 
   return <article ref={frame} tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}>
     <Anchors />
-    <header className="flex h-8 shrink-0 items-center gap-1.5 px-3 pt-1">
+    <header className="flex h-8 shrink-0 items-center gap-1.5 px-3 pt-1" style={pagerRoom ? { paddingRight: pagerRoom } : undefined}>
       {data.waiting.length > 0 ? (
         <>
           <span aria-hidden="true" className="size-2 rounded-full bg-state-needs" />
-          <h2 id={titleId} className="text-[13px] font-semibold leading-5 text-foreground">Waits for you</h2>
+          <h2 id={titleId} className="shrink-0 whitespace-nowrap text-[13px] font-semibold leading-5 text-foreground">Waits for you</h2>
         </>
       ) : (
         <>
           <ShieldCheck aria-hidden="true" className="size-3.5 text-muted-foreground" />
-          <h2 id={titleId} className="text-[13px] font-semibold leading-5 text-foreground">Check</h2>
+          <h2 id={titleId} className="shrink-0 whitespace-nowrap text-[13px] font-semibold leading-5 text-foreground">Check</h2>
         </>
       )}
-      {lost && <p role="status" className="ml-1 min-w-0 truncate text-[12.5px] text-muted-foreground">The question changed in the plan; your answer was not sent.</p>}
+      {lost && !noticeApart && notice}
     </header>
+    {noticeApart && notice}
     {data.waiting.length > 0 && (
-      <ul aria-label="Decisions waiting for you" className="flex min-h-0 flex-1 flex-col gap-2 px-2.5 pb-4">
+      <ul aria-label="Decisions waiting for you" className={cn('flex min-h-0 flex-1 flex-col gap-2 px-2.5', noticeApart ? 'pb-2' : 'pb-4')}>
         {data.waiting.map((decision) => (
           <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} onLost={onLost} width={width ?? ROW_SIZE.decisionWidth} />
         ))}

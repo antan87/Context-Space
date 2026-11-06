@@ -5,6 +5,7 @@
  */
 import type { Locator, Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { ANSWER_HOLD_OFF_MS } from '../src/features/board/answerHoldOff.ts';
 import { boardFile, boardFileCard, boardLink, boardNote, decision, planFile, whatsNew } from './planData';
 
 const workspace = {
@@ -96,6 +97,26 @@ async function routeBoard(page: Page, decisions: Array<ReturnType<typeof decisio
 
 const TWO = () => [decision(LONG, { suggested: ANSWERS, detail: 'The Board does not yet show uncommitted changes or run services.' }), decision('Which **time zone** should export timestamps use?', { suggested: ['UTC', 'Local time (browser)', 'Account setting'] })];
 
+/**
+ * Waits until what is drawn inside `root` has stopped moving: no finite animation or transition is running in it (an Area scales in over 260 ms,
+ * and again whenever it is drawn anew) and its zoom and pan are the same on two looks in a row. A box measured before that is a box in flight.
+ */
+async function settled(page: Page, root: string) {
+  let last = '';
+  await expect.poll(async () => {
+    const now = await page.evaluate((selector) => {
+      const el = document.querySelector(selector);
+      if (!el) return 'absent';
+      const running = el.getAnimations({ subtree: true }).filter((animation) => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity).length;
+      const viewport = el.querySelector('.react-flow__viewport');
+      return `${running} ${viewport ? getComputedStyle(viewport).transform : ''}`;
+    }, root);
+    const calm = now.startsWith('0 ') && now === last;
+    last = now;
+    return calm;
+  }, { message: `${root} has stopped moving`, intervals: [100], timeout: 10_000 }).toBe(true);
+}
+
 async function stepIn(page: Page, split: boolean, openFold = true) {
   await page.goto('/#/workspaces/demo/board');
   if (split) {
@@ -104,7 +125,7 @@ async function stepIn(page: Page, split: boolean, openFold = true) {
     await page.getByTestId('view-mode-split').click();
   }
   // the overview is drawn for the width it has once the panels have settled; a click before that scrolls the stage to reach the card
-  await page.waitForTimeout(800);
+  await settled(page, '#board-overview');
   await page.locator('#board-overview button.board-area').filter({ hasText: AREA }).click();
   await expect(page.locator('#board-area')).toBeVisible();
   const frame = page.getByRole('article', { name: 'Waits for you' });
@@ -112,7 +133,7 @@ async function stepIn(page: Page, split: boolean, openFold = true) {
   if (openFold && !(await frame.isVisible().catch(() => false))) await page.locator('#board-area').getByRole('button', { name: /Waits for you/ }).click();
   await expect(frame).toBeVisible();
   // the Area's rows are laid out for the canvas as it is, a frame or two after it opens
-  await page.waitForTimeout(400);
+  await settled(page, '#board-area');
 }
 
 /** What overflows inside `box`: elements that scroll, and the ones whose content is wider or taller than they are. */
@@ -223,6 +244,8 @@ for (const size of SIZES) {
       const label = (await first.textContent())!;
       await first.click();
       await expect(card.getByRole('alert')).toContainText('Conflict');
+      // a failed answer draws the Area anew, which scales it in again: measure the card once that has stopped
+      await settled(page, '#board-area');
       const after = (await card.boundingBox())!;
       expect(after.height).toBe(before.height);
       expect((await frame.boundingBox())!.height).toBe(frameBefore.height);
@@ -418,7 +441,7 @@ test.describe('a decision answered from the dialog', () => {
     // on the card of the next decision, not on one of its answers: a second press of the same key must not answer it unread
     await expect(cardOf(/^decision-card-which/)).toBeFocused();
     // the next Tab reaches its answers; a deliberate press (after the hold-off) answers
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(ANSWER_HOLD_OFF_MS + 200);
     await page.keyboard.press('Tab');
     await expect(cardOf(/^decision-card-which/).getByRole('group', { name: 'Suggested answers' }).getByRole('button').first()).toBeFocused();
     await page.keyboard.press('Enter');
@@ -636,7 +659,7 @@ test.describe('a double press answers once', () => {
       await page.keyboard.press('Enter');
       await page.waitForTimeout(gap);
       await page.keyboard.press('Enter');
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(ANSWER_HOLD_OFF_MS + 100);
       expect(tracker.answers.length - before, `Enter twice, ${gap} ms apart`).toBe(1);
       await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-testid^="decision-card-"]'))).toBe(true);
     }
@@ -649,13 +672,13 @@ test.describe('a double press answers once', () => {
     await page.keyboard.press('Space');
     await page.waitForTimeout(150);
     await page.keyboard.press('Space');
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(ANSWER_HOLD_OFF_MS + 100);
     expect(tracker.answers).toHaveLength(1);
     await firstAnswer(page).focus();
     await page.keyboard.down('Enter');
     for (let i = 0; i < 20; i++) { await page.keyboard.down('Enter'); await page.waitForTimeout(30); }
     await page.keyboard.up('Enter');
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(ANSWER_HOLD_OFF_MS + 100);
     expect(tracker.answers).toHaveLength(2);
   });
 
@@ -665,7 +688,7 @@ test.describe('a double press answers once', () => {
     const centre = async () => { const box = (await firstAnswer(page).boundingBox())!; return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; };
     let point = await centre();
     await page.mouse.dblclick(point.x, point.y);
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(ANSWER_HOLD_OFF_MS + 100);
     expect(tracker.answers, 'native double click').toHaveLength(1);
     for (const gap of [20, 150, 300]) {
       const before = tracker.answers.length;
@@ -673,23 +696,60 @@ test.describe('a double press answers once', () => {
       await page.mouse.click(point.x, point.y);
       await page.waitForTimeout(gap);
       await page.mouse.click(point.x, point.y);
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(ANSWER_HOLD_OFF_MS + 100);
       expect(tracker.answers.length - before, `clicks ${gap} ms apart`).toBe(1);
     }
   });
 
-  test('a second press 700 ms later does answer the next decision', async ({ page }) => {
+  test('a second press after the hold-off does answer the next decision', async ({ page }) => {
     const tracker = await routeBoard(page, FIVE());
     await stepIn(page, true);
     await firstAnswer(page).focus();
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(ANSWER_HOLD_OFF_MS + 200);
     await page.keyboard.press('Tab');
     await expect(firstAnswer(page)).toBeFocused();
     await page.keyboard.press('Enter');
     await expect.poll(() => tracker.answers.length).toBe(2);
     expect(tracker.answers.map((entry) => entry.answer)).toEqual(['First answer', 'First answer']);
   });
+
+  for (const [gap, posts] of [[600, 1], [1000, 2]] as const) {
+    test(`a second click ${gap} ms later, with the pointer still, makes ${posts} answer${posts > 1 ? 's' : ''}`, async ({ page }) => {
+      const tracker = await routeBoard(page, FIVE());
+      await stepIn(page, true);
+      const box = (await firstAnswer(page).boundingBox())!;
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.click(x, y);
+      await page.waitForTimeout(gap);
+      await page.mouse.click(x, y);
+      await page.waitForTimeout(700);
+      expect(tracker.answers).toHaveLength(posts);
+    });
+  }
+
+  for (const clicks of [2, 3]) {
+    test(`${clicks} quick clicks answer once, the keyboard rests on the card, and an Enter 1.5 s later answers nothing`, async ({ page }) => {
+      const tracker = await routeBoard(page, FIVE());
+      await stepIn(page, true);
+      const box = (await firstAnswer(page).boundingBox())!;
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      for (let count = 1; count <= clicks; count++) {
+        await page.mouse.down({ clickCount: count });
+        await page.mouse.up({ clickCount: count });
+        await page.waitForTimeout(120);
+      }
+      await page.waitForTimeout(1500);
+      expect(tracker.answers).toHaveLength(1);
+      await expect.poll(() => page.evaluate(() => document.activeElement?.matches('[data-testid^="decision-card-"]'))).toBe(true);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(700);
+      expect(tracker.answers).toHaveLength(1);
+    });
+  }
 
   test('guard: the hold-off alone stops a press that is a single click, not a repeat, 150 ms after an answer', async ({ page }) => {
     const tracker = await routeBoard(page, FIVE());
@@ -765,23 +825,133 @@ test.describe('the Area header buttons that add', () => {
 });
 
 test.describe('when the plan changes under the keyboard', () => {
-  test('a question edited in the plan while its dialog is open says so, and the keyboard is not lost to the page', async ({ page }) => {
+  // Where the notice goes: in the header when the frame has no pager, or room beside it; on a line of its own under the header when the frame is paged and narrow.
+  for (const [name, split, width, paged, place] of [['at 1280 in Split', true, 1280, false, 'header'], ['at 1100 in Split', true, 1100, false, 'header'], ['in the 420 pane', false, 420, true, 'own line']] as const) {
+  test(`a question edited in the plan while its dialog is open says so, and the keyboard is not lost to the page, and the notice is ${place === 'header' ? 'in the header' : 'on a line of its own under the header'} ${name}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 700 });
     const tracker = await routeBoard(page, TWO());
-    await stepIn(page, true);
+    await stepIn(page, split);
     const frame = page.getByRole('article', { name: 'Waits for you' });
-    await frame.getByTestId('decision-more-answers').nth(1).click();
+    // the card whose answers do not all fit holds the dialog's button (which cards that is depends on the width)
+    const opener = frame.getByTestId(/^decision-card-/).filter({ has: page.getByTestId('decision-more-answers') }).last();
+    const openedIndex = (await frame.getByTestId(/^decision-card-/).evaluateAll((all, key) => all.findIndex((el) => el.getAttribute('data-testid') === key), await opener.getAttribute('data-testid')));
+    await opener.getByTestId('decision-more-answers').click();
     const input = page.getByTestId('decision-dialog').getByPlaceholder('Your answer');
     await input.fill('Some words I typed');
-    tracker.setDecisions([TWO()[0]!, decision('Which **time zone** should export files use?', { suggested: ['UTC', 'Local time (browser)', 'Account setting'] })]);
+    const changed = TWO();
+    changed[openedIndex] = decision('Which **time zone** should export files use?', { suggested: ['UTC', 'Local time (browser)', 'Account setting'] });
+    tracker.setDecisions(changed);
     await page.waitForTimeout(5200);
     const reads = tracker.control.getCount;
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true })));
     await expect.poll(() => tracker.control.getCount).toBeGreaterThan(reads);
     await expect(page.getByTestId('decision-dialog')).toHaveCount(0);
-    await expect(frame.getByRole('status')).toContainText('The question changed in the plan');
+    const notice = frame.getByRole('status');
+    await expect(notice).toContainText('answer not sent');
+    await expect(notice).toHaveAttribute('title', /The question changed in the plan; your answer was not sent/);
+    const fit = await frame.evaluate((el) => {
+      const header = el.querySelector('header')!.getBoundingClientRect();
+      const h2 = el.querySelector('header h2')!;
+      const status = el.querySelector('[role="status"]')!;
+      const list = el.querySelector('ul')!.getBoundingClientRect();
+      const lineHeight = parseFloat(getComputedStyle(h2).lineHeight);
+      const rects = [h2.getBoundingClientRect(), status.getBoundingClientRect()];
+      const frameBox = el.getBoundingClientRect();
+      const noticeBox = status.getBoundingClientRect();
+      // in the header, or on a line of its own right under it, with the decisions below and inside the frame
+      const inHeader = rects.every((r) => r.top >= header.top - 0.5 && r.bottom <= header.bottom + 0.5 && r.right <= header.right + 0.5);
+      const apart = noticeBox.top >= header.bottom - 0.5 && noticeBox.bottom <= list.top + 0.5 && noticeBox.right <= frameBox.right + 0.5;
+      return { h2Lines: Math.round(h2.getBoundingClientRect().height / lineHeight), place: inHeader ? 'header' : apart ? 'own line' : 'neither', noticeCut: status.scrollHeight > status.clientHeight + 1 || status.scrollWidth > status.clientWidth + 1, listBelow: list.top >= (inHeader ? header.bottom : noticeBox.bottom) - 0.5 && list.bottom <= frameBox.bottom + 0.5 };
+    });
+    expect(await page.getByRole('navigation', { name: /^Pages of / }).count() > 0, 'the frame is paged').toBe(paged);
+    expect(fit, `the heading on one line, the notice whole ${place === 'header' ? 'in the header' : 'on its own line under it'}, the decisions not pushed`).toEqual({ h2Lines: 1, place, noticeCut: false, listBelow: true });
     await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).not.toBe('BODY');
     await expect.poll(() => page.evaluate(() => document.activeElement?.closest('#board-area') !== null)).toBe(true);
     expect(tracker.answers).toHaveLength(0);
+  });
+  }
+
+  for (const [name, width, height, make] of [['in the 420 pane with 5 decisions', 420, 700, FIVE], ['at 360 wide with 2 decisions', 360, 700, TWO], ['at 360x600 on a page of one card', 360, 600, TWO]] as const) {
+  test(`a paged frame keeps its notice off the pager, and "not sent" stays visible, with the answers whole inside their cards ${name}`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    const tracker = await routeBoard(page, make());
+    await stepIn(page, false);
+    const frame = page.getByRole('article', { name: 'Waits for you' });
+    const more = frame.getByRole('button', { name: /^Show \d+ more decisions waiting for you/ });
+    if (await more.count()) await more.click();
+    const pager = page.getByRole('navigation', { name: /^Pages of / });
+    await expect(pager).toBeVisible();
+    const opener = frame.getByTestId(/^decision-card-/).filter({ has: page.getByTestId('decision-more-answers') }).last();
+    const openedIndex = (await frame.getByTestId(/^decision-card-/).evaluateAll((all, key) => all.findIndex((el) => el.getAttribute('data-testid') === key), await opener.getAttribute('data-testid')));
+    await opener.getByTestId('decision-more-answers').click();
+    await page.getByTestId('decision-dialog').getByPlaceholder('Your answer').fill('Some words I typed');
+    const changed = make();
+    changed[openedIndex] = decision('Which **time zone** should export files use?', { suggested: ['UTC', 'Local time (browser)', 'Account setting'] });
+    tracker.setDecisions(changed);
+    await page.waitForTimeout(5200);
+    const reads = tracker.control.getCount;
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true })));
+    await expect.poll(() => tracker.control.getCount).toBeGreaterThan(reads);
+    const notice = frame.getByRole('status');
+    await expect(notice).toContainText('answer not sent');
+    await expect(pager).toBeVisible();
+    const boxes = { notice: (await notice.boundingBox())!, pager: (await pager.boundingBox())! };
+    const apart = boxes.notice.x + boxes.notice.width <= boxes.pager.x + 0.5 || boxes.pager.x + boxes.pager.width <= boxes.notice.x + 0.5 || boxes.notice.y + boxes.notice.height <= boxes.pager.y + 0.5 || boxes.pager.y + boxes.pager.height <= boxes.notice.y + 0.5;
+    expect(apart, `the notice ${JSON.stringify(boxes.notice)} does not overlap the pager ${JSON.stringify(boxes.pager)}`).toBe(true);
+    const shown = await notice.evaluate((el) => { const r = el.getBoundingClientRect(); const f = el.closest('article')!.getBoundingClientRect(); return { whole: el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1, inFrame: r.left >= f.left - 0.5 && r.right <= f.right + 0.5 && r.bottom <= f.bottom + 0.5 }; });
+    expect(shown).toEqual({ whole: true, inFrame: true });
+    await expect(frame.getByTestId(/^decision-card-/).first()).toBeVisible();
+    // every answer button sits whole inside its card, under the notice line, with room below it
+    const gaps = await frame.evaluate((el) => {
+      const f = el.getBoundingClientRect();
+      return Array.from(el.querySelectorAll('[data-testid^="decision-card-"]')).flatMap((card) => {
+        const c = card.getBoundingClientRect();
+        return Array.from(card.querySelectorAll('button')).filter((b) => b.getBoundingClientRect().height > 0).map((b) => { const r = b.getBoundingClientRect(); return { belowCardTop: r.top - c.top, aboveCardBottom: c.bottom - r.bottom, aboveFrameBottom: f.bottom - r.bottom }; });
+      });
+    });
+    expect(gaps.length, 'the card has answer buttons').toBeGreaterThan(0);
+    for (const gap of gaps) {
+      expect(gap.belowCardTop, `an answer button starts inside its card: ${JSON.stringify(gap)}`).toBeGreaterThanOrEqual(0);
+      expect(gap.aboveCardBottom, `an answer button ends inside its card, with a little room: ${JSON.stringify(gap)}`).toBeGreaterThanOrEqual(3);
+      expect(gap.aboveFrameBottom, `an answer button ends inside the frame: ${JSON.stringify(gap)}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+  }
+
+  test('a paged frame 540 px or wider keeps the notice in the header, beside the pager and not under it', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 600 });
+    const tracker = await routeBoard(page, FIVE());
+    await stepIn(page, false);
+    const frame = page.getByRole('article', { name: 'Waits for you' });
+    const more = frame.getByRole('button', { name: /^Show \d+ more decisions waiting for you/ });
+    if (await more.count()) await more.click();
+    const pager = page.getByRole('navigation', { name: /^Pages of / });
+    await expect(pager).toBeVisible();
+    expect((await frame.boundingBox())!.width, 'the frame is 540 px or wider').toBeGreaterThanOrEqual(540);
+    const opener = frame.getByTestId(/^decision-card-/).filter({ has: page.getByTestId('decision-more-answers') }).last();
+    const openedIndex = (await frame.getByTestId(/^decision-card-/).evaluateAll((all, key) => all.findIndex((el) => el.getAttribute('data-testid') === key), await opener.getAttribute('data-testid')));
+    await opener.getByTestId('decision-more-answers').click();
+    await page.getByTestId('decision-dialog').getByPlaceholder('Your answer').fill('Some words I typed');
+    const changed = FIVE();
+    changed[openedIndex] = decision('Which **time zone** should export files use?', { suggested: ['UTC', 'Local time (browser)', 'Account setting'] });
+    tracker.setDecisions(changed);
+    await page.waitForTimeout(5200);
+    const reads = tracker.control.getCount;
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true })));
+    await expect.poll(() => tracker.control.getCount).toBeGreaterThan(reads);
+    const notice = frame.getByRole('status');
+    await expect(notice).toContainText('answer not sent');
+    await expect(pager).toBeVisible();
+    const where = await frame.evaluate((el) => {
+      const header = el.querySelector('header')!.getBoundingClientRect();
+      const n = el.querySelector('[role="status"]')!.getBoundingClientRect();
+      const p = el.querySelector('nav[aria-label^="Pages of"]')?.getBoundingClientRect() ?? Array.from(document.querySelectorAll('nav')).find((x) => /^Pages of/.test(x.getAttribute('aria-label') ?? ''))!.getBoundingClientRect();
+      return { inHeader: n.top >= header.top - 0.5 && n.bottom <= header.bottom + 0.5 && n.right <= header.right + 0.5, noticeRight: n.right, pagerLeft: p.left, pagerTop: p.top, pagerBottom: p.bottom, noticeTop: n.top, noticeBottom: n.bottom };
+    });
+    expect(where.inHeader, `the notice is in the header ${JSON.stringify(where)}`).toBe(true);
+    const sideBySide = where.noticeRight <= where.pagerLeft + 0.5 || where.noticeBottom <= where.pagerTop + 0.5 || where.pagerBottom <= where.noticeTop + 0.5;
+    expect(sideBySide, `the notice does not touch the pager ${JSON.stringify(where)}`).toBe(true);
+    expect(await notice.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1)).toBe(true);
   });
 
   test('after the last decision is answered with an empty Now row, the keyboard is on the Now row\'s step', async ({ page }) => {
