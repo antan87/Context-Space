@@ -757,6 +757,13 @@
   }
 }
 
+/* The card the reader shows is marked while the reader is open, and the rest of the board stays as it is */
+.board-flow .react-flow__node[data-reader-open="true"] > :is(article, button, div) {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
 /* Follow the thread: selected card and its chain stay bright; unrelated cards dim */
 .board-flow[data-thread-active="true"] .react-flow__node {
   transition: opacity 220ms ease, filter 220ms ease;

@@ -23,6 +23,7 @@ import { BoardActionsContext, BoardReadingContext, firstControl, type BoardActio
 import {
   areaLayout,
   areaPlace,
+  areaRows,
   areaRowIds,
   areaView,
   READABLE_ZOOM,
@@ -32,6 +33,7 @@ import {
   overviewPlan,
   stepsText,
   waitingText,
+  type LooseTab,
   type OverviewNode,
 } from './boardAreas.js';
 import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard } from './boardData.js';
@@ -187,6 +189,10 @@ function useLayoutElementSize(element: HTMLElement | null): { width: number; hei
  * Area surface grows smoothly from the clicked card's transform-origin to fit all items whole on one
  * screen without scrolling.
  */
+/** What a node stands for that is not drawn (the other tab, behind "+N more", on another page, in a folded row). */
+const nodeHolds = (node: BoardNode): string[] | undefined =>
+  node.type === 'fold' || node.type === 'more' || node.type === 'pager' || node.type === 'step' ? node.data.holds : node.type === 'lane' ? node.data.group?.holds : undefined;
+
 export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false, askInCLI }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean; askInCLI?: (context: string) => void }) {
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
@@ -380,6 +386,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     areaId: string;
     nodeId: string;
     readerTarget?: ReaderTarget;
+    /** A jump that only lights the card (the add of a note): no thread is selected, so nothing else dims */
+    lightOnly?: boolean;
     request: number;
   } | null>(null);
   const pendingJumpRef = useRef<typeof pendingJump>(null);
@@ -427,7 +435,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     );
   }, [clearJump, reader, setReader, setNarrowNavOpen, overviewNodes, stageContainer, stageSize, setThreadSelectedId, takeOverview]);
 
-  const jumpToItem = useCallback((item: NavItem, openReader?: boolean) => {
+  const jumpToItem = useCallback((item: Pick<NavItem, 'areaId' | 'nodeId' | 'readerTarget'>, openReader?: boolean, lightOnly?: boolean) => {
     if (item.nodeId === null) {
       jumpToArea(item.areaId);
       return;
@@ -461,6 +469,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       areaId: item.areaId,
       nodeId: item.nodeId,
       ...(opensReader && item.readerTarget ? { readerTarget: item.readerTarget } : {}),
+      ...(lightOnly ? { lightOnly: true } : {}),
       request: ++jumpSeq.current,
     };
     jumpFrames.current = 0;
@@ -534,8 +543,15 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // it and win (otherwise focus ends on the opener, then falls to BODY when React Flow removes it).
   const wasReaderOpen = useRef(false);
   /** The control to put the keyboard on when the reader has closed and the card it came from is not drawn yet (the rows are laid out again). */
-  const openerRetry = useRef<{ was: { node: string; label: string }; until: number; placed: boolean } | null>(null);
+  const openerRetry = useRef<{ was: { node: string; label: string }; card: string | null; until: number; placedFor: string | null } | null>(null);
   const [openerTick, setOpenerTick] = useState(0);
+  /** The card the reader showed last: when it was walked on from the card it was opened on, that is the card to come back to */
+  const lastReadCard = useRef<string | null>(null);
+  /** A card's own control: the one the keyboard goes to */
+  const findCardControl = useCallback((cardId: string) => {
+    const nodeEl = Array.from(areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? []).find((el) => el.dataset.id === cardId);
+    return nodeEl ? (firstControl(nodeEl, 'button') ?? firstControl(nodeEl)) : null;
+  }, [areaCanvasContainer]);
   const findOpener = useCallback((was: { node: string; label: string }) => {
     const nodeEl = Array.from(areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
       .find((el) => el.dataset.id === was.node);
@@ -548,19 +564,24 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (reader) { wasReaderOpen.current = true; return; }
     if (!wasReaderOpen.current) return;
     wasReaderOpen.current = false;
+    const read = lastReadCard.current;
+    lastReadCard.current = null;
     const from = opener.current;
     const was = openerWas.current;
+    // The reader was walked on to another card: that card is where the keyboard and the view come back to
+    const card = was && read && read !== was.node ? read : null;
     opener.current = null;
     openerWas.current = null;
-    const target = from?.isConnected ? from : was ? findOpener(was) : null;
+    if (skipFocusReturn.current) { skipFocusReturn.current = false; return; }
+    const target = card ? findCardControl(card) : from?.isConnected ? from : was ? findOpener(was) : null;
     focusing.current = true;
     (target ?? areaCanvasContainer?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
     focusing.current = false;
     if (was) {
-      openerRetry.current = { was, until: Date.now() + 1500, placed: false };
+      openerRetry.current = { was, card, until: Date.now() + 1500, placedFor: null };
       setOpenerTick((tick) => (tick + 1) % 1000);
     }
-  }, [reader, areaCanvasContainer, findOpener]);
+  }, [reader, areaCanvasContainer, findOpener, findCardControl]);
 
   // The newest nodes and stage size for the focus return below, which must not run again when they change
   const overviewNow = useRef({ nodes: overviewNodes, size: stageSize, viewport: overview.viewport });
@@ -641,14 +662,37 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   useEffect(() => {
     if (!stepped) setOpenState(null);
   }, [stepped]);
+  // Which tab of the row that is not tied to a step shows, if one was chosen (not saved); it belongs to the Area it was chosen in
+  const [tabState, setTabState] = useState<{ areaId: string; tab: LooseTab } | null>(null);
+  const looseTab = tabState && tabState.areaId === steppedAreaId ? tabState.tab : undefined;
+  useEffect(() => {
+    if (!stepped) setTabState(null);
+  }, [stepped]);
+  const chooseTab = useCallback((areaId: string, tab: LooseTab) => {
+    setTabState((curr) => (curr && curr.areaId === areaId && curr.tab === tab ? curr : { areaId, tab }));
+  }, []);
+  // The tab that shows when none was chosen is decided once, when the row first shows with tabs, and held: a picture arriving later does not turn it
+  const looseDefault = useMemo(
+    () => (stepped && activeArea ? areaRows(activeArea, { news: newsView }).find((row) => row.tabs)?.tabs?.first : undefined),
+    [stepped, activeArea, newsView],
+  );
+  useEffect(() => {
+    if (!steppedAreaId || !looseDefault) return;
+    setTabState((curr) => (curr && curr.areaId === steppedAreaId ? curr : { areaId: steppedAreaId, tab: looseDefault }));
+  }, [steppedAreaId, looseDefault]);
+  /** Where a card is: its tab, its row and its page. */
+  const showPlace = useCallback((areaId: string, place: { row: string | null; page: number; tab?: LooseTab }) => {
+    if (place.tab) chooseTab(areaId, place.tab);
+    setOpenState(place.row ? { areaId, rowId: place.row, page: place.page } : null);
+  }, []);
 
   // The rows are laid out for the canvas as it is: what the reader docked beside it leaves
   const areaReady = areaCanvasSize.width > 0 && areaCanvasSize.height > 0;
   const areaDrawn = useMemo(() => {
     if (!activeArea || !areaReady) return { nodes: [] as BoardNode[], open: null };
-    const { nodes, open } = areaLayout(activeArea, { news: newsView, size: areaCanvasSize, openRow, page: openPage });
+    const { nodes, open } = areaLayout(activeArea, { news: newsView, size: areaCanvasSize, openRow, page: openPage, ...(looseTab ? { tab: looseTab } : {}) });
     return { nodes: nodes.map((node) => (node.width !== undefined && node.height !== undefined ? { ...node, measured: { width: node.width, height: node.height } } : node) as BoardNode[][number]), open };
-  }, [activeArea, areaReady, newsView, areaCanvasSize, openRow, openPage]);
+  }, [activeArea, areaReady, newsView, areaCanvasSize, openRow, openPage, looseTab]);
   const areaNodes = areaDrawn.nodes;
   const areaOpen = areaDrawn.open;
   const rowIds = useMemo(() => (activeArea && areaReady ? areaRowIds(activeArea, { news: newsView, size: areaCanvasSize }) : []), [activeArea, areaReady, newsView, areaCanvasSize]);
@@ -685,10 +729,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     return () => document.removeEventListener('pointerdown', leave, true);
   }, []);
 
+  const areaSizeKey = `${areaCanvasSize.width}x${areaCanvasSize.height}`;
   useEffect(() => {
     const retry = openerRetry.current;
     if (!retry) return;
-    const target = findOpener(retry.was);
+    const target = retry.card ? findCardControl(retry.card) : findOpener(retry.was);
     const active = document.activeElement;
     const adrift = !active || active === document.body || (active instanceof HTMLElement && active.classList.contains('react-flow'));
     // The keyboard has been put somewhere else meanwhile: leave it
@@ -699,16 +744,16 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       focusing.current = false;
     }
     // The canvas has its whole size again and the card is on another page of the row, or in a row that is folded: its row is opened at its page
-    if (!target && !retry.placed && activeArea && areaReady && !areaNodes.some((areaNode) => areaNode.id === retry.was.node)) {
-      retry.placed = true;
-      const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, retry.was.node);
-      if (place) setOpenState(place.row ? { areaId: activeArea.id, rowId: place.row, page: place.page } : null);
+    if (!target && retry.placedFor !== areaSizeKey && activeArea && areaReady && !areaNodes.some((areaNode) => areaNode.id === (retry.card ?? retry.was.node))) {
+      retry.placedFor = areaSizeKey;
+      const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, retry.card ?? retry.was.node);
+      if (place) showPlace(activeArea.id, place);
     }
     // The rows may be laid out again a frame or two after the reader closed, so the keyboard is looked after for a few frames
     if (Date.now() > retry.until) { openerRetry.current = null; return; }
     const frame = requestAnimationFrame(() => setOpenerTick((tick) => (tick + 1) % 1000));
     return () => cancelAnimationFrame(frame);
-  }, [openerTick, areaNodes, findOpener, activeArea, areaReady, newsView, areaCanvasSize]);
+  }, [openerTick, areaNodes, findOpener, activeArea, areaReady, newsView, areaCanvasSize, areaSizeKey, showPlace, findCardControl]);
 
   const activeReaderCardId = useMemo(() => {
     if (!reader?.target) return null;
@@ -725,8 +770,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     return null;
   }, [reader, activeArea]);
 
+  useLayoutEffect(() => { if (reader && activeReaderCardId) lastReadCard.current = activeReaderCardId; }, [reader, activeReaderCardId]);
+
   // When the canvas changes size (the reader docks beside it, or leaves), the card the reader shows may no longer be drawn: its row is opened at the page it is on
-  const areaSizeKey = `${areaCanvasSize.width}x${areaCanvasSize.height}`;
   const lastAreaSize = useRef(areaSizeKey);
   useEffect(() => {
     const changed = lastAreaSize.current !== areaSizeKey;
@@ -734,8 +780,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const card = activeReaderCardId;
     if (!changed || !card || !activeArea || !areaReady || areaNodes.some((areaNode) => areaNode.id === card)) return;
     const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, card);
-    if (place) setOpenState(place.row ? { areaId: activeArea.id, rowId: place.row, page: place.page } : null);
-  }, [areaSizeKey, activeReaderCardId, activeArea, areaReady, areaNodes, newsView, areaCanvasSize]);
+    if (place) showPlace(activeArea.id, place);
+  }, [areaSizeKey, activeReaderCardId, activeArea, areaReady, areaNodes, newsView, areaCanvasSize, showPlace]);
 
   // Opening or closing a row: the control that was pressed is swapped for another node, so the keyboard is put on the row's control again
   const rowFocus = useRef<{ rowId: string; pressed: HTMLElement | null } | null>(null);
@@ -744,16 +790,33 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     rowFocusFrames.current = 0;
     rowFocus.current = { rowId, pressed: document.activeElement instanceof HTMLElement ? document.activeElement : null };
   }, []);
+  // A press that changes what the row shows ends the thread only when what it then shows holds nothing of it (no card of it, no "+N more", pager or header that holds one): the board is never left dark with nothing lit
+  const keepsThread = useCallback((next: { openRow: string | null; page: number; tab: LooseTab | undefined }) => {
+    if (!threadSelectedId || !activeArea || !areaReady) return false;
+    const { nodes } = areaLayout(activeArea, { news: newsView, size: areaCanvasSize, openRow: next.openRow, page: next.page, ...(next.tab ? { tab: next.tab } : {}) });
+    const reached = findThreadChain({ selectedId: threadSelectedId, nodes: nodes as BoardNode[], links: board?.links ?? [], cards: board?.cards ?? [] });
+    reached.delete(threadSelectedId);
+    return nodes.some((node) => reached.has(node.id) || nodeHolds(node as BoardNode)?.some((id) => reached.has(id)));
+  }, [threadSelectedId, activeArea, areaReady, newsView, areaCanvasSize, board]);
   const toggleRow = useCallback((rowId: string) => {
     keepFocusOn(rowId);
+    const closing = openState && openState.areaId === steppedAreaId && openState.rowId === rowId;
+    if (!keepsThread({ openRow: closing ? null : rowId, page: 0, tab: looseTab })) setThreadSelectedId(null);
     setOpenState((curr) => {
       if (!steppedAreaId) return null;
       return curr && curr.areaId === steppedAreaId && curr.rowId === rowId ? null : { areaId: steppedAreaId, rowId, page: 0 };
     });
-  }, [steppedAreaId, keepFocusOn]);
+  }, [steppedAreaId, keepFocusOn, keepsThread, openState, looseTab]);
+  const setRowTab = useCallback((rowId: string, tab: LooseTab) => {
+    if (!steppedAreaId) return;
+    if (!keepsThread({ openRow: openRow, page: openRow === rowId ? 0 : openPage, tab })) setThreadSelectedId(null);
+    chooseTab(steppedAreaId, tab);
+    setOpenState((curr) => (curr && curr.areaId === steppedAreaId && curr.rowId === rowId ? { ...curr, page: 0 } : curr));
+  }, [steppedAreaId, chooseTab, keepsThread, openRow, openPage]);
   const setRowPage = useCallback((rowId: string, page: number) => {
+    if (!keepsThread({ openRow: rowId, page: Math.max(0, page), tab: looseTab })) setThreadSelectedId(null);
     setOpenState((curr) => (steppedAreaId && curr && curr.rowId === rowId ? { ...curr, page: Math.max(0, page) } : curr));
-  }, [steppedAreaId]);
+  }, [steppedAreaId, keepsThread, openRow, looseTab]);
   // The control that was pressed may be swapped for another one a frame or two after the row changes (it is drawn then), so for
   // a few frames the keyboard is put on the row's control whenever the pressed one is gone
   const [rowFocusTick, setRowFocusTick] = useState(0);
@@ -812,6 +875,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     setHighlightedNode({ id: activeReaderCardId, request: ++jumpSeq.current });
 
     const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, activeReaderCardId);
+    if (place?.tab) chooseTab(activeArea.id, place.tab);
     if (place?.row) {
       const targetRow = place.row;
       const targetPage = place.page;
@@ -822,24 +886,34 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         return { areaId: activeArea.id, rowId: targetRow, page: targetPage };
       });
     }
-  }, [reader, activeReaderCardId, activeArea, areaReady, newsView, areaCanvasSize]);
+  }, [reader, activeReaderCardId, activeArea, areaReady, newsView, areaCanvasSize, chooseTab]);
 
   const threadChain = useMemo(() => {
     if (!threadSelectedId) return null;
-    return findThreadChain({
+    const nodes = stepped ? areaNodes : (overviewNodes as unknown as BoardNode[]);
+    const chain = findThreadChain({
       selectedId: threadSelectedId,
-      nodes: stepped ? areaNodes : (overviewNodes as unknown as BoardNode[]),
+      nodes,
       links: board?.links ?? [],
       cards: board?.cards ?? [],
     });
+    // What the thread reaches that is not drawn (a picture on the other tab, behind "+N more") is stood for by what holds it: the line goes there
+    if (stepped) {
+      for (const node of nodes) {
+        if (nodeHolds(node)?.some((id) => chain.has(id))) chain.add(node.id);
+      }
+    }
+    return chain;
   }, [threadSelectedId, stepped, areaNodes, overviewNodes, board]);
 
   useLayoutEffect(() => {
     const container = stepped ? areaCanvasContainer : stageContainer;
     if (!container) return;
+    const mark = () => {
     const flowEl = container.querySelector<HTMLElement>('.board-flow');
     if (flowEl) {
-      if (threadSelectedId) {
+      // While the reader is open the board stays readable: the thread is not dimmed, and the open card is marked
+      if (threadSelectedId && !reader) {
         flowEl.setAttribute('data-thread-active', 'true');
       } else {
         flowEl.removeAttribute('data-thread-active');
@@ -848,7 +922,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const nodes = container.querySelectorAll<HTMLElement>('.react-flow__node');
     for (const el of Array.from(nodes)) {
       const id = el.dataset.id;
-      if (!threadSelectedId || !threadChain) {
+      if (reader && id && id === activeReaderCardId) el.setAttribute('data-reader-open', 'true');
+      else el.removeAttribute('data-reader-open');
+      if (!threadSelectedId || !threadChain || reader) {
         el.removeAttribute('data-thread');
         el.removeAttribute('data-thread-selected');
       } else if (id === threadSelectedId) {
@@ -866,7 +942,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const currentEdges = stepped ? areaEdges : overviewLines;
     for (const el of Array.from(edges)) {
       const id = el.getAttribute('data-id') || el.id?.replace(/^react-flow__edge-/, '');
-      if (!threadSelectedId || !threadChain || !id) {
+      if (!threadSelectedId || !threadChain || !id || reader) {
         el.removeAttribute('data-thread');
       } else {
         const edgeData = currentEdges.find((e) => e.id === id);
@@ -877,9 +953,17 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         }
       }
     }
+    };
+    mark();
+    // The canvas draws a node a frame after the layout changed (a "+N more" that comes with another tab): it is marked when it appears
+    const watch = new MutationObserver(mark);
+    watch.observe(container, { childList: true, subtree: true });
+    return () => watch.disconnect();
   }, [
     threadSelectedId,
     threadChain,
+    reader,
+    activeReaderCardId,
     stepped,
     areaCanvasContainer,
     stageContainer,
@@ -915,6 +999,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         backButtonRef.current?.focus({ preventScroll: true });
         return;
       }
+      if (place?.tab) chooseTab(pendingJump.areaId, place.tab);
       if (place && (place.row !== openRef.current.rowId || (place.row !== null && place.page !== openRef.current.page))) {
         openRef.current = { rowId: place.row, page: place.page };
         setOpenState(place.row ? { areaId: pendingJump.areaId, rowId: place.row, page: place.page } : null);
@@ -937,8 +1022,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     // Trigger node highlight
     setHighlightedNode({ id: jump.nodeId, request: jump.request });
 
-    // Select thread
-    setThreadSelectedId(jump.nodeId);
+    // Select thread (the add of a note only lights the note: a selected thread dims everything else)
+    setThreadSelectedId(jump.lightOnly ? null : jump.nodeId);
 
     // The cards are not stops of their own (nothing is moved here), so the keyboard goes to the card's first control, or to the card itself
     const inner = firstControl(nodeEl);
@@ -986,30 +1071,47 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [navDock.overlays, narrowNavOpen, active, closeNarrowNav]);
 
-  // A press outside the reader closes it: in the large window or a docked one that covers the canvas, anywhere in the Board pane outside the window (the index and the Area
-  // header too); beside the canvas, on empty board space (a card or a row control does its own thing). The press must begin and end
-  // there, so a text selected in the window and dragged out of it does not close it. The reader's own menu is out of the DOM of this
-  // pane (a portal), and a press that only dismisses that menu does not also close the reader.
+  // A press outside the reader closes it. In the large window or a docked one that covers the canvas: anywhere in the Board pane outside the window (the index and the Area
+  // header too). Beside the canvas: anything in the Area except another card (the card does its own thing, and the reader shows it), so a row header,
+  // "+N more", the pager, a tab or empty space closes it and still does its own action; the open card, pressed again, closes it and does nothing else.
+  // The press must begin and end there, so a text selected in the window and dragged out of it does not close it. The reader's own menu is out of the DOM
+  // of this pane (a portal), and a press that only dismisses that menu does not also close the reader.
+  const skipFocusReturn = useRef(false);
   useEffect(() => {
     const pane = root.current;
     if (!reader || !pane) return undefined;
-    const press = { down: false, up: false, ignored: false };
-    const closes = (target: EventTarget | null) => {
-      if (!(target instanceof Element) || target.closest('[data-board-reader]')) return false;
-      if (layout === 'large' || areaDock.covers) return true;
-      return Boolean(areaCanvasContainer?.contains(target)) && !target.closest('.react-flow__node, button, a, [role="button"]');
+    const press: { down: 'no' | 'close' | 'same'; up: 'no' | 'close' | 'same'; ignored: boolean; x: number; y: number } = { down: 'no', up: 'no', ignored: false, x: 0, y: 0 };
+    const classify = (target: EventTarget | null): 'no' | 'close' | 'same' => {
+      if (!(target instanceof Element) || target.closest('[data-board-reader]')) return 'no';
+      if (layout === 'large' || areaDock.covers) return 'close';
+      if (!target.closest('#board-area')) return 'no';
+      const nodeEl = target.closest('.react-flow__node');
+      if (!nodeEl) return 'close';
+      if (/react-flow__node-(fold|more|pager|step)(\s|$)/.test(nodeEl.getAttribute('class') ?? '')) return 'close';
+      return activeReaderCardId !== null && nodeEl.getAttribute('data-id') === activeReaderCardId ? 'same' : 'no';
     };
     const onDown = (event: PointerEvent) => {
       press.ignored = document.querySelector('[data-slot="menu-popup"]') !== null;
-      press.down = closes(event.target);
-      press.up = false;
+      press.down = classify(event.target);
+      press.up = 'no';
+      press.x = event.clientX;
+      press.y = event.clientY;
     };
-    const onUp = (event: PointerEvent) => { press.up = closes(event.target); };
-    const onClick = () => {
+    // A drag (an attempt to pan, or a selection) is not a press
+    const onUp = (event: PointerEvent) => { press.up = layout !== 'large' && !areaDock.covers && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8 ? 'no' : classify(event.target); };
+    const onClick = (event: MouseEvent) => {
       const { down, up, ignored } = press;
-      press.down = false;
-      press.up = false;
-      if (down && up && !ignored) closeReader();
+      press.down = 'no';
+      press.up = 'no';
+      if (down === 'no' || down !== up || ignored) return;
+      if (down === 'same') {
+        // Nothing else of the press happens: the card would open the reader again, and select its thread
+        event.stopPropagation();
+      } else if (event.target instanceof Element && layout !== 'large' && !areaDock.covers && event.target.closest('button, a, [role="button"], [role="tab"]')) {
+        // The control that was pressed keeps the keyboard
+        skipFocusReturn.current = true;
+      }
+      closeReader();
     };
     pane.addEventListener('pointerdown', onDown, true);
     pane.addEventListener('pointerup', onUp, true);
@@ -1019,7 +1121,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       pane.removeEventListener('pointerup', onUp, true);
       pane.removeEventListener('click', onClick);
     };
-  }, [reader, layout, areaDock.covers, areaCanvasContainer, closeReader]);
+  }, [reader, layout, areaDock.covers, activeReaderCardId, closeReader]);
 
   // Reader Escape handling. Escape that closes the reader's open menu is the menu's alone: whether one was open is seen first, in the
   // capture phase, because the menu is already closing by the time this listener runs.
@@ -1198,9 +1300,24 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const changeBoardMutation = useChangeBoard(workspaceId);
 
+  // A note that was just added: the board goes to it as soon as the board data has it (no fixed delay; the data may arrive after the mutation returns)
+  const boardIdsRef = useRef<Set<string>>(new Set());
+  boardIdsRef.current = new Set(board?.cards.map((card) => card.id) ?? []);
+  const [addedNoteId, setAddedNoteId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!addedNoteId) return;
+    const area = areas.find((entry) => entry.cards.some((card) => card.id === addedNoteId));
+    if (!area) return;
+    setAddedNoteId(null);
+    jumpToItem({ areaId: area.id, nodeId: addedNoteId }, false, true);
+  }, [addedNoteId, areas, jumpToItem]);
+
   const addNote = useCallback(async (note: { title: string; body?: string; area?: string; step?: string; pinned?: boolean }) => {
     try {
-      await changeBoardMutation.mutateAsync({ changes: [addNoteChange(note)] });
+      const before = boardIdsRef.current;
+      const result = await changeBoardMutation.mutateAsync({ changes: [addNoteChange(note)] });
+      const added = result.cards.findLast((card) => !before.has(card.id));
+      if (added) setAddedNoteId(added.id);
       return true;
     } catch (err) {
       console.error('Failed to add note:', err);
@@ -1292,6 +1409,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     keepFocus: () => {},
     toggleRow,
     setRowPage,
+    setRowTab,
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
     answerDecision,
     decisionErrors,
@@ -1304,7 +1422,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
+  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const backdropPress = useRef({ down: false, up: false });
 

@@ -924,4 +924,4 @@ export function overviewEdges(areas: BoardArea[], nodes: OverviewNode[], links: 
 }
 
 export { READABLE_ZOOM, ROW_SIZE, WAITING_ROW, areaBoardLayout, areaLayout, areaOpenInfo, areaPlace, areaRowIds, areaRowOf, areaRows, areaStage, areaView } from './boardRows.js';
-export type { AreaBoardLayoutOptions, AreaRow, AreaStage } from './boardRows.js';
+export type { AreaBoardLayoutOptions, AreaRow, AreaStage, LooseTab } from './boardRows.js';

@@ -245,6 +245,8 @@ function SidebarContents({
       // A letter typed into a field, or used to pick an option in a select, is not the shortcut.
       if (isTypingTarget(e.target)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // While the Board's reader is open, [ and ] move through its cards: they are not the sidebar's
+      if (e.key === '[' && document.querySelector('[data-board-reader]')) return;
       if (e.key === 'z' || e.key === 'Z' || e.key === '[') {
         // Not behind a modal, whatever the mode: undocking there would move focus behind it, and a sheet would open invisible.
         if (!sheetOpen && document.querySelector(OPEN_MODAL)) return;

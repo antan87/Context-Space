@@ -20,7 +20,7 @@ import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, docume
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { areaCounts, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
-import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
+import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type RowHeadData } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
@@ -1867,6 +1867,34 @@ function StepDetailDialog({
   );
 }
 
+/** The tabs on the header line of the row of cards tied to no step: pictures and files, and notes. One tab stop; Left and Right move and select. */
+function RowTabs({ rowId, tabs }: { rowId: string; tabs: NonNullable<RowHeadData['tabs']> }) {
+  const actions = useContext(BoardActionsContext);
+  const list = useRef<HTMLDivElement>(null);
+  const kinds = [{ key: 'media' as const, name: 'Media', count: tabs.media }, { key: 'notes' as const, name: 'Notes', count: tabs.notes }];
+  const choose = (key: 'media' | 'notes', focus: boolean) => {
+    actions?.setRowTab?.(rowId, key);
+    if (focus) list.current?.querySelector<HTMLElement>(`[data-tab="${key}"]`)?.focus({ preventScroll: true });
+  };
+  return <div ref={list} role="tablist" aria-label="Kinds of cards" className="nodrag nopan flex shrink-0 items-center gap-0.5">
+    {kinds.map((kind) => {
+      const selected = tabs.active === kind.key;
+      return <button
+        key={kind.key} type="button" role="tab" data-tab={kind.key} aria-selected={selected} tabIndex={selected ? 0 : -1} disabled={!actions}
+        onClick={() => choose(kind.key, false)}
+        onKeyDown={(e) => {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+          e.preventDefault();
+          e.stopPropagation();
+          choose(kind.key === 'media' ? 'notes' : 'media', true);
+        }}
+        className={cn('nodrag nopan inline-flex h-7 min-w-7 items-center gap-1 whitespace-nowrap rounded-md px-2 text-[13.5px] font-medium leading-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          selected ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground')}
+      >{kind.name}<span className={selected ? 'text-muted-foreground' : ''}>{kind.count}</span></button>;
+    })}
+  </div>;
+}
+
 /**
  * The header of a row, which stands above its things as a line of its own: its name and what it holds, as a button that opens the row
  * where it stands and closes it when it is open already; its chevron shows when the keyboard or the pointer is on it. The header of the
@@ -2080,17 +2108,27 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
     );
   }
 
-  return <div className="relative h-full w-full">
-    <Anchors />
+  const toggle = (
     <button
       type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
       onClick={() => actions?.toggleRow?.(data.rowId)}
-      className={cn('board-row-control nodrag nopan relative flex h-full w-full items-center gap-1.5 overflow-hidden text-left',
+      className={cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left',
         data.prominent ? 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 hover:bg-primary/10 border-l-4 border-l-state-now' : 'rounded-lg px-1 hover:bg-accent/30')}
     >
       {body}
       <Chevron aria-hidden="true" className={cn('size-4 shrink-0 text-muted-foreground', data.prominent ? 'absolute right-3 top-1/2 -translate-y-1/2' : 'board-row-chevron')} />
     </button>
+  );
+  if (data.tabs) {
+    return <div className="relative flex h-full w-full items-center gap-1">
+      <Anchors />
+      {toggle}
+      <RowTabs rowId={data.rowId} tabs={data.tabs} />
+    </div>;
+  }
+  return <div className="relative h-full w-full">
+    <Anchors />
+    {toggle}
   </div>;
 }
 

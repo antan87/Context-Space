@@ -206,6 +206,10 @@ export type RowHeadData = {
   stepKey?: string;
   /** The heading the step is nested under, as it is written (inline Markdown), shown quietly beside "Now". */
   heading?: string;
+  /** The row of cards tied to no step, when it holds both kinds: the tab that shows and what each tab holds. The summary is then empty. */
+  tabs?: { active: 'media' | 'notes'; media: number; notes: number };
+  /** The things of the other tab, which are not drawn: a line to one of them goes to this header, unless the row's "+N more" or pager holds them. */
+  holds?: string[];
 };
 /** A row folded to one line: its title and what it holds. Pressing it opens the row. */
 export type FoldData = { rowId: string; title: string; summary: string; current: boolean; warning?: string; /** The first thing the row holds that is worth saying, in the muted colour: red is for errors. */ note?: string; /** The first things the row holds, in a line, for the muted words after its name. */ preview?: string; /** The things of the row, which are not drawn: a line to one of them goes to the row. */ holds: string[] };
@@ -674,6 +678,8 @@ export function boardEdges(nodes: BoardNode[], links: BoardLink[]): Edge[] {
     if (node.type === 'lane' && node.data.group?.open === false) for (const id of node.data.group.holds) hidden.set(id, node.id);
     else if (node.type === 'fold' || node.type === 'more' || node.type === 'pager') for (const id of node.data.holds) hidden.set(id, node.id);
   }
+  // The things of the tab that is not shown go to the row's header, when nothing else of the row holds them
+  for (const node of nodes) if (node.type === 'step') for (const id of node.data.holds ?? []) if (!hidden.has(id)) hidden.set(id, node.id);
   const resolve = nodeResolver([...byId.keys(), ...hidden.keys()]);
   const edges: Edge[] = [];
   for (const link of links) {

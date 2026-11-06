@@ -202,9 +202,7 @@ test.describe('Canvas Note Creation & In-Place Editing (Milestone 2, Slice 2.1)'
       ]),
     );
 
-    // Step into the Area containing the new note
-    const areaBtn = page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' });
-    await areaBtn.click();
+    // The board steps into the Area containing the new note by itself
     const areaRegion = page.locator('#board-area');
     await expect(areaRegion).toBeVisible();
 

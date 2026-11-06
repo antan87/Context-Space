@@ -45,6 +45,8 @@ export interface BoardActions {
   toggleRow?: (rowId: string) => void;
   /** Shows another page of the row that is open. */
   setRowPage?: (rowId: string, page: number) => void;
+  /** Shows another tab of the row that is not tied to a step, from its first page, leaving the row open or folded as it is. */
+  setRowTab?: (rowId: string, tab: 'media' | 'notes') => void;
   /** Steps into an area from Level 0 (Overview) into Level 1 (Area). */
   openArea?: (id: string, button: HTMLElement) => void;
   /** Selects a card to follow its thread (lights up connected chain and dims the rest), or null to clear. */

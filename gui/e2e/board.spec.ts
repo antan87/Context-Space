@@ -910,8 +910,10 @@ test.describe('Board cards', () => {
       expect(apart).toBe(true);
     }
     for (const title of ['Second note', 'Third note', 'A page']) {
-      expect((await canvasBox(page, title === 'Second note' ? boardId(2) : title === 'Third note' ? boardId(3) : boardId(4))).y).toBeGreaterThanOrEqual(lane.y + lane.height);
+      // The loose row has a Media tab (the page) and a Notes tab (the notes): each card is shown on its own tab
+      await canvas.getByRole('tab', { name: title === 'A page' ? /^Media/ : /^Notes/ }).click();
       await expect(canvas.getByRole('article', { name: title })).toBeVisible();
+      expect((await canvasBox(page, title === 'Second note' ? boardId(2) : title === 'Third note' ? boardId(3) : boardId(4))).y).toBeGreaterThanOrEqual(lane.y + lane.height);
     }
   });
 
@@ -2135,13 +2137,70 @@ test.describe('Board, reader', () => {
       await expect(opener(page, 'Overview page')).toBeFocused();
     });
 
-    test('stays open for a press on a row label or its chevron, which do their own thing', async ({ page }) => {
+    // The reader beside the board: what it closes with, what stays marked, and nothing left dim
+    const opacityOf = (locator: Locator) => locator.evaluate((el) => Number(getComputedStyle(el.closest('.react-flow__node')!).opacity));
+    const dimmed = (page: Page) => page.evaluate(() => ({
+      flow: document.querySelectorAll('#board-area .board-flow[data-thread-active]').length,
+      selected: document.querySelectorAll('#board-area [data-thread-selected], #board-area [data-reader-open]').length,
+      dim: Array.from(document.querySelectorAll('#board-area .react-flow__node-note, #board-area .react-flow__node-file, #board-area .react-flow__node-step')).filter((el) => Number(getComputedStyle(el).opacity) < 0.9).length,
+    }));
+
+    test('pressing the open card again closes it, the board is not dimmed while it is open, the open card stays marked, and nothing is left dim or selected', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES);
+      for (const how of ['the open card again', 'the Close button', 'Escape', 'empty space']) {
+        await card(page, 'The CSV spec').click({ position: { x: 20, y: 12 } });
+        await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
+        await frames(page, 20);
+        // readable: the other card is at full strength, and the open one is marked
+        expect(await opacityOf(card(page, 'Overview page')), how).toBe(1);
+        expect((await dimmed(page)).dim, how).toBe(0);
+        await expect(board(page).locator('#board-area .react-flow__node[data-reader-open="true"]')).toHaveCount(1);
+        await expect(board(page).locator('#board-area .react-flow__node[data-reader-open="true"]')).toContainText('The CSV spec');
+        if (how === 'the open card again') await card(page, 'The CSV spec').click({ position: { x: 20, y: 12 } });
+        else if (how === 'the Close button') await closeButton(page).click();
+        else if (how === 'Escape') await page.keyboard.press('Escape');
+        else { const canvas = (await board(page).locator('#board-area .react-flow').boundingBox())!; await page.mouse.click(canvas.x + 6, canvas.y + canvas.height - 6); }
+        await expect(reader(page), how).toHaveCount(0);
+        await frames(page, 20);
+        expect(await dimmed(page), how).toEqual({ flow: 0, selected: 0, dim: 0 });
+        expect(await opacityOf(card(page, 'Overview page')), how).toBe(1);
+        // the same card is in view, and the keyboard is on it
+        await expect(card(page, 'The CSV spec'), how).toBeVisible();
+        await expect(opener(page, 'The CSV spec'), how).toBeFocused();
+      }
+    });
+
+    test('a press on a row header closes it and still toggles the row; another card switches it', async ({ page }) => {
       await openBoard(page, FILE_CARDS, FILE_PLACES);
       await opener(page, 'The CSV spec').click();
       await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
-      const control = board(page).locator('#board-area [data-row-control]').first();
+      const control = board(page).locator('#board-area [data-row-control]:not([data-row-control="row:waiting"])').first();
+      const was = await control.getAttribute('aria-expanded');
       await control.click();
-      await expect(reader(page)).toBeVisible();
+      await expect(reader(page)).toHaveCount(0);
+      await expect(control).toHaveAttribute('aria-expanded', was === 'true' ? 'false' : 'true');
+      await expect(control).toBeFocused();
+      expect((await dimmed(page)).dim).toBe(0);
+    });
+
+    test('[ moves the reader to the previous card each time, the sidebar does not take it, and Escape then closes the reader', async ({ page }) => {
+      await openBoard(page, FILE_CARDS, FILE_PLACES);
+      const position = async () => Number((await reader(page).getByLabel(/^Item \d+ of \d+$/).getAttribute('aria-label'))!.match(/Item (\d+)/)![1]);
+      await opener(page, 'Export requirements').click();
+      await expect(readerTitle(page, 'Export requirements')).toBeVisible();
+      await page.keyboard.press(']');
+      await expect.poll(position).toBe(2);
+      await page.keyboard.press(']');
+      await expect.poll(position).toBe(3);
+      const start = 3;
+      await page.keyboard.press('[');
+      await expect.poll(position).toBe(start - 1);
+      await page.keyboard.press('[');
+      await expect.poll(position).toBe(start - 2);
+      // the keyboard did not jump to the sidebar's search, and Escape closes the reader
+      await expect(page.getByRole('searchbox').or(page.getByPlaceholder(/search/i)).first()).not.toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(reader(page)).toHaveCount(0);
     });
   });
 
@@ -2470,7 +2529,7 @@ test.describe('Board, rows by step', () => {
     const older = inArea(page).getByRole('button', { name: 'Older cards' });
     // As far as the pages go, up to two: the cards fill the line, so a wide canvas has fewer pages
     for (let turn = 0; turn < 2 && await older.isEnabled(); turn += 1) { await older.click(); await frames(page, 4); }
-    await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).toContainText(/^\d+–\d+ of 10$/);
+    await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).toContainText(/^\d+–\d+ of 9$/);
     // Not the first page: that is what this test is about
     await expect(inArea(page).getByRole('navigation', { name: /Pages of/ })).not.toContainText(/^1–/);
     const open = inArea(page).getByRole('button', { name: /^Open Picture/ }).first();
@@ -2500,15 +2559,20 @@ test.describe('Board, rows by step', () => {
     await expect(more).toHaveCount(0);
     const seen = new Set<string>();
     const collect = async () => { for (const label of await inArea(page).locator('.react-flow__node-note h2, .react-flow__node-file h2').allTextContents()) if (/^(Picture|A loose note)/.test(label)) seen.add(label); };
-    await collect();
-    if (await pager.count()) {
-      await expect(pager).toContainText(/1–\d+ of 10/);
-      const older = inArea(page).getByRole('button', { name: 'Older cards' });
-      const newer = inArea(page).getByRole('button', { name: 'Newer cards' });
-      await expect(newer).toBeDisabled();
-      while (await older.isEnabled()) { await older.click(); await frames(page, 4); await collect(); }
-      await expect(older).toBeDisabled();
-      await expect(pager).toContainText(/of 10/);
+    // The row has a Media tab (9 pictures) and a Notes tab (1 note): every card is reachable on one of them, each tab paged by itself
+    for (const [tab, total] of [[/^Media/, 9], [/^Notes/, 1]] as const) {
+      await inArea(page).getByRole('tab', { name: tab }).click();
+      await frames(page, 4);
+      await collect();
+      if (await pager.count()) {
+        await expect(pager).toContainText(new RegExp(`1–\\d+ of ${total}`));
+        const older = inArea(page).getByRole('button', { name: 'Older cards' });
+        const newer = inArea(page).getByRole('button', { name: 'Newer cards' });
+        await expect(newer).toBeDisabled();
+        while (await older.isEnabled()) { await older.click(); await frames(page, 4); await collect(); }
+        await expect(older).toBeDisabled();
+        await expect(pager).toContainText(new RegExp(`of ${total}`));
+      }
     }
     expect(seen.size).toBe(10);
   });
@@ -2623,7 +2687,8 @@ test.describe('Board, rows by step', () => {
   });
 
   test('says "Now" with a dot for the current step, and puts the page buttons and "+N more" on the line of the row\'s header', async ({ page }) => {
-    await openReal(page, { size: { width: 1280, height: 800 } });
+    // 760 px high: the 9 pictures of the Media tab need more than one page
+    await openReal(page, { size: { width: 1280, height: 760 } });
     const now = rowButton(page, /^Now:/);
     await expect(now).toContainText('Now');
     await expect(now).not.toContainText(/current step/i);
@@ -2644,7 +2709,7 @@ test.describe('Board, rows by step', () => {
     const pager = inArea(page).getByRole('navigation', { name: /Pages of/ });
     await expect(pager).toBeVisible();
     await frames(page, 30);
-    await expect(pager).toContainText(/^\d+–\d+ of 10$/);
+    await expect(pager).toContainText(/^\d+–\d+ of 9$/);
     const rowHead = (await inArea(page).locator('.react-flow__node[data-id="lane:board"]').boundingBox())!;
     const pagerBox = (await pager.boundingBox())!;
     expect(Math.abs((pagerBox.y + pagerBox.height / 2) - (rowHead.y + rowHead.height / 2))).toBeLessThan(2);
@@ -2722,7 +2787,7 @@ test.describe('Board, rows by step', () => {
 
   test('moves the keyboard to the header of the row when a live change takes the pager away', async ({ page }) => {
     await page.clock.install();
-    await openReal(page, { size: { width: 1280, height: 800 } });
+    await openReal(page, { size: { width: 1280, height: 760 } });
     await rowButton(page, /Not tied to a step/).first().click();
     const older = inArea(page).getByRole('button', { name: 'Older cards' });
     await older.focus();
@@ -2735,7 +2800,7 @@ test.describe('Board, rows by step', () => {
   });
 
   test('moves the keyboard to the other page button when the one it was on has no page left', async ({ page }) => {
-    await openReal(page, { size: { width: 1280, height: 800 } });
+    await openReal(page, { size: { width: 1280, height: 760 } });
     await rowButton(page, /Not tied to a step/).first().click();
     const older = inArea(page).getByRole('button', { name: 'Older cards' });
     const newer = inArea(page).getByRole('button', { name: 'Newer cards' });
@@ -4257,7 +4322,8 @@ test.describe('Board index sidebar', () => {
     await routeCards(page, boardFile({
       cards: [
         boardNote(1, { title: 'First connected note', area: 'checkpoint:reports-export-to-csv', step: 'step-1' }),
-        boardFileCard(2, 'docs/flow.png', { title: 'Second connected picture', area: 'checkpoint:reports-export-to-csv', step: 'step-1' }),
+        // a note, not a picture: a picture would stand on the Media tab of the row, apart from the notes
+        boardNote(2, { title: 'Second connected picture', area: 'checkpoint:reports-export-to-csv', step: 'step-1' }),
         boardNote(3, { title: 'Unrelated note', area: 'checkpoint:reports-export-to-csv', step: 'step-2' }),
       ],
       links: [

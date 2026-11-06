@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkDocument } from '../../types.js';
 import type { PlanFileView } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
-import { areaBoardLayout, areaRowOf, buildBoardAreas, type BoardArea } from './boardAreas.js';
+import { areaBoardLayout, areaPlace, areaRowOf, buildBoardAreas, type BoardArea } from './boardAreas.js';
 import type { BoardCard, BoardView } from './boardData.js';
 import {
   buildBoardNav,
@@ -604,10 +604,11 @@ describe('with the areas the Board builds', () => {
       const byId = new Map(areas.map((area) => [area.id, area]));
       // A node is found when it is drawn, or once the row that holds it is opened
       const drawn = new Map(areas.map((area) => [area.id, {
-        closed: new Set(areaBoardLayout(area, { news, size }).map((node) => node.id)),
+        closed: (id: string) => new Set(areaBoardLayout(area, { news, size, ...(areaPlace(area, { news }, id)?.tab ? { tab: areaPlace(area, { news }, id)!.tab } : {}) }).map((node) => node.id)),
         open: (id: string) => {
           const row = areaRowOf(area, { news }, id);
-          return row ? new Set(areaBoardLayout(area, { news, size, openRow: row }).map((node) => node.id)) : new Set<string>();
+          const tab = areaPlace(area, { news }, id)?.tab;
+          return row ? new Set(areaBoardLayout(area, { news, size, openRow: row, ...(tab ? { tab } : {}) }).map((node) => node.id)) : new Set<string>();
         },
       }]));
       expect(areas.length).toBeGreaterThan(0);
@@ -623,7 +624,7 @@ describe('with the areas the Board builds', () => {
         for (const item of aimed) {
           const found = drawn.get(item.areaId);
           expect(byId.has(item.areaId)).toBe(true);
-          expect(found?.closed.has(item.nodeId!) || found?.open(item.nodeId!).has(item.nodeId!), `${mode}: ${item.id} aims at ${item.nodeId}, which ${item.areaId} does not draw, even with its row open`).toBe(true);
+          expect(found?.closed(item.nodeId!).has(item.nodeId!) || found?.open(item.nodeId!).has(item.nodeId!), `${mode}: ${item.id} aims at ${item.nodeId}, which ${item.areaId} does not draw, even with its row open`).toBe(true);
         }
       }
     }

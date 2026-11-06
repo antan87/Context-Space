@@ -120,7 +120,13 @@ export interface AreaBoardLayoutOptions {
   openRow?: string | null;
   /** Which page of the opened row, from 0. */
   page?: number;
+  /** Which tab of the row that is not tied to a step is shown (when it has tabs); the one holding the newest card when not given. */
+  tab?: LooseTab;
 }
+
+/** The two tabs of the row of cards that are tied to no step: every file card, and everything else. */
+export type LooseTab = 'media' | 'notes';
+export interface LooseTabs { media: LaneCard[]; notes: LaneCard[]; /** The tab that holds the newest card. */ first: LooseTab }
 
 export type AreaRowKind = 'step' | 'loose' | 'documents' | 'commits' | 'more-steps' | 'done';
 
@@ -142,6 +148,11 @@ export interface AreaRow {
   groups?: StepGroup[];
   summary: string;
   warning?: string;
+  /** Only the row of cards tied to no step, and only when it holds both kinds: `items` is then all of them, and the tabs say which is which. */
+  tabs?: LooseTabs;
+  /** In the row as it is drawn (`viewOf`): the tab that shows, and the ids of the things of the other tab, which are not drawn. */
+  activeTab?: LooseTab;
+  elsewhere?: string[];
 }
 
 export const WAITING_ROW = 'row:waiting';
@@ -289,7 +300,17 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   const rest: AreaRow[] = [];
   if (loose.length > 0) {
     const items = plans(loose);
-    rest.push({ id: 'lane:board', kind: 'loose', title: 'Not tied to a step', caption: 'Notes and files from you and the AI', state: 'plain', items, summary: cardsText(items.length) });
+    const row: AreaRow = { id: 'lane:board', kind: 'loose', title: 'Not tied to a step', caption: 'Notes and files from you and the AI', state: 'plain', items, summary: cardsText(items.length) };
+    const mediaCards = loose.filter((card) => card.kind === 'file');
+    const noteCards = loose.filter((card) => card.kind !== 'file');
+    if (mediaCards.length > 0 && noteCards.length > 0) {
+      const newest = (cards: BoardCard[]) => Math.max(...cards.map((card) => Date.parse(card.at) || 0));
+      const media = plans(mediaCards);
+      const notes = plans(noteCards);
+      row.tabs = { media, notes, first: newest(noteCards) > newest(mediaCards) ? 'notes' : 'media' };
+      row.summary = `${media.length} ${media.length === 1 ? 'picture or file' : 'pictures and files'} · ${notes.length} ${notes.length === 1 ? 'note' : 'notes'}`;
+    }
+    rest.push(row);
   }
   const { isDocFresh } = extractFreshSets(options.news);
   if (area.documents.length > 0) {
@@ -401,17 +422,30 @@ export function areaRowOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions,
  * What it takes to draw a node: nothing when it is drawn in the default layout, else the row to open and the page of it. Null when the
  * Area has no such node.
  */
-export function areaPlace(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now' | 'size'>, nodeId: string): { row: string | null; page: number } | null {
+export function areaPlace(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now' | 'size'>, nodeId: string): { row: string | null; page: number; tab?: LooseTab } | null {
   const row = areaRowOf(area, options, nodeId);
   if (row === null) return area.id === nodeId && areaBoardLayout(area, options).some((node) => node.id === nodeId) ? { row: null, page: 0 } : null;
-  if (areaBoardLayout(area, options).some((node) => node.id === nodeId)) return { row: null, page: 0 };
-  const first = areaLayout(area, { ...options, openRow: row, page: 0 });
+  // A row with tabs also says which tab holds the node, and is laid out with that tab
+  const tabs = areaRows(area, options).find((entry) => entry.id === row)?.tabs;
+  const tab: LooseTab | undefined = tabs ? (tabs.media.some((item) => item.id === nodeId) ? 'media' : 'notes') : undefined;
+  const drawn = { ...options, ...(tab ? { tab } : {}) };
+  const named = tab ? { tab } : {};
+  if (areaBoardLayout(area, drawn).some((node) => node.id === nodeId)) return { row: null, page: 0, ...named };
+  const first = areaLayout(area, { ...drawn, openRow: row, page: 0 });
   const pages = first.open?.pages ?? 1;
   for (let page = 0; page < pages; page += 1) {
-    const nodes = page === 0 ? first.nodes : areaLayout(area, { ...options, openRow: row, page }).nodes;
-    if (nodes.some((node) => node.id === nodeId)) return { row, page };
+    const nodes = page === 0 ? first.nodes : areaLayout(area, { ...drawn, openRow: row, page }).nodes;
+    if (nodes.some((node) => node.id === nodeId)) return { row, page, ...named };
   }
-  return { row, page: 0 };
+  return { row, page: 0, ...named };
+}
+
+/** A row as it is drawn: a row with tabs holds only the things of the tab that shows, and remembers those of the other one. */
+function viewOf(row: AreaRow, tab: LooseTab | undefined): AreaRow {
+  if (!row.tabs) return row;
+  const active = tab ?? row.tabs.first;
+  const other = active === 'media' ? 'notes' : 'media';
+  return { ...row, items: row.tabs[active], activeTab: active, elsewhere: row.tabs[other].map((item) => item.id) };
 }
 
 // ─── Drawing ────────────────────────────────────────────────────────────────
@@ -479,8 +513,10 @@ function headNode(row: AreaRow, y: number, width: number, expanded: boolean, emp
   return {
     id: row.id, type: 'step', position: { x: 0, y }, width, height: headerHeight(row),
     data: {
-      rowId: row.id, title: row.title, ...(row.text !== undefined ? { text: row.text } : {}), ...(row.heading ? { heading: row.heading } : {}), ...(row.caption ? { caption: row.caption } : {}),
-      summary: row.summary, state: row.state, expanded, prominent, empty,
+      rowId: row.id, title: row.title, ...(row.text !== undefined ? { text: row.text } : {}), ...(row.heading ? { heading: row.heading } : {}), ...(row.caption && !row.tabs ? { caption: row.caption } : {}),
+      summary: row.tabs ? '' : row.summary, state: row.state, expanded, prominent, empty,
+      ...(row.elsewhere?.length ? { holds: row.elsewhere } : {}),
+      ...(row.tabs && row.activeTab ? { tabs: { active: row.activeTab, media: row.tabs.media.length, notes: row.tabs.notes.length } } : {}),
       ...(stepKey ? { stepKey } : {}),
     },
     ...FIXED,
@@ -500,7 +536,7 @@ function foldPiece(row: AreaRow, stage: AreaStage, fold: number): Piece {
     height: fold,
     nodes: (y) => [{
       id: row.id, type: 'fold', position: { x: 0, y }, width: stage.width, height: fold,
-      data: { rowId: row.id, title: row.kind === 'step' ? `${row.title}: ${plainText(row.text ?? '')}` : row.title, summary: row.summary, current: row.state === 'current', ...(previewOf(row) ? { preview: previewOf(row) } : {}), holds: row.items.map((item) => item.id), ...(row.warning ? { warning: row.warning } : {}) },
+      data: { rowId: row.id, title: row.kind === 'step' ? `${row.title}: ${plainText(row.text ?? '')}` : row.title, summary: row.summary, current: row.state === 'current', ...(previewOf(row) ? { preview: previewOf(row) } : {}), holds: [...row.items.map((item) => item.id), ...(row.elsewhere ?? [])], ...(row.warning ? { warning: row.warning } : {}) },
       ...FIXED,
     }],
   };
@@ -534,7 +570,7 @@ function linesPiece(row: AreaRow, stage: AreaStage, lines: number): Piece {
       if (hidden > 0) {
         out.push({
           id: `${row.id}:more`, type: 'more', position: { x: stage.width - ROW_SIZE.more, y: y + (head - ROW_SIZE.header) / 2 }, width: ROW_SIZE.more, height: ROW_SIZE.header,
-          data: { rowId: row.id, title: `+${hidden} more`, count: hidden, rowTitle: plainText(row.text ?? row.title), holds: row.items.slice(shown.length).map((item) => item.id) }, ...FIXED,
+          data: { rowId: row.id, title: `+${hidden} more`, count: hidden, rowTitle: plainText(row.text ?? row.title), holds: [...row.items.slice(shown.length).map((item) => item.id), ...(row.elsewhere ?? [])] }, ...FIXED,
         });
       }
       let lineY = y + head + ROW_SIZE.stackGap;
@@ -613,7 +649,7 @@ function openPiece(row: AreaRow, stage: AreaStage, room: number, requested: numb
       if (pager) {
         out.push({
           id: `${row.id}:pager`, type: 'pager', position: { x: stage.width - ROW_SIZE.pager, y: y + (head - ROW_SIZE.header) / 2 }, width: ROW_SIZE.pager, height: ROW_SIZE.header,
-          data: { rowId: row.id, title: row.text ?? row.title, page, pages: pages.length, from: before + 1, to: before + inPage, total, holds: row.items.filter((item) => !onPage.has(item.id)).map((item) => item.id) }, ...FIXED,
+          data: { rowId: row.id, title: row.text ?? row.title, page, pages: pages.length, from: before + 1, to: before + inPage, total, holds: [...row.items.filter((item) => !onPage.has(item.id)).map((item) => item.id), ...(row.elsewhere ?? [])] }, ...FIXED,
         });
       }
       let lineY = y + top;
@@ -631,7 +667,9 @@ export interface LayoutResult { nodes: BoardNode[]; open: OpenInfo | null }
 /** The nodes of Level 1 and which row is open, with its page. */
 export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}): LayoutResult {
   const stage = areaStage(options.size ?? DEFAULT_SIZE);
-  const { waiting, rows } = modelOf(area, options, stage);
+  const model = modelOf(area, options, stage);
+  const waiting = model.waiting;
+  const rows = model.rows.map((row) => viewOf(row, options.tab));
   const H = stage.height;
   const openAsked = options.openRow ?? null;
   const openRow = openAsked && rows.some((row) => row.id === openAsked) ? openAsked : null;

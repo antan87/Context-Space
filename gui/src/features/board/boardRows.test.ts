@@ -400,14 +400,18 @@ describe('areaBoardLayout v2: nothing overlaps, everything fits and everything c
       for (const size of sizes) {
         const stage = areaStage(size);
         const where = `seed ${seed} ${size.width}x${size.height}`;
-        const states: Array<{ row: string | null; page: number }> = [{ row: null, page: 0 }];
+        // The row that is not tied to a step may have two tabs: each is a state of its own
+        const tabsOf: Array<'media' | 'notes' | undefined> = areaRows(area, { news, size }).some((row) => row.tabs) ? ['media', 'notes'] : [undefined];
+        const states: Array<{ row: string | null; page: number; tab?: 'media' | 'notes' }> = tabsOf.map((tab) => ({ row: null, page: 0, ...(tab ? { tab } : {}) }));
         for (const row of areaRowIds(area, { news, size })) {
-          const first = areaLayout(area, { news, size, openRow: row, page: 0 });
-          for (let page = 0; page < (first.open?.pages ?? 1); page += 1) states.push({ row, page });
+          for (const tab of tabsOf) {
+            const first = areaLayout(area, { news, size, openRow: row, page: 0, ...(tab ? { tab } : {}) });
+            for (let page = 0; page < (first.open?.pages ?? 1); page += 1) states.push({ row, page, ...(tab ? { tab } : {}) });
+          }
         }
         const reached = new Set<string>();
         for (const state of states) {
-          const { nodes } = areaLayout(area, { news, size, openRow: state.row, page: state.page });
+          const { nodes } = areaLayout(area, { news, size, openRow: state.row, page: state.page, ...(state.tab ? { tab: state.tab } : {}) });
           const rects = [...nodeRects(nodes).entries()];
           for (const [id, rect] of rects) {
             expect(rect.x, `${where} ${state.row}/${state.page} ${id} left`).toBeGreaterThanOrEqual(0);
@@ -752,5 +756,90 @@ describe('the waiting frame on a very low window', () => {
       const stage = areaStage({ width, height });
       for (const [id, rect] of nodeRects(nodes)) expect(rect.y + rect.height, `${count} decisions, cards ${withCards}, ${width}x${height}: ${id}`).toBeLessThanOrEqual(stage.height);
     }
+  });
+});
+
+describe('the row that is not tied to a step: Media and Notes tabs', () => {
+  const size = { width: 1280, height: 800 };
+  const pictures = Array.from({ length: 38 }, (_, i) => file(`p${i}`, `Picture ${i}`, { at: at(1 + (i % 9)) }));
+  const notes = [card('n0', 'Note 0', { at: at(20) }), card('n1', 'Note 1', { at: at(12) }), card('n2', 'Note 2', { at: at(11), pinned: true })];
+  const area = (cards: BoardCard[]) => areaOf(planOf(2, 0), cards);
+  const loose = (cards: BoardCard[]) => areaRows(area(cards), { size }).find((r) => r.id === 'lane:board')!;
+  const drawn = (nodes: BoardNode[]) => nodes.filter((n) => n.type === 'note' || n.type === 'file').map((n) => n.id);
+
+  it('splits the cards into Media (every file card) and Notes (the rest), none in neither, and says so in the folded summary', () => {
+    const row = loose([...pictures, ...notes]);
+    expect(row.tabs!.media).toHaveLength(38);
+    expect(row.tabs!.notes.map((i) => i.id)).toEqual(['n2', 'n0', 'n1']);
+    expect(row.items).toHaveLength(41);
+    expect(row.summary).toBe('38 pictures and files · 3 notes');
+    const header = byId(areaBoardLayout(area([...pictures, ...notes]), { size }), 'lane:board') as BoardNode & { data: { tabs: unknown; summary: string } };
+    expect(header.data.tabs).toEqual({ active: 'notes', media: 38, notes: 3 });
+    expect(header.data.summary).toBe('');
+  });
+
+  it('has no tabs with one kind only, and the row stays as it was', () => {
+    for (const cards of [pictures, notes]) {
+      const row = loose(cards);
+      expect(row.tabs).toBeUndefined();
+      expect(row.summary).toBe(`${cards.length} cards`);
+      expect((byId(areaBoardLayout(area(cards), { size }), 'lane:board') as BoardNode & { data: { tabs?: unknown } }).data.tabs).toBeUndefined();
+    }
+  });
+
+  it('starts on the tab that holds the newest card, and pinned cards stay first within their tab', () => {
+    expect(loose([...pictures, ...notes]).tabs!.first).toBe('notes');
+    expect(loose([...pictures, ...notes.map((n) => ({ ...n, at: at(1) }))]).tabs!.first).toBe('media');
+    expect(drawn(areaBoardLayout(area([...pictures, ...notes]), { size, openRow: 'lane:board' }))).toEqual(['n2', 'n0', 'n1']);
+  });
+
+  it('lays out only the chosen tab, and "+N more" and the pager count that tab alone', () => {
+    const a = area([...pictures, ...notes]);
+    const closed = areaBoardLayout(a, { size, tab: 'media' });
+    const shown = drawn(closed);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.every((id) => pictures.some((p) => p.id === id))).toBe(true);
+    const more = byId(closed, 'lane:board:more') as BoardNode & { data: { count: number; holds: string[] } };
+    expect(more.data.count).toBe(38 - shown.length);
+    // the other tab's cards are held by the row too, so lines and "(N more)" still point at it
+    expect(more.data.holds).toEqual(expect.arrayContaining(['n0', 'n1', 'n2']));
+    expect(more.data.holds).toHaveLength(more.data.count + 3);
+    const first = areaLayout(a, { size, tab: 'media', openRow: 'lane:board' });
+    const pager = byId(first.nodes, 'lane:board:pager') as BoardNode & { data: { total: number; holds: string[]; from: number; to: number } };
+    expect(pager.data.total).toBe(38);
+    expect(pager.data.holds).toEqual(expect.arrayContaining(['n0', 'n1', 'n2']));
+    // the notes tab has 3 cards: one page, no "+N more"
+    const notesTab = areaLayout(a, { size, tab: 'notes', openRow: 'lane:board' });
+    expect(notesTab.open!.pages).toBe(1);
+    expect(notesTab.nodes.some((n) => n.id === 'lane:board:pager')).toBe(false);
+    expect(drawn(areaBoardLayout(a, { size, tab: 'notes' })).sort()).toEqual(['n0', 'n1', 'n2']);
+    expect(areaBoardLayout(a, { size, tab: 'notes' }).some((n) => n.id === 'lane:board:more')).toBe(false);
+  });
+
+  it('folded, a row has no tabs and holds both tabs', () => {
+    const a = area([...pictures, ...notes]);
+    const nodes = areaBoardLayout(a, { size: { width: 1280, height: 800 }, openRow: 'row:step:s0' });
+    const fold = nodes.find((n) => n.id === 'lane:board')!;
+    expect(fold.type).toBe('fold');
+    const data = fold.data as { summary: string; holds: string[] };
+    expect(data.summary).toBe('38 pictures and files · 3 notes');
+    expect(data.holds).toHaveLength(41);
+  });
+
+  it('names the tab, the row and the page that hold a card', () => {
+    const a = area([...pictures, ...notes]);
+    expect(areaRowOf(a, { size }, 'n1')).toBe('lane:board');
+    const note = areaPlace(a, { size }, 'n1')!;
+    expect(note.tab).toBe('notes');
+    const media = areaPlace(a, { size }, 'p37')!;
+    expect(media.tab).toBe('media');
+    expect(media.row === null ? true : media.row === 'lane:board').toBe(true);
+    // the page is the page of that tab's layout
+    if (media.row) {
+      const nodes = areaLayout(a, { size, tab: 'media', openRow: media.row, page: media.page }).nodes;
+      expect(drawn(nodes)).toContain('p37');
+    }
+    // a card of a row without tabs names no tab
+    expect(areaPlace(area(pictures), { size }, 'p5')!.tab).toBeUndefined();
   });
 });

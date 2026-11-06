@@ -23,7 +23,7 @@ const NOW = 'C1 bug, tracked: with a fold open, **Escape** within about 250 ms o
 
 const s = (key: string, text: string, done = false, parent?: string) => ({ key, text, done, ...(parent ? { parent } : {}) });
 
-function plan(decisions: Array<ReturnType<typeof decision>>, check?: string) {
+function plan(decisions: Array<ReturnType<typeof decision>>, check?: string, second = false) {
   const steps = [
     s('slice-a', '**Slice A: Purge lingering clutter**', true),
     s('heading', HEADING),
@@ -40,6 +40,7 @@ function plan(decisions: Array<ReturnType<typeof decision>>, check?: string) {
         key: 'a-board-tab-in-nexusflow', title: AREA, done: false, steps, ...(check ? { check } : {}),
         decisions: decisions.map((entry) => ({ ...entry, checkpoint: 'a-board-tab-in-nexusflow' })),
       },
+      ...(second ? [{ key: 'second-area', title: 'A second Area', done: false, steps: [s('sa-1', 'Do the first thing of the second Area'), s('sa-2', 'Then the second')], decisions: [] }] : []),
     ],
   });
 }
@@ -53,14 +54,20 @@ const cards = (archived = 0, onNow = true) => [
   ...Array.from({ length: 7 }, (_, i) => boardFileCard(10 + i, `p${i}.png`, { area: AREA_ID, step: undefined, title: `Picture ${i}`, at: new Date(Date.now() - (10 + i) * 60_000).toISOString() })),
 ];
 
+/** Like this workspace's: about 38 pictures and 3 notes, all tied to no step. The newest card is a note. */
+const looseCards = () => [
+  ...Array.from({ length: 38 }, (_, i) => boardFileCard(100 + i, `m${i}.png`, { area: AREA_ID, step: undefined, title: `Media ${i}`, at: new Date(Date.now() - (10 + i) * 60_000).toISOString() })),
+  ...Array.from({ length: 3 }, (_, i) => boardNote(200 + i, { area: AREA_ID, step: undefined, title: `Loose note ${i}`, body: `About loose note ${i}.`, at: new Date(Date.now() - (1 + i) * 60_000).toISOString() })),
+];
+
 const links = () => [
   boardLink(1, boardNote(1).id, boardNote(2).id),
   boardLink(2, boardNote(1).id, boardNote(3).id),
   ...Array.from({ length: 6 }, (_, i) => boardLink(3 + i, boardNote(1).id, boardFileCard(10 + i, `p${i}.png`).id)),
 ];
 
-async function routeBoard(page: Page, decisions: Array<ReturnType<typeof decision>>, opts: { check?: string; archived?: number; onNow?: boolean; answerDelay?: number; answerFails?: boolean } = {}) {
-  let current = plan(decisions, opts.check);
+async function routeBoard(page: Page, decisions: Array<ReturnType<typeof decision>>, opts: { loose?: boolean; second?: boolean; linked?: boolean | number; check?: string; archived?: number; onNow?: boolean; answerDelay?: number; answerFails?: boolean } = {}) {
+  let current = plan(decisions, opts.check, opts.second);
   const control = { getDelay: 0, answerFails: opts.answerFails ?? false, getCount: 0 };
   const answers: Array<{ key: string; answer: string }> = [];
   await page.route('**/api/terminals/bootstrap', (route) => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
@@ -90,9 +97,27 @@ async function routeBoard(page: Page, decisions: Array<ReturnType<typeof decisio
     return route.fulfill({ json: { message: 'Answered.', plan: current } });
   });
   await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [{ repo: 'NexusFlow', more: 0, commits: [{ sha: 'a91f2e0c4d5b', author: 'Anna', subject: 'A commit', at: new Date().toISOString() }] }] }) }));
-  await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: boardFile({ cards: cards(opts.archived ?? 0, opts.onNow ?? true), links: links() }) }));
+  // The board as it is now: what a note added, or a live change, makes of it
+  const live = {
+    cards: (opts.loose ? looseCards() : cards(opts.archived ?? 0, opts.onNow ?? true)) as Array<Record<string, unknown>>,
+    links: (opts.linked ? [boardLink(50, boardNote(200).id, boardFileCard(100 + (typeof opts.linked === 'number' ? opts.linked : 0), `m${typeof opts.linked === 'number' ? opts.linked : 0}.png`).id)] : opts.loose ? [] : links()) as Array<Record<string, unknown>>,
+    changesAfter: 0,
+    added: [] as Array<Record<string, unknown>>,
+  };
+  await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: boardFile({ cards: live.cards, links: live.links }) }));
+  await page.route('**/api/workspace/demo/board/changes', async (route) => {
+    const body = route.request().postDataJSON() as { changes: Array<Record<string, unknown>> };
+    for (const change of body.changes) {
+      if (change.op !== 'add_card') continue;
+      const added = boardNote(300 + live.added.length, { title: change.title as string, ...(change.area ? { area: change.area as string } : {}), step: (change.step as string | undefined) ?? undefined, at: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      live.added.push(added);
+      live.cards = [added, ...live.cards];
+    }
+    if (live.changesAfter) await new Promise((resolve) => setTimeout(resolve, live.changesAfter));
+    return route.fulfill({ json: boardFile({ cards: live.cards, links: live.links }) });
+  });
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ json: { guidance: { version: 1, revision: 1, workType: 'feature', size: 'standard', assignment: { stage: 'implement', objective: '', expectedOutput: '', stopCondition: '' }, documents: [] }, lifecycle: null, assignment: '', sharedDocuments: [] } }));
-  return { answers, control, setDecisions: (next: Array<ReturnType<typeof decision>>) => { current = plan(next, opts.check); } };
+  return { live, answers, control, setDecisions: (next: Array<ReturnType<typeof decision>>) => { current = plan(next, opts.check); } };
 }
 
 const TWO = () => [decision(LONG, { suggested: ANSWERS, detail: 'The Board does not yet show uncommitted changes or run services.' }), decision('Which **time zone** should export timestamps use?', { suggested: ['UTC', 'Local time (browser)', 'Account setting'] })];
@@ -300,7 +325,7 @@ test.describe('cards always show, with two waiting decisions', () => {
     test(`at ${width}x${height} in Split`, async ({ page }) => {
       await page.setViewportSize({ width, height });
       await routeBoard(page, TWO());
-      await stepIn(page, true, false);
+      await stepIn(page, true);
       const drawn = await page.locator('#board-area .react-flow__node-note, #board-area .react-flow__node-file').count();
       expect(drawn).toBeGreaterThan(0);
       // the waiting decisions are cards, or their one line, which still says what the question is
@@ -983,5 +1008,263 @@ test.describe('when the plan changes under the keyboard', () => {
     await page.waitForTimeout(2200);
     await expect(frame).not.toContainText('Code, Docs and Services');
     expect(tracker.answers).toHaveLength(1);
+  });
+});
+
+for (const size of [{ name: '1280x800', width: 1280, height: 800 }, { name: '1100x700', width: 1100, height: 700 }]) {
+  test.describe(`the row that is not tied to a step has Media and Notes tabs, ${size.name} Split`, () => {
+    test.use({ viewport: { width: size.width, height: size.height } });
+    const looseNodes = (page: Page) => page.locator('#board-area .react-flow__node-note, #board-area .react-flow__node-file');
+
+    test('shows the tabs with their counts on the header line, only that kind after a press, and moves with the arrow keys without panning the board', async ({ page }) => {
+      await routeBoard(page, TWO(), { loose: true });
+      await stepIn(page, true);
+      const area = page.locator('#board-area');
+      const tabs = area.getByRole('tablist', { name: 'Kinds of cards' });
+      await expect(tabs).toBeVisible();
+      const media = tabs.getByRole('tab', { name: /^Media\s*38$/ });
+      const notes = tabs.getByRole('tab', { name: /^Notes\s*3$/ });
+      await expect(media).toBeVisible();
+      await expect(notes).toBeVisible();
+      // the newest card is a note: that tab shows first
+      await expect(notes).toHaveAttribute('aria-selected', 'true');
+      // the tabs share the header line of their row, are at least 24 px, and the summary is gone
+      const header = area.locator('.react-flow__node[data-id="lane:board"]');
+      const headBox = (await header.boundingBox())!;
+      for (const tab of [media, notes]) {
+        const box = (await tab.boundingBox())!;
+        expect(box.height).toBeGreaterThanOrEqual(24);
+        expect(box.y).toBeGreaterThanOrEqual(headBox.y - 1);
+        expect(box.y + box.height).toBeLessThanOrEqual(headBox.y + headBox.height + 1);
+      }
+      await expect(header).not.toContainText('41 cards');
+      await expect(looseNodes(page).filter({ hasText: /Loose note/ })).not.toHaveCount(0);
+      await expect(looseNodes(page).filter({ hasText: /Media \d/ })).toHaveCount(0);
+      await media.click();
+      await expect(media).toHaveAttribute('aria-selected', 'true');
+      await settled(page, '#board-area');
+      await expect(looseNodes(page).filter({ hasText: /Media \d/ }).first()).toBeVisible();
+      await expect(looseNodes(page).filter({ hasText: /Loose note/ })).toHaveCount(0);
+      // "+N more" counts the media alone, and lines up on the header line beside the tabs without overlapping them
+      const more = area.getByRole('button', { name: /^Show \d+ more for Not tied to a step/ });
+      await expect(more).toBeVisible();
+      const moreBox = (await more.boundingBox())!;
+      const mediaBox = (await media.boundingBox())!;
+      const notesBox = (await notes.boundingBox())!;
+      expect(notesBox.x + notesBox.width).toBeLessThanOrEqual(moreBox.x + 1);
+      expect(mediaBox.x + mediaBox.width).toBeLessThanOrEqual(notesBox.x + 1);
+      const shown = await looseNodes(page).count();
+      expect(Number((await more.textContent())!.match(/\d+/)![0])).toBe(38 - shown);
+      // Left and Right move and select; the board does not pan
+      const viewport = () => page.locator('#board-area .react-flow__viewport').evaluate((el) => getComputedStyle(el).transform);
+      const before = await viewport();
+      await media.focus();
+      await page.keyboard.press('ArrowRight');
+      await expect(notes).toHaveAttribute('aria-selected', 'true');
+      await expect(notes).toBeFocused();
+      await page.keyboard.press('ArrowLeft');
+      await expect(media).toHaveAttribute('aria-selected', 'true');
+      await expect(media).toBeFocused();
+      await page.waitForTimeout(300);
+      expect(await viewport()).toBe(before);
+      // one tab stop: the tab that is not selected is out of the tab order
+      await expect(notes).toHaveAttribute('tabindex', '-1');
+      // the header's toggle still opens the row, and a tab keeps it open and goes back to page 1
+      await area.getByRole('button', { name: /^Not tied to a step/ }).click();
+      await expect(area.getByRole('button', { name: /^Not tied to a step/ })).toHaveAttribute('aria-expanded', 'true');
+      await notes.click();
+      await expect(area.getByRole('button', { name: /^Not tied to a step/ })).toHaveAttribute('aria-expanded', 'true');
+      await expect(media).toHaveAttribute('aria-selected', 'false');
+      await settled(page, '#board-area');
+      // a small canvas may page the three notes, but only notes are shown
+      await expect(looseNodes(page).filter({ hasText: /Loose note/ }).first()).toBeVisible();
+      await expect(looseNodes(page).filter({ hasText: /Media \d/ })).toHaveCount(0);
+    });
+
+    test('an index jump to a note while on Media switches the tab and highlights the note', async ({ page }) => {
+      await routeBoard(page, TWO(), { loose: true });
+      await stepIn(page, true);
+      const area = page.locator('#board-area');
+      await area.getByRole('tab', { name: /^Media/ }).click();
+      await expect(area.getByRole('tab', { name: /^Media/ })).toHaveAttribute('aria-selected', 'true');
+      await settled(page, '#board-area');
+      await expect(looseNodes(page).filter({ hasText: /Loose note 1/ })).toHaveCount(0);
+      const nav = page.getByRole('navigation', { name: 'Board index' });
+      if (!(await nav.isVisible().catch(() => false))) await page.getByRole('button', { name: /^Board index/ }).click();
+      await nav.locator('li').filter({ hasText: 'Loose note 1' }).locator('button').first().click();
+      await expect(area.getByRole('tab', { name: /^Notes/ })).toHaveAttribute('aria-selected', 'true');
+      await expect(area.locator('.react-flow__node[data-highlighted="true"]')).toContainText('Loose note 1');
+    });
+  });
+}
+
+test.describe('a note that was added always shows, and the tab that shows holds still', () => {
+  const AREA2 = 'A second Area';
+  const added = (page: Page, title: string) => page.locator('#board-area .react-flow__node[data-highlighted="true"]').filter({ hasText: title });
+  async function addNote(page: Page, title: string, area: string, step?: string) {
+    await page.getByRole('button', { name: /^(Add a note|\+?\s*Note)$/ }).first().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByPlaceholder('Note title...').fill(title);
+    await dialog.getByLabel('Area').selectOption({ label: area });
+    if (step) await dialog.getByLabel(/^Step/).selectOption(step);
+    await dialog.getByRole('button', { name: 'Add note' }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  test('from the overview, from another Area and from the Media tab, the board goes to the note and lights it up, even when the card arrives late', async ({ page }) => {
+    const tracker = await routeBoard(page, TWO(), { loose: true, second: true });
+    tracker.live.changesAfter = 300;
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click().catch(() => undefined);
+    await settled(page, '#board-overview');
+    // 1. from the overview: it steps into the Area, to the Notes tab, and lights the note
+    await expect(page.locator('#board-area')).toHaveCount(0);
+    await addNote(page, 'Added from the overview', AREA);
+    await expect(page.locator('#board-area')).toBeVisible();
+    await expect(added(page, 'Added from the overview')).toBeVisible();
+    await expect(page.locator('#board-area').getByRole('tab', { name: /^Notes/ })).toHaveAttribute('aria-selected', 'true');
+    // 2. from another Area: it steps across
+    await page.locator('#board-area').getByRole('button', { name: /^Board ›/ }).click();
+    await settled(page, '#board-overview');
+    await page.locator('#board-overview button.board-area').filter({ hasText: AREA2 }).click();
+    await expect(page.locator('#board-area')).toContainText('Do the first thing of the second Area');
+    await expect(page.locator('#board-area').getByRole('tab', { name: /^Notes/ })).toHaveCount(0);
+    await addNote(page, 'Added from the other Area', AREA);
+    await expect(page.locator('#board-area').getByRole('tab', { name: /^Notes/ })).toBeVisible();
+    await expect(added(page, 'Added from the other Area')).toBeVisible();
+    // 3. from the Media tab of the same Area: the tab turns to Notes
+    await page.locator('#board-area').getByRole('tab', { name: /^Media/ }).click();
+    await settled(page, '#board-area');
+    await expect(page.locator('#board-area .react-flow__node-note')).toHaveCount(0);
+    await addNote(page, 'Added from the Media tab', AREA);
+    await expect(page.locator('#board-area').getByRole('tab', { name: /^Notes/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(added(page, 'Added from the Media tab')).toBeVisible();
+    // the keyboard is on the note, not lost on the page
+    await expect(page.locator('#board-area .react-flow__node').filter({ hasText: 'Added from the Media tab' }).locator(':focus')).toHaveCount(1);
+  });
+
+  test('a note added to a step shows on that step\'s row', async ({ page }) => {
+    await routeBoard(page, TWO(), { loose: true });
+    await stepIn(page, true);
+    await addNote(page, 'Added to a step', AREA, 'c1-bug');
+    await expect(added(page, 'Added to a step')).toBeVisible();
+  });
+
+  test('the tab that shows holds still when a picture arrives live', async ({ page }) => {
+    const tracker = await routeBoard(page, TWO(), { loose: true });
+    await stepIn(page, true);
+    const area = page.locator('#board-area');
+    await expect(area.getByRole('tab', { name: /^Notes/ })).toHaveAttribute('aria-selected', 'true');
+    tracker.live.cards = [boardFileCard(400, 'new.png', { area: AREA_ID, step: undefined, title: 'A new AI picture', at: new Date().toISOString() }), ...tracker.live.cards];
+    await page.evaluate(() => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });
+    await expect(area.getByRole('tab', { name: /^Media\s*39$/ })).toBeVisible({ timeout: 15_000 });
+    await expect(area.getByRole('tab', { name: /^Notes/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(area.locator('.react-flow__node-note').first()).toBeVisible();
+  });
+
+  test('a line runs from a note to a picture on the other tab, to the row header, on hover and when its thread is followed', async ({ page }) => {
+    await routeBoard(page, TWO(), { loose: true, linked: true });
+    await stepIn(page, true);
+    const area = page.locator('#board-area');
+    await expect(area.getByRole('tab', { name: /^Notes/ })).toHaveAttribute('aria-selected', 'true');
+    const note = area.locator(`.react-flow__node[data-id="${boardNote(200).id}"]`);
+    await note.hover();
+    await expect(area.locator('.react-flow__edge[data-lit]')).toHaveCount(1);
+    await expect(area.locator('.react-flow__edge[data-lit]')).toHaveAttribute('aria-label', /Not tied to a step/);
+    await page.mouse.move(5, 5);
+    await note.click({ position: { x: 20, y: 12 } });
+    await expect(area.locator('.react-flow__edge[data-thread="active"]')).toHaveCount(1);
+  });
+});
+
+test.describe('the reader closes on a row paged off the first page, and a note or a tab never leaves the board dark', () => {
+  test.use({ viewport: { width: 1500, height: 840 } });
+  const dimmed = (page: Page) => page.evaluate(() => ({
+    thread: document.querySelectorAll('#board-area .board-flow[data-thread-active]').length,
+    dim: Array.from(document.querySelectorAll('#board-area .react-flow__node-note, #board-area .react-flow__node-file, #board-area .react-flow__node-step')).filter((el) => Number(getComputedStyle(el).opacity) < 0.9).length,
+  }));
+  const drawn = (page: Page, title: string) => page.locator('#board-area .react-flow__node').filter({ hasText: title });
+  const frames = (page: Page, n = 12) => page.evaluate((count) => new Promise<void>((resolve) => { let left = count; const tick = () => { if (--left <= 0) resolve(); else requestAnimationFrame(tick); }; requestAnimationFrame(tick); }), n);
+
+  for (const [steps, how] of [[12, 'Escape'], [9, 'the Close button']] as const) {
+    test(`a row opened at a late page, the reader walked ${steps} cards back and closed by ${how}: the card last read is drawn and holds the keyboard`, async ({ page }) => {
+      await page.addInitScript(() => { try { localStorage.setItem('contextspace_board_reader_layout_v1', 'side'); } catch { /* no storage */ } });
+      await routeBoard(page, TWO(), { loose: true });
+      await stepIn(page, false);
+      const area = page.locator('#board-area');
+      await area.getByRole('tab', { name: /^Media/ }).click();
+      await settled(page, '#board-area');
+      await area.locator('.react-flow__node-more button').first().click();
+      await settled(page, '#board-area');
+      for (let i = 0; i < 3; i += 1) { await area.getByRole('button', { name: 'Older cards' }).click(); await frames(page, 6); }
+      await settled(page, '#board-area');
+      await area.locator('.react-flow__node-file').first().click({ position: { x: 30, y: 20 } });
+      const reader = page.locator('[data-board-reader]');
+      await expect(reader).toBeVisible();
+      await settled(page, '#board-area');
+      const label = reader.getByLabel(/^Item \d+ of \d+$/);
+      const position = async () => Number((await label.getAttribute('aria-label'))!.match(/Item (\d+)/)![1]);
+      const first = await position();
+      for (let i = 0; i < steps; i += 1) { await page.keyboard.press(']'); await frames(page, 4); }
+      await expect.poll(position).toBe(first + steps);
+      const last = `m${(await reader.textContent())!.match(/Media (\d+)/)![1]}.png`;
+      if (how === 'Escape') await page.keyboard.press('Escape');
+      else await reader.getByRole('button', { name: /^Close/ }).first().click();
+      await expect(reader).toHaveCount(0);
+      await settled(page, '#board-area');
+      await expect(drawn(page, last).first(), 'the card last read is drawn').toBeVisible();
+      await expect(drawn(page, last).first().locator(':focus'), 'the keyboard is on it').toHaveCount(1);
+    });
+  }
+
+  test('a note that was added lights up alone: nothing is dim, and a press on a tab leaves nothing dim either', async ({ page }) => {
+    await routeBoard(page, TWO(), { loose: true });
+    await stepIn(page, false);
+    const area = page.locator('#board-area');
+    await page.getByRole('button', { name: /^(Add a note|\+?\s*Note)$/ }).first().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByPlaceholder('Note title...').fill('A lit note');
+    await dialog.getByLabel('Area').selectOption({ label: AREA });
+    await dialog.getByRole('button', { name: 'Add note' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(area.locator('.react-flow__node[data-highlighted="true"]')).toContainText('A lit note');
+    await frames(page, 20);
+    expect(await dimmed(page)).toEqual({ thread: 0, dim: 0 });
+    // a thread selected with no reader open (the note is linked to nothing, so the tab press holds none of its chain and ends it), then a press on a tab, a row control, "+N more" and the pager
+    await area.locator('.react-flow__node-note').nth(1).click({ position: { x: 20, y: 12 } });
+    await expect(area.locator('.board-flow[data-thread-active]')).toHaveCount(1);
+    await area.getByRole('tab', { name: /^Media/ }).click();
+    await settled(page, '#board-area');
+    expect(await dimmed(page)).toEqual({ thread: 0, dim: 0 });
+    await area.locator('.react-flow__node-file').first().click({ position: { x: 30, y: 20 } });
+    await page.keyboard.press('Escape');
+    await area.locator('.react-flow__node-more button').first().click();
+    await settled(page, '#board-area');
+    expect(await dimmed(page)).toEqual({ thread: 0, dim: 0 });
+  });
+
+  test('a note linked to a picture on the other tab: the thread stays through the tab and "+N more" until the picture shows lit', async ({ page }) => {
+    await routeBoard(page, TWO(), { loose: true, linked: 37 });
+    await stepIn(page, false);
+    const area = page.locator('#board-area');
+    await area.locator(`.react-flow__node[data-id="${boardNote(200).id}"]`).click({ position: { x: 20, y: 12 } });
+    await expect(area.locator('.board-flow[data-thread-active]')).toHaveCount(1);
+    await area.getByRole('tab', { name: /^Media/ }).click();
+    await settled(page, '#board-area');
+    await frames(page, 10);
+    await expect(area.locator('.board-flow[data-thread-active]'), 'the thread stays on the tab that holds its picture').toHaveCount(1);
+    const picture = area.locator('.react-flow__node[data-id="' + boardFileCard(137, 'm37.png').id + '"]');
+    await expect(picture).toHaveCount(0);
+    await expect(area.locator('.react-flow__node-more[data-thread="active"]'), '"+N more" that holds it is lit').toHaveCount(1);
+    await area.locator('.react-flow__node-more button').first().click();
+    await settled(page, '#board-area');
+    for (let i = 0; i < 20 && (await picture.count()) === 0; i += 1) {
+      await expect(area.locator('.board-flow[data-thread-active]'), 'the thread stays while the pager is followed').toHaveCount(1);
+      await expect(area.locator('.react-flow__node-pager[data-thread="active"]'), 'the pager that holds it is lit').toHaveCount(1);
+      await area.getByRole('button', { name: 'Older cards' }).click();
+      await settled(page, '#board-area');
+    }
+    await expect(picture).toHaveAttribute('data-thread', 'active');
+    await expect(area.locator('.board-flow[data-thread-active]')).toHaveCount(1);
   });
 });
