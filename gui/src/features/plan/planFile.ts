@@ -14,7 +14,13 @@ export interface PlanProof {
   at?: string;
 }
 
-export interface PlanFileStep { key: string; text: string; done: boolean }
+export interface PlanFileStep {
+  key: string;
+  text: string;
+  done: boolean;
+  /** The key of the step it is nested under: that step is a heading for it. */
+  parent?: string;
+}
 
 export interface PlanFileDecision {
   key: string;
@@ -113,12 +119,13 @@ export function useChangePlanFile(workspace: string) {
 export function useAnswerDecision(workspace: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, answer, expected }: { key: string; answer: string; expected?: string }) =>
+    mutationFn: ({ key, answer, expected }: { key: string; answer: string; expected?: string; /** False: the decision stays on the board until the server has answered (the dialog, where the typed words must survive a failure). */ optimistic?: boolean }) =>
       apiFetch<{ message: string; plan: PlanFileView }>(
         `/api/workspace/${encodeURIComponent(workspace)}/plan/decisions/${encodeURIComponent(key)}/answer`,
         { method: 'POST', body: JSON.stringify({ answer, ...(expected ? { expected } : {}) }) },
       ),
-    onMutate: async ({ key, answer }) => {
+    onMutate: async ({ key, answer, optimistic }) => {
+      if (optimistic === false) return { previous: undefined };
       await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
       const previous = queryClient.getQueryData<PlanFileView>(planFileKey(workspace));
       if (previous) {
@@ -138,7 +145,10 @@ export function useAnswerDecision(workspace: string) {
       }
       return { previous };
     },
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
+      // A plan read that started before the answer was saved and lands after it would bring the answered decision back: drop it (the
+      // dialog's answer is not optimistic, so nothing else has cancelled it).
+      await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
       queryClient.setQueryData(planFileKey(workspace), result.plan);
       void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
       void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });

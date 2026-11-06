@@ -50,7 +50,7 @@ export interface BoardActions {
   /** Selects a card to follow its thread (lights up connected chain and dims the rest), or null to clear. */
   selectThread?: (nodeId: string | null) => void;
   /** Submits an answer to a plan decision directly from a board card. */
-  answerDecision?: (key: string, answer: string, expected?: string) => Promise<boolean>;
+  answerDecision?: (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => Promise<boolean>;
   /** Errors encountered when answering decisions, keyed by decision key. */
   decisionErrors?: Record<string, string>;
   /** Toggles a plan step (or checkpoint) done state directly from the board. */

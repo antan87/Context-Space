@@ -576,11 +576,16 @@ export function areaCounts(data: AreaData): string[] {
  * of a second line, and one that is a little short of the width stays on its one.
  */
 function cardTextLines(text: string, size: number, weight = 1): 1 | 2 {
+  return textEm(text) * size * weight > CARD_TEXT_WIDTH * 0.92 ? 2 : 1;
+}
+
+/** The width of a text in ems, guessed without the browser from the width of each kind of letter (`EM`): times the font size, it is px. */
+export function textEm(text: string): number {
   let em = 0;
   for (const letter of text) {
     em += /[WMm@]/.test(letter) ? EM.wide : /[A-Z]/.test(letter) ? EM.capital : /[ijl.,;:!'|tfrI ]/.test(letter) ? EM.narrow : EM.other;
   }
-  return em * size * weight > CARD_TEXT_WIDTH * 0.92 ? 2 : 1;
+  return em;
 }
 
 /** How high an Area card needs to be for what it shows: its pictures or its preview, and its counts, only when it has them. */

@@ -204,13 +204,15 @@ export type RowHeadData = {
   static?: boolean;
   /** Key of the plan step if this row represents a plan step. */
   stepKey?: string;
+  /** The heading the step is nested under, as it is written (inline Markdown), shown quietly beside "Now". */
+  heading?: string;
 };
 /** A row folded to one line: its title and what it holds. Pressing it opens the row. */
 export type FoldData = { rowId: string; title: string; summary: string; current: boolean; warning?: string; /** The first thing the row holds that is worth saying, in the muted colour: red is for errors. */ note?: string; /** The first things the row holds, in a line, for the muted words after its name. */ preview?: string; /** The things of the row, which are not drawn: a line to one of them goes to the row. */ holds: string[] };
 /** The tile at the end of a row that has more than fits: "+N more". Pressing it opens the row. */
 export type MoreData = { rowId: string; title: string; count: number; rowTitle: string; static?: boolean; /** The things the tile stands for, which are not drawn. */ holds: string[] };
 /** The buttons that page through an opened row: "‹ Newer", "1–6 of 10", "Older ›". */
-export type PagerData = { rowId: string; title: string; page: number; pages: number; from: number; to: number; total: number; /** The things of the row that are not on this page, which are not drawn: a line to one of them goes to the buttons. */ holds: string[] };
+export type PagerData = { rowId: string; title: string; /** What the pages hold, for the buttons' names; cards when missing. */ what?: 'questions'; page: number; pages: number; from: number; to: number; total: number; /** The things of the row that are not on this page, which are not drawn: a line to one of them goes to the buttons. */ holds: string[] };
 export type RowHeadNode = Node<RowHeadData, 'step'>;
 export type PagerNode = Node<PagerData, 'pager'>;
 export type FoldNode = Node<FoldData, 'fold'>;
@@ -690,4 +692,18 @@ export function boardEdges(nodes: BoardNode[], links: BoardLink[]): Edge[] {
     });
   }
   return edges;
+}
+
+/**
+ * One line for each pair of things: several links from a card to things that are all folded into one row (or to the same card, with other
+ * labels) would be drawn on top of each other as one thick arrow. The line that stays says how many it stands for.
+ */
+export function oneLinePerPair(edges: Edge[]): Edge[] {
+  const kept = new Map<string, { edge: Edge; count: number }>();
+  for (const edge of edges) {
+    const key = [edge.source, edge.target].sort().join('\u0000');
+    const seen = kept.get(key);
+    if (seen) seen.count += 1; else kept.set(key, { edge, count: 1 });
+  }
+  return Array.from(kept.values(), ({ edge, count }) => (count > 1 ? { ...edge, ariaLabel: `${edge.ariaLabel}, ${count} links` } : edge));
 }

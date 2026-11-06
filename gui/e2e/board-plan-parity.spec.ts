@@ -163,7 +163,7 @@ test.describe('Plan Tab Deprecation & Board Redirection (Slice 1.3)', () => {
     await expect(stepped).toBeVisible();
 
     // Verify stepped area displays Add step button
-    const addStepTrigger = stepped.locator('[data-testid="area-add-step-button"]');
+    const addStepTrigger = stepped.getByRole('button', { name: 'Add a step' });
     await expect(addStepTrigger).toBeVisible();
 
     // Click trigger to expand form
@@ -205,7 +205,7 @@ test.describe('Plan Tab Deprecation & Board Redirection (Slice 1.3)', () => {
     await expect(stepped).toBeVisible();
 
     // Open add step via header action button
-    const stepBtn = stepped.locator('[data-testid="area-add-step-button"]');
+    const stepBtn = stepped.getByRole('button', { name: 'Add a step' });
     await expect(stepBtn).toBeVisible();
     await stepBtn.click();
 
@@ -237,7 +237,7 @@ test.describe('Plan Tab Deprecation & Board Redirection (Slice 1.3)', () => {
     await expect(stepped).toBeVisible();
 
     // Open add step via header action button
-    const stepBtn = stepped.locator('[data-testid="area-add-step-button"]');
+    const stepBtn = stepped.getByRole('button', { name: 'Add a step' });
     await expect(stepBtn).toBeVisible();
     await stepBtn.click();
 

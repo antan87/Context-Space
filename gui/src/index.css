@@ -793,6 +793,28 @@
   }
 }
 
+/* Inside an Area no line is drawn at rest. Each line is faint on its own (0.2), but the lines of a card that many things point to run
+   on top of each other and add up to a nearly solid line: 8 lines at 0.2 are 83 % opaque. A line shows only when one of its two cards
+   is hovered or has the keyboard (`data-lit`), or is in the thread of the selected card. It stays in the accessibility tree. */
+.board-flow-rows .react-flow__edge,
+.board-flow-rows[data-thread-active="true"] .react-flow__edge:not([data-thread="active"]) {
+  opacity: 0;
+  pointer-events: none;
+}
+.board-flow-rows .react-flow__edge[data-lit],
+.board-flow-rows[data-thread-active="true"] .react-flow__edge[data-lit],
+.board-flow-rows[data-thread-active="true"] .react-flow__edge[data-thread="active"] {
+  opacity: 1;
+}
+.board-flow-rows .react-flow__edge[data-lit] .react-flow__edge-path {
+  stroke: var(--primary);
+  stroke-width: 2.5px;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--primary) 55%, transparent));
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-flow-rows .react-flow__edge { transition: none; }
+}
+
 /* ─── Board Areas & Stepping In/Out (Level 0 and Level 1) ─────────────────── */
 .board-overview-plane {
   scale: 1;

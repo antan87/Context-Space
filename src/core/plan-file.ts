@@ -38,6 +38,8 @@ export interface PlanLine {
 
 export interface PlanStep extends PlanLine {
   text: string;
+  /** The key of the step this one is nested under, when it is indented below another step: that one is a heading for it. */
+  parent?: string;
 }
 
 export interface PlanDecision extends PlanLine {
@@ -114,6 +116,8 @@ export function parsePlanFile(text: string): PlanFile {
   const details = new Map<PlanLine, string[]>();
   const keep = (item: PlanLine, line: string) => details.set(item, [...(details.get(item) ?? []), line]);
   const close = () => { open = null; };
+  // The steps whose nested checkboxes may follow, with their indents: a step's parent is the nearest one indented less than it.
+  let stepStack: Array<{ key: string; indent: number }> = [];
 
   lines.forEach((line, index) => {
     const fenceMark = FENCE.exec(line)?.[1];
@@ -132,6 +136,7 @@ export function parsePlanFile(text: string): PlanFile {
     const heading = HEADING.exec(line);
     if (heading) {
       close();
+      stepStack = [];
       const level = heading[1]!.length;
       const words = heading[2]!.trim();
       if (level === 1 && !plan.title) plan.title = words;
@@ -153,6 +158,7 @@ export function parsePlanFile(text: string): PlanFile {
       const words = task[3]!.trim();
       if (inCheckpoints && (checkpointIndent === null || indent <= checkpointIndent)) {
         checkpointIndent = indent;
+        stepStack = [];
         const title = unbold(words);
         checkpoint = { key: uniqueKey(title), title, done, line: index, end: index, steps: [], decisions: [] };
         plan.checkpoints.push(checkpoint);
@@ -161,6 +167,8 @@ export function parsePlanFile(text: string): PlanFile {
       }
       const under = inCheckpoints ? checkpoint : null;
       if (DECIDE.test(words)) {
+        // A decision ends the steps beside it and above it in the outline, so a step nested under it is not under the step before it
+        while (stepStack.length > 0 && stepStack[stepStack.length - 1]!.indent >= indent) stepStack.pop();
         const question = words.replace(DECIDE, '').replace(/(\*\*|__)$/, '').trim();
         const decision: PlanDecision = {
           key: uniqueKey(question), question, done, line: index, end: index, suggested: [],
@@ -169,7 +177,10 @@ export function parsePlanFile(text: string): PlanFile {
         (under ? under.decisions : plan.decisions).push(decision);
         open = { item: decision, indent };
       } else {
-        const step: PlanStep = { key: uniqueKey(words), text: words, done, line: index, end: index };
+        while (stepStack.length > 0 && stepStack[stepStack.length - 1]!.indent >= indent) stepStack.pop();
+        const parent = stepStack[stepStack.length - 1]?.key;
+        const step: PlanStep = { key: uniqueKey(words), text: words, done, line: index, end: index, ...(parent ? { parent } : {}) };
+        stepStack.push({ key: step.key, indent });
         (under ? under.steps : plan.steps).push(step);
         open = { item: step, indent };
       }

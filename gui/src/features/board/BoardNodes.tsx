@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type Ref } from 'react';
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, Terminal, type LucideIcon } from 'lucide-react';
 
@@ -14,9 +14,11 @@ import { cn } from '../../lib/utils.js';
 import { NoteDialog } from './NoteDialog.js';
 import { useAnswerDecision, useChangePlanFile } from '../plan/planFile.js';
 import { suggestedAnswers } from '../plan/planView.js';
+import { plainText, stripHeadingColon } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { areaCounts, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { answersThatFit, ROW_SIZE } from './boardRows.js';
 import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
@@ -122,15 +124,79 @@ const planSubtitle = (data: CheckpointData, open: boolean) =>
 
 interface WaitingDecisionCardProps {
   decision: BoardDecision;
-  onAnswer: (key: string, answer: string, expected?: string) => Promise<boolean>;
+  onAnswer: (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => Promise<boolean>;
+  /** The width of the node the card is on, when it is the compact card of the Area's waiting frame: one line of answers, the rest in a dialog. */
+  width?: number;
+  /** Said when the card leaves the board with its dialog open and no answer sent: the question changed in the plan (or was answered elsewhere). */
+  onLost?: () => void;
 }
 
-function WaitingDecisionCard({ decision, onAnswer }: WaitingDecisionCardProps) {
+/**
+ * The keyboard after an answer: the decision it was on has left the board (or was put back, after a failure), and focus would fall to the page.
+ * It goes to the card of the decision that follows, else of the first one that waits, else to the Now row's step or the row after the waiting card. The
+ * layout is drawn again a frame or two after the plan changes, so this looks for a few frames; if the keyboard has been put somewhere else
+ * meanwhile, it is left there.
+ */
+function focusAfterAnswer(card: HTMLElement, nextTestId: string | null, ownKey: string | null) {
+  const area = card.closest('#board-area') ?? document;
+  let frames = 0;
+  const lost = () => {
+    const active = document.activeElement;
+    return !active || active === document.body || !active.isConnected || document.querySelector('[data-testid="decision-dialog"]')?.contains(active) === true;
+  };
+  const attempt = () => {
+    if (!lost()) return;
+    frames += 1;
+    const cards = Array.from(area.querySelectorAll<HTMLElement>('[data-testid^="decision-card-"]'));
+    const target = (ownKey && cards.find((entry) => entry.dataset.testid === `decision-card-${ownKey}`))
+      || (nextTestId && cards.find((entry) => entry.dataset.testid === nextTestId))
+      || cards[0];
+    // Never on an answer button: a second press meant for the first decision would answer this one unread. The next Tab reaches its answers.
+    if (target) { target.focus({ preventScroll: true }); return; }
+    if (frames < 20) { requestAnimationFrame(attempt); return; }
+    (area.querySelector<HTMLElement>('[data-row-fallback]') ?? area.querySelector<HTMLElement>('[data-row-control]:not([data-row-control="row:waiting"])'))?.focus({ preventScroll: true });
+  };
+  requestAnimationFrame(attempt);
+}
+
+
+/** How long after an answer the other answers of the same frame ignore a press: a double press is not a second answer. */
+const ANSWER_HOLD_OFF_MS = 500;
+const lastAnswerOnFrame = new WeakMap<object, number>();
+const frameOf = (element: Element) => element.closest('#board-area') ?? document;
+
+/**
+ * The one place that decides whether a press on a suggested answer counts. Spread on the card; it sees every press first (also those from
+ * the dialog, which is a child of the card in React). A repeat of a held key, the second press of a double click, and any press within
+ * the hold-off after an answer on this frame are dropped; a deliberate press later answers.
+ */
+const answerPressGuard = {
+  onClickCapture(event: ReactMouseEvent<HTMLElement>) { guardPress(event, event.detail > 1); },
+  onKeyDownCapture(event: ReactKeyboardEvent<HTMLElement>) { if (event.key === 'Enter' || event.key === ' ') guardPress(event, event.repeat); },
+};
+function guardPress(event: { type: string; nativeEvent: Event; target: EventTarget; currentTarget: HTMLElement; preventDefault(): void; stopPropagation(): void }, repeated: boolean) {
+  const button = (event.target as Element).closest?.('[role="group"] button');
+  // (the dialog is drawn outside the card, but its presses reach the card's handlers through React)
+  if (!button) return;
+  // an event is decided once: it can reach this handler more than once on its way, and must not be dropped by its own stamp
+  const decided = decisions.get(event.nativeEvent);
+  const frame = frameOf(event.currentTarget);
+  const drop = decided ?? (repeated || performance.now() - (lastAnswerOnFrame.get(frame) ?? -Infinity) < ANSWER_HOLD_OFF_MS);
+  decisions.set(event.nativeEvent, drop);
+  if (drop) { event.preventDefault(); event.stopPropagation(); return; }
+  if (event.type === 'click' && decided === undefined) lastAnswerOnFrame.set(frame, performance.now());
+}
+const decisions = new WeakMap<Event, boolean>();
+
+/** What answering a decision takes: its suggested answers, a free answer, and whether the last try failed. */
+function useDecisionAnswer({ decision, onAnswer }: WaitingDecisionCardProps) {
   const actions = useContext(BoardActionsContext);
   const [customAnswer, setCustomAnswer] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const displayError = error ?? actions?.decisionErrors?.[decision.key];
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const failure = error ?? actions?.decisionErrors?.[decision.key] ?? null;
+  const displayError = failure && failure !== dismissed ? failure : null;
 
   const options = useMemo(() => {
     if (decision.suggested && decision.suggested.length > 0) return decision.suggested;
@@ -143,25 +209,191 @@ function WaitingDecisionCard({ decision, onAnswer }: WaitingDecisionCardProps) {
     return suggestedAnswers(decision.detail);
   }, [decision.suggested, decision.detail]);
 
-  const submitAnswer = async (answer: string) => {
+  /**
+   * `fromDialog`: the answer is not optimistic (the decision stays until the server has said yes), so a failure keeps the dialog open with
+   * the typed words and the keyboard where it was. A press on the card is optimistic: the decision leaves the board at once.
+   */
+  const refocus = useRef<HTMLElement | null>(null);
+  const sent = useRef(false);
+  const submitAnswer = async (answer: string, fromDialog = false, card?: HTMLElement | null) => {
     const text = answer.trim();
     if (!text || saving) return;
+    const active = document.activeElement as HTMLElement | null;
+    const hadFocus = Boolean(card && (card.contains(active) || document.querySelector('[data-testid="decision-dialog"]')?.contains(active)));
+    const next = card?.nextElementSibling?.getAttribute('data-testid') ?? null;
+    if (fromDialog) refocus.current = active;
+    if (card) lastAnswerOnFrame.set(frameOf(card), performance.now());
     setSaving(true);
+    sent.current = true;
     setError(null);
+    setDismissed(null);
     try {
-      const ok = await onAnswer(decision.key, text, decision.question);
-      if (!ok) setError('Could not save answer.');
+      const ok = await onAnswer(decision.key, text, decision.question, fromDialog ? { optimistic: false } : undefined);
+      if (!ok) { setError('Could not save answer.'); sent.current = false; }
+      if (ok && hadFocus) focusAfterAnswer(card!, next, null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save answer.');
+      sent.current = false;
+      if (hadFocus && !fromDialog) focusAfterAnswer(card!, null, decision.key);
     } finally {
       setSaving(false);
     }
   };
+  // The keyboard stays on what it was on in the dialog while it saves and when the answer fails (the buttons are off for a moment)
+  useEffect(() => {
+    if (saving || !refocus.current) return;
+    const element = refocus.current;
+    refocus.current = null;
+    if (element.isConnected) element.focus({ preventScroll: true });
+  }, [saving]);
+
+  return { actions, options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError: () => { setDismissed(failure); setError(null); }, submitAnswer };
+}
+
+const ANSWER_BUTTON = 'nodrag nopan inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md border border-border/80 bg-background/80 px-2.5 text-[13px] font-medium text-foreground transition-colors hover:bg-accent cursor-pointer disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
+const GHOST_BUTTON = 'nodrag nopan inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
+
+/** Asks about the question in the CLI; the question without its marks. */
+function AskInCliButton({ question }: { question: string }) {
+  const actions = useContext(BoardActionsContext);
+  if (!actions?.askInCLI || actions.readOnly) return null;
+  const plain = plainText(question) || question;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        actions.askInCLI?.(plain);
+      }}
+      className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded px-2 text-[12px] text-muted-foreground hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
+      title={`Ask about "${plain}" in CLI`}
+    >
+      <span>Ask in CLI</span>
+      <span aria-hidden="true">↗</span>
+    </button>
+  );
+}
+
+/**
+ * A waiting decision on the Area's frame: a fixed card that never scrolls. The question is up to two lines (all of it in the dialog and the
+ * title), then one line: the suggested answers that fit whole, one press answers, and a quiet button that opens the dialog with every answer,
+ * the full question, a free answer and "Ask in CLI". A failed answer is said in place of the answers on that line, so the card keeps its height.
+ */
+function CompactDecisionCard(props: WaitingDecisionCardProps) {
+  const { decision, width = ROW_SIZE.decisionWidth } = props;
+  const { options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError, submitAnswer } = useDecisionAnswer(props);
+  const fit = useMemo(() => answersThatFit(options, width), [options, width]);
+  const plain = plainText(decision.question);
+  const [open, setOpen] = useState(false);
+  const card = useRef<HTMLLIElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const question = useRef<HTMLDivElement>(null);
+  // "Other answer…" opens on the free answer; "All answers…" opens on the question, so that neither a second Enter nor a space answers by
+  // accident: an answer needs a press of its own. The question is read first by a screen reader, and Tab reaches the answers from it.
+  const allAnswers = fit.hidden > 0;
+  const [again, setAgain] = useState(false);
+  // The decision's key is its question, so a question edited in the plan is another card: this one goes, and its dialog with it. Say so.
+  const openNow = useRef(false);
+  useEffect(() => { openNow.current = open; }, [open]);
+  const onLost = props.onLost;
+  useEffect(() => () => { if (openNow.current && !sent.current) onLost?.(); }, [onLost, sent]);
+  useEffect(() => {
+    if (!again || displayError) return;
+    setAgain(false);
+    card.current?.querySelector<HTMLElement>('[role="group"] button:not(:disabled), [data-testid="decision-more-answers"]')?.focus({ preventScroll: true });
+  }, [again, displayError]);
 
   return (
     <li
+      ref={card}
+      tabIndex={-1}
+      {...answerPressGuard}
       data-testid={`decision-card-${decision.key}`}
-      className="nodrag nopan flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/8 p-2.5 text-foreground transition-colors shadow-2xs"
+      style={{ height: ROW_SIZE.decisionCard }}
+      className="nodrag nopan box-border outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col justify-between overflow-hidden rounded-lg border border-warning/40 bg-warning/8 px-2.5 py-[7px] text-foreground shadow-2xs"
+    >
+      <div className="flex items-start gap-2">
+        <CircleHelp aria-hidden="true" className="mt-px size-4 shrink-0 text-warning-foreground" />
+        <span className="line-clamp-2 min-w-0 break-words text-[14px] font-medium leading-[18px]" title={plain}>
+          <span className="sr-only">Waiting for you: </span>
+          <InlinePlanMarkdown content={decision.question} />
+        </span>
+      </div>
+
+      {/* The line takes 24 px of the card's height, but is 32 px tall (4 px pulled back above and below, into the card's padding), so that a focus
+          ring (2 px and 1 px offset) is whole inside the clip that keeps a button the estimate let through from ever printing over the ghost button. */}
+      <div className="-my-1 flex h-8 min-w-0 items-center gap-1.5">
+        {displayError ? (
+          <>
+            <p role="alert" className="min-w-0 flex-1 truncate text-[12.5px] text-destructive" title={displayError}>{displayError}</p>
+            <button type="button" onClick={() => { setAgain(true); dismissError(); }} className={GHOST_BUTTON}>Answer again</button>
+          </>
+        ) : fit.shown.length > 0 && (
+          <div data-testid="decision-answers" className="-mx-1 min-w-0 overflow-clip px-1 py-1">
+            <div role="group" aria-label="Suggested answers" className="flex w-max items-center gap-1.5">
+              {fit.shown.map((option) => (
+                <button key={option} type="button" disabled={saving} onClick={() => void submitAnswer(option, false, card.current)} className={ANSWER_BUTTON}>{option}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger render={<button type="button" data-testid="decision-more-answers" className={cn(GHOST_BUTTON, 'ml-auto')} aria-haspopup="dialog" />}>{fit.ghost}</DialogTrigger>
+          <DialogPopup className="max-w-lg" data-testid="decision-dialog" initialFocus={allAnswers ? question : input} onClick={(e) => e.stopPropagation()}>
+            <DialogHeader>
+              <DialogTitle className="text-sm font-semibold text-muted-foreground">Waits for you</DialogTitle>
+              <DialogDescription className="sr-only">Answer this question with a suggestion or in your own words</DialogDescription>
+            </DialogHeader>
+            <DialogPanel>
+              <div className="space-y-3">
+                <div ref={question} tabIndex={-1} className="select-text break-words text-base font-medium leading-relaxed text-foreground outline-none"><InlinePlanMarkdown content={decision.question} /></div>
+                {decision.detail && <div className="board-text select-text break-words text-sm leading-6 text-muted-foreground"><ChatMarkdown content={decision.detail} /></div>}
+                {options.length > 0 && (
+                  <div role="group" aria-label="All suggested answers" className="flex flex-wrap gap-1.5">
+                    {options.map((option) => (
+                      <button key={option} type="button" disabled={saving} onClick={() => void submitAnswer(option, true, card.current)} className={cn(ANSWER_BUTTON, 'h-auto min-h-7 whitespace-normal py-1 text-left')}>{option}</button>
+                    ))}
+                  </div>
+                )}
+                <form aria-busy={saving} onSubmit={(e) => { e.preventDefault(); void submitAnswer(customAnswer, true, card.current); }} className="flex items-center gap-1.5">
+                  <input
+                    ref={input}
+                    type="text"
+                    value={customAnswer}
+                    readOnly={saving}
+                    onChange={(e) => setCustomAnswer(e.target.value)}
+                    placeholder="Your answer"
+                    aria-label={`Your answer to ${plain}`}
+                    className="h-8 min-w-0 flex-1 rounded border border-input bg-background px-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-50"
+                  />
+                  <Button type="submit" size="sm" disabled={saving || !customAnswer.trim()}>{saving ? 'Saving…' : 'Answer'}</Button>
+                </form>
+                {saving && <p role="status" className="text-sm text-muted-foreground">Saving…</p>}
+                {displayError && <p role="alert" className="break-words text-sm text-destructive">{displayError}</p>}
+              </div>
+            </DialogPanel>
+            <DialogFooter variant="bare">
+              <AskInCliButton question={decision.question} />
+              <DialogClose render={<Button type="button" variant="ghost" size="sm" />}>Close</DialogClose>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
+      </div>
+    </li>
+  );
+}
+
+/** The decision in a checkpoint's own frame (not inside an Area): the whole form on the card, in a list that scrolls. */
+function FullDecisionCard(props: WaitingDecisionCardProps) {
+  const { decision } = props;
+  const { actions, options, customAnswer, setCustomAnswer, saving, displayError, submitAnswer } = useDecisionAnswer(props);
+
+  return (
+    <li
+      tabIndex={-1}
+      {...answerPressGuard}
+      data-testid={`decision-card-${decision.key}`}
+      className="nodrag nopan outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/8 p-2.5 text-foreground transition-colors shadow-2xs"
     >
       <div className="flex items-start gap-2">
         <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
@@ -240,6 +472,11 @@ function WaitingDecisionCard({ decision, onAnswer }: WaitingDecisionCardProps) {
   );
 }
 
+
+function WaitingDecisionCard(props: WaitingDecisionCardProps) {
+  return props.width !== undefined ? <CompactDecisionCard {...props} /> : <FullDecisionCard {...props} />;
+}
+
 function CheckpointCheckFooter({ data, cpKey }: { data: CheckpointData; cpKey: string }) {
   const actions = useContext(BoardActionsContext);
   const isBusy = Boolean(cpKey && actions?.busyStepKeys?.has(cpKey));
@@ -282,24 +519,45 @@ function CheckpointCheckFooter({ data, cpKey }: { data: CheckpointData; cpKey: s
  * The decisions that wait for you, inside an Area: "Waits for you" and the first decisions, and a button that opens the rest (and, when
  * they are open, closes them again). The Area's own name is in the header above, and is not said again here.
  */
-function WaitingFrame({ id, data, border, titleId }: { id?: string; data: CheckpointData; border: string; titleId: string }) {
+function WaitingFrame({ id, data, border, titleId, width }: { id?: string; data: CheckpointData; border: string; titleId: string; width?: number }) {
   const actions = useContext(BoardActionsContext);
   const fallbackMutation = useAnswerDecision(actions?.workspaceId ?? '');
-  const handleAnswer = async (key: string, answer: string, expected?: string) => {
+  const handleAnswer = async (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => {
     if (actions?.answerDecision) {
-      return actions.answerDecision(key, answer, expected);
+      return actions.answerDecision(key, answer, expected, options);
     }
     if (actions?.workspaceId) {
-      await fallbackMutation.mutateAsync({ key, answer, expected });
+      await fallbackMutation.mutateAsync({ key, answer, expected, ...(options ?? {}) });
       return true;
     }
     return false;
   };
 
+  const frame = useRef<HTMLElement>(null);
+  const [lost, setLost] = useState(false);
+  const onLost = useCallback(() => {
+    setLost(true);
+    let frames = 0;
+    const attempt = () => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active.isConnected && !document.querySelector('[data-testid="decision-dialog"]')) return;
+      frames += 1;
+      const target = frame.current?.querySelector<HTMLElement>('[data-testid^="decision-card-"]') ?? frame.current;
+      if (target?.isConnected) target.focus({ preventScroll: true });
+      else if (frames < 20) requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(attempt));
+  }, []);
+  useEffect(() => {
+    if (!lost) return;
+    const timer = window.setTimeout(() => setLost(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [lost]);
+
   const expanded = data.waitingExpanded === true;
   const cpKey = data.checkpointKey ?? (id ? id.replace(/^area:checkpoint:|^checkpoint:/, '') : undefined);
 
-  return <article tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}>
+  return <article ref={frame} tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}>
     <Anchors />
     <header className="flex h-8 shrink-0 items-center gap-1.5 px-3 pt-1">
       {data.waiting.length > 0 ? (
@@ -313,11 +571,12 @@ function WaitingFrame({ id, data, border, titleId }: { id?: string; data: Checkp
           <h2 id={titleId} className="text-[13px] font-semibold leading-5 text-foreground">Check</h2>
         </>
       )}
+      {lost && <p role="status" className="ml-1 min-w-0 truncate text-[12.5px] text-muted-foreground">The question changed in the plan; your answer was not sent.</p>}
     </header>
     {data.waiting.length > 0 && (
-      <ul aria-label="Decisions waiting for you" className="nowheel min-h-0 flex-1 overflow-y-auto space-y-2 p-2.5">
+      <ul aria-label="Decisions waiting for you" className="flex min-h-0 flex-1 flex-col gap-2 px-2.5 pb-4">
         {data.waiting.map((decision) => (
-          <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} />
+          <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} onLost={onLost} width={width ?? ROW_SIZE.decisionWidth} />
         ))}
       </ul>
     )}
@@ -457,16 +716,16 @@ export function AddStepInline({
  * One checkpoint of PLAN.md: whether it is done, how far its steps are, what waits for the user, and the first steps.
  * Folded, it is the header alone, as one button that opens it.
  */
-export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
+export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) {
   const titleId = useId();
   const actions = useContext(BoardActionsContext);
   const fallbackMutation = useAnswerDecision(actions?.workspaceId ?? '');
-  const handleAnswer = async (key: string, answer: string, expected?: string) => {
+  const handleAnswer = async (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => {
     if (actions?.answerDecision) {
-      return actions.answerDecision(key, answer, expected);
+      return actions.answerDecision(key, answer, expected, options);
     }
     if (actions?.workspaceId) {
-      await fallbackMutation.mutateAsync({ key, answer, expected });
+      await fallbackMutation.mutateAsync({ key, answer, expected, ...(options ?? {}) });
       return true;
     }
     return false;
@@ -486,7 +745,7 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
       <FrameFacts data={data} />
     </FoldedGroup>;
   }
-  if (data.waitingOnly) return <WaitingFrame id={id} data={data} border={border} titleId={titleId} />;
+  if (data.waitingOnly) return <WaitingFrame id={id} data={data} border={border} titleId={titleId} width={width} />;
 
   const cpKey = data.checkpointKey ?? (data.kind === 'plan' ? undefined : id.replace(/^area:checkpoint:|^checkpoint:/, ''));
 
@@ -524,8 +783,8 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
                 role="checkbox"
                 data-testid={`checkpoint-step-checkbox-${step.key}`}
                 aria-checked={step.done}
-                aria-label={step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`}
-                title={stepError ?? (step.done ? `Mark "${step.text}" not done` : `Mark "${step.text}" done`)}
+                aria-label={step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`}
+                title={stepError ?? (step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`)}
                 disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -548,8 +807,8 @@ export function BoardCheckpoint({ id, data }: NodeProps<CheckpointNode>) {
                   </svg>
                 ) : null}
               </button>
-              <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={step.text}>
-                <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span>{step.text}
+              <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={plainText(step.text)}>
+                <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span><InlinePlanMarkdown content={step.text} />
               </span>
               {stepError && <span role="alert" className="shrink-0 text-[12.5px] text-destructive">{stepError}</span>}
             </li>
@@ -1503,6 +1762,10 @@ function StepDetailDialog({
   isDone,
   isBusy,
   onToggle,
+  label,
+  main = true,
+  rowFallback = false,
+  className,
   children,
 }: {
   stepKey?: string;
@@ -1512,6 +1775,13 @@ function StepDetailDialog({
   isDone: boolean;
   isBusy: boolean;
   onToggle?: () => void;
+  /** The name of the button that opens it, when it is not "View step: …". */
+  label?: string;
+  /** Whether the button is the main control of a card (`data-card-main`), which a press on the card goes to. */
+  main?: boolean;
+  /** Marks the button as where the keyboard goes when a row has no control of its own (the Now row with no step open). */
+  rowFallback?: boolean;
+  className?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -1522,10 +1792,11 @@ function StepDetailDialog({
         render={
           <button
             type="button"
-            data-card-main
+            {...(main ? { 'data-card-main': true } : {})}
+            {...(rowFallback ? { 'data-row-fallback': true } : {})}
             data-testid={stepKey ? `step-trigger-${stepKey}` : 'step-trigger'}
-            className="nodrag nopan flex min-w-0 flex-1 flex-col justify-center text-left rounded-md px-1 py-0.5 outline-hidden transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer"
-            aria-label={`View step: ${title}`}
+            className={cn("nodrag nopan flex min-w-0 flex-1 flex-col justify-center text-left rounded-md px-1 py-0.5 outline-hidden transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer", className)}
+            aria-label={label ?? `View step: ${plainText(title)}`}
             onClick={(e) => {
               e.stopPropagation();
             }}
@@ -1597,11 +1868,13 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   const isDone = data.state === 'done';
   const isBusy = Boolean(data.stepKey && actions?.busyStepKeys?.has(data.stepKey));
   const stepError = data.stepKey ? actions?.stepErrors?.[data.stepKey] : undefined;
-  const label = [isStep ? `${STATE_LABEL[data.state]}: ${data.text}` : data.title, data.summary || data.caption].filter(Boolean).join(', ');
+  const stepPlain = plainText(data.text ?? data.title);
+  const label = [isStep ? `${STATE_LABEL[data.state]}: ${stepPlain}` : data.title, data.summary || data.caption].filter(Boolean).join(', ');
   const Chevron = data.expanded ? ChevronUp : ChevronDown;
 
   if (data.static) {
-    const stepText = data.text ?? data.title;
+    const stepText = stripHeadingColon(data.text ?? data.title);
+    const stepName = plainText(stepText);
     return (
       <div
         className={cn(
@@ -1621,8 +1894,8 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
             role="checkbox"
             data-testid={`step-checkbox-${data.stepKey}`}
             aria-checked={isDone}
-            aria-label={isDone ? `Mark "${stepText}" not done` : `Mark "${stepText}" done`}
-            title={stepError ?? (isDone ? `Mark "${stepText}" not done` : `Mark "${stepText}" done`)}
+            aria-label={isDone ? `Mark "${stepName}" not done` : `Mark "${stepName}" done`}
+            title={stepError ?? (isDone ? `Mark "${stepName}" not done` : `Mark "${stepName}" done`)}
             disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
             onClick={(e) => {
               e.stopPropagation();
@@ -1668,9 +1941,9 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
               'line-clamp-1 text-[13px] font-medium leading-[17px]',
               isDone ? 'text-muted-foreground line-through' : 'text-foreground'
             )}
-            title={stepText}
+            title={stepName}
           >
-            {stepText}
+            <InlinePlanMarkdown content={stepText} />
           </span>
         </StepDetailDialog>
       </div>
@@ -1683,8 +1956,8 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       role="checkbox"
       data-testid={`step-checkbox-${data.stepKey}`}
       aria-checked={isDone}
-      aria-label={isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`}
-      title={stepError ?? (isDone ? `Mark "${data.text ?? data.title}" not done` : `Mark "${data.text ?? data.title}" done`)}
+      aria-label={isDone ? `Mark "${stepPlain}" not done` : `Mark "${stepPlain}" done`}
+      title={stepError ?? (isDone ? `Mark "${stepPlain}" not done` : `Mark "${stepPlain}" done`)}
       disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
       onClick={(e) => {
         e.stopPropagation();
@@ -1709,27 +1982,61 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
     </button>
   ) : null;
 
-  const body = data.prominent
-    ? <span className="flex min-w-0 flex-1 flex-col justify-center pr-6">
-      <span className="flex items-center gap-1.5 whitespace-nowrap text-[13px] font-semibold leading-4 text-foreground">
-        <span aria-hidden="true" className={cn('size-2 rounded-full', data.state === 'current' ? 'board-now-dot bg-state-now' : 'bg-muted-foreground/60')} />
-        {STATE_LABEL[data.state]}
-        {stepError ? (
-          <span role="alert" className="text-[12.5px] font-normal text-destructive truncate">{stepError}</span>
-        ) : data.empty && (
-          <span className="text-[13px] font-normal text-muted-foreground">{data.summary}</span>
-        )}
-      </span>
-      <span className={cn('line-clamp-2 text-[14px] font-semibold leading-[18px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={data.text}>{data.text}</span>
-    </span>
+  const body = isStep && data.prominent
+    ? null
     : <span className="flex min-w-0 flex-1 items-baseline gap-2">
-      <span className={cn('truncate text-[14px] font-semibold leading-5', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={isStep ? data.text : data.title}>{isStep ? data.text : data.title}</span>
+      <span className={cn('truncate text-[14px] font-semibold leading-5', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={isStep ? stepPlain : data.title}>{isStep ? <InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /> : data.title}</span>
       {stepError ? (
         <span role="alert" className="shrink-0 whitespace-nowrap text-[12.5px] leading-5 text-destructive">{stepError}</span>
       ) : (data.summary || data.caption) && (
         <span className="shrink-0 whitespace-nowrap text-[13px] leading-5 text-muted-foreground" title={data.caption}>{data.summary}</span>
       )}
     </span>;
+
+  // The current step: the state and the heading above it, then the step itself. A press on the first line opens or closes the row; a press on the
+  // words of the step opens the whole step (as a step tile does), so a long step can be read in full by keyboard and touch, and when the
+  // step has nothing on it there is no row to open: the first line is only said, and the words, named "Now: …", open the whole step.
+  if (isStep && data.prominent) {
+    const first = <>
+      <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', data.state === 'current' ? 'board-now-dot bg-state-now' : 'bg-muted-foreground/60')} />
+      <span className="shrink-0">{STATE_LABEL[data.state]}</span>
+      {stepError && <span role="alert" className="min-w-0 truncate text-[12.5px] font-normal text-destructive">{stepError}</span>}
+      {data.heading && !stepError && <span className="hidden min-w-0 flex-1 items-center gap-1.5 text-[12.5px] font-normal text-muted-foreground @[40rem]/now:flex"><span aria-hidden="true">·</span><span className="truncate" title={plainText(data.heading)}>{plainText(data.heading)}</span></span>}
+    </>;
+    return (
+      <div className="@container/now relative flex h-full w-full items-center gap-2 overflow-hidden rounded-xl border border-l-4 border-primary/40 border-l-state-now bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 text-left">
+        <Anchors />
+        {checkboxButton}
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
+          {data.empty
+            ? <div className="flex h-7 items-center gap-1.5 whitespace-nowrap px-1 text-[13px] font-semibold leading-4 text-foreground">{first}</div>
+            : <button
+              type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
+              onClick={() => actions?.toggleRow?.(data.rowId)}
+              className="board-row-control nodrag nopan flex h-7 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-1 text-left text-[13px] font-semibold leading-4 text-foreground hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {first}
+              <Chevron aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
+            </button>}
+          <StepDetailDialog
+            main={false}
+            rowFallback={data.empty}
+            className="min-h-7"
+            label={data.empty ? label : undefined}
+            stepKey={data.stepKey}
+            title={stripHeadingColon(data.text ?? '')}
+            state={data.state}
+            stepError={stepError}
+            isDone={isDone}
+            isBusy={isBusy}
+            onToggle={!actions?.readOnly && data.stepKey && actions?.toggleStep ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text) : undefined}
+          >
+            <span className={cn('line-clamp-2 text-[14px] font-semibold leading-[18px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={stepPlain}><InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /></span>
+          </StepDetailDialog>
+        </div>
+      </div>
+    );
+  }
 
   if (isStep) {
     return (
@@ -1838,8 +2145,8 @@ export function BoardPager({ data }: NodeProps<PagerNode>) {
   }, [rowId]);
   return <nav ref={nav} aria-label={`Pages of ${data.title}`} className="flex h-full w-full items-center justify-end gap-0.5">
     <Anchors />
-    <Button ref={newer} type="button" size="icon-xs" variant="ghost" className="board-row-control nodrag nopan" aria-label="Newer cards" title="Newer" disabled={!actions || atStart} onClick={() => actions?.setRowPage?.(data.rowId, data.page - 1)}><ChevronLeft aria-hidden="true" /></Button>
+    <Button ref={newer} type="button" size="icon-xs" variant="ghost" className="board-row-control nodrag nopan" aria-label={data.what === 'questions' ? 'Earlier questions' : 'Newer cards'} title={data.what === 'questions' ? 'Earlier' : 'Newer'} disabled={!actions || atStart} onClick={() => actions?.setRowPage?.(data.rowId, data.page - 1)}><ChevronLeft aria-hidden="true" /></Button>
     <span role="status" aria-live="polite" className="whitespace-nowrap px-1 text-[13px] text-muted-foreground">{data.from}–{data.to} of {data.total}</span>
-    <Button ref={older} type="button" size="icon-xs" variant="ghost" className="board-row-control nodrag nopan" aria-label="Older cards" title="Older" disabled={!actions || atEnd} onClick={() => actions?.setRowPage?.(data.rowId, data.page + 1)}><ChevronRight aria-hidden="true" /></Button>
+    <Button ref={older} type="button" size="icon-xs" variant="ghost" className="board-row-control nodrag nopan" aria-label={data.what === 'questions' ? 'Later questions' : 'Older cards'} title={data.what === 'questions' ? 'Later' : 'Older'} disabled={!actions || atEnd} onClick={() => actions?.setRowPage?.(data.rowId, data.page + 1)}><ChevronRight aria-hidden="true" /></Button>
   </nav>;
 }

@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { WorkDocument } from '../../types.js';
 import type { PlanFileView } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
-import { buildBoardAreas } from './boardAreas.js';
+import { buildBoardAreas, type BoardArea } from './boardAreas.js';
 import type { BoardCard, BoardView } from './boardData.js';
 import { boardEdges, nodeRects, type BoardNode, type Rect } from './boardLayout.js';
-import { ITEM_HEIGHT, READABLE_ZOOM, ROW_SIZE, areaBoardLayout, areaLayout, areaPlace, areaRowIds, areaRowOf, areaRows, areaStage, areaView } from './boardRows.js';
+import { ITEM_HEIGHT, READABLE_ZOOM, ROW_SIZE, WAITING_ROW, answersThatFit, areaBoardLayout, areaLayout, areaPlace, areaRowIds, areaRowOf, areaRows, areaStage, areaView, headingKeys, waitingHeight } from './boardRows.js';
 
 const at = (n: number) => `2026-10-${String(n).padStart(2, '0')}T00:00:00Z`;
 const card = (id: string, title: string, extra: Partial<BoardCard> = {}): BoardCard => ({
@@ -167,7 +167,13 @@ describe('areaBoardLayout v2: height', () => {
       expect(!isFolded('lane:documents') || ['lane:commits:api', 'lane:commits:repo1'].every(isFolded), `docs at ${height}`).toBe(true);
       expect(!isFolded('lane:board') || (isFolded('lane:documents') && isFolded('lane:commits:api')), `loose at ${height}`).toBe(true);
       expect(!isFolded('row:step:s1') || isFolded('lane:board'), `step at ${height}`).toBe(true);
-      expect(byId(nodes, area().id).type).toBe('checkpoint');
+      // The waiting frame is folded only as the last resort, and then the cards of the rows are drawn: that is why it was folded
+      const waitingNode = byId(nodes, area().id) as BoardNode & { data: { title?: string; note?: string } };
+      if (waitingNode.type === 'fold') {
+        expect(waitingNode.data.title, `waiting fold at ${height}`).toBe('Waits for you');
+        expect(waitingNode.data.note, `waiting fold at ${height}`).toBeTruthy();
+        expect(nodes.some((n) => n.type === 'note' || n.type === 'file'), `cards at ${height}`).toBe(true);
+      } else expect(waitingNode.type).toBe('checkpoint');
       expect(byId(nodes, 'row:step:s0').type).toBe('step');
       expect(byId(nodes, 'row:more-steps').type).toBe('fold');
       expect(byId(nodes, 'row:done').type).toBe('fold');
@@ -409,6 +415,8 @@ describe('areaBoardLayout v2: nothing overlaps, everything fits and everything c
             expect((rect.y + rect.height) * READABLE_ZOOM, `${where} ${state.row}/${state.page} ${id} bottom`).toBeLessThanOrEqual(size.height - ROW_SIZE.top - ROW_SIZE.bottom + 0.5);
           }
           for (let i = 0; i < rects.length; i += 1) for (let j = i + 1; j < rects.length; j += 1) {
+            // The buttons that page through the waiting decisions stand on the header line of their frame, inside it
+            if ([rects[i]![0], rects[j]![0]].includes(`${WAITING_ROW}:pager`) && [rects[i]![0], rects[j]![0]].includes(area.id)) continue;
             expect(overlap(rects[i]![1], rects[j]![1]), `${where} ${state.row}/${state.page}: ${rects[i]![0]} vs ${rects[j]![0]}`).toBe(false);
           }
           for (const n of nodes) {
@@ -545,5 +553,204 @@ describe('areaStage: things fill the line', () => {
     const pagerAt = open.findIndex((n) => n.type === 'pager');
     expect(pagerAt).toBeGreaterThan(0);
     expect(open[pagerAt - 1]!.id).toBe('row:step:s0');
+  });
+});
+
+describe('answersThatFit: the answers that are whole buttons on the one line of a waiting decision', () => {
+  const four = ['Stay removed; the Board takes over', 'Bring back Code (uncommitted changes)', 'Bring back Code and Services', 'Bring back all three'];
+
+  it('takes as many answers as fit whole, in order, and calls the ghost button "All answers…" when some did not', () => {
+    const wide = answersThatFit(four, ROW_SIZE.decisionWidth);
+    expect(wide.shown).toEqual(four.slice(0, wide.shown.length));
+    expect(wide.shown.length).toBeGreaterThan(0);
+    expect(wide.shown.length).toBeLessThan(four.length);
+    expect(wide.hidden).toBe(four.length - wide.shown.length);
+    expect(wide.ghost).toBe('All answers…');
+    const roomy = answersThatFit(['UTC', 'Local time (browser)', 'Account setting'], ROW_SIZE.decisionWidth);
+    expect(roomy).toEqual({ shown: ['UTC', 'Local time (browser)', 'Account setting'], hidden: 0, ghost: 'Other answer…' });
+  });
+
+  it('shows fewer on a narrower card, never reorders, and never shows an answer that does not fit in what is left', () => {
+    let last = Infinity;
+    for (const width of [720, 600, 500, 420, 340, 300]) {
+      const { shown } = answersThatFit(four, width);
+      expect(shown.length, `${width}`).toBeLessThanOrEqual(last);
+      expect(shown, `${width}`).toEqual(four.filter((answer) => shown.includes(answer)));
+      last = shown.length;
+    }
+    expect(answersThatFit(['UTC', 'Local time (browser)', 'Account setting'], 300).shown.length).toBeLessThan(3);
+  });
+
+  it('leaves an answer that could not fit even alone for the dialog, and goes on with the shorter ones after it', () => {
+    const long = 'Yes, and also rewrite every export so that it streams, with the old files kept for a year';
+    const fit = answersThatFit([long, 'Yes', 'No'], 420);
+    expect(fit.shown).toEqual(['Yes', 'No']);
+    expect(fit.hidden).toBe(1);
+    expect(fit.ghost).toBe('All answers…');
+  });
+
+  it('counts CJK and emoji letters as about 1 em wide and accented Latin letters as capitals, so that they do not run under the ghost button', () => {
+    // 12 letters: ~120 px of Latin lower case, ~170 px of Japanese or emoji, which is more than is left of a 300 px card
+    const latin = 'abcdefghijkl';
+    const cjk = 'はいそうしてくださいおねがい';
+    const emoji = '👍👍👍👍👍👍👍👍👍👍👍👍';
+    expect(answersThatFit([latin], 300).shown).toEqual([latin]);
+    expect(answersThatFit([cjk], 300).shown).toEqual([]);
+    expect(answersThatFit([emoji], 300).shown).toEqual([]);
+    // accented letters are wider than the plain ones: it takes a wider card to show the same words with accents
+    const room = (text: string) => { let width = 200; while (answersThatFit([text], width).shown.length === 0 && width < 800) width += 4; return width; };
+    expect(room('ménage à trois été')).toBeGreaterThan(room('menage a trois ete'));
+    expect(room(cjk)).toBeGreaterThan(room(latin));
+  });
+
+  it('has no answers to show when there are no suggestions, and a ghost button for a free answer', () => {
+    expect(answersThatFit([], 500)).toEqual({ shown: [], hidden: 0, ghost: 'Other answer…' });
+  });
+});
+
+describe('areaBoardLayout: what the Now row is', () => {
+  const step = (key: string, text: string, done = false, parent?: string) => ({ key, text, done, ...(parent ? { parent } : {}) });
+  const planWith = (steps: ReturnType<typeof step>[]): PlanFileView => ({
+    title: 'P', checkpoints: [{ key: 'cp', title: 'The checkpoint', done: false, steps, decisions: [] }], steps: [], decisions: [], waiting: [],
+  });
+  const rowsOf = (steps: ReturnType<typeof step>[], cards: BoardCard[] = []) => areaRows(areaOf(planWith(steps), cards), { size: big });
+
+  it('is never a heading: a step with open steps under it', () => {
+    const rows = rowsOf([step('h', '**Audit & Polish**:'), step('a', 'Slice A', false, 'h'), step('b', 'Slice B', false, 'h')]);
+    expect(rows[0]).toMatchObject({ id: 'row:step:a', state: 'current', text: 'Slice A', heading: '**Audit & Polish**:' });
+    expect(rows.find((r) => r.id === 'row:more-steps')!.groups!.map((g) => g.key)).toEqual(['h', 'b']);
+  });
+
+  it('is a real step when all the steps under it are done', () => {
+    const rows = rowsOf([step('h', 'Heading with done children'), step('a', 'Done child', true, 'h'), step('z', 'Later step')]);
+    expect(rows[0]).toMatchObject({ id: 'row:step:h', text: 'Heading with done children' });
+    expect(rows[0]!.heading).toBeUndefined();
+  });
+
+  it('skips a heading nested two deep, and a heading under a heading, and names the nearest heading above', () => {
+    const steps = [step('top', 'Top'), step('mid', 'Middle', false, 'top'), step('leaf', 'Leaf step', false, 'mid'), step('leaf2', 'Second leaf', false, 'mid')];
+    expect([...headingKeys(steps)].sort()).toEqual(['mid', 'top']);
+    const rows = rowsOf(steps);
+    expect(rows[0]).toMatchObject({ id: 'row:step:leaf', heading: 'Middle' });
+  });
+
+  it('is still the leaf with the newest card, when the Area where only headings\' children are open is the current one', () => {
+    const steps = [step('h', 'Heading'), step('a', 'Child A', false, 'h'), step('b', 'Child B', false, 'h')];
+    const rows = rowsOf(steps, [card('x', 'X', { step: 'b', at: at(9) }), card('y', 'Y', { step: 'h', at: at(20) })]);
+    expect(rows[0]).toMatchObject({ id: 'row:step:b', state: 'current' });
+  });
+
+  it('counts a heading as a step for the counts, and keeps it in the "more open steps" line', () => {
+    const area = areaOf(planWith([step('h', 'Heading'), step('a', 'Child', false, 'h'), step('d', 'Done', true)]), []);
+    expect(area.data.stepsTotal).toBe(3);
+    expect(area.data.stepsDone).toBe(1);
+  });
+});
+
+describe('areaBoardLayout: no raw markup in a step\'s words', () => {
+  const marked = '**Slice C: Split mode** with `code` and [a link](https://x.test):';
+  const plan: PlanFileView = {
+    title: 'P', checkpoints: [{ key: 'cp', title: 'The checkpoint', done: false, steps: [
+      { key: 'a', text: '**First** open step', done: false }, { key: 'b', text: marked, done: false }, { key: 'c', text: '_Third_ `step`', done: false }, { key: 'd', text: '**Done** one', done: true },
+    ], decisions: [{ key: 'q', question: 'Is **this** what you want?', done: false, suggested: ['Yes'], checkpoint: 'cp' }] }],
+    steps: [], decisions: [], waiting: ['q'],
+  };
+
+  it('says the plain words in the previews, the fold\'s title and the waiting fold\'s question', () => {
+    const area = areaOf(plan, [file('f1', 'Picture', { step: 'a' }), file('f2', 'Picture 2')]);
+    const nodes = areaBoardLayout(area, { size: { width: 700, height: 150 } });
+    const folds = nodes.filter((n) => n.type === 'fold').map((n) => n.data);
+    const text = JSON.stringify(folds);
+    expect(text).not.toMatch(/\*\*|`|\]\(/);
+    const more = nodes.find((n) => n.id === 'row:more-steps') as BoardNode & { data: { preview?: string } };
+    expect(more.data.preview).toBe('Slice C: Split mode with code and a link · Third step');
+    expect(text).toContain('Done one');
+    // the waiting decisions on their one line say what the question is, in plain words
+    const crowdedPlan = planOf(13, 12, 2);
+    crowdedPlan.checkpoints[1]!.decisions[0]!.question = 'Is **this** what you want?';
+    const crowded = areaOf(crowdedPlan, [file('p', 'Picture'), file('p2', 'Picture 2')], { news: newsOf(1, 3) });
+    const waitingNode = byId(areaBoardLayout(crowded, { news: newsOf(1, 3), size: { width: 706, height: 474 } }), crowded.id) as BoardNode & { data: { note?: string } };
+    expect(waitingNode.type).toBe('fold');
+    expect(waitingNode.data.note).toBe('Is this what you want?');
+  });
+});
+
+describe('the waiting frame', () => {
+  const withQuestions = (count: number, check = false): BoardArea => {
+    const plan = planOf(3, 0, count);
+    if (check) plan.checkpoints[1]!.check = 'npm test';
+    return areaOf(plan, [file('p', 'Picture', { step: 's0' }), file('q', 'Picture 2')]);
+  };
+
+  it('is as tall as the cards, the footer and the check that it draws, at every count', () => {
+    for (const count of [1, 2, 3, 5]) for (const check of [false, true]) {
+      const area = withQuestions(count, check);
+      const node = byId(areaBoardLayout(area, { size: big }), area.id) as BoardNode & { height: number; width: number; data: { waiting: unknown[]; moreWaiting: number } };
+      const shown = node.data.waiting.length;
+      // the frame's 2 px border, its 32 px head, 90 px a card, 28 px for "+N more", 8 px of padding and 37 px for the check: constants, not the function
+      const expected = 2 + 32 + shown * 90 + (count > shown ? 28 : 0) + 8 + (check ? 37 : 0);
+      expect(node.height, `${count} ${check}`).toBe(expected);
+      expect(waitingHeight(shown, count > shown, check), `${count} ${check}`).toBe(expected);
+      expect(node.width).toBeLessThanOrEqual(ROW_SIZE.decisionWidth);
+      expect(node.width).toBeGreaterThan(480);
+    }
+  });
+
+  it('puts the waiting decisions in pages, with the buttons on the frame, when the opened decisions do not fit; never a scroll box', () => {
+    const area = withQuestions(5);
+    const size = { width: 700, height: 560 };
+    const first = areaLayout(area, { size, openRow: WAITING_ROW, page: 0 });
+    const frame = byId(first.nodes, area.id) as BoardNode & { height: number; data: { waiting: Array<{ key: string }>; waitingExpanded: boolean } };
+    expect(frame.data.waitingExpanded).toBe(true);
+    expect(frame.data.waiting.length).toBeLessThan(5);
+    expect(first.open).toMatchObject({ rowId: WAITING_ROW, page: 0 });
+    expect(first.open!.pages).toBeGreaterThan(1);
+    expect(frame.height).toBeLessThanOrEqual(areaStage(size).height);
+    const seen = new Set<string>();
+    for (let page = 0; page < first.open!.pages; page += 1) {
+      const { nodes } = areaLayout(area, { size, openRow: WAITING_ROW, page });
+      expect(nodes.some((n) => n.id === `${WAITING_ROW}:pager`)).toBe(true);
+      for (const [, rect] of nodeRects(nodes)) expect(rect.y + rect.height).toBeLessThanOrEqual(areaStage(size).height);
+      (byId(nodes, area.id) as typeof frame).data.waiting.forEach((d) => seen.add(d.key));
+    }
+    expect([...seen].sort()).toEqual(['q0', 'q1', 'q2', 'q3', 'q4']);
+  });
+
+  it('shows at least one line of cards with two waiting decisions at the canvases of the laptop windows, folding the decisions to their line only when it must', () => {
+    const area = withQuestions(2);
+    const need = (size: { width: number; height: number }) => {
+      const nodes = areaBoardLayout(area, { size });
+      const waitingNode = byId(nodes, area.id);
+      return { cards: nodes.filter((n) => n.type === 'file').length, waiting: waitingNode.type };
+    };
+    for (const size of [{ width: 706, height: 474 }, { width: 414, height: 510 }, { width: 678, height: 574 }, { width: 886, height: 606 }, { width: 1100, height: 700 }, { width: 1280, height: 800 }, { width: 1440, height: 900 }]) {
+      expect(need(size).cards, `${size.width}x${size.height}`).toBeGreaterThan(0);
+    }
+    expect(need({ width: 1280, height: 800 }).waiting).toBe('checkpoint');
+    expect(need({ width: 1440, height: 900 }).waiting).toBe('checkpoint');
+  });
+
+  it('can be opened from its one line when a single decision is folded, with its answers in the frame', () => {
+    const plan = planOf(8, 0, 1);
+    const area = areaOf(plan, Array.from({ length: 6 }, (_, i) => file(`f${i}`, `Pic ${i}`, { step: 's0', at: at(1 + i) })));
+    const size = { width: 700, height: 330 };
+    const closed = areaBoardLayout(area, { size });
+    expect(byId(closed, area.id).type).toBe('fold');
+    expect(areaRowIds(area, { size })).toContain(WAITING_ROW);
+    const open = areaBoardLayout(area, { size, openRow: WAITING_ROW });
+    expect(byId(open, area.id).type).toBe('checkpoint');
+    expect((byId(open, area.id) as BoardNode & { data: { waiting: unknown[] } }).data.waiting).toHaveLength(1);
+  });
+});
+
+describe('the waiting frame on a very low window', () => {
+  const planWithCheck = (count: number) => planOf(4, 0, count);
+  it('keeps every row on the stage at canvas heights down to 250, with one, two or five decisions, with and without cards: the decisions go to their one line', () => {
+    for (const count of [1, 2, 5]) for (const withCards of [false, true]) for (const width of [414, 700]) for (let height = 250; height <= 500; height += 10) {
+      const area = areaOf(planWithCheck(count), withCards ? [file('p', 'Picture', { step: 's0' }), file('q', 'Picture 2')] : []);
+      const nodes = areaBoardLayout(area, { size: { width, height } });
+      const stage = areaStage({ width, height });
+      for (const [id, rect] of nodeRects(nodes)) expect(rect.y + rect.height, `${count} decisions, cards ${withCards}, ${width}x${height}: ${id}`).toBeLessThanOrEqual(stage.height);
+    }
   });
 });

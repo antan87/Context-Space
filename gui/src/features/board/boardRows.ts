@@ -12,10 +12,11 @@
  * here ever needs the view to move.
  */
 
-import type { PlanProof } from '../plan/planFile.js';
+import { plainText } from '../../lib/plainText.js';
+import type { PlanFileStep, PlanProof } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard } from './boardData.js';
-import { extractFreshSets, type BoardArea, type Size, type Viewport } from './boardAreas.js';
+import { extractFreshSets, textEm, type BoardArea, type Size, type Viewport } from './boardAreas.js';
 import {
   BOARD_SIZE,
   cardPlan,
@@ -63,12 +64,21 @@ export const ROW_SIZE = {
   bottom: 36,
   /** The decisions that wait for you. */
   waitingHead: 32,
-  decision: 50,
+  /** One waiting decision: its card (82) and the space under it (8). The card never scrolls, so this is what it is drawn at. */
+  decision: 90,
+  decisionCard: 82,
+  /** The most a waiting decision is as wide as, so that its question and answers read as a line. */
+  decisionWidth: 720,
   waitingMore: 28,
   waitingPad: 8,
   waitingShown: 2,
   waitingOpen: 6,
+  /** The footer of a frame with a check: its border, 6 + 24 + 6 px of padding and button. */
+  waitingCheck: 37,
 } as const;
+
+/** The frame's own border, top and bottom. */
+const WAITING_BORDER = 2;
 
 /** How high each kind of thing is, whatever the room: a compact card is never drawn shorter, nor taller. */
 export const ITEM_HEIGHT = { note: 96, file: 96, document: 96, commit: 80, placeholder: 56, step: 40 } as const;
@@ -118,6 +128,8 @@ export interface StepGroup { key: string; text: string; items: LaneCard[] }
 
 export interface AreaRow {
   id: string;
+  /** The heading the step is nested under, when it has one: it is only said quietly beside "Now". */
+  heading?: string;
   kind: AreaRowKind;
   title: string;
   /** The text of a step. */
@@ -162,8 +174,53 @@ function compact(item: LaneCard): LaneCard {
   return { ...item, height: ITEM_HEIGHT[item.type as keyof typeof ITEM_HEIGHT] ?? item.height, data: { ...item.data, compact: true } as LaneCard['data'] };
 }
 
-const waitingHeight = (shown: number, footer: boolean, hasCheck = false) =>
-  ROW_SIZE.waitingHead + shown * ROW_SIZE.decision + (footer ? ROW_SIZE.waitingMore : 0) + ROW_SIZE.waitingPad + (hasCheck ? 36 : 0);
+/** The type of the answer buttons on a waiting decision's card, in px, and what a button adds to the width of its words (its padding and border). */
+const ANSWER = { size: 13, pad: 22, gap: 6, ghostPad: 16, ghostSize: 12.5, margin: 1.12 } as const;
+/** What the card of a waiting decision keeps for itself on the width of its node: the frame's padding, the card's border and padding. */
+const DECISION_SIDES = 44;
+
+/** Scripts whose letters are about 1 em wide, and emoji: `textEm` takes them for the width of an ordinary letter (0.54 em), which is far too narrow for them. */
+const WIDE_SCRIPT = /[\u1100-\u11FF\u2E80-\uD7FF\uF900-\uFAFF\uFF00-\uFFEF]|\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+/** Latin letters with accents or marks (Latin-1 Supplement to Latin Extended-B) run as wide as a capital, not as the plain letter. */
+const ACCENTED = /[\u00C0-\u024F]/;
+/** The width of a button's words in em: `textEm`, with the wide scripts at 1 em and the accented Latin letters as capitals. */
+function answerEm(text: string): number {
+  let em = 0;
+  for (const letter of text) em += WIDE_SCRIPT.test(letter) ? 1 : ACCENTED.test(letter) ? 0.68 : textEm(letter);
+  return em;
+}
+
+/** Which of a decision's suggested answers are drawn as buttons on its card, and whether the rest (or a free answer) are behind the ghost button. */
+export interface AnswersFit { shown: string[]; hidden: number; ghost: string }
+
+/**
+ * The suggested answers that fit whole on the one line of a waiting decision's card of `width`, in order, with the ghost button at the end
+ * of the line ("All answers…" when some did not fit, else "Other answer…"). An answer that could not fit even alone goes only in the dialog;
+ * the first one that does not fit in what is left ends the line, so the order is never changed. A guess made without the browser, with a margin
+ * on the width of the words (`textEm`, as the cards of the overview do).
+ */
+export function answersThatFit(options: ReadonlyArray<string>, width: number): AnswersFit {
+  const line = width - DECISION_SIDES;
+  const wide = (text: string, size: number, pad: number) => Math.ceil(answerEm(text) * size * ANSWER.margin) + pad;
+  const ghost = (label: string) => wide(label, ANSWER.ghostSize, ANSWER.ghostPad);
+  const room = line - ghost('All answers…') - ANSWER.gap;
+  const shown: string[] = [];
+  let used = 0;
+  let ended = false;
+  for (const option of options) {
+    const button = wide(option, ANSWER.size, ANSWER.pad);
+    if (button > room) continue;
+    if (ended || used + (shown.length > 0 ? ANSWER.gap : 0) + button > room) { ended = true; continue; }
+    used += (shown.length > 0 ? ANSWER.gap : 0) + button;
+    shown.push(option);
+  }
+  const hidden = options.length - shown.length;
+  return { shown, hidden, ghost: hidden > 0 ? 'All answers…' : 'Other answer…' };
+}
+
+/** How tall the waiting frame is for `shown` decision cards, with a footer for "+N more" or "Show fewer" and one for the check: what the frame draws. */
+export const waitingHeight = (shown: number, footer: boolean, hasCheck = false) =>
+  WAITING_BORDER + ROW_SIZE.waitingHead + shown * ROW_SIZE.decision + (footer ? ROW_SIZE.waitingMore : 0) + ROW_SIZE.waitingPad + (hasCheck ? ROW_SIZE.waitingCheck : 0);
 const isCurrent = (row: AreaRow) => row.state === 'current' || row.state === 'next';
 const headerHeight = (row: AreaRow) => (isCurrent(row) ? ROW_SIZE.current : ROW_SIZE.header);
 
@@ -172,7 +229,23 @@ function groupsRow(id: string, kind: 'more-steps' | 'done', title: string, group
   return { id, kind, title, state, items, groups, summary: items.length ? cardsText(items.length) : kind === 'done' ? 'Nothing attached' : 'No cards' };
 }
 
-type PlanStep = { key: string; text: string; done: boolean };
+type PlanStep = PlanFileStep;
+
+/** The keys of the open steps that have open steps under them, however deep: headings, not steps to work on. A step whose children are all done is a real step. */
+export function headingKeys(steps: ReadonlyArray<PlanFileStep>): Set<string> {
+  const byKey = new Map(steps.map((entry) => [entry.key, entry]));
+  const headings = new Set<string>();
+  for (const entry of steps) {
+    if (entry.done) continue;
+    // Each open step marks the open steps above it; a step nested under a done step still reaches the open ones further up
+    const seen = new Set<string>();
+    for (let up = entry.parent ? byKey.get(entry.parent) : undefined; up && !seen.has(up.key); up = up.parent ? byKey.get(up.parent) : undefined) {
+      seen.add(up.key);
+      if (!up.done) headings.add(up.key);
+    }
+  }
+  return headings;
+}
 
 /** The rows of an Area and its waiting decisions, for `stage`: some open steps may be put in the line of "more open steps" when the canvas is small. */
 function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now'>, stage: AreaStage): Model {
@@ -192,15 +265,19 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
 
   const open = steps.filter((entry) => !entry.done);
   const finished = steps.filter((entry) => entry.done);
+  // A step with open steps under it (at any depth) is a heading for them: the work is on those, so it is never the Now or Next row.
+  const headings = headingKeys(steps);
+  const leaves = open.filter((entry) => !headings.has(entry.key));
   // The current step is the one with the newest card, when this Area is the current one; else, and in every other Area, the first open step
-  let head = open[0];
+  let head = leaves[0];
   if (area.data.current) {
-    for (const entry of open) if ((byStep.get(entry.key)?.length ?? 0) > 0 && (!head || (byStep.get(head.key)?.length ?? 0) === 0 || newestAt(entry.key) > newestAt(head.key))) head = entry;
+    for (const entry of leaves) if ((byStep.get(entry.key)?.length ?? 0) > 0 && (!head || (byStep.get(head.key)?.length ?? 0) === 0 || newestAt(entry.key) > newestAt(head.key))) head = entry;
   }
   const rows: AreaRow[] = [];
   if (head) {
     const items = plans(byStep.get(head.key) ?? []);
-    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.current ? 'Now' : 'Next', text: head.text, state: area.data.current ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : 'Nothing on this step yet' });
+    const above = head.parent ? steps.find((entry) => entry.key === head!.parent)?.text : undefined;
+    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.current ? 'Now' : 'Next', text: head.text, ...(above ? { heading: above } : {}), state: area.data.current ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : '' });
   }
   const others = open.filter((entry) => entry !== head);
   let withCards = others.filter((entry) => (byStep.get(entry.key)?.length ?? 0) > 0);
@@ -306,7 +383,13 @@ export function areaRows(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 
 /** The ids of the rows that can be opened, with the waiting decisions when there is more than the compact frame shows. */
 export function areaRowIds(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now' | 'size'> = {}): string[] {
   const model = modelOf(area, options, areaStage(options.size));
-  return [...(model.waiting && model.waiting.decisions.length > 1 ? [WAITING_ROW] : []), ...model.rows.map((row) => row.id)];
+  const waitingOpens = model.waiting !== null && (model.waiting.decisions.length > 1 || waitingFoldedAtRest(area, options));
+  return [...(waitingOpens ? [WAITING_ROW] : []), ...model.rows.map((row) => row.id)];
+}
+
+/** Whether the canvas is too small to draw the waiting decisions as cards, so that they stand as one line that opens them. */
+function waitingFoldedAtRest(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now' | 'size'>): boolean {
+  return areaLayout(area, { ...options, openRow: null, page: 0 }).nodes.some((entry) => entry.id === area.id && entry.type === 'fold');
 }
 
 /** The id of the row that holds a node (a card, a document, a commit), so a jump to it can open the row. Null for what is not in a row. */
@@ -334,32 +417,44 @@ export function areaPlace(area: BoardArea, options: Pick<AreaBoardLayoutOptions,
 // ─── Drawing ────────────────────────────────────────────────────────────────
 
 type Piece = { height: number; nodes: (y: number) => BoardNode[] };
+/** `waitingShown` is how many waiting decisions are drawn as cards; 0 folds them to one line. */
 interface Sizing { fold: number; gap: number; waitingShown: number }
 const COMFY: Sizing = { fold: ROW_SIZE.fold, gap: ROW_SIZE.rowGap, waitingShown: ROW_SIZE.waitingShown };
 const COMPACT: Sizing = { fold: ROW_SIZE.compactFold, gap: ROW_SIZE.compactGap, waitingShown: 1 };
+/** The last resort, for a canvas on which not one card would show: the waiting decisions are one line (which still says what the question is). */
+const FOLDED: Sizing = { fold: ROW_SIZE.compactFold, gap: ROW_SIZE.compactGap, waitingShown: 0 };
 
 function node(item: LaneCard, x: number, y: number, width: number): BoardNode {
   return { id: item.id, type: item.type, position: { x, y }, width, height: item.height, data: item.data, ...FIXED } as BoardNode;
 }
 
-function waitingPiece(waiting: Waiting, stage: AreaStage, shown: number, expanded: boolean): Piece {
+function waitingPiece(waiting: Waiting, stage: AreaStage, shown: number, expanded: boolean, page = 0): Piece & { info?: OpenInfo } {
   const total = waiting.decisions.length;
-  const count = Math.min(total, expanded ? ROW_SIZE.waitingOpen : shown);
-  const footer = expanded ? total > 1 : total > count;
+  // Opened, the decisions are in pages when they do not all fit (the row rule); "Show fewer" is always there to close them
+  const count = Math.max(0, Math.min(total, expanded ? Math.max(1, shown) : shown));
+  const pages = expanded && count > 0 ? Math.ceil(total / count) : 1;
+  const at = Math.max(0, Math.min(page, pages - 1));
+  const first = expanded ? at * count : 0;
+  const footer = expanded ? true : total > count;
   const hasCheck = Boolean(waiting.check && !waiting.done);
   const height = waitingHeight(count, footer, hasCheck);
+  const width = Math.min(stage.width, ROW_SIZE.decisionWidth);
   return {
     height,
+    ...(expanded ? { info: { rowId: WAITING_ROW, page: at, pages } } : {}),
     nodes: (y) => [{
-      id: waiting.areaId, type: 'checkpoint', position: { x: 0, y }, width: Math.min(stage.width, 480), height, ...FIXED,
+      id: waiting.areaId, type: 'checkpoint', position: { x: 0, y }, width, height, ...FIXED,
       data: {
         kind: waiting.kind, open: true, openHeight: height, title: waiting.title, done: waiting.done, stepsDone: waiting.stepsDone, stepsTotal: waiting.stepsTotal,
-        steps: [], moreSteps: 0, waiting: waiting.decisions.slice(0, count), moreWaiting: total - count, collapsible: false, waitingOnly: true, rowId: WAITING_ROW, waitingExpanded: expanded,
+        steps: [], moreSteps: 0, waiting: waiting.decisions.slice(first, first + count), moreWaiting: total - count, collapsible: false, waitingOnly: true, rowId: WAITING_ROW, waitingExpanded: expanded,
         ...(waiting.check !== undefined ? { check: waiting.check } : {}),
         ...(waiting.proof ? { proof: waiting.proof } : {}),
         ...(waiting.checkpointKey ? { checkpointKey: waiting.checkpointKey } : {}),
       },
-    } as CheckpointNode],
+    } as CheckpointNode, ...(pages > 1 ? [{
+      id: `${WAITING_ROW}:pager`, type: 'pager', position: { x: width - ROW_SIZE.pager - ROW_SIZE.gap, y }, width: ROW_SIZE.pager, height: ROW_SIZE.header, ...FIXED,
+      data: { rowId: WAITING_ROW, title: 'questions waiting for you', what: 'questions', page: at, pages, from: first + 1, to: first + Math.min(count, total - first), total, holds: [] },
+    } as BoardNode] : [])],
   };
 }
 
@@ -372,7 +467,7 @@ function waitingFold(waiting: Waiting, stage: AreaStage, fold: number): Piece {
     height: fold,
     nodes: (y) => [{
       id: waiting.areaId, type: 'fold', position: { x: 0, y }, width: stage.width, height: fold,
-      data: { rowId: WAITING_ROW, title, summary, current: false, note: waiting.decisions[0]?.question, holds: [] },
+      data: { rowId: WAITING_ROW, title, summary, current: false, note: waiting.decisions[0] ? plainText(waiting.decisions[0].question) : undefined, holds: [] },
       ...FIXED,
     }],
   };
@@ -384,7 +479,7 @@ function headNode(row: AreaRow, y: number, width: number, expanded: boolean, emp
   return {
     id: row.id, type: 'step', position: { x: 0, y }, width, height: headerHeight(row),
     data: {
-      rowId: row.id, title: row.title, ...(row.text !== undefined ? { text: row.text } : {}), ...(row.caption ? { caption: row.caption } : {}),
+      rowId: row.id, title: row.title, ...(row.text !== undefined ? { text: row.text } : {}), ...(row.heading ? { heading: row.heading } : {}), ...(row.caption ? { caption: row.caption } : {}),
       summary: row.summary, state: row.state, expanded, prominent, empty,
       ...(stepKey ? { stepKey } : {}),
     },
@@ -395,7 +490,7 @@ function headNode(row: AreaRow, y: number, width: number, expanded: boolean, emp
 /** The first things a row holds, in words, for its folded line: the steps of a line of steps, the shas of commits, else the titles of the cards. */
 function previewOf(row: AreaRow): string {
   const parts = row.groups
-    ? row.groups.map((group) => group.text)
+    ? row.groups.map((group) => plainText(group.text))
     : row.items.map((item) => (item.type === 'commit' ? (item.data as { sha: string }).sha : (item.data as { title?: string }).title ?? ''));
   return parts.filter(Boolean).slice(0, 8).join(' · ');
 }
@@ -405,7 +500,7 @@ function foldPiece(row: AreaRow, stage: AreaStage, fold: number): Piece {
     height: fold,
     nodes: (y) => [{
       id: row.id, type: 'fold', position: { x: 0, y }, width: stage.width, height: fold,
-      data: { rowId: row.id, title: row.kind === 'step' ? `${row.title}: ${row.text}` : row.title, summary: row.summary, current: row.state === 'current', ...(previewOf(row) ? { preview: previewOf(row) } : {}), holds: row.items.map((item) => item.id), ...(row.warning ? { warning: row.warning } : {}) },
+      data: { rowId: row.id, title: row.kind === 'step' ? `${row.title}: ${plainText(row.text ?? '')}` : row.title, summary: row.summary, current: row.state === 'current', ...(previewOf(row) ? { preview: previewOf(row) } : {}), holds: row.items.map((item) => item.id), ...(row.warning ? { warning: row.warning } : {}) },
       ...FIXED,
     }],
   };
@@ -439,7 +534,7 @@ function linesPiece(row: AreaRow, stage: AreaStage, lines: number): Piece {
       if (hidden > 0) {
         out.push({
           id: `${row.id}:more`, type: 'more', position: { x: stage.width - ROW_SIZE.more, y: y + (head - ROW_SIZE.header) / 2 }, width: ROW_SIZE.more, height: ROW_SIZE.header,
-          data: { rowId: row.id, title: `+${hidden} more`, count: hidden, rowTitle: row.text ?? row.title, holds: row.items.slice(shown.length).map((item) => item.id) }, ...FIXED,
+          data: { rowId: row.id, title: `+${hidden} more`, count: hidden, rowTitle: plainText(row.text ?? row.title), holds: row.items.slice(shown.length).map((item) => item.id) }, ...FIXED,
         });
       }
       let lineY = y + head + ROW_SIZE.stackGap;
@@ -540,7 +635,9 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
   const H = stage.height;
   const openAsked = options.openRow ?? null;
   const openRow = openAsked && rows.some((row) => row.id === openAsked) ? openAsked : null;
-  const waitingOpen = openAsked === WAITING_ROW && waiting !== null && waiting.decisions.length > 1;
+  const hasCheck = Boolean(waiting?.check && !waiting.done);
+  // The waiting decisions can be opened when there is more than the frame shows, and when the canvas is too small for them and folds them to one line
+  const waitingOpen = openAsked === WAITING_ROW && waiting !== null && (waiting.decisions.length > 1 || waitingFoldedAtRest(area, options));
   const head = rows.find((row) => row.kind === 'step' && isCurrent(row));
   const isAggregate = (row: AreaRow) => row.kind === 'more-steps' || row.kind === 'done';
   const content = rows.filter((row) => !isAggregate(row));
@@ -562,18 +659,29 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
       // Everything but the opened row: the waiting decisions folded to one line (unless they are the opened row), the current step as one line, the other rows folded
       const build = (headLines: number) => {
         const pieces: Piece[] = [];
-        if (waiting) pieces.push(waitingOpen ? waitingPiece(waiting, stage, sizing.waitingShown, true) : waitingFold(waiting, stage, sizing.fold));
+        let waitSlot = -1;
+        if (waiting) {
+          if (waitingOpen) { waitSlot = pieces.length; pieces.push({ height: 0, nodes: () => [] }); } else pieces.push(waitingFold(waiting, stage, sizing.fold));
+        }
         let slot = -1;
         for (const row of rows) {
           if (row === target) { slot = pieces.length; pieces.push({ height: 0, nodes: () => [] }); continue; }
           pieces.push(row === head ? linesPiece(row, stage, headLines) : foldPiece(row, stage, sizing.fold));
         }
-        return { pieces, slot, room: H - sum(pieces, sizing.gap) };
+        return { pieces, slot, waitSlot, room: H - sum(pieces, sizing.gap) };
       };
       let built = build(1);
       if (!target) {
-        if (built.room < 0 && !last) return null;
-        if (built.room < 0) built = build(0);
+        // The waiting decisions are the opened row: they take the room that is left, in pages when they do not all fit
+        const need = waitingOpen ? waitingHeight(1, true, hasCheck) : 0;
+        if (built.room < need && !last) return null;
+        if (built.room < need) built = build(0);
+        if (waitingOpen && waiting) {
+          const count = Math.max(1, Math.min(ROW_SIZE.waitingOpen, waiting.decisions.length, Math.floor((Math.max(built.room, need) - waitingHeight(0, true, hasCheck)) / ROW_SIZE.decision)));
+          const piece = waitingPiece(waiting, stage, count, true, page);
+          built.pieces[built.waitSlot] = piece;
+          return { result: { nodes: assemble(built.pieces, sizing.gap), open: piece.info ?? null }, score: count };
+        }
         const nodes = assemble(built.pieces, sizing.gap);
         return { result: { nodes, open: null }, score: Math.min(waiting?.decisions.length ?? 0, sizing.waitingShown) };
       }
@@ -597,8 +705,8 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
   // shows its header alone. What room is left goes to the rows from the top down, in order of priority (the current step, the steps with
   // cards, what is tied to no step, the documents, the commits): each is given as many lines of things as fit, with the rest behind "+N
   // more", and a folded row is unfolded to one line, until a row cannot have all it wants. The smaller sizes are used when they show more.
-  const defaultLayout = (sizing: Sizing): { nodes: BoardNode[]; score: number } | null => {
-    const last = sizing === COMPACT;
+  const defaultLayout = (sizing: Sizing): { nodes: BoardNode[]; score: number; fits: boolean } | null => {
+    const last = sizing !== COMFY;
     /** Lines shown by each row; -1 is folded. */
     const modes = new Map<string, number>();
     for (const row of rows) modes.set(row.id, row === head ? 1 : -1);
@@ -607,16 +715,11 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
       const mode = modes.get(row.id)!;
       return mode < 0 ? foldPiece(row, stage, sizing.fold) : linesPiece(row, stage, mode);
     };
-    const pieces = (): Piece[] => [...(waiting ? [waitingPiece(waiting, stage, waitingShown, false)] : []), ...rows.map(pieceOf)];
+    const pieces = (): Piece[] => [...(waiting ? [waitingShown === 0 ? waitingFold(waiting, stage, sizing.fold) : waitingPiece(waiting, stage, waitingShown, false)] : []), ...rows.map(pieceOf)];
     const fits = () => sum(pieces(), sizing.gap) <= H;
     if (!fits()) {
       if (!last) return null;
       if (head) modes.set(head.id, 0);
-    }
-    if (waiting && waitingShown < ROW_SIZE.waitingShown && waiting.decisions.length > waitingShown) {
-      const was = waitingShown;
-      waitingShown = ROW_SIZE.waitingShown;
-      if (!fits()) waitingShown = was;
     }
     // The rows get their lines in order of priority: when one cannot have all it wants, the ones after it keep what they have
     for (const row of content) {
@@ -630,12 +733,24 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
       }
       if (stopped) break;
     }
+    // Every row has what it can have, and a card of a waiting decision costs as much as a line of things: a second decision is shown only with the room that is left
+    if (waiting && waitingShown > 0 && waitingShown < ROW_SIZE.waitingShown && waiting.decisions.length > waitingShown) {
+      const was = waitingShown;
+      waitingShown = ROW_SIZE.waitingShown;
+      if (!fits()) waitingShown = was;
+    }
     const nodes = assemble(pieces(), sizing.gap);
-    return { nodes, score: nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'placeholder').length };
+    return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'placeholder').length };
   };
   const comfy = defaultLayout(COMFY);
   const small = defaultLayout(COMPACT);
-  const best = comfy && (!small || comfy.score >= small.score) ? comfy : small;
+  let best = comfy && (!small || comfy.score >= small.score) ? comfy : small;
+  // Not one card shows with the waiting decisions as cards, or on a window so low that the rows do not fit at all: they go to their one line
+  // first, so that the cards of the rows can be seen and the rows stay on the stage
+  if (waiting && (!best?.fits || ((best?.score ?? 0) === 0 && rows.some((row) => row.items.length > 0)))) {
+    const folded = defaultLayout(FOLDED);
+    if (folded && (folded.score > (best?.score ?? 0) || (folded.fits && !best?.fits))) best = folded;
+  }
   return { nodes: best?.nodes ?? [], open: null };
 }
 

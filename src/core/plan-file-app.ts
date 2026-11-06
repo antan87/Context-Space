@@ -35,10 +35,10 @@ function view(read: PlanFileRead, checks: Record<string, PlanEvidence>, changes:
       ...(checks[checkpoint.key] ? { proof: checks[checkpoint.key] } : {}),
       ...(checkpoint.outcome ? { outcome: checkpoint.outcome } : {}),
       ...(checkpoint.detail ? { detail: checkpoint.detail } : {}),
-      steps: checkpoint.steps.map((step) => ({ key: step.key, text: step.text, done: step.done })),
+      steps: checkpoint.steps.map((step) => ({ key: step.key, text: step.text, done: step.done, ...(step.parent ? { parent: step.parent } : {}) })),
       decisions: checkpoint.decisions.map(decisionView),
     })),
-    steps: plan.steps.map((step) => ({ key: step.key, text: step.text, done: step.done })),
+    steps: plan.steps.map((step) => ({ key: step.key, text: step.text, done: step.done, ...(step.parent ? { parent: step.parent } : {}) })),
     decisions: plan.decisions.map(decisionView),
     /** The decisions that wait for the user's answer. */
     waiting: openDecisions(plan).map((decision) => decision.key),

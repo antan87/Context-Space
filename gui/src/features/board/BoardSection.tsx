@@ -3,10 +3,11 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
-import { Archive, Kanban, Plus, RefreshCw } from 'lucide-react';
+import { Archive, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { IconButton } from '../../components/ui/icon-button.js';
 import { Input } from '../../components/ui/input.js';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../../components/ui/empty.js';
 import { Spinner } from '../../components/ui/spinner.js';
@@ -36,7 +37,7 @@ import {
 import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard } from './boardData.js';
 import { NoteDialog } from './NoteDialog.js';
 import { fileTitle, readerDock } from './boardDock.js';
-import { boardEdges, type BoardNode } from './boardLayout.js';
+import { boardEdges, oneLinePerPair, type BoardNode } from './boardLayout.js';
 import {
   buildBoardNav,
   readNavMode,
@@ -659,7 +660,22 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     else if (areaOpen && areaOpen.page !== openState.page) setOpenState({ ...openState, page: areaOpen.page });
   }, [openState, steppedAreaId, areaReady, activeArea, rowIds, areaOpen]);
 
-  const areaEdges = useMemo(() => boardEdges(areaNodes, board?.links ?? []), [areaNodes, board]);
+  const areaEdges = useMemo(() => oneLinePerPair(boardEdges(areaNodes, board?.links ?? [])), [areaNodes, board]);
+  // Inside an Area a line is drawn only for a card the pointer is on or the keyboard is in (`data-lit`, see index.css). This sets the attribute on the
+  // lines in the DOM and keeps no state: a render on every hover or focus would move things under a press in progress.
+  const litNodes = useRef<{ pointed: string | null; focused: string | null }>({ pointed: null, focused: null });
+  const lightAreaEdges = useCallback((change: Partial<{ pointed: string | null; focused: string | null }>) => {
+    litNodes.current = { ...litNodes.current, ...change };
+    const { pointed, focused } = litNodes.current;
+    for (const el of Array.from(areaCanvasContainer?.querySelectorAll<SVGElement>('.react-flow__edge') ?? [])) {
+      const id = el.getAttribute('data-id') || el.id?.replace(/^react-flow__edge-/, '');
+      const edge = areaEdges.find((entry) => entry.id === id);
+      const lit = Boolean(edge) && [pointed, focused].some((node) => node !== null && (edge!.source === node || edge!.target === node));
+      el.toggleAttribute('data-lit', lit);
+    }
+  }, [areaCanvasContainer, areaEdges]);
+  // The lines are drawn again when the rows change: what was lit is lit again
+  useLayoutEffect(() => { lightAreaEdges({}); }, [lightAreaEdges, areaNodes]);
 
   // A press anywhere ends the looking after the keyboard: whoever pressed has put it where they want it, and putting it back on the opener
   // in the middle of a drag over a card's text (the focus moves, and the selection stops) is the one thing to avoid.
@@ -1109,7 +1125,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const tickStepMutation = useTickPlanStep(workspaceId);
   const runCheckMutation = useRunCheckpointCheck(workspaceId);
 
-  const answerDecision = useCallback(async (key: string, answer: string, expected?: string) => {
+  const answerDecision = useCallback(async (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => {
     setDecisionErrors((prev) => {
       if (!prev[key]) return prev;
       const next = { ...prev };
@@ -1117,7 +1133,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return next;
     });
     try {
-      await answerMutation.mutateAsync({ key, answer, expected });
+      await answerMutation.mutateAsync({ key, answer, expected, ...(options?.optimistic === false ? { optimistic: false } : {}) });
       return true;
     } catch (err) {
       setDecisionErrors((prev) => ({
@@ -1292,17 +1308,44 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const backdropPress = useRef({ down: false, up: false });
 
-  const noteButton = (defaultAreaId?: string) => (
-    readOnly ? null : (
+  // `inArea`: in the header of an Area, narrower than LABELS_FROM the label gives way to the icon (the name and the tooltip stay), so that the
+  // pane icon and Close are never pushed out of the header
+  const noteButton = (defaultAreaId?: string, inArea = false) => (
+    readOnly ? null : inArea ? (
+      <>
+        <IconButton
+          label="Add a note"
+          variant="outline"
+          size="sm"
+          icon={<StickyNote aria-hidden="true" />}
+          className="nodrag nopan cursor-pointer @[44rem]:hidden"
+          data-testid="area-add-note-icon"
+          onClick={() => openCreateNoteDialog(defaultAreaId)}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          title="Add a note"
+          aria-label="Add a note"
+          className="nodrag nopan hidden gap-1.5 px-2.5 text-[12.5px] font-medium @[44rem]:inline-flex"
+          onClick={() => openCreateNoteDialog(defaultAreaId)}
+        >
+          <Plus className="size-4" aria-hidden="true" />
+          <span className="sr-only">+ </span>
+          <span>Note</span>
+        </Button>
+      </>
+    ) : (
       <Button
         size="sm"
         variant="outline"
+        title="Add a note"
         className="nodrag nopan gap-1.5 text-[12.5px] font-medium"
         onClick={() => openCreateNoteDialog(defaultAreaId)}
       >
         <Plus className="size-4" aria-hidden="true" />
         <span className="sr-only">+ </span>
-        Note
+        <span>Note</span>
       </Button>
     )
   );
@@ -1474,11 +1517,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
               aria-labelledby={areaHeadingId}
               style={{ transformOrigin: stepped.origin }}
               className={cn(
-                'relative flex h-full w-full flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl',
+                'relative flex h-full w-full flex-col overflow-clip rounded-2xl border border-border bg-background shadow-2xl',
                 stepped.phase === 'closing' ? 'board-area-exit' : 'board-area-enter',
               )}
             >
-              <header className="@container flex h-12 shrink-0 items-center gap-1.5 border-b border-border/60 px-3">
+              <header className="@container shrink-0 border-b border-border/60">
+              {/* One 48 px line from 22rem up; narrower than that (a phone) the title keeps 7rem and the buttons wrap under it, so that nothing is pushed out */}
+              <div className="flex min-h-12 flex-wrap items-center gap-x-1 gap-y-1 px-3 py-1.5 @[22rem]:flex-nowrap @[22rem]:gap-x-1.5 @[22rem]:py-0">
                 <Button
                   ref={backButtonRef}
                   type="button"
@@ -1491,7 +1536,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 </Button>
                 <h2
                   id={areaHeadingId}
-                  className="min-w-[7rem] truncate text-sm font-semibold text-foreground"
+                  className="min-w-[7rem] max-w-full truncate text-sm font-semibold text-foreground @[22rem]:min-w-[2rem]"
                   title={activeArea.data.title}
                 >
                   {activeArea.data.title}
@@ -1512,24 +1557,40 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 {activeArea.data.kind !== 'work' && (
                   <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
                 )}
-                <div className="ml-auto flex items-center gap-1.5">
+                <div className="ml-auto flex shrink-0 items-center gap-1">
                   {activeArea.data.kind !== 'work' && !readOnly && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      data-testid="area-add-step-button"
-                      className="nodrag nopan gap-1.5 text-[12.5px] font-medium min-h-[24px] cursor-pointer"
-                      onClick={() => {
-                        setAreaAddStepOpen(true);
-                        setAreaAddStepError(null);
-                      }}
-                    >
-                      <Plus className="size-4" aria-hidden="true" />
-                      <span className="sr-only">+ </span>
-                      Step
-                    </Button>
+                    <>
+                      <IconButton
+                        label="Add a step"
+                        variant="outline"
+                        size="sm"
+                        icon={<ListPlus aria-hidden="true" />}
+                        className="nodrag nopan cursor-pointer @[44rem]:hidden"
+                        data-testid="area-add-step-icon"
+                        onClick={() => {
+                          setAreaAddStepOpen(true);
+                          setAreaAddStepError(null);
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid="area-add-step-button"
+                        title="Add a step"
+                        aria-label="Add a step"
+                        className="nodrag nopan hidden min-h-[24px] cursor-pointer gap-1.5 px-2.5 text-[12.5px] font-medium @[44rem]:inline-flex"
+                        onClick={() => {
+                          setAreaAddStepOpen(true);
+                          setAreaAddStepError(null);
+                        }}
+                      >
+                        <Plus className="size-4" aria-hidden="true" />
+                        <span className="sr-only">+ </span>
+                        <span>Step</span>
+                      </Button>
+                    </>
                   )}
-                  {noteButton(activeArea.id)}
+                  {noteButton(activeArea.id, true)}
                   {activeArea.archivedCount > 0 && (
                     <Button
                       size="xs"
@@ -1537,14 +1598,16 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                       className="shrink-0"
                       aria-pressed={showArchived}
                       aria-label={`Archived (${activeArea.archivedCount})`}
+                      title={`Archived (${activeArea.archivedCount})`}
                       onClick={() => setShowArchived((s) => !s)}
                     >
                       <Archive aria-hidden="true" />
-                      <span className="hidden @[26rem]:inline">Archived </span>({activeArea.archivedCount})
+                      <span className="hidden @[44rem]:inline">Archived </span>({activeArea.archivedCount})
                     </Button>
                   )}
                   {paneIcons}
                 </div>
+              </div>
               </header>
               {areaAddStepOpen && (
                 <div data-testid="area-add-step-panel" className="border-b border-border bg-card px-3 py-2">
@@ -1625,6 +1688,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   <div
                     ref={setAreaCanvasContainer}
                     className="absolute inset-0"
+                    onFocus={(event) => lightAreaEdges({ focused: (event.target as HTMLElement).closest<HTMLElement>('.react-flow__node')?.dataset.id ?? null })}
+                    onBlur={() => lightAreaEdges({ focused: null })}
                   >
                     <BoardActionsContext value={areaActions}>
                       <BoardReadingContext value={reader?.target.card ?? null}>
@@ -1636,6 +1701,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                           tabIndex={0}
                           nodes={areaNodes}
                           edges={areaEdges}
+                          onNodeMouseEnter={(_event, node) => lightAreaEdges({ pointed: node.id })}
+                          onNodeMouseLeave={() => lightAreaEdges({ pointed: null })}
                           nodeTypes={AREA_NODE_TYPES}
                           defaultEdgeOptions={EDGE_OPTIONS}
                           defaultViewport={areaView()}

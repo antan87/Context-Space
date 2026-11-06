@@ -198,7 +198,9 @@ test.describe('Board & Terminal Unified Co-Working', () => {
     await expect(boardBtn).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('chat-dock-slot')).toHaveCount(0);
 
-    const decisionAskBtn = page.locator('button[title*="Which time zone"]');
+    // "Ask in CLI" is in the dialog that the quiet button at the end of the card's answers opens
+    await page.getByTestId('decision-more-answers').click();
+    const decisionAskBtn = page.getByTestId('decision-dialog').locator('button[title*="Which time zone"]');
     await expect(decisionAskBtn).toBeVisible();
     await decisionAskBtn.click();
 

@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { checkpoint, decision, planFile, step, whatsNew } from './planData';
 import type { WorkDocument } from '../src/types.ts';
@@ -138,6 +138,14 @@ async function routeBoard(
   return { getPlan: () => currentPlan, getAnswers: () => answersReceived };
 }
 
+/** The free answer is in the dialog that the quiet button at the end of the card's answers opens. */
+async function openAnswerDialog(page: Page, frame: Locator) {
+  await frame.getByTestId('decision-more-answers').first().click();
+  const dialog = page.getByTestId('decision-dialog');
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
 test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
   test('displays decision question, quick-action suggested option buttons, and answer input inside the waiting frame', async ({ page }) => {
     await routeBoard(page);
@@ -167,10 +175,12 @@ test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
     await expect(optLocal).toBeVisible();
     await expect(optAccount).toBeVisible();
 
-    // Answer text input and Answer button are visible
-    const input = frame.getByPlaceholder('Your answer');
+    // The card has no input: the quiet button at the end of the answers opens the dialog that has it
+    await expect(frame.getByPlaceholder('Your answer')).toHaveCount(0);
+    const dialog = await openAnswerDialog(page, frame);
+    const input = dialog.getByPlaceholder('Your answer');
     await expect(input).toBeVisible();
-    const answerBtn = frame.getByRole('button', { name: 'Answer' });
+    const answerBtn = dialog.getByRole('button', { name: 'Answer', exact: true });
     await expect(answerBtn).toBeVisible();
     await expect(answerBtn).toBeDisabled(); // Empty input has disabled button
   });
@@ -214,8 +224,9 @@ test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
     const frame = stepped.getByRole('article', { name: 'Waits for you' });
     await expect(frame).toBeVisible();
 
-    const input = frame.getByPlaceholder('Your answer');
-    const answerBtn = frame.getByRole('button', { name: 'Answer' });
+    const dialog = await openAnswerDialog(page, frame);
+    const input = dialog.getByPlaceholder('Your answer');
+    const answerBtn = dialog.getByRole('button', { name: 'Answer', exact: true });
 
     // Type custom answer
     await input.fill('Europe/Stockholm');
@@ -265,9 +276,9 @@ test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
     ]);
 
     // Now answer the second question by typing custom text
-    const input = frame.getByPlaceholder('Your answer');
-    await input.fill('Custom answer for two');
-    await frame.getByRole('button', { name: 'Answer' }).click();
+    const dialog = await openAnswerDialog(page, frame);
+    await dialog.getByPlaceholder('Your answer').fill('Custom answer for two');
+    await dialog.getByRole('button', { name: 'Answer', exact: true }).click();
 
     // All decisions answered, Waits for you frame disappears
     await expect(stepped.getByRole('article', { name: 'Waits for you' })).toHaveCount(0);
@@ -313,7 +324,8 @@ test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
     const frame = stepped.getByRole('article', { name: 'Waits for you' });
     await expect(frame).toBeVisible();
 
-    const input = frame.getByPlaceholder('Your answer');
+    const dialog = await openAnswerDialog(page, frame);
+    const input = dialog.getByPlaceholder('Your answer');
     await input.fill('Custom via Enter');
     await input.press('Enter');
 
