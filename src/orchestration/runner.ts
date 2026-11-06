@@ -14,6 +14,7 @@ import type { ServiceConfig, RunningService, RunningState, ServiceFailure, Servi
 import { BRAND_CONFIG, getPm2ProcessPrefix } from '../core/constants.js';
 import { findExecutable } from '../utils/user-paths.js';
 import { isLocalPortListening } from '../utils/ports.js';
+import { assertPm2HomeUsable, isPm2DaemonAlive, overlongPm2SocketPath, resolvePm2Home } from './pm2-home.js';
 
 /** Name of the state file that tracks running services. */
 const PRIMARY_STATE_FILE = BRAND_CONFIG.files.runningState.primary;
@@ -65,7 +66,8 @@ export async function pm2Start(opts: {
   /** Extra environment for this process; PM2 gives an app the environment it was started with. */
   env?: Record<string, string>;
 }): Promise<void> {
-  await execa('npx', ['pm2', 'delete', opts.name], { reject: false });
+  assertPm2HomeUsable();
+  await pm2Delete(opts.name);
   await execa('npx', [
     'pm2',
     'start',
@@ -83,6 +85,15 @@ export async function pm2Start(opts: {
     '--',
     ...opts.args,
   ], opts.env ? { env: opts.env } : undefined);
+}
+
+/** Deletes a PM2 app; refuses when the PM2 home path is too long, and does nothing when no daemon is alive. */
+export async function pm2Delete(name: string): Promise<{ failed?: boolean; exitCode?: number }> {
+  const home = resolvePm2Home();
+  assertPm2HomeUsable(home);
+  // With no daemon there is no app to delete, and `pm2 delete` would start one.
+  if (!isPm2DaemonAlive(home)) return { failed: false, exitCode: 0 };
+  return execa('npx', ['pm2', 'delete', name], { reject: false });
 }
 
 /**
@@ -111,6 +122,11 @@ export function parsePm2Json(stdout: string): any[] {
  * {@link loadRunningState} to avoid spawning npx per workspace.
  */
 export async function readPm2List(): Promise<any[] | null> {
+  const home = resolvePm2Home();
+  // Unreadable: PM2 could not have a daemon here, and asking would start one.
+  if (overlongPm2SocketPath(home)) return null;
+  // No daemon alive means nothing runs under PM2; `pm2 jlist` would start one.
+  if (!isPm2DaemonAlive(home)) return [];
   try {
     const { stdout } = await execa('npx', ['pm2', 'jlist']);
     const list = parsePm2Json(stdout);
@@ -411,7 +427,7 @@ export async function startService(
       const status = pm2App?.pm2_env?.status;
       const output = await lastLogLine(logFile);
       // Not tracked as running, so it must not keep running (or crash-looping) under PM2.
-      await execa('npx', ['pm2', 'delete', uniqueName], { reject: false });
+      await pm2Delete(uniqueName);
       return failed(`PM2 started it but it is not running${status ? ` (status: ${status})` : ''}.${output ? ` Last output: ${output}` : ' Check its log.'}`);
     }
 
@@ -447,7 +463,7 @@ export async function stopService(workspacePath: string, serviceName: string): P
   const pm2List = await getPm2List();
   if (pm2List.some((app: any) => app.name === uniqueName)) {
     existed = true;
-    const res = await execa('npx', ['pm2', 'delete', uniqueName], { reject: false });
+    const res = await pm2Delete(uniqueName);
     if (res.failed || (typeof res.exitCode === 'number' && res.exitCode !== 0)) {
       deleteSuccess = false;
     }
@@ -542,7 +558,7 @@ export async function stopServices(workspacePath: string): Promise<void> {
     } else {
       for (const app of targetApps) {
         console.log(chalk.dim(`    Stopping PM2 process: ${app.name}`));
-        const res = await execa('npx', ['pm2', 'delete', app.name], { reject: false });
+        const res = await pm2Delete(app.name);
         if (res.failed || (typeof res.exitCode === 'number' && res.exitCode !== 0)) {
           failedApps.add(app.name);
         }

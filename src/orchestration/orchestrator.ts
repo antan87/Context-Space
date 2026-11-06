@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 
 import type { OrchestrationDetection, RunningOrchestrator } from '../types.js';
-import { getPm2List, mutateRunningState, pm2Prefix, pm2Start, readRawRunningState, serviceLogFile } from './runner.js';
+import { getPm2List, mutateRunningState, pm2Delete, pm2Prefix, pm2Start, readRawRunningState, serviceLogFile } from './runner.js';
 
 /**
  * Slugifies a detection id into a PM2/filesystem-safe token. Keyed on the id
@@ -100,7 +100,7 @@ export async function stopOrchestrator(
     const pm2Name = orchestratorPm2Name(workspacePath, detection);
     const pm2List = await getPm2List();
     if (pm2List.some((app: any) => app.name === pm2Name)) {
-      await execa('npx', ['pm2', 'delete', pm2Name], { reject: false });
+      await pm2Delete(pm2Name);
     }
   }
 
@@ -130,7 +130,7 @@ export async function stopRecordedOrchestrator(id: string, workspacePath: string
   const recorded = state?.orchestrators?.find((o) => o.id === id);
   if (!recorded) return false;
   if (recorded.mode === 'pm2' && recorded.pm2Name) {
-    await execa('npx', ['pm2', 'delete', recorded.pm2Name], { reject: false });
+    await pm2Delete(recorded.pm2Name);
   }
   await mutateRunningState(workspacePath, (current) => ({
     ...current,

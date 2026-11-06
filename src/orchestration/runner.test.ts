@@ -1,13 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as net from 'node:net';
 import { execa } from 'execa';
 import * as path from 'node:path';
+import * as nodeFs from 'node:fs';
+import * as os from 'node:os';
 
 import {
   getPm2List,
   loadRunningState,
   parsePm2Json,
+  pm2Start,
+  readPm2List,
   pm2AppName,
   pm2Prefix,
   serviceExecutable,
@@ -17,6 +21,7 @@ import {
   startServices,
   stopService,
   stopServices,
+  pm2Delete,
 } from './runner.js';
 import type { RunningState, ServiceConfig } from '../types.js';
 import { findExecutable } from '../utils/user-paths.js';
@@ -35,9 +40,33 @@ function service(name: string, cwd: string): ServiceConfig {
   };
 }
 
+/** A throwaway PM2 home with a live daemon record (this process's pid and an rpc.sock file). Never ~ or ~/.pm2. */
+const tempDirs: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function fakeLivePm2Home(): string {
+  const dir = tempDir('pm2t-');
+  if (dir === os.homedir() || dir.startsWith(path.join(os.homedir(), '.pm2'))) throw new Error('unsafe temp dir');
+  nodeFs.writeFileSync(path.join(dir, 'pm2.pid'), String(process.pid));
+  nodeFs.writeFileSync(path.join(dir, 'rpc.sock'), '');
+  return dir;
+}
+
 describe('orchestration runner PM2 state handling', () => {
+  const originalPm2Home = process.env.PM2_HOME;
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) nodeFs.rmSync(dir, { recursive: true, force: true });
+    if (originalPm2Home === undefined) delete process.env.PM2_HOME;
+    else process.env.PM2_HOME = originalPm2Home;
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.PM2_HOME = fakeLivePm2Home();
   });
 
   describe('parsePm2Json', () => {
@@ -53,6 +82,72 @@ describe('orchestration runner PM2 state handling', () => {
 
     it('returns an empty list for invalid output', () => {
       expect(parsePm2Json('not json')).toEqual([]);
+    });
+  });
+
+
+  describe('reading never starts a PM2 daemon', () => {
+    it('returns [] without running PM2 when there is no pid file', async () => {
+      process.env.PM2_HOME = tempDir('pm2t-');
+      await expect(readPm2List()).resolves.toEqual([]);
+      expect(execa).not.toHaveBeenCalled();
+    });
+
+    it('returns [] without running PM2 when the pid is dead', async () => {
+      const home = tempDir('pm2t-');
+      nodeFs.writeFileSync(path.join(home, 'rpc.sock'), '');
+      nodeFs.writeFileSync(path.join(home, 'pm2.pid'), '2147483646');
+      process.env.PM2_HOME = home;
+      await expect(readPm2List()).resolves.toEqual([]);
+      expect(execa).not.toHaveBeenCalled();
+    });
+
+    it('returns [] when the pid is alive but rpc.sock is missing', async () => {
+      const home = tempDir('pm2t-');
+      nodeFs.writeFileSync(path.join(home, 'pm2.pid'), String(process.pid));
+      process.env.PM2_HOME = home;
+      await expect(readPm2List()).resolves.toEqual([]);
+      expect(execa).not.toHaveBeenCalled();
+    });
+
+    it('runs jlist and parses the list when the daemon is alive (PM2_HOME honoured)', async () => {
+      vi.mocked(execa).mockResolvedValueOnce({ stdout: '[{"name":"api"}]' } as any);
+      await expect(readPm2List()).resolves.toEqual([{ name: 'api' }]);
+      expect(execa).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to ~/.pm2 under HOME when PM2_HOME is unset', async () => {
+      const fakeHome = tempDir('pm2h-');
+      const oldHome = process.env.HOME;
+      delete process.env.PM2_HOME;
+      process.env.HOME = fakeHome;
+      try {
+        await expect(readPm2List()).resolves.toEqual([]);
+        expect(execa).not.toHaveBeenCalled();
+        nodeFs.mkdirSync(path.join(fakeHome, '.pm2'));
+        nodeFs.writeFileSync(path.join(fakeHome, '.pm2', 'pm2.pid'), String(process.pid));
+        nodeFs.writeFileSync(path.join(fakeHome, '.pm2', 'rpc.sock'), '');
+        vi.mocked(execa).mockResolvedValueOnce({ stdout: '[]' } as any);
+        await expect(readPm2List()).resolves.toEqual([]);
+        expect(execa).toHaveBeenCalledTimes(1);
+      } finally {
+        process.env.HOME = oldHome;
+      }
+    });
+
+    it('a too-long home: read returns null, runs nothing; start and delete refuse naming the fix', async () => {
+      process.env.PM2_HOME = path.join(os.tmpdir(), 'pm2t-' + 'x'.repeat(120));
+      await expect(readPm2List()).resolves.toBeNull();
+      await expect(pm2Start({ name: 'a', command: 'node', args: [], cwd: '/tmp', logFile: '/tmp/a.log' }))
+        .rejects.toThrow(/too long.*rpc\.sock.*Set PM2_HOME to a shorter path/s);
+      await expect(pm2Delete('a')).rejects.toThrow(/too long.*rpc\.sock.*Set PM2_HOME to a shorter path/s);
+      expect(execa).not.toHaveBeenCalled();
+    });
+
+    it('a delete with no daemon alive starts nothing', async () => {
+      process.env.PM2_HOME = tempDir('pm2t-');
+      await pm2Delete('a');
+      expect(execa).not.toHaveBeenCalled();
     });
   });
 
