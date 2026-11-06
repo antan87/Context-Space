@@ -843,3 +843,57 @@ describe('the row that is not tied to a step: Media and Notes tabs', () => {
     expect(areaPlace(area(pictures), { size }, 'p5')!.tab).toBeUndefined();
   });
 });
+
+describe('the uncommitted card in a repository commits row', () => {
+  const pending = (files = 13, repoName = 'api') => [{ repoName, repoPath: '/r', files, additions: 120, deletions: 40, names: ['a.ts', 'b.ts', 'c.ts'], firstFile: 'src/a.ts' }];
+  const withChanges = (changes: ReturnType<typeof pending> | undefined, opts: { current?: boolean } = {}) => {
+    const area = areaOf(planOf(2, 1), [], { news: newsOf() });
+    return { ...area, data: { ...area.data, current: opts.current ?? true }, ...(changes ? { uncommitted: changes } : {}) } as BoardArea;
+  };
+  const commitsRow = (area: BoardArea) => areaRows(area, { news: newsOf(), size: big }).find((r) => r.id === 'lane:commits:api')!;
+
+  it('is first in the row of its repository, as its own kind of item, at the height of a commit', () => {
+    const row = commitsRow(withChanges(pending()));
+    expect(row.items.map((i) => i.type)).toEqual(['uncommitted', 'commit', 'commit', 'commit']);
+    expect(row.items[0]!.height).toBe(ITEM_HEIGHT.commit);
+    expect(row.items[0]!.data).toMatchObject({ title: '13 files changed', numbers: '+120 −40', names: ['a.ts', 'b.ts', 'c.ts'], firstFile: 'src/a.ts' });
+    const nodes = areaBoardLayout(withChanges(pending()), { news: newsOf(), size: big });
+    const node = nodes.find((n) => n.type === 'uncommitted')!;
+    expect(node.height).toBe(ITEM_HEIGHT.commit);
+    expect(nodes.find((n) => n.type === 'commit')!.height).toBe(node.height);
+    expect(node.draggable).toBe(false);
+  });
+
+  it('is absent when the repository is clean, in an Area that is not the current one, and for a repository of another name', () => {
+    expect(commitsRow(withChanges(undefined)).items.map((i) => i.type)).toEqual(['commit', 'commit', 'commit']);
+    expect(commitsRow(withChanges(pending(), { current: false })).items.some((i) => i.type === 'uncommitted')).toBe(false);
+    const other = areaRows(withChanges(pending(2, 'web')), { news: newsOf(), size: big });
+    expect(other.find((r) => r.id === 'lane:commits:api')!.items.some((i) => i.type === 'uncommitted')).toBe(false);
+  });
+
+  it('is not counted as a commit in the summary, and a repository with no commits in the Area gets a row of its own for it', () => {
+    const row = commitsRow(withChanges(pending()));
+    expect(row.summary).toContain('13 files changed');
+    expect(row.summary).toContain('3 new since you last looked');
+    const plain = commitsRow(withChanges(undefined));
+    expect(row.summary.endsWith(plain.summary)).toBe(true);
+    const solo = areaRows(withChanges(pending(1, 'web')), { news: newsOf(), size: big }).find((r) => r.id === 'lane:commits:web')!;
+    expect(solo.items.map((i) => i.type)).toEqual(['uncommitted']);
+    expect(solo.summary).toBe('1 file changed');
+  });
+
+  it('starts the one-line summary of a folded commits row with the changes', () => {
+    const crowded = areaOf(planOf(4, 3, 2), [
+      ...Array.from({ length: 3 }, (_, i) => file(`f${i}`, `File ${i}`, { step: 's0', at: at(10 + i) })),
+      file('t1', 'Tied one', { step: 's1', at: at(4) }), file('l1', 'Loose one'), file('l2', 'Loose two'),
+    ], { docs: [doc('d1', 'Doc'), doc('d2', 'Doc two')], news: newsOf(2) });
+    const area = { ...crowded, uncommitted: pending() } as BoardArea;
+    let seen: string | undefined;
+    for (let height = 1500; height >= 300 && seen === undefined; height -= 20) {
+      const fold = areaBoardLayout(area, { news: newsOf(), size: { width: 1000, height } }).find((n) => n.type === 'fold' && n.id === 'lane:commits:api');
+      if (fold) seen = (fold.data as { summary: string }).summary;
+    }
+    expect(seen).toBeDefined();
+    expect(seen!.startsWith('13 files changed')).toBe(true);
+  });
+});

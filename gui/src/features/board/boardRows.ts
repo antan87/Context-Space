@@ -16,6 +16,7 @@ import { plainText } from '../../lib/plainText.js';
 import type { PlanFileStep, PlanProof } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard } from './boardData.js';
+import { filesChangedText, plusMinusText, type RepoChangeSummary } from '../changes/changeSummary.js';
 import { extractFreshSets, textEm, type BoardArea, type Size, type Viewport } from './boardAreas.js';
 import {
   BOARD_SIZE,
@@ -81,7 +82,7 @@ export const ROW_SIZE = {
 const WAITING_BORDER = 2;
 
 /** How high each kind of thing is, whatever the room: a compact card is never drawn shorter, nor taller. */
-export const ITEM_HEIGHT = { note: 96, file: 96, document: 96, commit: 80, placeholder: 56, step: 40 } as const;
+export const ITEM_HEIGHT = { note: 96, file: 96, document: 96, commit: 80, uncommitted: 80, placeholder: 56, step: 40 } as const;
 
 const CARD_W = ROW_SIZE.card;
 const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
@@ -181,6 +182,14 @@ function shownOrder(cards: BoardCard[]): BoardCard[] {
 }
 
 /** A thing as it is drawn inside an Area: its compact variant, at the height that variant has. */
+/** The card of a repository's uncommitted work, at the commit card's size. */
+function uncommittedItem(changes: RepoChangeSummary, taken: Set<string>): LaneCard {
+  return compact({
+    id: uniqueId(`uncommitted:${changes.repoName}`, taken), type: 'uncommitted', height: BOARD_SIZE.commit,
+    data: { repoName: changes.repoName, repoPath: changes.repoPath, title: filesChangedText(changes.files), numbers: plusMinusText(changes.additions, changes.deletions), names: changes.names, firstFile: changes.firstFile },
+  });
+}
+
 function compact(item: LaneCard): LaneCard {
   return { ...item, height: ITEM_HEIGHT[item.type as keyof typeof ITEM_HEIGHT] ?? item.height, data: { ...item.data, compact: true } as LaneCard['data'] };
 }
@@ -327,16 +336,29 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   const news = options.news;
   const since = news ? commitsSince(news) : { caption: 'New since you last looked', none: () => 'No new commits.', count: (n: number) => `${n} commits` };
   const laneTaken = new Set<string>();
+  // The work not committed yet is the current Area's: one card at the top of its repository's commits row. It is not a commit, so the row's count leaves it out.
+  const pending = new Map((area.data.current ? (area.uncommitted ?? []) : []).map((entry) => [entry.repoName, entry]));
   for (const r of area.repos) {
     const more = r.repo.more;
     const total = r.commits.length + more;
+    const changes = pending.get(r.repo.repo);
+    pending.delete(r.repo.repo);
+    const countText = r.repo.problem && total === 0 ? `Could not be read: ${r.repo.problem}` : total > 0 ? since.count(total, r.repo.moreAtLeast) : '0 commits';
     rest.push({
-      id: r.laneId, kind: 'commits', title: r.repo.repo, state: 'plain', items: r.cards.map(compact),
+      id: r.laneId, kind: 'commits', title: r.repo.repo, state: 'plain', items: [...(changes ? [uncommittedItem(changes, taken)] : []), ...r.cards.map(compact)],
       caption: [since.caption, more ? moreText(more, r.repo.moreAtLeast) : '', r.repo.problem ? `Could not be read: ${r.repo.problem}` : ''].filter(Boolean).join(' · '),
-      summary: r.repo.problem && total === 0 ? `Could not be read: ${r.repo.problem}` : total > 0 ? since.count(total, r.repo.moreAtLeast) : '0 commits',
+      // Folded to one line, the row still says there is work to commit
+      summary: changes ? (total > 0 ? `${filesChangedText(changes.files)} · ${countText}` : filesChangedText(changes.files)) : countText,
       ...(r.repo.problem ? { warning: 'Could not read everything' } : {}),
     });
     laneTaken.add(r.laneId);
+  }
+  // A repository with changes but no commits in this Area still gets its row, so the work to commit is never hidden.
+  for (const changes of pending.values()) {
+    rest.push({
+      id: uniqueId(`lane:commits:${changes.repoName}`, laneTaken), kind: 'commits', title: changes.repoName, state: 'plain', caption: since.caption,
+      items: [uncommittedItem(changes, taken)], summary: filesChangedText(changes.files),
+    });
   }
   // The placeholder rule: only on the current Area, when no repository has commits and there is other content or a problem.
   if (news && area.data.current) {
@@ -527,7 +549,7 @@ function headNode(row: AreaRow, y: number, width: number, expanded: boolean, emp
 function previewOf(row: AreaRow): string {
   const parts = row.groups
     ? row.groups.map((group) => plainText(group.text))
-    : row.items.map((item) => (item.type === 'commit' ? (item.data as { sha: string }).sha : (item.data as { title?: string }).title ?? ''));
+    : row.items.filter((item) => item.type !== 'uncommitted').map((item) => (item.type === 'commit' ? (item.data as { sha: string }).sha : (item.data as { title?: string }).title ?? ''));
   return parts.filter(Boolean).slice(0, 8).join(' · ');
 }
 
@@ -691,7 +713,7 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
   if (openRow || waitingOpen) {
     const target = openRow ? rows.find((row) => row.id === openRow)! : null;
     // The comfortable and the compact sizing are both tried, and the one that shows more things on its page wins (the comfortable one on a tie)
-    const thingsOf = (nodes: BoardNode[]) => nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'placeholder').length;
+    const thingsOf = (nodes: BoardNode[]) => nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'uncommitted' || entry.type === 'placeholder').length;
     const attempt = (sizing: Sizing, page: number): { result: LayoutResult; score: number } | null => {
       const last = sizing === COMPACT;
       // Everything but the opened row: the waiting decisions folded to one line (unless they are the opened row), the current step as one line, the other rows folded
@@ -778,7 +800,7 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
       if (!fits()) waitingShown = was;
     }
     const nodes = assemble(pieces(), sizing.gap);
-    return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'placeholder').length };
+    return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'uncommitted' || entry.type === 'placeholder').length };
   };
   const comfy = defaultLayout(COMFY);
   const small = defaultLayout(COMPACT);

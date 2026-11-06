@@ -68,7 +68,6 @@ import type {
   StorageAdapterMeta,
   TranscriptMessage,
   WorkspaceStatus,
-  CommitRepoResult,
 } from './types.js';
 import {
   BRAND_NAME,
@@ -251,9 +250,6 @@ function AppInner() {
   const isEditingKnowledgeRef = useRef(false);
   const [syncLoading, setSyncLoading] = useState<boolean>(false);
   const [syncResults, setSyncResults] = useState<any[] | null>(null);
-  const [commitMessage, setCommitMessage] = useState<string>('');
-  const [showCommitModal, setShowCommitModal] = useState<boolean>(false);
-  const [commitResults, setCommitResults] = useState<CommitRepoResult[] | null>(null);
   const [deleteWsLoading, setDeleteWsLoading] = useState<string | null>(null);
   const [addRepoLoading, setAddRepoLoading] = useState<boolean>(false);
 
@@ -1075,7 +1071,7 @@ Core Instructions:
       addRepoLoading={addRepoLoading}
       handleAddRepo={handleAddRepo}
       sessionProps={{ sessions, sessionsLoading, setActiveSession, setTranscript, fetchSessionTranscript, handleOpenDesktopSession, showToast }}
-      changesProps={{ gitChanges, syncLoading, syncResults, commitMessage, showCommitModal, commitResults, setSyncResults, setCommitResults, setCommitMessage, setShowCommitModal, fetchGitChanges, handleSyncAll }}
+      changesProps={{ gitChanges, syncLoading, syncResults, setSyncResults, fetchGitChanges, handleSyncAll }}
       knowledgeProps={{
         knowledgeContent,
         knowledgeLoading,

@@ -233,6 +233,12 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
     handleNextHunk();
   }, [currentHunk, activeHunkIndex, showToast, onHunkAction, handleNextHunk]);
 
+  const askButton = useRef<HTMLButtonElement>(null);
+  /** Closing the form gives the keyboard back to the button that opened it (and does nothing if the window has closed meanwhile). */
+  const closeRefineModal = () => {
+    setRefineModalOpen(false);
+    requestAnimationFrame(() => askButton.current?.focus({ preventScroll: true }));
+  };
   const handleOpenRefineModal = () => {
     setRefineFeedback('');
     setRefineModalOpen(true);
@@ -242,9 +248,9 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
     if (!currentHunk || !refineFeedback.trim() || !onRequestRefine) return;
     try {
       await onRequestRefine({ ...currentHunk, type: 'refine' }, refineFeedback.trim());
-      setRefineModalOpen(false);
+      closeRefineModal();
     } catch (error) {
-      showToast?.(error instanceof Error ? error.message : 'Could not copy the refinement request.', 'error');
+      showToast?.(error instanceof Error ? error.message : 'Could not send the request.', 'error');
     }
   };
 
@@ -335,7 +341,7 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
   const atLast = activeHunkIndex >= hunks.length - 1;
   const firstChangedLine = (hunk: DiffHunkAction) => hunk.firstChangedLineModified ?? hunk.startLineModified;
   const countLines = (hunk: DiffHunkAction, sign: '+' | '-') => hunk.lines.filter((line) => hunkLineKind(line) === (sign === '+' ? 'added' : 'removed')).length;
-  const toolbarButton = 'inline-flex h-6 items-center gap-1 rounded px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40';
+  const toolbarButton = 'inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40';
 
   return (
     <div
@@ -392,8 +398,8 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
         )}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           {onRequestRefine && currentHunk && (
-            <button type="button" className={toolbarButton} onClick={handleOpenRefineModal} title="Ask the CLI to change this part">
-              <MessageSquare className="size-3.5" /><span className="hidden md:inline">Refine</span>
+            <button ref={askButton} type="button" className={toolbarButton} onClick={handleOpenRefineModal} title="Ask the AI to change this part">
+              <MessageSquare className="size-3.5" /><span className="hidden md:inline">Ask AI</span>
             </button>
           )}
           <button type="button" className={cn(toolbarButton, viewMode === 'side-by-side' && 'bg-accent text-foreground')} onClick={toggleViewMode}
@@ -487,18 +493,18 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
 
       {/* ─── REFINE PROMPT MODAL ────────────────────────────────────────────── */}
       {refineModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
+        <div role="dialog" aria-modal="true" aria-label="Ask AI about this change" onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); closeRefineModal(); } }} className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-4 shadow-2xl space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <MessageSquare size={16} className="text-primary" />
                 <h3 className="text-xs font-bold text-foreground">
-                  Refine change {activeHunkIndex + 1} of {filePath.split('/').at(-1)}
+                  Ask AI about change {activeHunkIndex + 1} in {filePath.split('/').at(-1)}
                 </h3>
               </div>
               <button
                 type="button"
-                onClick={() => setRefineModalOpen(false)}
+                onClick={closeRefineModal}
                 className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"
               >
                 <X size={14} />
@@ -506,7 +512,7 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
             </div>
 
             <p className="text-[11px] text-muted-foreground">
-              Add instructions for this hunk. The request will be copied for you to paste into CLI chat:
+              Say what this part should do. It goes to your AI session; with none open, it is copied for you to paste.
             </p>
 
             <textarea
@@ -521,7 +527,7 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/60">
               <button
                 type="button"
-                onClick={() => setRefineModalOpen(false)}
+                onClick={closeRefineModal}
                 className="px-3 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg"
               >
                 Cancel
@@ -532,7 +538,7 @@ export const PluggableDiffViewer: React.FC<PluggableDiffViewerProps> = ({
                 onClick={() => void handleConfirmRefine()}
                 className="px-3 py-1 text-xs font-semibold text-primary-foreground bg-primary hover:bg-primary/90 disabled:opacity-50 rounded-lg transition-colors"
               >
-                Copy for CLI chat
+                Send to AI
               </button>
             </div>
           </div>

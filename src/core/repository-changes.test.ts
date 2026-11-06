@@ -90,3 +90,20 @@ describe('repository listing reuse', () => {
     expect(second.files.find(f => f.file === 'a.ts')?.additions).toBe(2);
   });
 });
+
+describe('line counts of untracked files', () => {
+  it('counts the lines of a small text file git does not track yet, and leaves a binary one at zero', async () => {
+    const repo = await mkdtemp(path.join(os.tmpdir(), 'ctx-untracked-'));
+    roots.push(repo);
+    const git = (...args: string[]) => execa('git', args, { cwd: repo });
+    await git('init', '-q');
+    await writeFile(path.join(repo, 'tracked.txt'), 'one\n');
+    await git('add', '.');
+    await git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
+    await writeFile(path.join(repo, 'new.txt'), 'a\nb\nc');
+    await writeFile(path.join(repo, 'blob.bin'), Buffer.from([1, 0, 2, 10, 3]));
+    const files = await listRepositoryChanges(repo);
+    expect(files.find((file) => file.file === 'new.txt')?.additions).toBe(3);
+    expect(files.find((file) => file.file === 'blob.bin')?.additions).toBe(0);
+  });
+});

@@ -108,6 +108,7 @@ import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
 import { ChatMarkdown } from '../components/ChatMarkdown.js';
+import { CodeWindowSlot } from '../features/changes/CodeWindowSlot.js';
 import { fillPromptForWorkspace } from '../features/terminal/promptFill.js';
 
 type SubTab = WorkspaceSection;
@@ -236,9 +237,12 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     }
   }, [selected, roomBeside, onSelectTab]);
 
-  const askInCLI = useCallback((context: string) => {
-    if (!selected) return;
-    const promptText = `Regarding ${context}: `;
+  /**
+   * Types a line into the active AI session, showing the chat first. Resolves true when a session took it, false after two seconds
+   * with none that can (nothing open, disconnected, or a plain shell, which is never typed into).
+   */
+  const sendToSession = useCallback((promptText: string, assistantOnly = false): Promise<boolean> => {
+    if (!selected) return Promise.resolve(false);
 
     if (!roomBeside) {
       onSelectTab(selected.branchName, 'chat');
@@ -251,15 +255,21 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       }
     }
 
-    const start = Date.now();
-    const tryFill = () => {
-      const filled = fillPromptForWorkspace(selected.branchName, promptText);
-      if (!filled && Date.now() - start < 2000) {
-        setTimeout(tryFill, 50);
-      }
-    };
-    tryFill();
+    return new Promise<boolean>((resolve) => {
+      const start = Date.now();
+      const tryFill = () => {
+        const filled = fillPromptForWorkspace(selected.branchName, promptText, { assistantOnly });
+        if (filled) resolve(true);
+        else if (Date.now() - start < 2000) setTimeout(tryFill, 50);
+        else resolve(false);
+      };
+      tryFill();
+    });
   }, [selected, roomBeside, layout.hidden, subTab, onSelectTab]);
+
+  const askInCLI = useCallback((context: string) => {
+    void sendToSession(`Regarding ${context}: `);
+  }, [sendToSession]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -634,7 +644,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     }
   };
 
-  const overviewChanges = changesProps?.gitChanges;
+  const { gitChanges: overviewChanges, ...codeSectionProps } = changesProps ?? {};
   const repoRows = selected
     ? selected.repos.map((rp) => {
         const name = repoName(rp);
@@ -925,6 +935,16 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
         />
         {/* Tab Navigation & Content Container */}
         <div ref={setBody} className="flex min-h-0 flex-1 pb-14 md:pb-0">
+          {!archived && (
+            <CodeWindowSlot
+              key={selected.branchName}
+              ws={selected}
+              cover={body}
+              sectionProps={codeSectionProps as never}
+              showToast={showToast}
+              askAI={(message) => sendToSession(message, true)}
+            />
+          )}
           {showPanel && (
           <div className="relative flex min-w-0 flex-1 flex-col" style={{ flex: showChat ? `0 0 ${100 - layout.percent}%` : '1 1 100%' }}>
             {/* What is open, and the way back to the chat, which is always one click: the cross, or the rail item again.

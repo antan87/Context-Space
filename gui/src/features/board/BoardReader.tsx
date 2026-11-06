@@ -36,6 +36,7 @@ import { LARGE_WINDOW, type ReaderLayout } from './boardReaderLayout.js';
 import { forgeDisplayName, safeForgeUrl, type CommitDetail } from './commitContext.js';
 import { CommitReaderView } from './CommitReaderView.js';
 import { ReaderPage } from './ReaderPage.js';
+import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 
 /** How many frames the reader keeps trying to take the keyboard: something that is closing (a dialog) may hold it back for a moment. */
 const FOCUS_FRAMES = 30;
@@ -204,6 +205,7 @@ export function BoardReader({
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.data !== ESCAPE_MESSAGE || !event.source) return;
+      if (isCodeWindowOpen()) return;
       const frames = panel.current?.querySelectorAll('iframe') ?? [];
       if (Array.from(frames).some((frame) => frame.contentWindow === event.source)) {
         if (maximized) setMaximized(false);
@@ -220,6 +222,7 @@ export function BoardReader({
     if (!maximized) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (isCodeWindowOpen()) return;
       if (document.querySelector('[data-slot="menu-popup"], .find-widget.visible, .monaco-menu-container, [role="dialog"]:not([data-board-reader-fullscreen])')) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -233,6 +236,8 @@ export function BoardReader({
   // Keyboard navigation between elements: [ and ] or Alt+ArrowLeft and Alt+ArrowRight
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // The Code window over the board has these keys
+      if (isCodeWindowOpen()) return;
       const target = event.target as HTMLElement | null;
       if (
         target &&

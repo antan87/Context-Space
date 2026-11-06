@@ -151,6 +151,19 @@ export type DocumentData = {
 };
 
 export type CommitData = { sha: string; subject: string; author: string; at: string; compact?: boolean; fresh?: boolean; pictures?: Array<{ path: string; title?: string }> };
+/** The work of one repository that is not committed yet: drawn first in its commits row, as a card of its own that opens the Code window. */
+export type UncommittedData = {
+  repoName: string;
+  repoPath: string;
+  title: string;
+  /** "+120 −40"; empty when the listing carries no counts. */
+  numbers: string;
+  /** The first file names. */
+  names: string[];
+  /** The file the Code window opens on. */
+  firstFile: string;
+  compact?: boolean;
+};
 /** What stands where a lane would be, when there is nothing to draw in it. */
 export type PlaceholderData = { text: string; compact?: boolean };
 
@@ -183,6 +196,7 @@ export type CheckpointNode = Node<CheckpointData, 'checkpoint'>;
 export type DocumentNode = Node<DocumentData, 'document'>;
 export type CommitNode = Node<CommitData, 'commit'>;
 export type PlaceholderNode = Node<PlaceholderData, 'placeholder'>;
+export type UncommittedNode = Node<UncommittedData, 'uncommitted'>;
 export type NoteNode = Node<NoteData, 'note'>;
 export type FileNode = Node<FileCardData, 'file'>;
 /** The tile at the left of a row inside an Area: a plan step, or the name of a group of things. Pressing it opens the row. */
@@ -221,7 +235,7 @@ export type RowHeadNode = Node<RowHeadData, 'step'>;
 export type PagerNode = Node<PagerData, 'pager'>;
 export type FoldNode = Node<FoldData, 'fold'>;
 export type MoreNode = Node<MoreData, 'more'>;
-export type BoardNode = LaneNode | CheckpointNode | DocumentNode | CommitNode | PlaceholderNode | NoteNode | FileNode | RowHeadNode | FoldNode | MoreNode | PagerNode;
+export type BoardNode = LaneNode | CheckpointNode | DocumentNode | CommitNode | UncommittedNode | PlaceholderNode | NoteNode | FileNode | RowHeadNode | FoldNode | MoreNode | PagerNode;
 
 export interface BoardSources {
   /** A source that is missing (still loading, or it failed) leaves its part of the board out. */
@@ -336,7 +350,7 @@ export function cardPlan(card: BoardCard, now: number): CardPlan {
 
 // ─── Lanes ──────────────────────────────────────────────────────────────────
 
-export type LaneCard = { id: string; type: 'document' | 'commit' | 'placeholder' | 'note' | 'file'; height: number; data: DocumentData | CommitData | PlaceholderData | NoteData | FileCardData };
+export type LaneCard = { id: string; type: 'document' | 'commit' | 'uncommitted' | 'placeholder' | 'note' | 'file'; height: number; data: DocumentData | CommitData | UncommittedData | PlaceholderData | NoteData | FileCardData };
 
 /**
  * A lane and its cards, one under the other, or in rows of `columns` when it is wider than one column, filled from the
@@ -652,6 +666,7 @@ export function nodeTitle(node: BoardNode): string {
     case 'pager': return `${node.data.title} (${node.data.holds.length} more)`;
     case 'lane': return node.data.group ? node.data.title : node.id;
     case 'placeholder': return node.id;
+    case 'uncommitted': return `${node.data.title} in ${node.data.repoName}`;
     default: return node.data.title;
   }
 }

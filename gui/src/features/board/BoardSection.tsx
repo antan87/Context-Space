@@ -3,7 +3,7 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
-import { Archive, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
+import { Archive, Code2, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -18,7 +18,9 @@ import { goToWorkspace } from '../chat/chatRoute.js';
 import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useTickPlanStep } from '../plan/planFile.js';
 import { useWhatsNew } from '../plan/whatsNew.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
-import { documentRequests } from '../workspace-shell/openRequests.js';
+import { documentRequests, openCodeWindow, useCodeWindowOpen } from '../workspace-shell/openRequests.js';
+import { filesChangedText } from '../changes/changeSummary.js';
+import { useRepoChanges } from '../changes/useRepoChanges.js';
 import { BoardActionsContext, BoardReadingContext, firstControl, type BoardActions, type ReaderTarget } from './boardActions.js';
 import {
   areaLayout,
@@ -53,12 +55,13 @@ import {
   type NavItem,
   type NavMode,
 } from './boardNav.js';
-import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
+import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead, BoardUncommitted } from './BoardNodes.js';
 import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
 import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { findThreadChain } from './boardThread.js';
+import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 
 const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaMini: BoardAreaMini, areaFold: BoardAreaFold, checkpoint: BoardCheckpoint };
 const AREA_NODE_TYPES: NodeTypes = {
@@ -67,6 +70,7 @@ const AREA_NODE_TYPES: NodeTypes = {
   document: BoardDocument,
   commit: BoardCommit,
   placeholder: BoardPlaceholder,
+  uncommitted: BoardUncommitted,
   note: BoardNote,
   file: BoardFile,
   step: BoardRowHead,
@@ -221,9 +225,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const problems = parts.filter((part) => part.failed);
 
   // Logical Areas
+  // The work not committed yet: the Code button counts it and the current Area draws one card for each repository that has some.
+  // While the Code window is open that section polls the same listing, so this one rests.
+  const codeOpen = useCodeWindowOpen(workspaceId);
+  const { summary: changes } = useRepoChanges(workspaceId, { enabled: listening && !readOnly, paused: codeOpen });
   const areas = useMemo(
-    () => buildBoardAreas({ plan: planView, documents, news: newsView, board, showArchived }),
-    [planView, documents, newsView, board, showArchived],
+    () => buildBoardAreas({ plan: planView, documents, news: newsView, board, showArchived }).map((area) => (area.data.current && changes.repos.length > 0 ? { ...area, uncommitted: changes.repos } : area)),
+    [planView, documents, newsView, board, showArchived, changes.repos],
   );
 
   // Plane 0 (Overview) elements
@@ -1060,6 +1068,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (!navDock.overlays || !narrowNavOpen || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (isCodeWindowOpen()) return;
       if (document.querySelector('[role="dialog"]')) return;
       const target = event.target;
       const inside = target instanceof Node && Boolean(root.current?.contains(target));
@@ -1132,6 +1141,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     window.addEventListener('keydown', onCapture, true);
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || menuHadEscape.current) return;
+      if (isCodeWindowOpen()) return;
       if (document.querySelector('[role="dialog"]')) return;
       if (navDock.overlays && narrowNavOpen) return;
       const target = event.target;
@@ -1152,6 +1162,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (!stepped || stepped.phase !== 'open' || reader || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (isCodeWindowOpen()) return;
       if (document.querySelector('[role="dialog"]')) return;
       if (navDock.overlays && narrowNavOpen) return;
       const target = event.target;
@@ -1180,6 +1191,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (stepped || !threadSelectedId || reader || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (isCodeWindowOpen()) return;
       if (document.querySelector('[role="dialog"]')) return;
       if (navDock.overlays && narrowNavOpen) return;
       const target = event.target;
@@ -1468,6 +1480,28 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     )
   );
 
+  // The way into the Code window: the files changed and not committed yet. Shown with the Add buttons, at Level 0 and in an Area.
+  // `inArea`: narrower than 44rem the word gives way to the icon, and the count stays
+  const codeButton = (inArea = false) => {
+    if (readOnly) return null;
+    const name = changes.files > 0 ? `Code, ${filesChangedText(changes.files)}` : 'Code';
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        title={name}
+        aria-label={name}
+        data-testid="board-code-button"
+        className={cn('nodrag nopan min-h-[24px] cursor-pointer gap-1.5 px-2.5 text-[12.5px] font-medium', inArea && 'gap-0.5 px-1 @[34rem]:gap-1 @[34rem]:px-1.5 @[44rem]:gap-1.5 @[44rem]:px-2.5')}
+        onClick={(event) => openCodeWindow(workspaceId, { opener: event.currentTarget })}
+      >
+        <Code2 className="size-4" aria-hidden="true" />
+        <span className={inArea ? 'hidden @[44rem]:inline' : undefined}>Code</span>
+        {changes.files > 0 && <span className={cn('tabular-nums text-muted-foreground', inArea && 'hidden @[30rem]:inline')}>{changes.files}</span>}
+      </Button>
+    );
+  };
+
   // The pane's own icons (hide the chat, close) are the board's to show, since it has no title row of its own: quiet until pointed at or
   // focused. At the overview they stand in its top-right corner, which the layout leaves free; inside an Area, at the end of its heading.
   const paneIcons = panelActions && (
@@ -1475,6 +1509,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   );
   const paneCorner = (
     <div className="absolute right-2 top-1.5 z-10 flex items-center gap-1.5">
+      {codeButton()}
       {noteButton()}
       {paneIcons}
     </div>
@@ -1675,7 +1710,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 {activeArea.data.kind !== 'work' && (
                   <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
                 )}
-                <div className="ml-auto flex shrink-0 items-center gap-1">
+                <div className="ml-auto flex shrink-0 items-center gap-0.5 @[34rem]:gap-1">
                   {activeArea.data.kind !== 'work' && !readOnly && (
                     <>
                       <IconButton
@@ -1708,12 +1743,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                       </Button>
                     </>
                   )}
+                  {codeButton(true)}
                   {noteButton(activeArea.id, true)}
                   {activeArea.archivedCount > 0 && (
                     <Button
                       size="xs"
                       variant={showArchived ? 'secondary' : 'outline'}
-                      className="shrink-0"
+                      className="shrink-0 gap-0.5 px-1 @[34rem]:gap-1 @[34rem]:px-1.5 @[44rem]:px-2"
                       aria-pressed={showArchived}
                       aria-label={`Archived (${activeArea.archivedCount})`}
                       title={`Archived (${activeArea.archivedCount})`}

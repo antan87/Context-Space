@@ -12,6 +12,7 @@ import type { AISession } from '../../types.js';
 import type { TerminalStatus } from './client.js';
 import { useWorkspaceSessionSources } from './useWorkspaceSessionSources.js';
 import { perfMark } from '../../lib/perfMarks.js';
+import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 
 export function matchesResumeSession(s: AISession, search: string): boolean {
   const q = search.trim().toLowerCase();
@@ -41,6 +42,7 @@ export function ResumeSessions({ workspace, active, busy, status, fill, embedded
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isCodeWindowOpen()) return;
       if (e.key === '/' && !isTypingTarget(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         searchInputRef.current?.focus();

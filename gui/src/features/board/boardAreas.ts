@@ -10,6 +10,7 @@
  * size: Level 0 is cards when they fit at that size, and one-line rows when they do not.
  */
 
+import type { RepoChangeSummary } from '../changes/changeSummary.js';
 import type { Edge, Node } from '@xyflow/react';
 import type { WorkDocument } from '../../types.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
@@ -109,6 +110,8 @@ export interface BoardAreaRepo {
 }
 
 export interface BoardArea {
+  /** The work not committed yet, per repository, with the files it touches. Added by the Board from the change listing; only the current Area draws it. */
+  uncommitted?: RepoChangeSummary[];
   id: string;
   kind: 'checkpoint' | 'plan' | 'work';
   checkpointKey?: string;

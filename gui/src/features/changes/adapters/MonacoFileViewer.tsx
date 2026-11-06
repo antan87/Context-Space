@@ -7,6 +7,7 @@
 import { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import './MonacoDiffAdapter.js';
+import { editorThemeName, watchEditorTheme } from '../../../lib/editorTheme.js';
 import { getLanguageFromPath } from '../utils/languageDetector.js';
 import { getModifiedFileUri, getOrCreateTextModel, registerCrossFileEditorOpener } from '../utils/changesetModelStore.js';
 
@@ -31,7 +32,6 @@ export function MonacoFileViewer({ filePath, repoName, repoPath, content, target
   useEffect(() => {
     if (!containerRef.current) return;
     const model = getOrCreateTextModel(getModifiedFileUri(repoName, filePath, monaco, repoPath), content, getLanguageFromPath(filePath), monaco);
-    const isDark = document.documentElement.classList.contains('dark') || document.documentElement.getAttribute('data-theme') !== 'light';
     const editor = monaco.editor.create(containerRef.current, {
       model,
       readOnly: true,
@@ -43,12 +43,14 @@ export function MonacoFileViewer({ filePath, repoName, repoPath, content, target
       lineNumbersMinChars: 3,
       fontSize: 12,
       fontFamily: "'JetBrains Mono', Consolas, Menlo, monospace",
-      theme: isDark ? 'vs-dark' : 'vs',
+      theme: editorThemeName(),
       renderLineHighlight: 'all',
     });
     editorRef.current = editor;
+    const stopWatchingTheme = watchEditorTheme((theme) => monaco.editor.setTheme(theme));
     const opener = registerCrossFileEditorOpener((repo, file, line) => onOpenFileRef.current?.(repo, file, line), monaco);
     return () => {
+      stopWatchingTheme();
       opener?.dispose();
       editor.dispose();
       editorRef.current = null;

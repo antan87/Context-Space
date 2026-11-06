@@ -57,6 +57,7 @@ import { useWorktreeNavigationState } from '../features/worktrees/worktreeStore.
 import { useSidebarWidth } from '../features/worktrees/sidebarWidth.js';
 import { isArchivedWorkspace, workspacesForList } from './workspaceList.js';
 import { isTypingTarget } from './typingTarget.js';
+import { isCodeWindowOpen } from '../features/workspace-shell/codeWindowOpen.js';
 
 export type WorkspaceSortOption =
   | 'created-desc'
@@ -246,7 +247,7 @@ function SidebarContents({
       if (isTypingTarget(e.target)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       // While the Board's reader is open, [ and ] move through its cards: they are not the sidebar's
-      if (e.key === '[' && document.querySelector('[data-board-reader]')) return;
+      if (e.key === '[' && (document.querySelector('[data-board-reader]') || isCodeWindowOpen())) return;
       if (e.key === 'z' || e.key === 'Z' || e.key === '[') {
         // Not behind a modal, whatever the mode: undocking there would move focus behind it, and a sheet would open invisible.
         if (!sheetOpen && document.querySelector(OPEN_MODAL)) return;

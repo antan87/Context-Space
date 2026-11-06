@@ -22,6 +22,7 @@ import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution';
 import type { DiffAdapterRenderProps } from '../types.js';
 import { getLanguageFromPath } from '../utils/languageDetector.js';
 import { ensureMonacoWorkerEnvironment } from '../utils/monacoWorkerSetup.js';
+import { editorThemeName, watchEditorTheme } from '../../../lib/editorTheme.js';
 import { ensureMonacoNavigation } from '../utils/monacoNavigationSetup.js';
 import { registerLightweightNavigationProviders } from '../utils/changesetSymbolIndex.js';
 import {
@@ -167,9 +168,7 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
     }, monaco);
 
     // Instantiate Monaco Diff Editor
-    const isDark =
-      document.documentElement.classList.contains('dark') ||
-      document.documentElement.getAttribute('data-theme') !== 'light';
+    const stopWatchingTheme = watchEditorTheme((theme) => monaco.editor.setTheme(theme));
 
     let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
     let cursorSub: monaco.IDisposable | null = null;
@@ -200,7 +199,9 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
         lineNumbersMinChars: 3,
         fontSize: 12,
         fontFamily: "'JetBrains Mono', Consolas, Menlo, monospace",
-        theme: isDark ? 'vs-dark' : 'vs',
+        theme: editorThemeName(),
+        // Long lines wrap instead of running off the right edge of either side
+        wordWrap: 'on',
         contextmenu: true,
       });
 
@@ -241,6 +242,7 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
 
     // Cleanup: Strictly dispose listeners and editor widget to prevent memory leaks
     return () => {
+      stopWatchingTheme();
       updateSub?.dispose();
       cursorSub?.dispose();
       openerDisposable?.dispose();

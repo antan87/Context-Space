@@ -31,6 +31,7 @@ import { cn } from '../../lib/utils.js';
 import { formatCompact, formatHeaderQuota } from './usageFormat.js';
 import { handleDelegatedRowClick } from '../../lib/delegatedRowClick.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
+import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 
 export type SessionSortOption =
   | 'created-desc'
@@ -187,6 +188,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isCodeWindowOpen()) return;
       if (e.key === '/' && !isTypingTarget(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         searchInputRef.current?.focus();

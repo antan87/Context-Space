@@ -43,6 +43,8 @@ export interface RepositoryListing {
 // status output, the index (rewritten by commit, checkout, pull and add) and
 // the size and mtime of every changed file.
 const LISTING_CACHE_LIMIT = 64;
+/** The largest untracked file whose lines are counted, in bytes. */
+const UNTRACKED_COUNT_LIMIT = 256 * 1024;
 const listingCache = new Map<string, RepositoryListing>();
 
 export function clearRepositoryListingCache(): void {
@@ -91,6 +93,18 @@ export async function listRepositoryChangesWithFingerprint(repoPath: string, inc
   } catch {
     // A repository without HEAD still has useful status and untracked files.
   }
+  // git has no numstat for a file it does not track yet: its lines are its additions. Small text files only, so a listing stays cheap.
+  await Promise.all(files.filter((file) => file.rawStatus === '??' && file.additions === 0 && (file.size ?? 0) > 0 && (file.size ?? 0) <= UNTRACKED_COUNT_LIMIT).map(async (file) => {
+    try {
+      const content = await fs.readFile(path.join(repoPath, file.file));
+      if (content.includes(0)) return;
+      let lines = 0;
+      for (const byte of content) if (byte === 10) lines += 1;
+      file.additions = lines + (content[content.length - 1] === 10 ? 0 : 1);
+    } catch {
+      // Gone since the status: the count stays 0.
+    }
+  }));
   if (includeAll) {
     const listed = await execa('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: repoPath, stripFinalNewline: false });
     for (const file of listed.stdout.split('\0').filter(Boolean)) {

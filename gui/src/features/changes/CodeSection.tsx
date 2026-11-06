@@ -9,11 +9,9 @@ import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { useElementWidth } from '../../lib/useElementWidth.js';
 import { useConfig } from '../../lib/api/queries.js';
-import type { CommitRepoResult, Feature } from '../../types.js';
+import type { Feature } from '../../types.js';
 import { Button } from '../../components/ui/button.js';
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '../../components/ui/menu.js';
-import { floatingChatStore } from '../chat/floatingChatStore.js';
-import { useCockpitStore } from '../cockpit/cockpitStore.js';
 import { usePaneHotkey } from '../terminal/usePaneHotkey.js';
 import { useCodeRequest, type CodeRequest, type RepoFile } from '../workspace-shell/openRequests.js';
 import { CommitReviewPanel } from './CommitReviewPanel.js';
@@ -23,6 +21,9 @@ import { DiffErrorBoundary } from './DiffErrorBoundary.js';
 import { PluggableDiffViewer } from './PluggableDiffViewer.js';
 import { FileTree, buildCompactedTree, filterTreeFiles, flattenTreeFiles, getAllDirectoryPaths } from './FileTree.js';
 import { fileTypeGlyph } from './fileTypeGlyph.js';
+import { plusMinusText, totalLine } from './changeSummary.js';
+import { useCommitDraft } from './commitDraftStore.js';
+import type { DiffViewMode } from '../cockpit/cockpitStore.js';
 import { OPENED_UNLISTED, withOpenedFile } from './openedFileRow.js';
 import { getEditorLabel, openInVsCodeAtLine } from './adapters/ExternalDiffLauncher.js';
 import { disposeChangesetModelsAfterEditors } from './utils/changesetModelStore.js';
@@ -68,18 +69,19 @@ export interface CodeSectionProps {
   active: boolean;
   syncLoading: boolean;
   syncResults: { repoName: string; success: boolean; message: string }[] | null;
-  commitMessage: string;
-  showCommitModal: boolean;
-  commitResults: CommitRepoResult[] | null;
   setSyncResults: (value: null) => void;
-  setCommitResults: (value: CommitRepoResult[] | null) => void;
-  setCommitMessage: (value: string) => void;
-  setShowCommitModal: (value: boolean) => void;
   fetchGitChanges: (wsId: string) => Promise<void>;
   handleSyncAll: (wsId: string) => Promise<void>;
   showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
   /** The panel's own controls (give the chat its room back, close), shown at the end of the toolbar. */
   panelActions?: ReactNode;
+  /** Opens the first change at once when nothing is chosen, instead of waiting for a press. */
+  autoSelect?: boolean;
+  /**
+   * Sends a request about a change to the AI session. Resolves true when it was typed into a session; false when there is
+   * none to take it (nothing open, disconnected, or a plain shell), and then the request is copied instead.
+   */
+  onAskAI?: (message: string) => Promise<boolean>;
 }
 
 const fileKey = (repoName: string, file: string) => `${repoName}\0${file}`;
@@ -110,7 +112,8 @@ export function CodeSection(props: CodeSectionProps) {
   const config = useConfig().data?.config;
   const defaultEditor = config?.defaultEditor;
   const editorLabel = getEditorLabel(defaultEditor);
-  const cockpit = useCockpitStore();
+  // The person's own choice of side by side or inline; until they choose, it follows the room the code has.
+  const [userViewMode, setUserViewMode] = useState<DiffViewMode | null>(null);
 
   const [mode, setMode] = useState<Mode>('changes');
   const [repos, setRepos] = useState<CodeRepo[]>([]);
@@ -124,6 +127,9 @@ export function CodeSection(props: CodeSectionProps) {
   const [diffError, setDiffError] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [finishOpen, setFinishOpen] = useState(false);
+  // What the person unticked in the commit form lives here, not in the form: the form closes whenever a file is opened.
+  // The commit form's state lives in a store per workspace, so another workspace never sees it and this one gets it back as it was left.
+  const [commit, patchCommit] = useCommitDraft(workspace);
   const [symbolsOpen, setSymbolsOpen] = useState(false);
   const [treeHidden, setTreeHidden] = useState(false);
   const [treeWidth, setTreeWidth] = useState(readTreeWidth);
@@ -229,6 +235,12 @@ export function CodeSection(props: CodeSectionProps) {
     const root = buildCompactedTree(files);
     return { repo, files, root, folders: getAllDirectoryPaths(root), ordered: flattenTreeFiles(root) };
   }), [shownRepos, searching, deferredQuery]);
+  const totals = useMemo(() => {
+    const counted = shownRepos.some((repo) => (repo.files ?? []).some((file) => file.additions !== undefined || file.deletions !== undefined));
+    if (!counted) return {};
+    const files = shownRepos.flatMap((repo) => repo.files ?? []);
+    return { additions: files.reduce((sum, file) => sum + (file.additions ?? 0), 0), deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0) };
+  }, [shownRepos]);
   const matchingFiles = useMemo(() => trees.reduce((sum, tree) => sum + tree.files.length, 0), [trees]);
   const ordered = useMemo(() => trees.flatMap(({ repo, ordered: files }) => files.map((file) => ({ repoName: repo.repoName, repoPath: repo.repoPath, file: file.file }))), [trees]);
   const currentIndex = selection ? ordered.findIndex((entry) => sameFile(entry, selection)) : -1;
@@ -278,7 +290,7 @@ export function CodeSection(props: CodeSectionProps) {
     setNotice(null);
     setDrawerOpen(false);
     setFinishOpen(false);
-    if (props.showCommitModal) props.setShowCommitModal(false);
+    if (commit.open) patchCommit({ open: false });
     if (!sameFile(target, selection)) setDiffError('');
     setSelection({ repoName: target.repoName, repoPath: target.repoPath, file: target.file, line: options.line, jump: jumpCounter.current, pinned: options.pinned ?? false });
     revealInTree(target);
@@ -317,6 +329,26 @@ export function CodeSection(props: CodeSectionProps) {
     if (relisted.current !== asked) { relisted.current = asked; setRevision((value) => value + 1); return; }
     setMode('files');
   }, [selection, mode, listedMode, repos, loading]);
+
+  // The window opens on something to read: the first change. A path asked for (a request, `notice`) or a form on screen comes first.
+  const autoSelect = props.autoSelect;
+  const showingForm = commit.open || finishOpen;
+  useEffect(() => {
+    if (!autoSelect || !active || selection || notice || showingForm || mode !== 'changes' || listedMode !== 'changes' || loading) return;
+    const first = ordered[0];
+    if (first) openFileRef.current(first);
+  }, [autoSelect, active, selection, notice, showingForm, mode, listedMode, loading, ordered]);
+
+  // Stepping to the last file disables the button that was pressed: the keyboard must not fall to the page. It stays in the window.
+  useEffect(() => {
+    if (!active || !sectionElement) return;
+    const frame = requestAnimationFrame(() => {
+      const held = document.activeElement;
+      const lost = !held || held === document.body || (held instanceof HTMLButtonElement && held.disabled && sectionElement.contains(held));
+      if (lost) sectionElement.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [currentIndex, active, sectionElement]);
 
   // ─── The open file ─────────────────────────────────────────────────────────
   const selectedEntry = selection ? repos.find((repo) => repo.repoName === selection.repoName)?.files.find((file) => file.file === selection.file) : undefined;
@@ -427,6 +459,14 @@ export function CodeSection(props: CodeSectionProps) {
     }
   }, { respectTerminal: false, enabled: active });
 
+  // [ and ] go to the previous and next file, as in the Board's reader. Not while typing, and not in the editor (its own keys).
+  usePaneHotkey((event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || (event.key !== '[' && event.key !== ']')) return;
+    if (event.target instanceof Element && event.target.closest('.monaco-editor, [role="dialog"], [data-slot="menu-popup"]')) return;
+    event.preventDefault();
+    step(event.key === ']' ? 1 : -1);
+  }, { respectTerminal: true, enabled: active });
+
   // / filters the tree (showing it first if it is hidden); Escape clears the filter.
   usePaneHotkey((event) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -445,7 +485,7 @@ export function CodeSection(props: CodeSectionProps) {
   }, { respectTerminal: true, enabled: active });
 
   // ─── Render ────────────────────────────────────────────────────────────────
-  const mainView = props.showCommitModal ? 'commit' : finishOpen ? 'finish' : 'file';
+  const mainView = commit.open ? 'commit' : finishOpen ? 'finish' : 'file';
   const shownDiff = diff && selection && sameFile(diff.target, selection) ? diff.data : null;
   const fileNotice = omittedNotice(shownDiff && (shownDiff.contentOmitted || shownDiff.diffOmitted) ? { content: shownDiff.contentOmitted, diff: shownDiff.diffOmitted } : undefined);
   // Narrow (beside the chat in a small window): the code takes the width and the tree opens over it.
@@ -453,6 +493,10 @@ export function CodeSection(props: CodeSectionProps) {
   const treeVisible = narrow ? !treeAsDrawer || drawerOpen : !treeHidden;
   const toggleTree = () => (narrow ? setDrawerOpen((open) => !open) : setTreeHidden((hidden) => !hidden));
   const iconButton = 'size-7 p-0';
+  // Side by side where the code has 760 px or more, inline (with wrapped lines) below; the viewer's own button wins.
+  const codeWidth = width - (treeVisible && !treeAsDrawer && !narrow ? treeWidth + 6 : 0);
+  const autoViewMode: DiffViewMode = codeWidth >= 760 ? 'side-by-side' : 'unified';
+  const viewMode = userViewMode ?? autoViewMode;
 
   const tree = (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -485,8 +529,9 @@ export function CodeSection(props: CodeSectionProps) {
         <Button size="xs" variant="ghost" className={iconButton} aria-label="Expand all folders" title="Expand all folders" onClick={expandAll}><ChevronsUpDown className="size-3.5" /></Button>
         <Button size="xs" variant="ghost" className={iconButton} aria-label="Collapse all folders" title="Collapse all folders" onClick={collapseAll}><ChevronsDownUp className="size-3.5" /></Button>
       </div>
-      <p data-testid="search-match-count" className="shrink-0 px-2.5 pb-1 pt-1 text-[11px] text-muted-foreground">
-        {searching ? `${matchingFiles} of ${totalFiles} files match` : `${totalFiles} ${mode === 'changes' ? 'changed ' : ''}file${totalFiles === 1 ? '' : 's'}`}
+      <p className="shrink-0 px-2.5 pb-1 pt-1 text-xs text-muted-foreground">
+        <span data-testid="search-match-count">{searching ? `${matchingFiles} of ${totalFiles} files match` : mode === 'changes' ? totalLine(totalFiles) : `${totalFiles} file${totalFiles === 1 ? '' : 's'}`}</span>
+        {!searching && mode === 'changes' && plusMinusText(totals.additions, totals.deletions) && <span data-testid="change-totals" className="font-mono tabular-nums"> · {plusMinusText(totals.additions, totals.deletions)}</span>}
       </p>
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 pb-2 [scrollbar-gutter:stable]">
         {listedMode !== mode && !listError && (
@@ -530,8 +575,13 @@ export function CodeSection(props: CodeSectionProps) {
                         <span className={cn('truncate', file.type === 'deleted' && 'line-through opacity-70')}>{file.file.split('/').at(-1)}</span>
                         <span className="sr-only">{glyph.label}{unlisted ? ', opened here, ignored by git or not listed yet' : changed ? `, ${file.type}` : ''}</span>
                         {unlisted && <span aria-hidden="true" title="Ignored by git" className="ml-auto shrink-0 font-mono text-[10px] font-semibold text-muted-foreground">I</span>}
+                        {changed && plusMinusText(file.additions, file.deletions) && (
+                          <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-muted-foreground" title={`${file.additions ?? 0} added, ${file.deletions ?? 0} removed`}>
+                            {plusMinusText(file.additions, file.deletions)}
+                          </span>
+                        )}
                         {changed && (
-                          <span aria-hidden="true" title={file.type} className={cn('ml-auto shrink-0 font-mono text-[10px] font-semibold',
+                          <span aria-hidden="true" title={file.type} className={cn('shrink-0 font-mono text-[10px] font-semibold', !plusMinusText(file.additions, file.deletions) && 'ml-auto',
                             file.type === 'added' || file.type === 'untracked' ? 'text-emerald-500'
                               : file.type === 'deleted' ? 'text-destructive'
                                 : file.type === 'renamed' ? 'text-sky-400' : 'text-amber-500')}>
@@ -566,7 +616,7 @@ export function CodeSection(props: CodeSectionProps) {
   const fileFolder = selection ? selection.file.slice(0, selection.file.length - fileName.length) : '';
 
   return (
-    <section ref={setSectionElement} aria-label="Workspace code" className="flex h-full min-h-0 min-w-0 flex-col bg-background">
+    <section ref={setSectionElement} tabIndex={-1} aria-label="Workspace code" className="flex h-full min-h-0 min-w-0 flex-col bg-background outline-hidden">
       <div role="toolbar" aria-label="Code" className="flex h-10 min-w-0 shrink-0 items-center gap-1 overflow-hidden border-b border-border px-1.5">
         <Button size="xs" variant={treeVisible ? 'secondary' : 'ghost'} className={iconButton} aria-label={treeVisible ? 'Hide the file tree' : 'Show the file tree'} aria-expanded={treeVisible}
           title={treeVisible ? 'Hide the file tree' : 'Show the file tree'} onClick={toggleTree}>
@@ -586,12 +636,12 @@ export function CodeSection(props: CodeSectionProps) {
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <Button size="xs" variant={mainView === 'commit' ? 'secondary' : 'outline'} disabled={changedFiles === 0} aria-pressed={mainView === 'commit'}
             aria-label="Review & commit" title="Review the changes and commit them"
-            onClick={() => { setFinishOpen(false); props.setShowCommitModal(!props.showCommitModal); }}>
+            onClick={() => { setFinishOpen(false); patchCommit({ open: !commit.open }); }}>
             <GitCommitHorizontal className="size-3.5" />{compactToolbar ? 'Commit' : 'Review & commit'}
           </Button>
           {!compactToolbar && (
             <Button size="xs" variant={mainView === 'finish' ? 'secondary' : 'ghost'} aria-pressed={mainView === 'finish'}
-              onClick={() => { props.setShowCommitModal(false); setFinishOpen((value) => !value); }}>
+              onClick={() => { patchCommit({ open: false }); setFinishOpen((value) => !value); }}>
               Finish…
             </Button>
           )}
@@ -601,7 +651,7 @@ export function CodeSection(props: CodeSectionProps) {
             </MenuTrigger>
             <MenuPopup align="end" className="w-60">
               {compactToolbar && (
-                <MenuItem onClick={() => { props.setShowCommitModal(false); setFinishOpen((value) => !value); }}><Flag />Finish…</MenuItem>
+                <MenuItem onClick={() => { patchCommit({ open: false }); setFinishOpen((value) => !value); }}><Flag />Finish…</MenuItem>
               )}
               <MenuItem onClick={() => setRevision((value) => value + 1)}><RefreshCw />Refresh now</MenuItem>
               <MenuItem disabled={allSymbols.length === 0} onClick={() => setSymbolsOpen((value) => !value)}>
@@ -669,9 +719,9 @@ export function CodeSection(props: CodeSectionProps) {
             <ResultBanner title="Sync results" onDismiss={() => props.setSyncResults(null)}
               rows={props.syncResults.map((result) => ({ key: result.repoName, ok: result.success, text: result.success ? `Synced (${result.message})` : `Conflict: ${result.message}` }))} />
           )}
-          {props.commitResults && (
-            <ResultBanner title="Commit results" onDismiss={() => props.setCommitResults(null)}
-              rows={props.commitResults.map((result) => ({
+          {commit.results && (
+            <ResultBanner title="Commit results" onDismiss={() => patchCommit({ results: null })}
+              rows={commit.results.map((result) => ({
                 key: result.repoName, ok: result.success,
                 text: result.committed
                   ? `Committed ${result.filesChanged} file(s) (${result.commitHash ? result.commitHash.slice(0, 7) : 'no hash'}) on ${result.branch}${result.pushed ? ', pushed' : ', not pushed'}`
@@ -696,9 +746,10 @@ export function CodeSection(props: CodeSectionProps) {
 
           {mainView === 'commit' ? (
             <div className="min-h-0 flex-1 overflow-auto p-3">
-              <CommitReviewPanel ws={ws} message={props.commitMessage} setMessage={props.setCommitMessage}
-                onClose={() => props.setShowCommitModal(false)}
-                onCompleted={(results) => { props.setCommitResults(results); props.setShowCommitModal(false); }}
+              <CommitReviewPanel ws={ws} message={commit.message} setMessage={(message) => patchCommit({ message })}
+                onClose={() => patchCommit({ open: false })}
+                onCompleted={(results) => patchCommit({ results, open: false, excluded: new Set(), message: '' })}
+                excluded={commit.excluded as Set<string>} onExcludedChange={(excluded) => patchCommit({ excluded })} push={commit.push} onPushChange={(push) => patchCommit({ push })}
                 onGitChanged={gitChanged} />
             </div>
           ) : mainView === 'finish' ? (
@@ -756,8 +807,8 @@ export function CodeSection(props: CodeSectionProps) {
                           fullOriginalContent={shownDiff.originalContent}
                           preExtractedSymbols={shownDiff.symbols}
                           defaultEditor={defaultEditor}
-                          viewMode={narrow ? 'unified' : cockpit.diffViewMode}
-                          onToggleViewMode={cockpit.toggleDiffMode}
+                          viewMode={viewMode}
+                          onToggleViewMode={() => setUserViewMode(viewMode === 'side-by-side' ? 'unified' : 'side-by-side')}
                           initialTargetLine={selection.line}
                           fillContainer
                           onOpenFile={openDefinition}
@@ -766,10 +817,12 @@ export function CodeSection(props: CodeSectionProps) {
                           onPrevFile={currentIndex > 0 ? () => step(-1) : undefined}
                           showToast={showToast}
                           onRequestRefine={async (hunk, feedback) => {
-                            const prompt = [`Refine ${selection.repoName}/${selection.file} at line ${hunk.startLineModified}.`, feedback, 'Selected diff hunk:', hunk.patchHeader, ...hunk.lines].join('\n');
-                            if (!await safeCopyToClipboard(prompt)) throw new Error('Could not copy the refinement request. Check clipboard permissions.');
-                            floatingChatStore.openCli(workspace);
-                            showToast?.('Refinement request copied. Paste it into the CLI chat.', 'success');
+                            const where = `${selection.repoName}/${selection.file} at line ${hunk.startLineModified}`;
+                            // The session gets one short line to send; the clipboard keeps the whole hunk
+                            if (props.onAskAI && await props.onAskAI(`Regarding ${where}: ${feedback} `)) return;
+                            const prompt = [`Regarding ${where}.`, feedback, 'Selected diff hunk:', hunk.patchHeader, ...hunk.lines].join('\n');
+                            if (!await safeCopyToClipboard(prompt)) throw new Error('Could not copy the request. Check clipboard permissions.');
+                            showToast?.(props.onAskAI ? 'No AI session is open to take it, so the request is copied. Paste it into a session.' : 'Request copied. Paste it into the CLI chat.', props.onAskAI ? 'info' : 'success');
                           }}
                         />
                       </DiffErrorBoundary>

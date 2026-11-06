@@ -49,17 +49,26 @@ interface Props {
   onCompleted: (results: CommitRepoResult[]) => void;
   /** Called after any request that may have changed Git state. */
   onGitChanged: () => void;
+  /** The files the person unticked, and the push choice, kept by the caller so they outlive the form: closing it, looking at a file or closing the window loses nothing. */
+  excluded?: Set<string>;
+  onExcludedChange?: (excluded: Set<string>) => void;
+  push?: boolean;
+  onPushChange?: (push: boolean) => void;
 }
 
 const fileKey = (repo: string, file: string) => `${repo}\u0000${file}`;
 
-export function CommitReviewPanel({ ws, message, setMessage, onClose, onCompleted, onGitChanged }: Props) {
+export function CommitReviewPanel({ ws, message, setMessage, onClose, onCompleted, onGitChanged, excluded: heldExcluded, onExcludedChange, push: heldPush, onPushChange }: Props) {
   const wsId = ws.branchName;
   const queryClient = useQueryClient();
   const repositories = useWorkspaceRepositories(wsId);
   const progression = useProgression(wsId);
-  const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const [push, setPush] = useState(true);
+  const [ownExcluded, setOwnExcluded] = useState<Set<string>>(new Set());
+  const [ownPush, setOwnPush] = useState(true);
+  const excluded = heldExcluded ?? ownExcluded;
+  const setExcluded = (update: (current: Set<string>) => Set<string>) => (onExcludedChange ?? setOwnExcluded)(update(excluded));
+  const push = heldPush ?? ownPush;
+  const setPush = onPushChange ?? setOwnPush;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<CommitResponse | null>(null);
@@ -116,7 +125,7 @@ export function CommitReviewPanel({ ws, message, setMessage, onClose, onComplete
     setOutcome(merged);
     if (result.data.results.length > 0 && result.data.results.every((r) => r.success)) {
       setMessage('');
-      setExcluded(new Set());
+      setExcluded(() => new Set());
       setOutcome(null);
       onCompleted(merged.results);
     }

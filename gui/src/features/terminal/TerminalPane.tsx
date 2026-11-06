@@ -20,7 +20,7 @@ import { terminalRequest, terminalToken, terminalSocketUrl, type TerminalInfo, t
 import { findFileReferences, type FileReference } from './fileReferences.js';
 import { hardWrapSkip } from './wrappedRows.js';
 import { findWebLinks } from './webLinks.js';
-import { toPromptText } from './promptFill.js';
+import { promptFillWantsAssistant, toPromptText } from './promptFill.js';
 import { SHIFT_ENTER_SEQUENCE, terminalKeyAction } from './terminalKeys.js';
 import type { AISession } from '../../types.js';
 
@@ -163,6 +163,8 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
     fillPromptRef.current = (text: string) => {
       const data = toPromptText(text);
       const term = renderer.current;
+      // Asked for an AI session only (Ask AI in the Code window): a plain shell is refused like a closed terminal
+      if (promptFillWantsAssistant() && targetRef.current === 'shell') return false;
       if (!data || !term || term.options.disableStdin || socket.current?.readyState !== WebSocket.OPEN) return false;
       const sendData = typeof text === 'string' && text.endsWith(' ') && !data.endsWith(' ') ? `${data} ` : data;
       send({ type: 'input', data: sendData });

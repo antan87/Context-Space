@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, Terminal, type LucideIcon } from 'lucide-react';
+import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, Terminal, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
@@ -20,7 +20,8 @@ import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, docume
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { areaCounts, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
-import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type RowHeadData } from './boardLayout.js';
+import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
+import { openCodeWindow } from '../workspace-shell/openRequests.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
@@ -1111,6 +1112,46 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         </button>
       </div>
     )}
+  </article>;
+}
+
+/**
+ * The work in a repository that is not committed yet, first in its commits row. It is the size of a commit card and, like one,
+ * the whole card is one press: it opens the Code window on the first changed file. No sha: it is not a commit.
+ */
+export function BoardUncommitted({ id, data }: NodeProps<UncommittedNode>) {
+  const titleId = useId();
+  const actions = useContext(BoardActionsContext);
+  const opens = Boolean(actions);
+  const open = (button: HTMLElement) => {
+    openCodeWindow(actions!.workspaceId, { opener: button, file: { repoName: data.repoName, repoPath: data.repoPath, file: data.firstFile } });
+  };
+  return <article
+    tabIndex={-1}
+    data-uncommitted={id}
+    aria-labelledby={titleId}
+    onClick={opens ? (event) => brickPress(event, (card) => firstControl(card)) : undefined}
+    className={cn('relative flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-dashed border-primary/50 bg-card px-3 py-2 text-card-foreground shadow-xs', CARD_FOCUS, opens && BRICK)}
+  >
+    <Anchors />
+    <div className="flex h-5 items-center gap-2 text-[13px]">
+      <GitCompare aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
+      <button
+        type="button"
+        id={titleId}
+        data-card-main
+        aria-label={`Open ${data.title} in Code`}
+        disabled={!opens}
+        onClick={(event) => open(event.currentTarget)}
+        className="nodrag nopan min-w-0 truncate rounded-sm text-left font-medium text-foreground outline-hidden hover:underline disabled:pointer-events-none"
+      >{data.title}</button>
+      {data.numbers && (
+        <span className="ml-auto shrink-0 font-mono text-[12px] tabular-nums">
+          <span className="text-success-foreground">{data.numbers.split(' ')[0]}</span>{' '}<span className="text-destructive-foreground">{data.numbers.split(' ')[1]}</span>
+        </span>
+      )}
+    </div>
+    <p className="truncate font-mono text-[12px] leading-4 text-muted-foreground" title={data.names.join(', ')}>{data.names.join(', ')}</p>
   </article>;
 }
 

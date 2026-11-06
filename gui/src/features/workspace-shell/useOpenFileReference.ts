@@ -2,10 +2,10 @@ import { useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../../lib/api/client.js';
 import { parseFileReference } from '../../lib/fileReference.js';
-import { goToWorkspace } from '../chat/chatRoute.js';
+import { browserPath, goToWorkspace, parseWorkspacePath } from '../chat/chatRoute.js';
 import { isUnreadableDocument, workspaceDocumentName } from '../terminal/documentReference.js';
 import { isWebOrDomain, normalizeWebUrl } from '../terminal/webLinks.js';
-import { codeRequests, documentRequests, type CodeRequest, type RepoFile } from './openRequests.js';
+import { codeRequests, documentRequests, openCodeWindow, type CodeRequest, type RepoFile } from './openRequests.js';
 
 /** A path someone clicked: in terminal output, a progress card or a document. */
 export interface FileReferenceClick {
@@ -31,7 +31,7 @@ export function codeRequestFor(path: string, line: number | undefined, resolutio
 
 /**
  * Opens a clicked path where it belongs: a web address in the browser, a workspace document in
- * Docs, anything else in the Code section beside the chat. Every click ends somewhere visible:
+ * Docs, anything else in the Code window. Every click ends somewhere visible:
  * Code first says it is locating the path, then shows the file, the files the path could mean,
  * or why there is none, instead of the click silently doing nothing.
  */
@@ -71,7 +71,12 @@ export function useOpenFileReference(workspace: string, workspacePath: string, r
     }
 
     codeRequests.open(workspace, { kind: 'locating', path: parsed.path, line });
-    goToWorkspace(navigate, workspace, 'changes');
+    // The Code window opens over whatever is on screen (Board, Split or Terminal): the path is not a place to navigate to.
+    // Except from the terminal of another workspace docked beside this one: its window is on its own page, so go there.
+    const here = parseWorkspacePath(browserPath())?.workspace;
+    const elsewhere = Boolean(here && here !== workspace);
+    if (elsewhere) goToWorkspace(navigate, workspace, 'board');
+    openCodeWindow(workspace, { navigated: elsewhere });
     try {
       const query = new URLSearchParams({ path: parsed.path, ...(click.cwd ? { cwd: click.cwd } : {}) });
       const resolution = await apiFetch<Resolution>(`${base}/files/resolve?${query}`);

@@ -37,8 +37,21 @@ export function registerPromptFiller(workspace: string, filler: (text: string) =
   };
 }
 
-/** Types text into the terminal prompt of the given workspace if available. */
-export function fillPromptForWorkspace(workspace: string, text: string): boolean {
+/** What the filling that is running right now asks for. Read by the pane's filler, which runs synchronously inside the call. */
+let assistantOnlyNow = false;
+export const promptFillWantsAssistant = (): boolean => assistantOnlyNow;
+
+/**
+ * Types text into the terminal prompt of the given workspace if available. With `assistantOnly`, a plain shell is refused like a
+ * closed terminal: text typed into it would be a command line, not a message to an AI.
+ */
+export function fillPromptForWorkspace(workspace: string, text: string, options: { assistantOnly?: boolean } = {}): boolean {
   const filler = registeredFillers.get(workspace);
-  return filler ? filler(text) : false;
+  if (!filler) return false;
+  assistantOnlyNow = options.assistantOnly === true;
+  try {
+    return filler(text);
+  } finally {
+    assistantOnlyNow = false;
+  }
 }
