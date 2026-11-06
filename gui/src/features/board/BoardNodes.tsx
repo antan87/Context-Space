@@ -16,7 +16,7 @@ import { useAnswerDecision, useChangePlanFile } from '../plan/planFile.js';
 import { suggestedAnswers } from '../plan/planView.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
-import { areaCounts, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { areaCounts, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode } from './boardLayout.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
@@ -1389,6 +1389,85 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
               <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
             </span>
           </>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * An area at Level 0 as a small card, where the full cards would not be readable but a grid of them fits: its state, its title,
+ * how far it is, and a picture when there is room. The whole card is the button, and a press steps into it, as on the card.
+ */
+export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNode>) {
+  const actions = useContext(BoardActionsContext);
+  const [failedPics, setFailedPics] = useState<string[]>([]);
+  const picture = data.pictures.find((pic) => !failedPics.includes(pic.path));
+  const hasStatus = data.current || data.waitingCount > 0;
+  const showPicture = Boolean(picture && actions && miniShowsPicture(width ?? 0, height ?? 0, hasStatus));
+  const statusLine = (height ?? 0) >= MINI_STATUS_LINE;
+  const hasSteps = data.kind !== 'work' && data.stepsTotal > 0;
+  const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
+  const status = (
+    <>
+      {data.current && <span className="shrink-0 text-xs font-medium leading-4 text-state-now">Now</span>}
+      {data.waitingCount > 0 && (
+        <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium leading-4 text-state-needs">
+          <span className="size-1.5 rounded-full bg-state-needs" />Waiting
+        </span>
+      )}
+    </>
+  );
+  return (
+    <div className="relative h-full w-full rounded-xl">
+      {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-xl" />}
+      <button
+        type="button"
+        onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+        aria-label={areaLabel(data)}
+        className={cn(
+          'board-area nodrag nopan relative flex h-full w-full items-stretch gap-3 overflow-hidden rounded-xl border bg-card px-3 py-2.5 text-left text-card-foreground shadow-xs',
+          'transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md',
+          'motion-reduce:transition-none motion-reduce:hover:translate-y-0',
+          data.current ? 'border-primary/40' : 'border-border/60',
+        )}
+      >
+        <span className="flex min-w-0 flex-1 flex-col justify-between gap-1">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="flex min-w-0 items-start gap-2">
+              <span className="mt-0.5"><AreaMark data={data} /></span>
+              <span className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-foreground" title={data.title}>
+                {data.fresh && !data.current && !data.done && (
+                  <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+                )}
+                {data.title}
+              </span>
+            </span>
+            {statusLine && hasStatus && <span className="flex items-center gap-2 pl-6">{status}</span>}
+          </span>
+          {(hasSteps || (!statusLine && hasStatus)) && (
+            <span className="flex min-w-0 items-center gap-2">
+              {!statusLine && status}
+              {hasSteps && (
+                <>
+                  <span className="shrink-0 text-xs leading-4 tabular-nums text-muted-foreground">{data.stepsDone} of {data.stepsTotal}</span>
+                  <span aria-hidden="true" className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted-foreground/20">
+                    <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
+                  </span>
+                </>
+              )}
+            </span>
+          )}
+        </span>
+        {showPicture && picture && actions && (
+          <img
+            src={documentFileUrl(actions.workspaceId, picture.path)}
+            alt=""
+            aria-hidden="true"
+            loading="lazy"
+            onError={() => setFailedPics((prev) => (prev.includes(picture.path) ? prev : [...prev, picture.path]))}
+            className="w-20 shrink-0 self-stretch rounded-lg border border-border/50 object-cover dark:brightness-90"
+          />
         )}
       </button>
     </div>

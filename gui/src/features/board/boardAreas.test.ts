@@ -3,6 +3,7 @@ import type { WorkDocument } from '../../types.js';
 import type { PlanFileView } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import {
+  AREA_MINI,
   AREA_ROW,
   AREA_SIZE,
   OVERVIEW_FOLD,
@@ -316,7 +317,8 @@ describe('boardAreas', () => {
       expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.laptop).form).toBe('cards');
       expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.pane).form).toBe('rows');
       expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.phone).form).toBe('rows');
-      expect(overviewPlan(manyAreas(25, { data: realistic }), sizes.laptop).form).toBe('rows');
+      // Twenty-five fit the laptop as small cards (they used to be two columns of rows)
+      expect(overviewPlan(manyAreas(25, { data: realistic }), sizes.laptop).form).toBe('minis');
       expect(overviewPlan(manyAreas(25), sizes.pane).form).toBe('rows');
       expect(overviewPlan(manyAreas(25), sizes.phone).form).toBe('rows');
     });
@@ -367,13 +369,28 @@ describe('boardAreas', () => {
       }
     });
 
-    it('puts the rows of a wide stage in more columns when one column would not hold them', () => {
+    it('puts the small cards of a stage too small for cards in two columns or more, where one column of rows would not hold them', () => {
       const plan = overviewPlan(manyAreas(25), sizes.laptop);
-      expect(plan.form).toBe('rows');
-      const columns = new Set(plan.nodes.map((node) => node.position.x));
-      expect(columns.size).toBe(2);
+      expect(plan.form).toBe('minis');
+      expect(new Set(plan.nodes.map((node) => node.position.x)).size).toBeGreaterThanOrEqual(2);
       expect(plan.nodes).toHaveLength(25);
       expect(plan.nodes.some((node) => node.type === 'areaFold')).toBe(false);
+    });
+
+    it('puts the rows of a stage too short for small cards in more columns, with what does not fit folded', () => {
+      for (const size of [{ width: 697, height: 100 }, { width: 900, height: 140 }]) {
+        const plan = overviewPlan(manyAreas(11, { data: realistic }), size);
+        expect(plan.form).toBe('rows');
+        expect(new Set(plan.nodes.map((node) => node.position.x)).size).toBe(2);
+        expect(plan.nodes.at(-1)!.type).toBe('areaFold');
+        // The rows keep their size and the columns hold them: one row (y=44 to 84 on screen) is whole in both stages, the stage's own
+        // bottom inset aside, and no row is put below it
+        expect(plan.nodes.every((node) => node.height === AREA_ROW.height)).toBe(true);
+        for (const node of plan.nodes) {
+          expect(node.position.y + plan.viewport!.y).toBeGreaterThanOrEqual(0);
+          expect(node.position.y + node.height! + plan.viewport!.y).toBeLessThanOrEqual(size.height);
+        }
+      }
     });
 
     it('folds the finished Areas into one last row when the rows do not fit, and opens them on request', () => {
@@ -471,6 +488,162 @@ describe('boardAreas', () => {
     it('lays out the nodes of the plan', () => {
       const areas = manyAreas(3, { data: realistic });
       expect(overviewLayout(areas, sizes.laptop)).toEqual(overviewPlan(areas, sizes.laptop).nodes);
+    });
+  });
+
+  describe('overviewPlan: small cards', () => {
+    /** Stage sizes: the board beside the terminal at 1440x900, 1280x800 and 1100x700 (measured in the app), and the ones of the packet. */
+    const stages = {
+      split1440: { width: 652, height: 856 }, split1280: { width: 572, height: 756 }, split1100: { width: 482, height: 656 },
+      narrow: { width: 414, height: 510 }, a678: { width: 678, height: 574 }, a706: { width: 706, height: 474 }, a886: { width: 886, height: 574 }, phone: { width: 390, height: 720 },
+    };
+    const minisStages = ['split1440', 'split1280', 'split1100', 'a678', 'a706', 'a886'] as const;
+    const longTitle = 'Checkpoint: the whole of a long title that goes on to a second line and then a third';
+    const withPicture: Partial<AreaData> = { pictures: [{ path: 'a.png', alt: 'A' }], pictureCount: 1 };
+    /** Eleven Areas as a workspace has them: long titles, pictures on some, one under way, one with a waiting decision. */
+    const eleven = () => manyAreas(11, { done: 1, data: realistic }).map((area, i) => ({
+      ...area, data: { ...area.data, ...(i % 3 === 1 ? withPicture : {}), ...(i === 4 ? { waitingCount: 1 } : {}), ...(i === 2 ? { title: longTitle } : {}) },
+    }));
+    const inside = (plan: ReturnType<typeof overviewPlan>, size: { width: number; height: number }) => {
+      const { x, y } = plan.viewport!;
+      for (const node of plan.nodes) {
+        expect(node.position.x + x).toBeGreaterThanOrEqual(OVERVIEW_INSET.side - 0.01);
+        expect(node.position.x + node.width! + x).toBeLessThanOrEqual(size.width - OVERVIEW_INSET.side + 0.01);
+        expect(node.position.y + y).toBeGreaterThanOrEqual(OVERVIEW_INSET.top - 0.01);
+        expect(node.position.y + node.height! + y).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
+      }
+    };
+    const overlap = (a: OverviewNode, b: OverviewNode) =>
+      a.position.x < b.position.x + b.width! && b.position.x < a.position.x + a.width! && a.position.y < b.position.y + b.height! && b.position.y < a.position.y + a.height!;
+
+    it('uses the form each Split stage size calls for', () => {
+      expect(overviewPlan(eleven(), stages.split1440).form).toBe('minis');
+      expect(overviewPlan(eleven(), stages.split1280).form).toBe('minis');
+      expect(overviewPlan(eleven(), stages.split1100).form).toBe('minis');
+      expect(overviewPlan(eleven(), stages.a678).form).toBe('minis');
+      expect(overviewPlan(eleven(), stages.a706).form).toBe('minis');
+      expect(overviewPlan(eleven(), stages.a886).form).toBe('minis');
+      // Two columns of the least width do not fit a narrow pane or a phone
+      expect(overviewPlan(eleven(), stages.narrow).form).toBe('rows');
+      expect(overviewPlan(eleven(), stages.phone).form).toBe('rows');
+      expect(overviewPlan(eleven(), { width: 467, height: 900 }).form).toBe('rows');
+      expect(overviewPlan(eleven(), { width: 468, height: 900 }).form).toBe('minis');
+    });
+
+    it('keeps the cards whole, level, apart, in the room, at life size and at least as large as the least, in order', () => {
+      for (const name of minisStages) {
+        const size = stages[name];
+        for (const count of [2, 3, 4, 5, 11, 25]) {
+          const areas = manyAreas(count, { data: realistic });
+          const plan = overviewPlan(areas, size);
+          if (plan.form !== 'minis') continue;
+          expect(plan.viewport!.zoom).toBe(1);
+          inside(plan, size);
+          const cards = plan.nodes.filter((node) => node.type === 'areaMini');
+          expect(new Set(cards.map((node) => node.height)).size).toBe(1);
+          expect(new Set(cards.map((node) => node.width)).size).toBe(1);
+          for (const node of plan.nodes) {
+            expect(node.height).toBeGreaterThanOrEqual(AREA_MINI.minHeight);
+            expect(node.height).toBeLessThanOrEqual(AREA_MINI.maxHeight);
+            expect(node.width).toBeGreaterThanOrEqual(AREA_MINI.minWidth);
+            expect(node.width).toBeLessThanOrEqual(AREA_MINI.maxWidth);
+          }
+          for (let i = 0; i < plan.nodes.length; i++) for (let j = i + 1; j < plan.nodes.length; j++) expect(overlap(plan.nodes[i]!, plan.nodes[j]!)).toBe(false);
+          // Read left to right, line by line, and every Area is there or folded
+          expect(cards.map((node) => node.id)).toEqual(areas.slice(0, cards.length).map((area) => area.id));
+          const ys = plan.nodes.map((node) => node.position.y);
+          expect(ys).toEqual([...ys].sort((p, q) => p - q));
+          const fold = plan.nodes.find((node) => node.type === 'areaFold');
+          expect(cards.length + ((fold?.data as { count?: number } | undefined)?.count ?? 0)).toBe(count);
+        }
+      }
+    });
+
+    it('chooses the fewest columns that are comfortable, and the tallest otherwise', () => {
+      // 11 in 652x856: two columns of six lines are 120 px high, above the comfortable height
+      const plan = overviewPlan(eleven(), stages.split1440);
+      expect(new Set(plan.nodes.map((node) => node.position.x)).size).toBe(2);
+      expect(plan.nodes[0]!.height).toBe(120);
+      // At 1100x700 two columns have 86 px, the most there is, and they are used
+      const small = overviewPlan(eleven(), stages.split1100);
+      expect(new Set(small.nodes.map((node) => node.position.x)).size).toBe(2);
+      expect(small.nodes[0]!.height).toBe(86);
+      // Two columns of 743x656 are too short, so three are chosen: 226x124
+      const three = overviewPlan(eleven(), { width: 743, height: 656 });
+      expect(three.form).toBe('minis');
+      expect(new Set(three.nodes.map((node) => node.position.x)).size).toBe(3);
+      expect(three.nodes[0]!.width).toBe(226);
+      expect(three.nodes[0]!.height).toBe(124);
+      // A wide stage with few Areas: two columns first, since they are tall enough
+      const few = overviewPlan(manyAreas(4, { data: realistic }), { width: 886, height: 574 });
+      expect(few.form).toBe('cards');
+    });
+
+    it('centres the grid across the room, at the top of it', () => {
+      const plan = overviewPlan(eleven(), { width: 900, height: 900 });
+      expect(plan.form).toBe('minis');
+      const total = Math.max(...plan.nodes.map((node) => node.position.x + node.width!));
+      expect(plan.viewport!.x * 2 + total).toBeCloseTo(900, 0);
+      expect(plan.viewport!.y).toBe(OVERVIEW_INSET.top);
+    });
+
+    it('folds the finished Areas, then the last, into one tile when the cards do not fit; the one under way stays', () => {
+      const stage = { width: 482, height: 656 };
+      const done = manyAreas(25, { done: 15 });
+      const plan = overviewPlan(done, stage);
+      expect(plan.form).toBe('minis');
+      const fold = plan.nodes.at(-1)!;
+      expect(fold.type).toBe('areaFold');
+      expect(fold.data).toEqual({ count: 15, kind: 'done', expanded: false });
+      expect(plan.nodes.some((node) => node.id === 'area-15')).toBe(true);
+      inside(plan, stage);
+      const more = overviewPlan(manyAreas(60, { done: 3 }), stage);
+      expect(more.form).toBe('minis');
+      expect(more.nodes.at(-1)!.data).toMatchObject({ kind: 'more', expanded: false });
+      expect(more.nodes.some((node) => node.id === 'area-3')).toBe(true);
+      inside(more, stage);
+      // The Area under way is never folded, even the last
+      const last = manyAreas(60).map((area, i) => ({ ...area, data: { ...area.data, current: i === 59 } }));
+      expect(overviewPlan(last, stage).nodes.some((node) => node.id === 'area-59')).toBe(true);
+    });
+
+    it('opens the fold below the stage with the cards the size they were, and folds back', () => {
+      const stage = { width: 482, height: 656 };
+      const areas = manyAreas(25, { done: 15 });
+      const shut = overviewPlan(areas, stage);
+      const open = overviewPlan(areas, stage, { expanded: true });
+      expect(open.form).toBe('minis');
+      expect(open.nodes.filter((node) => node.type === 'areaMini')).toHaveLength(25);
+      expect(open.nodes.at(-1)!.data).toEqual({ count: 15, kind: 'done', expanded: true });
+      expect(open.nodes[0]!.width).toBe(shut.nodes[0]!.width);
+      expect(open.nodes[0]!.height).toBe(shut.nodes[0]!.height);
+      expect(open.viewport).toEqual(shut.viewport);
+      expect(Math.max(...open.nodes.map((node) => node.position.y + node.height!)) + open.viewport!.y).toBeGreaterThan(stage.height - OVERVIEW_INSET.bottom);
+    });
+
+    it('draws every Area of a finished workspace, and a work Area without steps', () => {
+      const finished = manyAreas(11, { done: 11 });
+      const plan = overviewPlan(finished, stages.split1280);
+      expect(plan.form).toBe('minis');
+      expect(plan.nodes).toHaveLength(11);
+      const work = manyAreas(11).map((area) => ({ ...area, kind: 'work' as const, data: { ...area.data, kind: 'work' as const, stepsTotal: 0, stepsDone: 0 } }));
+      const workPlan = overviewPlan(work, stages.split1280);
+      expect(workPlan.nodes.every((node) => node.type === 'areaMini' && node.data.kind === 'work')).toBe(true);
+    });
+
+    it('leaves a few Areas to the cards where they fit', () => {
+      for (const count of [2, 3, 4, 5]) {
+        const plan = overviewPlan(manyAreas(count, { data: realistic }), stages.split1280);
+        expect(['cards', 'minis']).toContain(plan.form);
+        if (plan.form === 'minis') inside(plan, stages.split1280);
+      }
+    });
+
+    it('draws no lines between small cards', () => {
+      const areas = manyAreas(11);
+      const plan = overviewPlan(areas, stages.split1280);
+      expect(plan.form).toBe('minis');
+      expect(overviewEdges(areas, plan.nodes, [{ id: 'l', from: 'area-0', to: 'area-4' }])).toEqual([]);
     });
   });
 

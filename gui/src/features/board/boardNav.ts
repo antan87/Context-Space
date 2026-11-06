@@ -51,7 +51,7 @@ export function readNavChoice(): boolean | null {
 
 /**
  * Whether the sidebar starts open when the person has not chosen. It does, unless it would take the room the Areas need as cards:
- * when the overview is rows with it open and cards with it closed, it starts closed, so the stage shows the Areas and not the same
+ * when closing it gives a better form of the overview (cards over small cards over rows), it starts closed, so the stage shows the Areas and not the same
  * list twice. Where the sidebar overlays the board (a narrow section) it does not take any room, and it stays as it is. `section` is
  * the size of the board's section.
  */
@@ -59,7 +59,8 @@ export function navStartsOpen(areas: BoardArea[], section: Size): boolean {
   if (areas.length === 0 || section.width <= 0 || section.height <= 0 || sidebarDock(section.width).overlays) return true;
   const open = overviewPlan(areas, { width: section.width - SIDEBAR.width, height: section.height }).form;
   const closed = overviewPlan(areas, { width: section.width - SIDEBAR.railWidth, height: section.height }).form;
-  return !(open === 'rows' && closed === 'cards');
+  const rank = { rows: 0, minis: 1, cards: 2 } as const;
+  return !(rank[closed] > rank[open]);
 }
 
 export function writeNavOpen(open: boolean): void {

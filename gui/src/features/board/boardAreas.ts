@@ -38,6 +38,9 @@ export const AREA_SIZE = { width: 320, height: 100, gapX: 32, gapY: 24 } as cons
 /** The overview as one-line rows: the width a row is drawn at least and at most, its height, and the space between rows and between columns of them. */
 export const AREA_ROW = { minWidth: 320, maxWidth: 560, height: 40, gap: 4, gapX: 16 } as const;
 
+/** The overview as small cards, two columns or more: least and most width, least, comfortable and most height, and the space between. Text never scales. */
+export const AREA_MINI = { minWidth: 208, maxWidth: 360, minHeight: 76, comfyHeight: 100, maxHeight: 124, gap: 12 } as const;
+
 /** What the overview leaves free of its stage: a corner above for the pane's icons, the library's credit below, and room at the sides. */
 export const OVERVIEW_INSET = { top: 44, bottom: 32, side: 20 } as const;
 
@@ -94,7 +97,9 @@ export type AreaFoldData = {
 };
 /** The one last row of the overview that holds the Areas that did not fit. */
 export type AreaFoldNode = Node<AreaFoldData, 'areaFold'>;
-export type OverviewNode = AreaNode | AreaRowNode | AreaFoldNode;
+/** The same Area as a small card of the overview. */
+export type AreaMiniNode = Node<AreaData, 'areaMini'>;
+export type OverviewNode = AreaNode | AreaRowNode | AreaMiniNode | AreaFoldNode;
 
 export interface BoardAreaRepo {
   repo: { repo: string; commits: NewsCommit[]; more: number; moreAtLeast?: boolean; problem?: string };
@@ -594,7 +599,7 @@ function overviewRoom(size: Size) {
 }
 
 export interface OverviewPlan {
-  form: 'cards' | 'rows';
+  form: 'cards' | 'minis' | 'rows';
   nodes: OverviewNode[];
   /** Where the view stands to show every node whole, or null while the stage has no size. */
   viewport: Viewport | null;
@@ -661,6 +666,26 @@ function cardsPlan(areas: BoardArea[], size: Size): OverviewPlan | null {
 export const OVERVIEW_FOLD = 'overview:fold';
 
 /**
+ * Which Areas stay when only `slots` places are free and the last one is taken by the fold: the finished ones go first, then the
+ * ones at the end, the one under way never.
+ */
+function foldAreas(areas: BoardArea[], slots: number): { shown: BoardArea[]; folded: BoardArea[] } {
+  if (areas.length <= slots) return { shown: areas, folded: [] };
+  const kept = new Set(areas.filter((area) => !area.data.done || area.data.current).map((area) => area.id));
+  // The last tile takes one slot, so the Areas that stay are one fewer than the slots
+  const trailing = areas.filter((area) => kept.has(area.id) && !area.data.current).reverse();
+  for (const area of trailing) {
+    if (kept.size <= slots - 1) break;
+    kept.delete(area.id);
+  }
+  return { shown: areas.filter((area) => kept.has(area.id)), folded: areas.filter((area) => !kept.has(area.id)) };
+}
+
+/** What the fold tile says about the Areas it holds. */
+const foldData = (folded: BoardArea[], expanded: boolean): AreaFoldData | null =>
+  folded.length > 0 ? { count: folded.length, kind: folded.every((area) => area.data.done) ? 'done' : 'more', expanded } : null;
+
+/**
  * One line to an Area at life size, in as few columns as show them all. When they are too many for the stage the finished ones
  * fold into one last row ("N done"), and when that is not enough the ones at the end fold with them ("N more"), the one under way
  * never. `expanded` shows them all, and the rows then go on below the stage: the view is for the person to move.
@@ -672,20 +697,8 @@ function rowsPlan(areas: BoardArea[], size: Size, expanded: boolean): OverviewPl
   const maxCols = Math.max(1, Math.floor((room.width + AREA_ROW.gapX) / (AREA_ROW.minWidth + AREA_ROW.gapX)));
   const slots = perColumn * maxCols;
 
-  let shown = areas;
-  let folded: BoardArea[] = [];
-  if (areas.length > slots) {
-    const kept = new Set(areas.filter((area) => !area.data.done || area.data.current).map((area) => area.id));
-    // The last row takes one slot, so the Areas that stay are one fewer than the slots
-    const trailing = areas.filter((area) => kept.has(area.id) && !area.data.current).reverse();
-    for (const area of trailing) {
-      if (kept.size <= slots - 1) break;
-      kept.delete(area.id);
-    }
-    shown = areas.filter((area) => kept.has(area.id));
-    folded = areas.filter((area) => !kept.has(area.id));
-  }
-  const fold: AreaFoldData | null = folded.length > 0 ? { count: folded.length, kind: folded.every((area) => area.data.done) ? 'done' : 'more', expanded } : null;
+  const { shown, folded } = foldAreas(areas, slots);
+  const fold = foldData(folded, expanded);
   const list = expanded ? areas : shown;
   const lines = list.length + (fold ? 1 : 0);
   const cols = Math.min(maxCols, Math.ceil(lines / perColumn));
@@ -719,9 +732,91 @@ function rowsPlan(areas: BoardArea[], size: Size, expanded: boolean): OverviewPl
   return { form: 'rows', nodes, viewport: { x: room.x + (room.width - total) / 2, y: room.top, zoom: 1 } };
 }
 
+/** The smallest a small card is for a picture to sit beside its text. */
+export const MINI_PICTURE = { minWidth: 240, minHeight: 92 } as const;
+/** From this height on, "Now" and "Waiting" get a line under the title; below it they share the line of the steps. */
+export const MINI_STATUS_LINE = 96;
+
+/**
+ * Whether a small card of this size shows its picture. Not where "Now" and "Waiting" share the line of the steps (under
+ * MINI_STATUS_LINE): that line and the picture would not both fit beside each other.
+ */
+export function miniShowsPicture(width: number, height: number, hasStatus: boolean): boolean {
+  if (width < MINI_PICTURE.minWidth || height < MINI_PICTURE.minHeight) return false;
+  return !hasStatus || height >= MINI_STATUS_LINE;
+}
+
+/** How many columns of small cards, and how wide and high each card is, for `count` tiles in the room; null when none fits them all. */
+function miniGrid(count: number, room: ReturnType<typeof overviewRoom>): { cols: number; width: number; height: number } | null {
+  const { minWidth, maxWidth, minHeight, comfyHeight, maxHeight, gap } = AREA_MINI;
+  const maxCols = Math.floor((room.width + gap) / (minWidth + gap));
+  let best: { cols: number; width: number; height: number } | null = null;
+  for (let cols = 2; cols <= maxCols; cols++) {
+    const width = Math.min(maxWidth, Math.floor((room.width - (cols - 1) * gap) / cols));
+    const lines = Math.ceil(count / cols);
+    const height = Math.min(maxHeight, Math.floor((room.height - (lines - 1) * gap) / lines));
+    if (height < minHeight) continue;
+    // The fewest columns that are comfortable win; otherwise the one with the most height
+    if (height >= comfyHeight) return { cols, width, height };
+    if (!best || height > best.height) best = { cols, width, height };
+  }
+  return best;
+}
+
+/**
+ * The Areas as small cards in two columns or more, at life size, between the cards and the rows. Too many fold as in the rows
+ * (`foldAreas`); null when two columns do not fit, or the cards do not fit even with the fold.
+ */
+function minisPlan(areas: BoardArea[], size: Size, expanded: boolean): OverviewPlan | null {
+  const room = overviewRoom(size);
+  const { minWidth, minHeight, gap } = AREA_MINI;
+  const maxCols = Math.floor((room.width + gap) / (minWidth + gap));
+  if (maxCols < 2) return null;
+
+  let grid = miniGrid(areas.length, room);
+  let shown = areas;
+  let fold: AreaFoldData | null = null;
+  if (!grid) {
+    const slots = maxCols * Math.max(1, Math.floor((room.height + gap) / (minHeight + gap)));
+    const split = foldAreas(areas, slots);
+    fold = foldData(split.folded, expanded);
+    if (!fold) return null;
+    shown = split.shown;
+    grid = miniGrid(shown.length + 1, room);
+    if (!grid) return null;
+  }
+  const { cols, width, height } = grid;
+  const list = expanded ? areas : shown;
+  const place = (index: number) => ({ x: (index % cols) * (width + gap), y: Math.floor(index / cols) * (height + gap) });
+  const nodes: OverviewNode[] = list.map((area, index): AreaMiniNode => ({
+    id: area.id,
+    type: 'areaMini',
+    position: place(index),
+    width,
+    height,
+    measured: { width, height },
+    data: area.data,
+    ...FIXED,
+  }));
+  if (fold) {
+    nodes.push({
+      id: OVERVIEW_FOLD,
+      type: 'areaFold',
+      position: place(list.length),
+      width,
+      height,
+      measured: { width, height },
+      data: fold,
+      ...FIXED,
+    } satisfies AreaFoldNode);
+  }
+  const total = cols * width + (cols - 1) * gap;
+  return { form: 'minis', nodes, viewport: { x: room.x + (room.width - total) / 2, y: room.top, zoom: 1 } };
+}
+
 /**
  * Lays out Level 0: the Areas as cards, as many columns as fit the stage at a readable size, and when they do not fit that
- * way, as one-line rows (the narrow pane, the phone, many Areas). Pure: the form follows from the stage's size and the Areas.
+ * way, as small cards in two columns or more, and when those do not fit either, as one-line rows (the narrow pane, the phone, many Areas). Pure: the form follows from the stage's size and the Areas.
  */
 export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded?: boolean } = {}): OverviewPlan {
   if (areas.length === 0) return { form: 'cards', nodes: [], viewport: null };
@@ -739,7 +834,7 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     });
     return { form: 'cards', nodes, viewport: null };
   }
-  return cardsPlan(areas, size) ?? rowsPlan(areas, size, options.expanded ?? false);
+  return cardsPlan(areas, size) ?? minisPlan(areas, size, options.expanded ?? false) ?? rowsPlan(areas, size, options.expanded ?? false);
 }
 
 /** The nodes of the overview (`overviewPlan`). */

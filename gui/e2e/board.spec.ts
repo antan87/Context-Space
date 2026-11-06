@@ -3228,7 +3228,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     }
     const boxes = areas.map((area) => { const r = area.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
     const inside = boxes.every((r) => r.x >= stage.x - 0.5 && r.y >= stage.y - 0.5 && r.x + r.width <= stage.x + stage.width + 0.5 && r.y + r.height <= stage.y + stage.height + 0.5);
-    return { count: areas.length, inside, sizes, titles, boxes, rows: overview.querySelectorAll('.react-flow__node-areaRow').length, cards: overview.querySelectorAll('.react-flow__node-area').length };
+    return { count: areas.length, inside, sizes, titles, boxes, rows: overview.querySelectorAll('.react-flow__node-areaRow').length, minis: overview.querySelectorAll('.react-flow__node-areaMini').length, stageWidth: stage.width, cards: overview.querySelectorAll('.react-flow__node-area').length };
   });
 
   const sizes = [
@@ -3246,7 +3246,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await viewAtRest(page);
       await expect(board(page).locator('#board-overview button.board-area')).toHaveCount(11);
       const facts = await overviewFacts(page);
-      test.info().annotations.push({ type: 'form', description: `${facts.cards} cards, ${facts.rows} rows, zoom ${(await transformOf(page)).scale.toFixed(2)}, titles ${facts.titles.map((size) => size.toFixed(1)).join(' ')}` });
+      test.info().annotations.push({ type: 'form', description: `${facts.cards} cards, ${facts.minis} minis, ${facts.rows} rows, zoom ${(await transformOf(page)).scale.toFixed(2)}, titles ${facts.titles.map((size) => size.toFixed(1)).join(' ')}` });
       expect(facts.count).toBe(11);
       expect(facts.inside, 'every Area is whole inside the stage, with no panning').toBe(true);
       expect(facts.titles).toHaveLength(11);
@@ -3405,7 +3405,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
   test.describe('the Board index at 1280x800', () => {
     test.use({ sidebarDocked: false });
 
-    test('starts with the index closed at 1280x800 when that turns the rows into cards, and it is one press away', async ({ page }) => {
+    test('starts with the index closed at 1280x800 when that turns the small cards into cards, and it is one press away', async ({ page }) => {
       await routeAreas(page);
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
@@ -3420,17 +3420,18 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await rail.click();
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
       await viewAtRest(page);
-      await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(11);
+      // With the index open the stage is too small for cards: the small cards stand there
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(11);
       await page.reload();
       await viewAtRest(page);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
-      await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(11);
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(11);
     });
 
-    test('never shows the docked index or the rows on the way to the closed index and cards, even when the commits take their time', async ({ page }) => {
-      // Every frame is looked at from the first one: the index (docked, drawn) and the rows are what must never be seen
+    test('never shows the docked index, the rows or the small cards on the way to the closed index and cards, even when the commits take their time', async ({ page }) => {
+      // Every frame is looked at from the first one: the index (docked, drawn), the rows and the small cards (the form of the open index) are what must never be seen
       await page.addInitScript(() => {
-        const seen = { frames: 0, loadingFrames: 0, indexFrames: 0, rowFrames: 0, blankFrames: 0 };
+        const seen = { frames: 0, loadingFrames: 0, indexFrames: 0, rowFrames: 0, miniFrames: 0, blankFrames: 0 };
         (window as unknown as { __seen: typeof seen }).__seen = seen;
         // Seen: not hidden, not faded out by a parent, and with a size
         const drawn = (element: Element | null) => {
@@ -3444,10 +3445,12 @@ test.describe('Board, a quiet frame and a readable overview', () => {
           if (drawn(document.querySelector('nav[aria-label="Board index"]'))) seen.indexFrames += 1;
           const rows = Array.from(document.querySelectorAll('.react-flow__node-areaRow')).some(drawn);
           if (rows) seen.rowFrames += 1;
+          const minis = Array.from(document.querySelectorAll('.react-flow__node-areaMini')).some(drawn);
+          if (minis) seen.miniFrames += 1;
           // A stage with nothing on it and nothing said about why is a frame the person should not see
           const region = document.querySelector<HTMLElement>('[role="region"][aria-label="Board"]');
           const areas = Array.from(document.querySelectorAll('.react-flow__node-area')).some(drawn);
-          if (region && !region.hidden && region.getBoundingClientRect().height > 0 && !rows && !areas && !/Still loading|Loading the board|Nothing on the board yet/.test(region.textContent ?? '')) seen.blankFrames += 1;
+          if (region && !region.hidden && region.getBoundingClientRect().height > 0 && !rows && !minis && !areas && !/Still loading|Loading the board|Nothing on the board yet/.test(region.textContent ?? '')) seen.blankFrames += 1;
           requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
@@ -3466,12 +3469,13 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       expect(seen.frames).toBeGreaterThan(30);
       expect(seen.indexFrames, 'frames with the index drawn').toBe(0);
       expect(seen.rowFrames, 'frames with rows drawn').toBe(0);
+      expect(seen.miniFrames, 'frames with small cards drawn').toBe(0);
       expect(seen.blankFrames, 'frames with an empty stage and no word about why').toBe(0);
     });
 
-    test('shows the Areas while the commits are still on their way, with no index and no rows seen, and adds their counts when they land', async ({ page }) => {
+    test('shows the Areas while the commits are still on their way, with no index, rows or small cards seen, and adds their counts when they land', async ({ page }) => {
       await page.addInitScript(() => {
-        const seen = { frames: 0, indexFrames: 0, rowFrames: 0 };
+        const seen = { frames: 0, indexFrames: 0, rowFrames: 0, miniFrames: 0 };
         (window as unknown as { __seen: typeof seen }).__seen = seen;
         const drawn = (element: Element | null) => {
           if (!element || element.getBoundingClientRect().width === 0 || getComputedStyle(element).visibility === 'hidden') return false;
@@ -3482,6 +3486,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
           seen.frames += 1;
           if (drawn(document.querySelector('nav[aria-label="Board index"]'))) seen.indexFrames += 1;
           if (Array.from(document.querySelectorAll('.react-flow__node-areaRow')).some(drawn)) seen.rowFrames += 1;
+          if (Array.from(document.querySelectorAll('.react-flow__node-areaMini')).some(drawn)) seen.miniFrames += 1;
           requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
@@ -3518,6 +3523,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       expect(seen.frames).toBeGreaterThan(30);
       expect(seen.indexFrames, 'frames with the index drawn').toBe(0);
       expect(seen.rowFrames, 'frames with rows drawn').toBe(0);
+      expect(seen.miniFrames, 'frames with small cards drawn').toBe(0);
     });
 
     test('decides only once the index docks: opened in the pane, then given the whole width, it ends closed with cards', async ({ page }) => {
@@ -3542,7 +3548,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
-      await expect(board(page).locator('#board-overview .react-flow__node-areaRow')).toHaveCount(11);
+      await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(11);
     });
 
     test('leaves the index open where closing it would not give cards: few Areas, and a stage too small for cards', async ({ page }) => {
@@ -3555,7 +3561,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await routeAreas(page);
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
-      await expect(board(page).locator('#board-overview .react-flow__node-areaRow')).toHaveCount(11);
+      await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(11);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
     });
   });
@@ -3577,6 +3583,60 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await viewAtRest(page);
     await expect(fold).toHaveText('8 done');
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('folds the finished Areas of the small cards as of the rows, keeps the fold open from rows to small cards, and lets it go when the overview has none', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 720 });
+    await routeAreas(page, { count: 14, done: 8 });
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    const overview = board(page).locator('#board-overview');
+    const fold = overview.locator('button.board-area-fold');
+    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(6);
+    await fold.click();
+    await expect(fold).toHaveText('Show fewer');
+    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(14);
+    // A wider stage draws small cards, with the fold as they have one: still open, nothing lost
+    await page.setViewportSize({ width: 700, height: 560 });
+    await viewAtRest(page);
+    await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(14);
+    await expect(fold).toHaveText('Show fewer');
+    await fold.click();
+    // The stage is short: the finished Areas and some at the end are folded, and the one under way is not
+    await expect(fold).toHaveText(/^\d+ (done|more)$/);
+    expect(await overview.locator('.react-flow__node-areaMini').count()).toBeLessThan(14);
+    await expect(overview.locator('.react-flow__node-areaMini').filter({ hasText: AREAS[8]! })).toHaveCount(1);
+    // Cards have no fold: it goes, and the rows come back folded
+    await fold.click();
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await viewAtRest(page);
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(14);
+    await expect(fold).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 720 });
+    await viewAtRest(page);
+    await expect(fold).toHaveText('8 done');
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('lays the cards out again when the fold goes away by itself after the view was moved', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 720 });
+    await routeAreas(page, { count: 14, done: 8 });
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    const overview = board(page).locator('#board-overview');
+    await overview.locator('button.board-area-fold').click();
+    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(14);
+    // The person scrolls the rows
+    await overview.locator('.react-flow__pane').hover({ position: { x: 5, y: 300 } });
+    await page.mouse.wheel(0, 200);
+    await viewAtRest(page);
+    expect((await transformOf(page)).y).toBeLessThan(0);
+    // The window grows: cards have no fold, the fold closes itself, and the view is laid out again
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(14);
+    await viewAtRest(page);
+    await expect(overview.locator('button.board-area-fold')).toHaveCount(0);
+    expect((await overviewFacts(page)).inside, 'every Area is whole inside the stage').toBe(true);
   });
 
   // The app's sidebar on its slim rail, as the app starts

@@ -27,6 +27,7 @@ import {
   READABLE_ZOOM,
   buildBoardAreas,
   overviewEdges,
+  OVERVIEW_INSET,
   overviewPlan,
   stepsText,
   waitingText,
@@ -49,13 +50,14 @@ import {
   type NavItem,
   type NavMode,
 } from './boardNav.js';
-import { BoardArea, BoardAreaFold, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
+import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead } from './BoardNodes.js';
+import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
 import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { findThreadChain } from './boardThread.js';
 
-const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaFold: BoardAreaFold, checkpoint: BoardCheckpoint };
+const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaMini: BoardAreaMini, areaFold: BoardAreaFold, checkpoint: BoardCheckpoint };
 const AREA_NODE_TYPES: NodeTypes = {
   lane: BoardLane,
   checkpoint: BoardCheckpoint,
@@ -119,10 +121,20 @@ function showFocused(flow: ReactFlowInstance<any> | null, event: FocusEvent<HTML
   const { x: left, y: top } = node.internals.positionAbsolute;
   const width = node.measured.width ?? node.width ?? 0;
   const height = node.measured.height ?? node.height ?? 0;
-  const seen = left * zoom + x >= 0 && top * zoom + y >= 0 && (left + width) * zoom + x <= size.width && (top + height) * zoom + y <= size.height;
-  if (seen) return;
+  const next = revealViewport({ x, y, zoom }, { x: left, y: top, width, height }, size, REVEAL_MARGIN, OVERVIEW_INSET.top);
+  if (!next) return;
   onMoved();
-  void flow.setCenter(left + width / 2, top + height / 2, { zoom, duration: moveMs(200) });
+  void flow.setViewport(next, { duration: moveMs(200) });
+}
+
+/** Brings an overview node whole into view, moving the least needed, and not at all when it already is. */
+function revealOverviewNode(flow: ReactFlowInstance<any> | null, node: { position: { x: number; y: number }; width?: number | null; height?: number | null }, size: { width: number; height: number }, onMoved: () => void, from?: { x: number; y: number; zoom: number }) {
+  if (!flow) return;
+  const next = revealViewport(from ?? flow.getViewport(), { x: node.position.x, y: node.position.y, width: node.width ?? 260, height: node.height ?? 160 }, size, REVEAL_MARGIN, OVERVIEW_INSET.top);
+  if (!next) return;
+  // The view is the person's now (as after a pan): a layout that changes later does not take it back
+  onMoved();
+  void flow.setViewport(next, { duration: moveMs(300) });
 }
 
 /** One part of the data that could not be read; the rest of the board still shows. */
@@ -167,7 +179,7 @@ function useLayoutElementSize(element: HTMLElement | null): { width: number; hei
 /**
  * The Board: a spatial 2-level surface where people and AIs collaborate.
  *
- * Level 0 ("Board"): Arranges workspace Areas (checkpoints, plan, work) as cards in a grid, or as one-line rows
+ * Level 0 ("Board"): Arranges workspace Areas (checkpoints, plan, work) as cards in a grid, as a grid of small cards, or as one-line rows
  * where the cards would not be readable, so that they fit whole on one screen at a readable size.
  *
  * Level 1 (inside an Area): Stepping into an Area recedes Level 0 behind a dimmed scrim while the
@@ -214,6 +226,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const [overviewInstance, setOverviewInstance] = useState<ReactFlowInstance<OverviewNode> | null>(null);
   const overviewTaken = useRef(false);
   const overviewTakenBefore = useRef(false);
+  const takeOverview = useCallback(() => { overviewTaken.current = true; }, []);
+  // The form the view was laid out for: a new form is a new layout, so the view goes back to the plan's
+  const overviewForm = useRef<string | null>(null);
   // The Areas folded into the overview's last row, shown (not saved)
   const [foldOpen, setFoldOpen] = useState(false);
 
@@ -228,10 +243,15 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     [overview.nodes, toggleFold],
   );
   const overviewLines = useMemo(() => overviewEdges(areas, overviewNodes, board?.links ?? []), [areas, overviewNodes, board?.links]);
-  // Only rows fold, and only they scroll: cards that come back leave the folded Areas as they were
+  // Only rows and small cards fold, and only they scroll: a form without a fold (or one that fits every Area) leaves the folded Areas as they were
+  const hasFold = overview.nodes.some((node) => node.type === 'areaFold');
   useEffect(() => {
-    if (overview.form !== 'rows' && foldOpen) setFoldOpen(false);
-  }, [overview.form, foldOpen]);
+    if (!hasFold && foldOpen) {
+      // The fold went away by itself (the window grew): the view is laid out again, as when the person closes it
+      overviewTaken.current = false;
+      setFoldOpen(false);
+    }
+  }, [hasFold, foldOpen]);
   const totalArchived = board?.cards.filter((card) => card.archived).length ?? 0;
 
   // Reader state
@@ -273,8 +293,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const [boardRow, setBoardRow] = useState<HTMLDivElement | null>(null);
   const boardRowSize = useLayoutElementSize(boardRow);
   const navDock = sidebarDock(boardRowSize.width);
-  // What the person chose (kept per device), else what suits the Areas: it starts closed when that turns the overview from rows into
-  // cards. That is decided once, when the Areas and the section's size are known and the index docks (where it overlays, it takes no
+  // What the person chose (kept per device), else what suits the Areas: it starts closed when that gives a better form of the overview
+  // (cards over small cards over rows). That is decided once, when the Areas and the section's size are known and the index docks (where it overlays, it takes no
   // room, so there is nothing to decide), and then left alone as the board changes. Until it is decided, and until the stage has the
   // size it has with the index as decided, the board is laid out but not drawn: the index and the rows are not seen for a moment and
   // then replaced by cards.
@@ -386,9 +406,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     }
     const overviewNode = overviewNodes.find((n) => n.id === areaId);
     if (overviewNode && overviewFlow.current) {
-      const cx = overviewNode.position.x + (overviewNode.width ?? 260) / 2;
-      const cy = overviewNode.position.y + (overviewNode.height ?? 160) / 2;
-      void overviewFlow.current.setCenter(cx, cy, { duration: moveMs(300) });
+      revealOverviewNode(overviewFlow.current, overviewNode, stageSize, takeOverview);
     }
     const nodeEl = stageContainer?.querySelector<HTMLElement>(`.react-flow__node[data-id="${areaId}"]`);
     let origin = '12% 50%';
@@ -406,7 +424,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         ? curr
         : { areaId, origin, phase: 'open' },
     );
-  }, [clearJump, reader, setReader, setNarrowNavOpen, overviewNodes, stageContainer, setThreadSelectedId]);
+  }, [clearJump, reader, setReader, setNarrowNavOpen, overviewNodes, stageContainer, stageSize, setThreadSelectedId, takeOverview]);
 
   const jumpToItem = useCallback((item: NavItem, openReader?: boolean) => {
     if (item.nodeId === null) {
@@ -424,9 +442,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (!stepped && overviewFlow.current) {
       const overviewNode = overviewNodes.find((n) => n.id === item.areaId);
       if (overviewNode) {
-        const cx = overviewNode.position.x + (overviewNode.width ?? 260) / 2;
-        const cy = overviewNode.position.y + (overviewNode.height ?? 160) / 2;
-        void overviewFlow.current.setCenter(cx, cy, { duration: moveMs(300) });
+        revealOverviewNode(overviewFlow.current, overviewNode, stageSize, takeOverview);
       }
     }
     const nodeEl = stageContainer?.querySelector<HTMLElement>(`.react-flow__node[data-id="${item.areaId}"]`);
@@ -454,7 +470,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         ? curr
         : { areaId: item.areaId, origin, phase: 'open' },
     );
-  }, [jumpToArea, stepped, setReader, setNarrowNavOpen, overviewNodes, stageContainer]);
+  }, [jumpToArea, stepped, setReader, setNarrowNavOpen, overviewNodes, stageContainer, stageSize, takeOverview]);
 
   // Stepped fallback redirect if active area disappeared
   useEffect(() => {
@@ -545,6 +561,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     }
   }, [reader, areaCanvasContainer, findOpener]);
 
+  // The newest nodes and stage size for the focus return below, which must not run again when they change
+  const overviewNow = useRef({ nodes: overviewNodes, size: stageSize, viewport: overview.viewport });
+  overviewNow.current = { nodes: overviewNodes, size: stageSize, viewport: overview.viewport };
+
   // Restore keyboard focus to Area button when stepping out
   useLayoutEffect(() => {
     const id = focusTarget.current;
@@ -556,11 +576,16 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       focusing.current = true;
       btn.focus({ preventScroll: true });
       focusing.current = false;
+      // The focus handler skips its own reveal while `focusing` is set, and the form of the overview may have changed (and moved the view) while the person was inside the Area
+      // A view the layout still moves to (not taken by the person) is where the card will be, so it is revealed from there, not from where the view happens to be now
+      const { nodes, size, viewport } = overviewNow.current;
+      const overviewNode = nodes.find((n) => n.id === id);
+      if (overviewNode) revealOverviewNode(overviewFlow.current, overviewNode, size, takeOverview, overviewTaken.current ? undefined : viewport ?? undefined);
       if (document.activeElement === btn || !stepped) {
         focusTarget.current = null;
       }
     }
-  }, [stepped, stageContainer]);
+  }, [stepped, stageContainer, takeOverview]);
 
   // Focus Back button when stepped into an area (skipping when a jump to an item is pending in this area)
   useLayoutEffect(() => {
@@ -573,10 +598,16 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // Plane 0 Viewport auto-fitting
   const overviewViewport = overview.viewport;
 
+  const formNow = overview.form;
   useEffect(() => {
+    if (overviewForm.current !== formNow) {
+      // Small cards and rows are only readable at zoom 1, which the old view may not have: whatever the person did, the new layout starts from the plan's view
+      if (overviewForm.current !== null) overviewTaken.current = false;
+      overviewForm.current = formNow;
+    }
     if (!overviewViewport || !overviewInstance || overviewTaken.current) return;
     void overviewInstance.setViewport(overviewViewport, { duration: moveMs(200) });
-  }, [overviewViewport, overviewInstance]);
+  }, [overviewViewport, overviewInstance, formNow]);
 
   // Plane 1 (Inside Area) elements
   const activeArea = areas.find((a) => a.id === stepped?.areaId);

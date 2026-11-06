@@ -101,6 +101,14 @@ describe('navStartsOpen', () => {
     expect(navStartsOpen(areas(11), { width: 1200, height: 756 })).toBe(false);
   });
 
+  it('starts closed when closing it turns small cards into cards, and open when both are small cards', () => {
+    // Eight Areas: small cards with it open, cards with it closed
+    expect(navStartsOpen(areas(8), { width: 1100, height: 700 })).toBe(false);
+    expect(navStartsOpen(areas(8), { width: 1200, height: 700 })).toBe(false);
+    // Eleven at 1100x700 are small cards either way
+    expect(navStartsOpen(areas(11), { width: 1100, height: 700 })).toBe(true);
+  });
+
   it('starts open when closing it would not turn the rows into cards', () => {
     // Cards fit with it open too, or they do not fit even with it closed
     expect(navStartsOpen(areas(3), { width: 1160, height: 756 })).toBe(true);
