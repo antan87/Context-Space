@@ -114,6 +114,8 @@ export type AreaFoldData = {
   /** How many Areas it holds: the finished ones (`done`), or the finished ones and others that did not fit (`more`). */
   count: number;
   kind: 'done' | 'more';
+  /** How many Areas holding a question did not fit, when questions are folded. */
+  waitingCount?: number;
   /** How many open Areas did not fit, when both open and finished ones are folded. */
   moreCount?: number;
   /** How many finished Areas are folded, when both open and finished ones are folded. */
@@ -123,17 +125,21 @@ export type AreaFoldData = {
   /** What a press on the row does. The layout leaves it out: the board puts it in. */
   onToggle?: () => void;
 };
-/** What the fold row calls itself: "N done", "N more", or "M more · N done" when it holds both. */
+/** What the fold row calls itself: "N done", "N more", or "M more · N done" when it holds both, or "K question(s) · ..." when questions fold. */
 export function foldLabel(data: AreaFoldData): string {
   if (data.expanded) return 'Show fewer';
-  if (data.moreCount && data.doneCount) {
-    return `${data.moreCount} more · ${data.doneCount} done`;
+  const parts: string[] = [];
+  if (data.waitingCount) {
+    parts.push(`${data.waitingCount} ${data.waitingCount === 1 ? 'question' : 'questions'}`);
   }
   if (data.moreCount) {
-    return `${data.moreCount} more`;
+    parts.push(`${data.moreCount} more`);
   }
   if (data.doneCount) {
-    return `${data.doneCount} done`;
+    parts.push(`${data.doneCount} done`);
+  }
+  if (parts.length > 0) {
+    return parts.join(' · ');
   }
   return `${data.count} ${data.kind}`;
 }
@@ -874,13 +880,15 @@ export function partitionOverviewTiers(areas: BoardArea[]): OverviewTiers {
   if (areas.length === 0) {
     return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [] };
   }
-  const allDone = areas.every((a) => a.data.done);
+  const allDone = areas.every((a) => a.data.done && (a.data.waitingCount ?? 0) === 0);
   if (allDone) {
     return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [...areas] };
   }
   const focusArea = areas.find((a) => a.data.current && !a.data.done) ?? areas.find((a) => !a.data.done);
   if (!focusArea) {
-    return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [...areas] };
+    const tier2 = areas.filter((a) => (a.data.waitingCount ?? 0) > 0);
+    const tier5 = areas.filter((a) => (a.data.waitingCount ?? 0) === 0);
+    return { tier1: [], tier2, tier3: [], tier4: [], tier5 };
   }
   const tier1 = [focusArea];
   let remaining = areas.filter((a) => a.id !== focusArea.id);
@@ -999,11 +1007,11 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     return { form: 'cards', nodes: [node], viewport: { x: 0, y: 0, zoom: 1 } };
   }
 
+  const tiers = partitionOverviewTiers(areas);
   const miniMaxCols = Math.floor((room.width + AREA_MINI.gap) / (AREA_MINI.minWidth + AREA_MINI.gap));
 
-  // If the stage is too narrow for 2 columns of small cards, or too short for a hero card, use rows
-  if (miniMaxCols < 2 || room.height < 150) {
-    const tiers = partitionOverviewTiers(areas);
+  // If the stage is too narrow for 2 columns of small cards, or too short for a hero card, or no active focus Area with waiting questions, use rows
+  if (miniMaxCols < 2 || room.height < 150 || (tiers.tier1.length === 0 && tiers.tier2.length > 0)) {
     const step = AREA_ROW.height + AREA_ROW.gap;
 
     // If stage is too short (< 150) or there's no active focus Area (all done), draw all rows
@@ -1014,47 +1022,44 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
       const hasDone = tiers.tier5.length > 0;
 
       const totalOpen = (tiers.tier1[0] ? 1 : 0) + tiers.tier2.length + tiers.tier3.length + tiers.tier4.length;
-      const needFold = (hasDone && !options.expanded) || totalOpen > totalSlots;
+      const needFold = hasDone || totalOpen > totalSlots;
       const maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
 
-      let shownTier1: BoardArea[];
-      let shownTier2: BoardArea[];
-      let shownTier3: BoardArea[];
-      let shownTier4: BoardArea[];
-      let shownTier5: BoardArea[];
+      let rem = maxRowSlots;
+      const shutTier1 = tiers.tier1[0] && rem > 0 ? (rem--, [tiers.tier1[0]]) : [];
+      const shutTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shutTier2.length);
+      const shutTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shutTier3.length);
+      const shutTier4 = tiers.tier4.slice(0, rem);
 
-      if (options.expanded) {
-        shownTier1 = tiers.tier1;
-        shownTier2 = tiers.tier2;
-        shownTier3 = tiers.tier3;
-        shownTier4 = tiers.tier4;
-        shownTier5 = tiers.tier5;
-      } else {
-        let rem = maxRowSlots;
-        shownTier1 = tiers.tier1[0] && rem > 0 ? (rem--, [tiers.tier1[0]]) : [];
-        shownTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shownTier2.length);
-        shownTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shownTier3.length);
-        shownTier4 = tiers.tier4.slice(0, rem);
-        shownTier5 = [];
-      }
-
-      const overflowOpen = Math.max(0, totalOpen - maxRowSlots);
+      const overflowWaiting = tiers.tier2.length - shutTier2.length;
+      const overflowTier3 = tiers.tier3.length - shutTier3.length;
+      const overflowTier4 = tiers.tier4.length - shutTier4.length;
+      const overflowTier1 = tiers.tier1[0] && shutTier1.length === 0 ? 1 : 0;
+      const overflowOtherOpen = overflowTier1 + overflowTier3 + overflowTier4;
+      const overflowOpen = overflowWaiting + overflowOtherOpen;
       const overflowDone = hasDone ? tiers.tier5.length : 0;
-      const hasFold = options.expanded ? (hasDone || totalOpen > totalSlots) : (overflowOpen + overflowDone > 0);
+      const hasFold = overflowOpen + overflowDone > 0;
       const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
-      const moreCount = overflowOpen;
+      const moreCount = overflowOtherOpen;
       const doneCount = overflowDone;
-      const foldDisplayCount = options.expanded ? (overflowOpen + doneCount) : (overflowOpen + overflowDone);
+      const foldDisplayCount = overflowOpen + overflowDone;
 
-      const rowItems: { area: BoardArea; tier: 1 | 2 | 3 | 4 | 5 }[] = [
-        ...shownTier1.map((area) => ({ area, tier: 1 as const })),
-        ...shownTier2.map((area) => ({ area, tier: 2 as const })),
-        ...shownTier3.map((area) => ({ area, tier: 3 as const })),
-        ...shownTier4.map((area) => ({ area, tier: 4 as const })),
-        ...shownTier5.map((area) => ({ area, tier: 5 as const })),
-      ];
+      const rowItems: { area: BoardArea; tier: 1 | 2 | 3 | 4 | 5 }[] = options.expanded
+        ? [
+            ...tiers.tier1.map((area) => ({ area, tier: 1 as const })),
+            ...tiers.tier2.map((area) => ({ area, tier: 2 as const })),
+            ...tiers.tier3.map((area) => ({ area, tier: 3 as const })),
+            ...tiers.tier4.map((area) => ({ area, tier: 4 as const })),
+            ...tiers.tier5.map((area) => ({ area, tier: 5 as const })),
+          ]
+        : [
+            ...shutTier1.map((area) => ({ area, tier: 1 as const })),
+            ...shutTier2.map((area) => ({ area, tier: 2 as const })),
+            ...shutTier3.map((area) => ({ area, tier: 3 as const })),
+            ...shutTier4.map((area) => ({ area, tier: 4 as const })),
+          ];
 
-      const shutCount = rowItems.length + (hasFold && (foldDisplayCount > 0 || options.expanded) ? 1 : 0);
+      const shutCount = shutTier1.length + shutTier2.length + shutTier3.length + shutTier4.length + (hasFold ? 1 : 0);
       const actualCols = Math.min(maxCols, Math.max(1, Math.ceil(shutCount / perCol)));
       const colWidth = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (actualCols - 1) * AREA_ROW.gapX) / actualCols));
       const totalWidth = actualCols * colWidth + (actualCols - 1) * AREA_ROW.gapX;
@@ -1076,7 +1081,7 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
         });
       });
 
-      if (hasFold && (foldDisplayCount > 0 || options.expanded)) {
+      if (hasFold) {
         const foldIndex = rowItems.length;
         const c = foldIndex % actualCols;
         const r = Math.floor(foldIndex / actualCols);
@@ -1090,7 +1095,13 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
           data: {
             count: foldDisplayCount,
             kind: foldKind,
-            ...(moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {}),
+            ...(overflowWaiting > 0
+              ? {
+                  waitingCount: overflowWaiting,
+                  ...(moreCount > 0 ? { moreCount } : {}),
+                  ...(doneCount > 0 ? { doneCount } : {}),
+                }
+              : (moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {})),
             expanded: options.expanded ?? false,
           },
           ...FIXED,
@@ -1144,44 +1155,41 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     const totalSlots = perCol;
 
     const totalOpenLower = tiers.tier2.length + tiers.tier3.length + tiers.tier4.length;
-    const needFold = (hasDone && !options.expanded) || totalOpenLower > totalSlots;
+    const needFold = hasDone || totalOpenLower > totalSlots;
     const maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
 
-    let shownTier2: BoardArea[];
-    let shownTier3: BoardArea[];
-    let shownTier4: BoardArea[];
-    let shownTier5: BoardArea[];
+    let rem = maxRowSlots;
+    const shutTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shutTier2.length);
+    const shutTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shutTier3.length);
+    const shutTier4 = tiers.tier4.slice(0, rem);
 
-    if (options.expanded) {
-      shownTier2 = tiers.tier2;
-      shownTier3 = tiers.tier3;
-      shownTier4 = tiers.tier4;
-      shownTier5 = tiers.tier5;
-    } else {
-      let rem = maxRowSlots;
-      shownTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shownTier2.length);
-      shownTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shownTier3.length);
-      shownTier4 = tiers.tier4.slice(0, rem);
-      shownTier5 = [];
-    }
-
-    const overflowOpen = Math.max(0, totalOpenLower - maxRowSlots);
+    const overflowWaiting = tiers.tier2.length - shutTier2.length;
+    const overflowTier3 = tiers.tier3.length - shutTier3.length;
+    const overflowTier4 = tiers.tier4.length - shutTier4.length;
+    const overflowOtherOpen = overflowTier3 + overflowTier4;
+    const overflowOpen = overflowWaiting + overflowOtherOpen;
     const overflowDone = hasDone ? tiers.tier5.length : 0;
-    const hasFold = options.expanded ? (hasDone || totalOpenLower > totalSlots) : (overflowOpen + overflowDone > 0);
+    const hasFold = overflowOpen + overflowDone > 0;
     const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
-    const moreCount = overflowOpen;
+    const moreCount = overflowOtherOpen;
     const doneCount = overflowDone;
-    const foldDisplayCount = options.expanded ? (overflowOpen + doneCount) : (overflowOpen + overflowDone);
+    const foldDisplayCount = overflowOpen + overflowDone;
 
     const colWidth = Math.min(AREA_ROW.maxWidth, room.width);
     const startX = room.x + Math.floor((room.width - colWidth) / 2);
 
-    const rowItems: { area: BoardArea; tier: 2 | 3 | 4 | 5 }[] = [
-      ...shownTier2.map((area) => ({ area, tier: 2 as const })),
-      ...shownTier3.map((area) => ({ area, tier: 3 as const })),
-      ...shownTier4.map((area) => ({ area, tier: 4 as const })),
-      ...shownTier5.map((area) => ({ area, tier: 5 as const })),
-    ];
+    const rowItems: { area: BoardArea; tier: 2 | 3 | 4 | 5 }[] = options.expanded
+      ? [
+          ...tiers.tier2.map((area) => ({ area, tier: 2 as const })),
+          ...tiers.tier3.map((area) => ({ area, tier: 3 as const })),
+          ...tiers.tier4.map((area) => ({ area, tier: 4 as const })),
+          ...tiers.tier5.map((area) => ({ area, tier: 5 as const })),
+        ]
+      : [
+          ...shutTier2.map((area) => ({ area, tier: 2 as const })),
+          ...shutTier3.map((area) => ({ area, tier: 3 as const })),
+          ...shutTier4.map((area) => ({ area, tier: 4 as const })),
+        ];
 
     const nodes: OverviewNode[] = [heroNode];
     rowItems.forEach(({ area, tier }, index) => {
@@ -1197,7 +1205,7 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
       });
     });
 
-    if (hasFold && (foldDisplayCount > 0 || options.expanded)) {
+    if (hasFold) {
       nodes.push({
         id: OVERVIEW_FOLD,
         type: 'areaFold',
@@ -1208,7 +1216,13 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
         data: {
           count: foldDisplayCount,
           kind: foldKind,
-          ...(moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {}),
+          ...(overflowWaiting > 0
+            ? {
+                waitingCount: overflowWaiting,
+                ...(moreCount > 0 ? { moreCount } : {}),
+                ...(doneCount > 0 ? { doneCount } : {}),
+              }
+            : (moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {})),
           expanded: options.expanded ?? false,
         },
         ...FIXED,
@@ -1217,8 +1231,6 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
 
     return { form: 'rows', nodes, viewport: { x: 0, y: room.top, zoom: 1 } };
   }
-
-  const tiers = partitionOverviewTiers(areas);
 
   // Case: All areas are Done (tier1 is empty)
   if (tiers.tier1.length === 0) {
@@ -1389,8 +1401,8 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     ...FIXED,
   };
 
-  const startY = heroY + heroHeight + tierGapY;
-  const availableHeight = Math.max(1, room.height - startY);
+  let startY = heroY + heroHeight + tierGapY;
+  let availableHeight = Math.max(1, room.height - startY);
 
   // Try small cards ('minis')
   if (miniMaxCols >= 2) {
@@ -1584,150 +1596,116 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
   const step = AREA_ROW.height + AREA_ROW.gap;
   const maxCols = Math.max(1, Math.floor((room.width + AREA_ROW.gapX) / (AREA_ROW.minWidth + AREA_ROW.gapX)));
 
-  let bestGrid: {
-    cols: number;
-    colWidth: number;
-    shownTier4: BoardArea[];
-    overflowTier4: BoardArea[];
-  } | null = null;
+  let currentHeroHeight = heroHeight;
+  let currentHeroNode = heroNode;
 
-  for (let cols = 1; cols <= maxCols; cols++) {
-    const colWidth = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (cols - 1) * AREA_ROW.gapX) / cols));
-    const tier2Lines = tiers.tier2.length > 0 ? Math.ceil(tiers.tier2.length / cols) : 0;
-    const tier3Lines = tiers.tier3.length > 0 ? Math.ceil(tiers.tier3.length / cols) : 0;
-    const fixedLines = tier2Lines + tier3Lines;
-
-    let reservedBottom = hasDone ? (AREA_ROW.height + AREA_ROW.gap) : 0;
-    let cardAreaHeight = availableHeight - reservedBottom;
-    let maxRowLines = Math.max(0, Math.floor((cardAreaHeight + AREA_ROW.gap) / step));
-
-    let availableLinesForTier4 = Math.max(0, maxRowLines - fixedLines);
-    const tier4NeededLines = tiers.tier4.length > 0 ? Math.ceil(tiers.tier4.length / cols) : 0;
-
-    let shownTier4 = tiers.tier4;
-    let overflowTier4: BoardArea[] = [];
-
-    if (tier4NeededLines > availableLinesForTier4) {
-      if (!hasDone) {
-        reservedBottom = AREA_ROW.height + AREA_ROW.gap;
-        cardAreaHeight = availableHeight - reservedBottom;
-        maxRowLines = Math.max(0, Math.floor((cardAreaHeight + AREA_ROW.gap) / step));
-        availableLinesForTier4 = Math.max(0, maxRowLines - fixedLines);
-      }
-      const shownLines = availableLinesForTier4;
-      const shownCount = Math.min(tiers.tier4.length, shownLines * cols);
-      shownTier4 = tiers.tier4.slice(0, shownCount);
-      overflowTier4 = tiers.tier4.slice(shownCount);
-    }
-
-    bestGrid = { cols, colWidth, shownTier4, overflowTier4 };
-    if (cols >= 2 && cols <= maxCols) break;
-  }
-
-  const { cols: actualCols, colWidth, shownTier4, overflowTier4 } = bestGrid!;
+  const actualCols = maxCols >= 2 ? 2 : 1;
+  const colWidth = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (actualCols - 1) * AREA_ROW.gapX) / actualCols));
   const totalWidth = actualCols * colWidth + (actualCols - 1) * AREA_ROW.gapX;
   const startX = room.x + Math.floor((room.width - totalWidth) / 2);
 
-  const hasFold = hasDone || overflowTier4.length > 0;
-  const foldKind: 'done' | 'more' = (overflowTier4.length === 0 && hasDone) ? 'done' : 'more';
-  const foldCount = overflowTier4.length + (hasDone ? tiers.tier5.length : 0);
-  const moreCount = overflowTier4.length;
-  const doneCount = hasDone ? tiers.tier5.length : 0;
+  startY = heroY + currentHeroHeight + tierGapY;
+  availableHeight = Math.max(1, room.height - startY);
+  let perCol = Math.max(1, Math.floor((availableHeight + AREA_ROW.gap) / step));
+  let totalSlots = perCol * actualCols;
 
-  const nodes: OverviewNode[] = [heroNode];
-  let tierY = startY;
+  const totalOpenLower = tiers.tier2.length + tiers.tier3.length + tiers.tier4.length;
+  let needFold = hasDone || totalOpenLower > totalSlots;
+  let maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
 
-  // Tier 2: Waits for you (starts own line)
-  if (tiers.tier2.length > 0) {
-    tiers.tier2.forEach((area, index) => {
-      const c = index % actualCols;
-      const r = Math.floor(index / actualCols);
-      nodes.push({
-        id: area.id,
-        type: 'areaRow',
-        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
-        width: colWidth,
-        height: AREA_ROW.height,
-        measured: { width: colWidth, height: AREA_ROW.height },
-        data: { ...area.data, tier: 2 },
-        ...FIXED,
-      });
-    });
-    tierY += Math.ceil(tiers.tier2.length / actualCols) * step;
+  // When lower tiers cannot all fit, tier 3 gives way first (taking no slots ahead of tier 2).
+  // If tier 2 alone still exceeds maxRowSlots, the focus card drops to fewer steps.
+  if (tiers.tier2.length > maxRowSlots) {
+    const tier2NeededLines = Math.ceil(tiers.tier2.length / actualCols);
+    const needFoldForTier2 = hasDone || totalOpenLower > tiers.tier2.length || tiers.tier2.length > maxRowSlots;
+    const neededLines = tier2NeededLines + (needFoldForTier2 ? 1 : 0);
+    const neededLowerSpace = tierGapY + neededLines * step;
+    const maxAvailableForHeroInRows = Math.max(100, room.height - neededLowerSpace);
+    const { height: newHeroHeight, config: newHeroConfig } = fitHeroCard(focusArea.data, heroWidth, maxAvailableForHeroInRows);
+    if (newHeroHeight < currentHeroHeight) {
+      currentHeroHeight = newHeroHeight;
+      currentHeroNode = {
+        ...currentHeroNode,
+        height: currentHeroHeight,
+        measured: { width: heroWidth, height: currentHeroHeight },
+        data: { ...focusArea.data, ...newHeroConfig, tier: 1 },
+      };
+      startY = heroY + currentHeroHeight + tierGapY;
+      availableHeight = Math.max(1, room.height - startY);
+      perCol = Math.max(1, Math.floor((availableHeight + AREA_ROW.gap) / step));
+      totalSlots = perCol * actualCols;
+      needFold = hasDone || totalOpenLower > totalSlots;
+      maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
+    }
   }
 
-  // Tier 3: Moved since you looked (starts own line)
-  if (tiers.tier3.length > 0) {
-    tiers.tier3.forEach((area, index) => {
-      const c = index % actualCols;
-      const r = Math.floor(index / actualCols);
-      nodes.push({
-        id: area.id,
-        type: 'areaRow',
-        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
-        width: colWidth,
-        height: AREA_ROW.height,
-        measured: { width: colWidth, height: AREA_ROW.height },
-        data: { ...area.data, tier: 3 },
-        ...FIXED,
-      });
-    });
-    tierY += Math.ceil(tiers.tier3.length / actualCols) * step;
-  }
+  let rem = maxRowSlots;
+  const shutTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shutTier2.length);
+  const shutTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shutTier3.length);
+  const shutTier4 = tiers.tier4.slice(0, rem);
 
-  // Tier 4: Everything else still open (starts own line)
-  const tier4List = options.expanded ? tiers.tier4 : shownTier4;
-  if (tier4List.length > 0) {
-    tier4List.forEach((area, index) => {
-      const c = index % actualCols;
-      const r = Math.floor(index / actualCols);
-      nodes.push({
-        id: area.id,
-        type: 'areaRow',
-        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
-        width: colWidth,
-        height: AREA_ROW.height,
-        measured: { width: colWidth, height: AREA_ROW.height },
-        data: { ...area.data, tier: 4 },
-        ...FIXED,
-      });
-    });
-    tierY += Math.ceil(tier4List.length / actualCols) * step;
-  }
+  const overflowWaiting = tiers.tier2.length - shutTier2.length;
+  const overflowTier3 = tiers.tier3.length - shutTier3.length;
+  const overflowTier4 = tiers.tier4.length - shutTier4.length;
+  const overflowOtherOpen = overflowTier3 + overflowTier4;
+  const overflowOpen = overflowWaiting + overflowOtherOpen;
+  const overflowDone = hasDone ? tiers.tier5.length : 0;
+  const hasFold = overflowOpen + overflowDone > 0;
+  const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
+  const moreCount = overflowOtherOpen;
+  const doneCount = overflowDone;
+  const foldDisplayCount = overflowOpen + overflowDone;
 
-  // Tier 5: Done (when expanded)
-  if (options.expanded && hasDone) {
-    tiers.tier5.forEach((area, index) => {
-      const c = index % actualCols;
-      const r = Math.floor(index / actualCols);
-      nodes.push({
-        id: area.id,
-        type: 'areaRow',
-        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
-        width: colWidth,
-        height: AREA_ROW.height,
-        measured: { width: colWidth, height: AREA_ROW.height },
-        data: { ...area.data, tier: 5 },
-        ...FIXED,
-      });
-    });
-    tierY += Math.ceil(tiers.tier5.length / actualCols) * step;
-  }
+  const rowItems: { area: BoardArea; tier: 2 | 3 | 4 | 5 }[] = options.expanded
+    ? [
+        ...tiers.tier2.map((area) => ({ area, tier: 2 as const })),
+        ...tiers.tier3.map((area) => ({ area, tier: 3 as const })),
+        ...tiers.tier4.map((area) => ({ area, tier: 4 as const })),
+        ...tiers.tier5.map((area) => ({ area, tier: 5 as const })),
+      ]
+    : [
+        ...shutTier2.map((area) => ({ area, tier: 2 as const })),
+        ...shutTier3.map((area) => ({ area, tier: 3 as const })),
+        ...shutTier4.map((area) => ({ area, tier: 4 as const })),
+      ];
 
-  // Full-width fold line at bottom
+  const nodes: OverviewNode[] = [currentHeroNode];
+  rowItems.forEach(({ area, tier }, index) => {
+    const c = index % actualCols;
+    const r = Math.floor(index / actualCols);
+    nodes.push({
+      id: area.id,
+      type: 'areaRow',
+      position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: startY + r * step },
+      width: colWidth,
+      height: AREA_ROW.height,
+      measured: { width: colWidth, height: AREA_ROW.height },
+      data: { ...area.data, tier },
+      ...FIXED,
+    });
+  });
+
   if (hasFold) {
-    const foldTop = (nodes.length > 1) ? (tierY - AREA_ROW.gap + foldGap) : tierY;
+    const foldIndex = rowItems.length;
+    const c = foldIndex % actualCols;
+    const r = Math.floor(foldIndex / actualCols);
     nodes.push({
       id: OVERVIEW_FOLD,
       type: 'areaFold',
-      position: { x: startX, y: foldTop },
-      width: totalWidth,
+      position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: startY + r * step },
+      width: colWidth,
       height: AREA_ROW.height,
-      measured: { width: totalWidth, height: AREA_ROW.height },
+      measured: { width: colWidth, height: AREA_ROW.height },
       data: {
-        count: foldCount,
+        count: foldDisplayCount,
         kind: foldKind,
-        ...(moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {}),
+        ...(overflowWaiting > 0
+          ? {
+              waitingCount: overflowWaiting,
+              ...(moreCount > 0 ? { moreCount } : {}),
+              ...(doneCount > 0 ? { doneCount } : {}),
+            }
+          : (moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {})),
         expanded: options.expanded ?? false,
       },
       ...FIXED,

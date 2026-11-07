@@ -385,6 +385,13 @@ describe('boardAreas', () => {
       expect(foldLabel({ count: 3, kind: 'more', moreCount: 3, expanded: false })).toBe('3 more');
       expect(foldLabel({ count: 5, kind: 'more', expanded: false })).toBe('5 more');
     });
+
+    it('names questions first when questions fold', () => {
+      expect(foldLabel({ count: 7, kind: 'more', waitingCount: 2, moreCount: 5, expanded: false })).toBe('2 questions · 5 more');
+      expect(foldLabel({ count: 7, kind: 'more', waitingCount: 1, moreCount: 3, doneCount: 3, expanded: false })).toBe('1 question · 3 more · 3 done');
+      expect(foldLabel({ count: 2, kind: 'more', waitingCount: 2, expanded: false })).toBe('2 questions');
+      expect(foldLabel({ count: 1, kind: 'more', waitingCount: 1, expanded: false })).toBe('1 question');
+    });
   });
 
   describe('overviewPlan', () => {
@@ -1400,6 +1407,435 @@ describe('boardAreas', () => {
         const screenY = node.position.y * plan.viewport!.zoom + plan.viewport!.y;
         expect(screenY + node.height! * plan.viewport!.zoom).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
       }
+    });
+
+    it('fits 14 Areas at 560x600 and 640x600 with 5+3+3, 8+3+0 and 10+0+0 questions, moved and done inside the stage with no overlaps', () => {
+      const stageSizes = [
+        { width: 560, height: 600 },
+        { width: 640, height: 600 },
+      ];
+
+      const configs = [
+        { name: '5+3+3', questions: 5, moved: 3, done: 3 },
+        { name: '8+3+0', questions: 8, moved: 3, done: 0 },
+        { name: '10+0+0', questions: 10, moved: 0, done: 0 },
+      ];
+
+      for (const size of stageSizes) {
+        for (const { name, questions, moved, done } of configs) {
+          const focus: BoardArea = {
+            ...manyAreas(1, { done: 0 })[0]!,
+            id: 'focus-0',
+            data: {
+              ...manyAreas(1, { done: 0 })[0]!.data,
+              current: true,
+              openSteps: [
+                { key: 's1', text: 'Step 1: Write initial code', done: false },
+                { key: 's2', text: 'Step 2: Add test coverage', done: false },
+                { key: 's3', text: 'Step 3: Verification', done: false },
+              ],
+            },
+          };
+
+          const questionAreas: BoardArea[] = Array.from({ length: questions }, (_, i) => ({
+            ...manyAreas(1)[0]!,
+            id: `question-${i}`,
+            data: {
+              ...manyAreas(1)[0]!.data,
+              current: false,
+              waitingCount: 1,
+              waitingQuestion: `Question ${i + 1}?`,
+            },
+          }));
+
+          const movedAreas: BoardArea[] = Array.from({ length: moved }, (_, i) => ({
+            ...manyAreas(1)[0]!,
+            id: `moved-${i}`,
+            data: {
+              ...manyAreas(1)[0]!.data,
+              current: false,
+              newsSummary: `${i + 1} commits`,
+              newestChangeTime: 500 - i * 10,
+            },
+          }));
+
+          const doneAreas: BoardArea[] = Array.from({ length: done }, (_, i) => ({
+            ...manyAreas(1)[0]!,
+            id: `done-${i}`,
+            data: {
+              ...manyAreas(1)[0]!.data,
+              current: false,
+              done: true,
+              stepsDone: 3,
+            },
+          }));
+
+          const remainingOpenCount = 14 - 1 - questions - moved - done;
+          const openAreas: BoardArea[] = Array.from({ length: remainingOpenCount }, (_, i) => ({
+            ...manyAreas(1)[0]!,
+            id: `open-${i}`,
+            data: {
+              ...manyAreas(1)[0]!.data,
+              current: false,
+              nextOpenStep: `Open step ${i + 1}`,
+            },
+          }));
+
+          const areas: BoardArea[] = [focus, ...questionAreas, ...movedAreas, ...openAreas, ...doneAreas];
+          expect(areas).toHaveLength(14);
+
+          const plan = overviewPlan(areas, size);
+          expect(plan.form).toBe('rows');
+
+          // Every node is inside the stage
+          for (const node of plan.nodes) {
+            const screenX = node.position.x * plan.viewport!.zoom + plan.viewport!.x;
+            const screenY = node.position.y * plan.viewport!.zoom + plan.viewport!.y;
+            expect(screenX, `Node ${node.id} screenX >= side inset at ${size.width}x${size.height} (${name})`).toBeGreaterThanOrEqual(OVERVIEW_INSET.side - 0.01);
+            expect(screenX + node.width! * plan.viewport!.zoom, `Node ${node.id} screenX + width <= stage width at ${size.width}x${size.height} (${name})`).toBeLessThanOrEqual(size.width - OVERVIEW_INSET.side + 0.01);
+            expect(screenY, `Node ${node.id} screenY >= top inset at ${size.width}x${size.height} (${name})`).toBeGreaterThanOrEqual(OVERVIEW_INSET.top - 0.01);
+            expect(screenY + node.height! * plan.viewport!.zoom, `Node ${node.id} screenY + height <= stage height at ${size.width}x${size.height} (${name})`).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
+          }
+
+          // Nothing overlaps
+          for (let i = 0; i < plan.nodes.length; i++) {
+            for (let j = i + 1; j < plan.nodes.length; j++) {
+              const a = plan.nodes[i]!;
+              const b = plan.nodes[j]!;
+              const overlaps = a.position.x < b.position.x + b.width! && b.position.x < a.position.x + a.width! &&
+                               a.position.y < b.position.y + b.height! && b.position.y < a.position.y + a.height!;
+              expect(overlaps, `Overlap at ${size.width}x${size.height} (${name}) between node ${a.id} and ${b.id}`).toBe(false);
+            }
+          }
+        }
+      }
+    });
+
+    it('names questions first and adds waiting count to fold data at 420x420 with 5 questions, 3 moved and 3 done', () => {
+      const size = { width: 420, height: 420 };
+      const focus: BoardArea = {
+        ...manyAreas(1, { done: 0 })[0]!,
+        id: 'focus-0',
+        data: {
+          ...manyAreas(1, { done: 0 })[0]!.data,
+          current: true,
+          openSteps: [{ key: 's1', text: 'Step 1', done: false }],
+        },
+      };
+
+      const questionAreas: BoardArea[] = Array.from({ length: 5 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `wait-${i}`,
+        data: {
+          ...manyAreas(1)[0]!.data,
+          current: false,
+          waitingCount: 1,
+          waitingQuestion: `Question ${i + 1}?`,
+        },
+      }));
+
+      const movedAreas: BoardArea[] = Array.from({ length: 3 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `news-${i}`,
+        data: {
+          ...manyAreas(1)[0]!.data,
+          current: false,
+          newsSummary: `${i + 1} commits`,
+          newestChangeTime: 400 - i * 10,
+        },
+      }));
+
+      const doneAreas: BoardArea[] = Array.from({ length: 3 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `done-${i}`,
+        data: {
+          ...manyAreas(1)[0]!.data,
+          current: false,
+          done: true,
+          stepsDone: 3,
+        },
+      }));
+
+      const areas = [focus, ...questionAreas, ...movedAreas, ...doneAreas];
+      const plan = overviewPlan(areas, size);
+      expect(plan.form).toBe('rows');
+
+      const fold = plan.nodes.find((n) => n.type === 'areaFold');
+      expect(fold).toBeDefined();
+      expect(fold!.data.waitingCount).toBe(2);
+      expect(fold!.data.moreCount).toBe(3);
+      expect(fold!.data.doneCount).toBe(3);
+      expect(foldLabel(fold!.data)).toBe('2 questions · 3 more · 3 done');
+
+      // Every node is inside the stage
+      for (const node of plan.nodes) {
+        const screenY = node.position.y * plan.viewport!.zoom + plan.viewport!.y;
+        expect(screenY + node.height! * plan.viewport!.zoom).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
+      }
+
+      // With 4 questions: exactly 1 question folds ("1 question · 3 more · 3 done")
+      const plan4 = overviewPlan([focus, ...questionAreas.slice(0, 4), ...movedAreas, ...doneAreas], size);
+      const fold4 = plan4.nodes.find((n) => n.type === 'areaFold');
+      expect(fold4).toBeDefined();
+      expect(fold4!.data.waitingCount).toBe(1);
+      expect(fold4!.data.moreCount).toBe(3);
+      expect(fold4!.data.doneCount).toBe(3);
+      expect(foldLabel(fold4!.data)).toBe('1 question · 3 more · 3 done');
+
+      // Expanding the fold keeps kind: 'more' and full count
+      const expandedPlan = overviewPlan(areas, size, { expanded: true });
+      const expandedFold = expandedPlan.nodes.find((n) => n.type === 'areaFold');
+      expect(expandedFold).toBeDefined();
+      expect(expandedFold!.data.kind).toBe('more');
+      expect(expandedFold!.data.count).toBe(8);
+      expect(expandedFold!.data.waitingCount).toBe(2);
+      expect(expandedFold!.data.moreCount).toBe(3);
+      expect(expandedFold!.data.doneCount).toBe(3);
+      expect(expandedFold!.data.expanded).toBe(true);
+    });
+
+    it('focus card keeps its height when fold expands at 560x600 with 8+3+0 and nothing shown moves', () => {
+      const size = { width: 560, height: 600 };
+      const focus: BoardArea = {
+        ...manyAreas(1, { done: 0 })[0]!,
+        id: 'focus-0',
+        data: {
+          ...manyAreas(1, { done: 0 })[0]!.data,
+          current: true,
+          openSteps: [
+            { key: 's1', text: 'Step 1: Write initial code', done: false },
+            { key: 's2', text: 'Step 2: Add test coverage', done: false },
+            { key: 's3', text: 'Step 3: Verification', done: false },
+          ],
+        },
+      };
+
+      const questionAreas: BoardArea[] = Array.from({ length: 8 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `question-${i}`,
+        data: {
+          ...manyAreas(1)[0]!.data,
+          current: false,
+          waitingCount: 1,
+          waitingQuestion: `Question ${i + 1}?`,
+        },
+      }));
+
+      const movedAreas: BoardArea[] = Array.from({ length: 3 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `moved-${i}`,
+        data: {
+          ...manyAreas(1)[0]!.data,
+          current: false,
+          newsSummary: `${i + 1} commits`,
+          newestChangeTime: 500 - i * 10,
+        },
+      }));
+
+      const remainingOpenCount = 14 - 1 - 8 - 3;
+      const openAreas: BoardArea[] = Array.from({ length: remainingOpenCount }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `open-${i}`,
+        data: {
+          ...manyAreas(1)[0]!.data,
+          current: false,
+          nextOpenStep: `Open step ${i + 1}`,
+        },
+      }));
+
+      const areas = [focus, ...questionAreas, ...movedAreas, ...openAreas];
+      const shutPlan = overviewPlan(areas, size, { expanded: false });
+      const openPlan = overviewPlan(areas, size, { expanded: true });
+
+      const shutHero = shutPlan.nodes.find((n) => n.id === focus.id)!;
+      const openHero = openPlan.nodes.find((n) => n.id === focus.id)!;
+
+      // Fold node when shut says "1 question · 5 more"
+      const shutFold = shutPlan.nodes.find((n) => n.type === 'areaFold')!;
+      expect(shutFold).toBeDefined();
+      expect(foldLabel(shutFold.data)).toBe('1 question · 5 more');
+      expect(shutFold.data.count).toBe(6);
+
+      // Hero keeps height and position
+      expect(shutHero.height).toBe(138);
+      expect(openHero.height).toBe(shutHero.height);
+      expect(openHero.position).toEqual(shutHero.position);
+
+      // Every node shown when shut (except the fold itself) is at the exact same position when open
+      for (const shutNode of shutPlan.nodes) {
+        if (shutNode.type === 'areaFold') continue;
+        const openNode = openPlan.nodes.find((n) => n.id === shutNode.id);
+        expect(openNode).toBeDefined();
+        expect(openNode!.position).toEqual(shutNode.position);
+        expect(openNode!.height).toBe(shutNode.height);
+        expect(openNode!.width).toBe(shutNode.width);
+      }
+
+      // Fold node expands and stays kind: 'more'
+      const openFold = openPlan.nodes.find((n) => n.type === 'areaFold');
+      expect(openFold).toBeDefined();
+      expect(openFold!.data.kind).toBe('more');
+      expect(openFold!.data.expanded).toBe(true);
+
+      // Same check with 10+0+0
+      const question10Areas: BoardArea[] = Array.from({ length: 10 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `question10-${i}`,
+        data: {
+          ...manyAreas(1)[0]!.data,
+          current: false,
+          waitingCount: 1,
+          waitingQuestion: `Question ${i + 1}?`,
+        },
+      }));
+      const areas10 = [focus, ...question10Areas];
+      const shutPlan10 = overviewPlan(areas10, size, { expanded: false });
+      const openPlan10 = overviewPlan(areas10, size, { expanded: true });
+      const shutHero10 = shutPlan10.nodes.find((n) => n.id === focus.id)!;
+      const openHero10 = openPlan10.nodes.find((n) => n.id === focus.id)!;
+      expect(shutHero10.height).toBe(138);
+      expect(openHero10.height).toBe(shutHero10.height);
+      expect(openHero10.position).toEqual(shutHero10.position);
+      for (const shutNode of shutPlan10.nodes) {
+        if (shutNode.type === 'areaFold') continue;
+        const openNode = openPlan10.nodes.find((n) => n.id === shutNode.id);
+        expect(openNode).toBeDefined();
+        expect(openNode!.position).toEqual(shutNode.position);
+      }
+    });
+
+    it('keeps kind: more and full count when expanding at 560x600 (5+3+3) and 420 pane with no questions (5 more · 3 done)', () => {
+      // 1. 560x600 with 5+3+3 ("4 more · 3 done")
+      const focus: BoardArea = {
+        ...manyAreas(1, { done: 0 })[0]!,
+        id: 'focus-0',
+        data: {
+          ...manyAreas(1, { done: 0 })[0]!.data,
+          current: true,
+          openSteps: [
+            { key: 's1', text: 'Step 1: Write code', done: false },
+            { key: 's2', text: 'Step 2: Add tests', done: false },
+            { key: 's3', text: 'Step 3: Verification', done: false },
+          ],
+        },
+      };
+      const question5 = Array.from({ length: 5 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `q-${i}`,
+        data: { ...manyAreas(1)[0]!.data, current: false, waitingCount: 1, waitingQuestion: `Q${i}?` },
+      }));
+      const moved3 = Array.from({ length: 3 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `m-${i}`,
+        data: { ...manyAreas(1)[0]!.data, current: false, newsSummary: `${i + 1} commits`, newestChangeTime: 500 - i * 10 },
+      }));
+      const done3 = Array.from({ length: 3 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `d-${i}`,
+        data: { ...manyAreas(1)[0]!.data, current: false, done: true, stepsDone: 3 },
+      }));
+      const open2 = Array.from({ length: 2 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `o-${i}`,
+        data: { ...manyAreas(1)[0]!.data, current: false, nextOpenStep: `Step ${i + 1}` },
+      }));
+      const areas533 = [focus, ...question5, ...moved3, ...open2, ...done3];
+      const shut533 = overviewPlan(areas533, { width: 560, height: 600 }, { expanded: false });
+      const foldShut533 = shut533.nodes.find((n) => n.type === 'areaFold')!;
+      expect(foldShut533).toBeDefined();
+      expect(foldLabel(foldShut533.data)).toBe('4 more · 3 done');
+      expect(foldShut533.data.kind).toBe('more');
+      expect(foldShut533.data.count).toBe(7);
+
+      const open533 = overviewPlan(areas533, { width: 560, height: 600 }, { expanded: true });
+      const foldOpen533 = open533.nodes.find((n) => n.type === 'areaFold')!;
+      expect(foldOpen533).toBeDefined();
+      expect(foldOpen533.data.kind).toBe('more');
+      expect(foldOpen533.data.count).toBe(7);
+      expect(foldOpen533.data.expanded).toBe(true);
+
+      // 2. 420 pane with no questions: 5 more · 3 done
+      const open5 = Array.from({ length: 5 }, (_, i) => ({
+        ...manyAreas(1)[0]!,
+        id: `open-plain-${i}`,
+        data: { ...manyAreas(1)[0]!.data, current: false, nextOpenStep: `Open ${i}` },
+      }));
+      // On a 420 pane with 1 focus, 5 open, 3 done at height 260:
+      const areas420 = [focus, ...open5, ...done3];
+      const shut420 = overviewPlan(areas420, { width: 420, height: 260 }, { expanded: false });
+      const foldShut420 = shut420.nodes.find((n) => n.type === 'areaFold')!;
+      expect(foldShut420).toBeDefined();
+      expect(foldLabel(foldShut420.data)).toBe('5 more · 3 done');
+      expect(foldShut420.data.kind).toBe('more');
+      expect(foldShut420.data.count).toBe(8);
+
+      const open420 = overviewPlan(areas420, { width: 420, height: 260 }, { expanded: true });
+      const foldOpen420 = open420.nodes.find((n) => n.type === 'areaFold')!;
+      expect(foldOpen420).toBeDefined();
+      expect(foldOpen420.data.kind).toBe('more');
+      expect(foldOpen420.data.count).toBe(8);
+      expect(foldOpen420.data.expanded).toBe(true);
+    });
+
+    it('when every Area is done, a done Area holding a question goes to waiting tier and does not stay folded', () => {
+      const doneAreas: BoardArea[] = [
+        {
+          ...manyAreas(1)[0]!,
+          id: 'done-with-q',
+          data: {
+            ...manyAreas(1)[0]!.data,
+            current: false,
+            done: true,
+            waitingCount: 1,
+            waitingQuestion: 'Are you sure?',
+            stepsDone: 2,
+            stepsTotal: 2,
+          },
+        },
+        {
+          ...manyAreas(1)[0]!,
+          id: 'done-1',
+          data: {
+            ...manyAreas(1)[0]!.data,
+            current: false,
+            done: true,
+            waitingCount: 0,
+            stepsDone: 3,
+            stepsTotal: 3,
+          },
+        },
+        {
+          ...manyAreas(1)[0]!,
+          id: 'done-2',
+          data: {
+            ...manyAreas(1)[0]!.data,
+            current: false,
+            done: true,
+            waitingCount: 0,
+            stepsDone: 1,
+            stepsTotal: 1,
+          },
+        },
+      ];
+
+      // 1. partitionOverviewTiers excludes waitingCount > 0 from allDone and places it in tier 2
+      const tiers = partitionOverviewTiers(doneAreas);
+      expect(tiers.tier1).toEqual([]);
+      expect(tiers.tier2.map((a) => a.id)).toEqual(['done-with-q']);
+      expect(tiers.tier5.map((a) => a.id)).toEqual(['done-1', 'done-2']);
+
+      // 2. overviewPlan renders the done area with question in waiting tier (tier 2), not folded in done
+      const plan = overviewPlan(doneAreas, { width: 500, height: 500 });
+      const waitNode = plan.nodes.find((n) => n.id === 'done-with-q');
+      expect(waitNode).toBeDefined();
+      expect(waitNode?.type).toBe('areaRow');
+      expect((waitNode?.data as AreaData).tier).toBe(2);
+
+      const fold = plan.nodes.find((n) => n.type === 'areaFold');
+      expect(fold).toBeDefined();
+      expect(fold?.data.kind).toBe('done');
+      expect(fold?.data.count).toBe(2);
+      expect(foldLabel(fold!.data)).toBe('2 done');
     });
   });
 });
