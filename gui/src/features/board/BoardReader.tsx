@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -57,6 +57,7 @@ const FOCUS_FRAMES = 30;
  * board's own page: the viewer draws it, and HTML stays in its sandboxed frame.
  */
 export function BoardReader({
+  active = true,
   workspaceId,
   workspacePath,
   target,
@@ -68,6 +69,8 @@ export function BoardReader({
   onClose,
   onOpenInDocs,
   onOpenFile,
+  back,
+  trailId = 0,
   onNext,
   onPrevious,
   nextTitle,
@@ -75,6 +78,8 @@ export function BoardReader({
   indexInfo,
   onAskInCLI,
 }: {
+  /** Whether the board section is currently active and visible. */
+  active?: boolean;
   workspaceId: string;
   workspacePath?: string;
   target: ReaderTarget;
@@ -89,6 +94,10 @@ export function BoardReader({
   onOpenInDocs: (path: string) => void;
   /** A link in the document to another file of the workspace. */
   onOpenFile: (path: string) => void;
+  /** Where Back returns to (its name), when the reader followed something from inside itself. */
+  back?: { label: string; onBack: () => void };
+  /** A monotonic id for the trail: another trail starts clean with its own id. */
+  trailId?: number;
   onNext?: () => void;
   onPrevious?: () => void;
   nextTitle?: string;
@@ -143,16 +152,66 @@ export function BoardReader({
   const [maximized, setMaximized] = useState(false);
   const fullscreenToggleRef = useRef<HTMLButtonElement>(null);
   const pendingFullscreenFocus = useRef(false);
-  const [commitSelectedFile, setCommitSelectedFile] = useState<string | null>(null);
-  const [commitViewMode, setCommitViewMode] = useState<DiffViewMode | null>(null);
+  // What each place of the trail was left as: a commit's open file and diff mode, a page's raw choice, and the scroll. Another trail starts clean.
+  const [placeUi, setPlaceUi] = useState<{ trailId: number | undefined; places: Record<string, { file: string | null; mode: DiffViewMode | null; raw: boolean; top?: number }> }>({ trailId, places: {} });
+  if (placeUi.trailId !== trailId) setPlaceUi({ trailId, places: {} });
+  const place = placeUi.places[open];
+  const commitSelectedFile = place?.file ?? null;
+  const commitViewMode = place?.mode ?? null;
+  const changePlace = useCallback((key: string, change: Partial<{ file: string | null; mode: DiffViewMode | null; raw: boolean; top?: number }>) => {
+    setPlaceUi((prev) => ({ ...prev, places: { ...prev.places, [key]: { ...(prev.places[key] ?? { file: null, mode: null, raw: false }), ...change } } }));
+  }, []);
+  const setCommitSelectedFile = useCallback((file: string | null) => changePlace(open, { file }), [changePlace, open]);
+  const setCommitViewMode = useCallback((mode: DiffViewMode | null) => changePlace(open, { mode }), [changePlace, open]);
 
-  // Reset selected commit file if open commit target changes
-  const lastCommitRef = useRef(commit ? `${commit.repo}:${commit.sha}` : null);
-  const currentCommitKey = commit ? `${commit.repo}:${commit.sha}` : null;
-  if (lastCommitRef.current !== currentCommitKey) {
-    lastCommitRef.current = currentCommitKey;
-    if (commitSelectedFile !== null) setCommitSelectedFile(null);
-  }
+  // The scroll of each place (the outermost thing that scrolls in the reader's body), put back when the place is shown again
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const scrolls = useRef(new Map<string, { el: Element; top: number }>());
+  // Keyed by the trail too: another trail starts with every place at the top
+  const scrollId = `${trailId ?? 0}|${open}`;
+  const scrollKey = useRef(scrollId);
+  useLayoutEffect(() => { scrollKey.current = scrollId; }, [scrollId]);
+  const onBodyScroll = useCallback((event: UIEvent) => {
+    const el = event.target;
+    if (!(el instanceof Element)) return;
+    const known = scrolls.current.get(scrollKey.current);
+    if (known && known.el !== el && known.el.isConnected && known.el.contains(el)) return;
+    scrolls.current.set(scrollKey.current, { el, top: el.scrollTop });
+    // The position itself is kept in the ref above. State only says that this place has been scrolled, once, so scrolling a long page does not draw it again each time.
+    const top = el.scrollTop;
+    setPlaceUi((prev) => (prev.places[open]?.top !== undefined ? prev : { ...prev, places: { ...prev.places, [open]: { ...(prev.places[open] ?? { file: null, mode: null, raw: false }), top } } }));
+  }, [open]);
+  useEffect(() => {
+    const saved = scrolls.current.get(scrollId);
+    const body = bodyRef.current;
+    if (!saved || typeof saved.top !== 'number' || saved.top < 0 || !body) return undefined;
+    const want = saved.top;
+    let frame = 0;
+    let tries = 0;
+    const find = (): HTMLElement | null => {
+      const walk = (node: Element): HTMLElement | null => {
+        for (const child of Array.from(node.children)) {
+          if (child instanceof HTMLElement && child.scrollHeight > child.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(child).overflowY)) return child;
+          const inner = walk(child);
+          if (inner) return inner;
+        }
+        return null;
+      };
+      return walk(body);
+    };
+    const stop = () => cancelAnimationFrame(frame);
+    const step = () => {
+      // Hold the place for a moment while the page settles (a diff loads, its height changes), until the person moves it
+      const el = find();
+      if (el) el.scrollTop = want;
+      if (tries++ < FOCUS_FRAMES) frame = requestAnimationFrame(step);
+    };
+    body.addEventListener('wheel', stop, { passive: true });
+    body.addEventListener('pointerdown', stop);
+    body.addEventListener('keydown', stop);
+    step();
+    return () => { stop(); body.removeEventListener('wheel', stop); body.removeEventListener('pointerdown', stop); body.removeEventListener('keydown', stop); };
+  }, [scrollId]);
 
   const toggleMaximized = useCallback(() => {
     pendingFullscreenFocus.current = true;
@@ -172,7 +231,7 @@ export function BoardReader({
   }, [onClose]);
 
   // Rendered or raw is for what is open: another file starts rendered.
-  const [rawOpen, setRawOpen] = useState<string | null>(null);
+
   // The card's text is one quiet line; when it has more, "More" opens it (up to a quarter of the reader) and "Less" closes it.
   const noteRef = useRef<HTMLDivElement>(null);
   const [noteOpenFor, setNoteOpenFor] = useState<string | null>(null);
@@ -191,7 +250,7 @@ export function BoardReader({
     watch.observe(node);
     return () => watch.disconnect();
   }, [noteKey, noteOpen]);
-  const raw = rawOpen === open;
+  const raw = place?.raw ?? false;
   // A file can be downloaded and shown by the server; a source document is read through the storage port and has neither.
   const fileUrl = source ? '' : documentFileUrl(workspaceId, path);
   const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, documentPath: path, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile }), [workspaceId, workspacePath, path, onOpenFile]);
@@ -209,17 +268,18 @@ export function BoardReader({
       const frames = panel.current?.querySelectorAll('iframe') ?? [];
       if (Array.from(frames).some((frame) => frame.contentWindow === event.source)) {
         if (maximized) setMaximized(false);
+        else if (back) back.onBack();
         else onClose();
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [onClose, maximized]);
+  }, [onClose, maximized, back]);
 
   // Escape when maximized: returns back to previous layout (large or side).
   // Escape that closes an open menu popup, find widget, or modal is theirs alone.
   useEffect(() => {
-    if (!maximized) return;
+    if (!maximized || !active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (isCodeWindowOpen()) return;
@@ -231,10 +291,11 @@ export function BoardReader({
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [maximized]);
+  }, [maximized, active]);
 
   // Keyboard navigation between elements: [ and ] or Alt+ArrowLeft and Alt+ArrowRight
   useEffect(() => {
+    if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       // The Code window over the board has these keys
       if (isCodeWindowOpen()) return;
@@ -251,7 +312,18 @@ export function BoardReader({
       }
       if (event.defaultPrevented) return;
 
-      if (event.key === '[' || (event.altKey && event.key === 'ArrowLeft')) {
+      if (event.altKey && event.key === 'ArrowLeft') {
+        event.preventDefault();
+        if (back) {
+          // One step back along the trail
+          setMaximized(false);
+          back.onBack();
+        } else if (onPrevious) {
+          // Previous card
+          onPrevious();
+        }
+        // With no trail and no previous card, stay in the app: preventDefault is called and does nothing
+      } else if (event.key === '[') {
         if (onPrevious) {
           event.preventDefault();
           onPrevious();
@@ -265,7 +337,7 @@ export function BoardReader({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onNext, onPrevious]);
+  }, [active, onNext, onPrevious, back]);
 
   const frame = useRef(0);
   const take = useCallback(() => {
@@ -344,12 +416,27 @@ export function BoardReader({
       }
     >
       <header
-        className="flex h-12 shrink-0 items-center gap-2 border-b border-border pl-3 pr-2 select-none"
+        // With a trail the Back button has a row of its own where the window is narrow (the title would have no room), and the start of the line where it is wide
+        className={cn('flex shrink-0 items-center gap-2 border-b border-border pl-3 pr-2 select-none', back ? 'h-auto min-h-12 flex-wrap py-1 @[44rem]:h-12 @[44rem]:flex-nowrap @[44rem]:py-0' : 'h-12')}
         onDoubleClick={(e) => {
           if ((e.target as HTMLElement).closest('button, a, [role="button"], [role="menu"], input')) return;
           toggleMaximized();
         }}
       >
+        {back && (
+          <div className="order-0 flex basis-full @[44rem]:max-w-[30%] @[44rem]:basis-auto">
+          <button
+            type="button"
+            className="nodrag nopan inline-flex h-6 max-w-full shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-muted/30 pl-1 pr-2 text-xs font-medium text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`Back to ${back.label}`}
+            title={`Back to ${back.label} (Esc or Alt+←)`}
+            onClick={() => { setMaximized(false); back.onBack(); }}
+          >
+            <ChevronLeft aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="truncate">{back.label}</span>
+          </button>
+          </div>
+        )}
         <div className="order-1 min-w-0 flex-1">
           <h2
             ref={title}
@@ -458,7 +545,7 @@ export function BoardReader({
                   )}
                   {!source && (isHtml || kind === 'html') && <MenuSeparator />}
                   {canViewSource && (
-                    <MenuItem onClick={() => setRawOpen(raw ? null : open)}>
+                    <MenuItem onClick={() => changePlace(open, { raw: !raw })}>
                       {raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}
                       {raw ? 'View page' : 'View source'}
                     </MenuItem>
@@ -547,7 +634,7 @@ export function BoardReader({
           </div>
         )}
       </header>
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div ref={bodyRef} onScrollCapture={onBodyScroll} className="min-h-0 flex-1 overflow-hidden">
         {commit ? (
           <CommitReaderView
             key={open}
@@ -560,6 +647,7 @@ export function BoardReader({
             onSelectFile={setCommitSelectedFile}
             diffViewMode={commitViewMode}
             onDiffViewModeChange={setCommitViewMode}
+            initialScrollTop={place?.top}
           />
         ) : isHtml ? (
           <ReaderPage

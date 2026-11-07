@@ -40,6 +40,7 @@ export function CommitReaderView({
   onSelectFile,
   diffViewMode,
   onDiffViewModeChange,
+  initialScrollTop,
 }: {
   workspaceId: string;
   repo: string;
@@ -50,6 +51,7 @@ export function CommitReaderView({
   onSelectFile?: (file: string | null) => void;
   diffViewMode?: DiffViewMode | null;
   onDiffViewModeChange?: (mode: DiffViewMode | null) => void;
+  initialScrollTop?: number;
 }) {
   const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
   const readerWidth = useElementWidth(containerEl);
@@ -87,12 +89,14 @@ export function CommitReaderView({
       }
     } else if (!scrolledInitialRef.current) {
       scrolledInitialRef.current = true;
-      const btn = fileButtonRefs.current.get(openFilePath);
-      if (btn) {
-        btn.scrollIntoView({ block: 'nearest' });
+      if (initialScrollTop === undefined) {
+        const btn = fileButtonRefs.current.get(openFilePath);
+        if (btn) {
+          btn.scrollIntoView({ block: 'nearest' });
+        }
       }
     }
-  }, [openFilePath]);
+  }, [openFilePath, initialScrollTop]);
 
   const plan = usePlanFile(workspaceId);
   const board = useBoard(workspaceId, { poll: false });

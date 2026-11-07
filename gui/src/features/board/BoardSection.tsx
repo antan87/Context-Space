@@ -67,6 +67,7 @@ import { BoardNowLine } from './BoardNowLine.js';
 import { firstWaiting, newsLines as buildNewsLines, nowLineParts, nowLineTarget, type NewsLine } from './nowLine.js';
 import { findThreadChain } from './boardThread.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
+import { backLabel, backTarget, backTrail, pushTrail, startTrail, type ReaderTrail } from './boardReaderTrail.js';
 
 const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaMini: BoardAreaMini, areaFold: BoardAreaFold, checkpoint: BoardCheckpoint };
 const AREA_NODE_TYPES: NodeTypes = {
@@ -284,7 +285,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const totalArchived = board?.cards.filter((card) => card.archived).length ?? 0;
 
   // Reader state
-  const [reader, setReader] = useState<{ target: ReaderTarget; request: number } | null>(null);
+  const [reader, setReader] = useState<{ target: ReaderTarget; request: number; trail: ReaderTrail } | null>(null);
   const [layout, setLayout] = useReaderLayout();
   const requests = useRef(0);
   const opener = useRef<HTMLElement | null>(null);
@@ -298,7 +299,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const label = opener.current?.getAttribute('aria-label') ?? (opener.current instanceof HTMLAnchorElement ? opener.current.textContent?.trim() : null);
     openerWas.current = node && label ? { node, label } : null;
     requests.current += 1;
-    setReader({ target, request: requests.current });
+    setReader({ target, request: requests.current, trail: startTrail(target) });
   }, [setReader]);
 
   const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from), [show]);
@@ -308,11 +309,27 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, [setReader]);
   const changeLayout = useCallback((next: ReaderLayout) => setLayout(next), [setLayout]);
 
+  // Following something from inside the reader is a step deeper: the place left stays on the trail, and Back, Alt+Left and Escape return to it.
+  // (The card the trail started from keeps the keyboard and the light; the opener is not touched.)
   const openLinked = useCallback((path: string) => {
     const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
-    const matched = allTargets.find((t) => t.path === path);
-    show(matched ?? { path, title: fileTitle(path) }, opener.current);
-  }, [show, areas]);
+    const target = allTargets.find((t) => t.path === path) ?? { path, title: fileTitle(path) };
+    requests.current += 1;
+    const request = requests.current;
+    setReader((current) => {
+      if (!current) return current;
+      const trail = pushTrail(current.trail, target);
+      return trail === current.trail ? { ...current, request } : { target, request, trail };
+    });
+  }, [areas]);
+  const goBack = useCallback(() => {
+    requests.current += 1;
+    const request = requests.current;
+    setReader((current) => {
+      const target = current && backTarget(current.trail);
+      return current && target ? { target, request, trail: backTrail(current.trail) } : current;
+    });
+  }, []);
   const openInDocs = useCallback((name: string) => {
     documentRequests.open(workspaceId, { name });
     goToWorkspace(navigateTo, workspaceId, 'documents');
@@ -822,15 +839,17 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, [openerTick, areaNodes, findOpener, activeArea, areaReady, boardNewsView, areaCanvasSize, areaSizeKey, showPlace, findCardControl]);
 
   const activeReaderCardId = useMemo(() => {
-    if (!reader?.target) return null;
-    if (reader.target.card) return reader.target.card;
+    // The card lit is the one the trail started from, not the file followed from it
+    const lit = reader?.trail.origin;
+    if (!lit) return null;
+    if (lit.card) return lit.card;
     if (activeArea) {
-      if (reader.target.path) {
-        const match = activeArea.cards.find((c) => 'path' in c && c.path === reader.target.path);
+      if (lit.path) {
+        const match = activeArea.cards.find((c) => 'path' in c && c.path === lit.path);
         if (match) return match.id;
       }
       const allTargets = collectAreaReaderTargets(activeArea);
-      const found = allTargets.find((t) => isSameReaderTarget(t, reader.target));
+      const found = allTargets.find((t) => isSameReaderTarget(t, lit));
       if (found?.card) return found.card;
     }
     return null;
@@ -1193,6 +1212,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // Reader Escape handling. Escape that closes the reader's open menu is the menu's alone: whether one was open is seen first, in the
   // capture phase, because the menu is already closing by the time this listener runs.
   const menuHadEscape = useRef(false);
+  const canStepBack = useRef(false);
+  canStepBack.current = Boolean(reader && backTarget(reader.trail));
   useEffect(() => {
     if (!reader || !active) return;
     const onCapture = (event: globalThis.KeyboardEvent) => { menuHadEscape.current = event.key === 'Escape' && document.querySelector('[data-slot="menu-popup"]') !== null; };
@@ -1206,14 +1227,16 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       const inside = target instanceof Node && Boolean(root.current?.contains(target));
       if (!inside && target !== document.body && target !== document.documentElement) return;
       event.preventDefault();
-      closeReader();
+      // One step back: along the trail if there is one, else the reader closes
+      if (canStepBack.current) goBack();
+      else closeReader();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('keydown', onCapture, true);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [reader, active, closeReader, navDock.overlays, narrowNavOpen]);
+  }, [reader, active, closeReader, goBack, navDock.overlays, narrowNavOpen]);
 
   // Stepped Area Escape handling (only when reader is closed and no modal dialog is open): an open row closes first, then the Area
   useEffect(() => {
@@ -1267,13 +1290,16 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const currentReaderIndex = useMemo(() => {
     if (!reader) return -1;
-    return findReaderTargetIndex(areaReaderTargets, reader.target);
+    return findReaderTargetIndex(areaReaderTargets, reader.trail.origin);
   }, [areaReaderTargets, reader]);
 
   const hasPreviousTarget = currentReaderIndex > 0;
   const hasNextTarget = currentReaderIndex >= 0 && currentReaderIndex < areaReaderTargets.length - 1;
   const previousTarget = hasPreviousTarget ? areaReaderTargets[currentReaderIndex - 1] : null;
   const nextTarget = hasNextTarget ? areaReaderTargets[currentReaderIndex + 1] : null;
+
+  const readerBackTarget = reader ? backTarget(reader.trail) : null;
+  const readerBack = readerBackTarget ? backLabel(readerBackTarget) : null;
 
   const readerIndexInfo = currentReaderIndex >= 0 && areaReaderTargets.length > 0
     ? { current: currentReaderIndex + 1, total: areaReaderTargets.length }
@@ -1284,7 +1310,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       requests.current += 1;
       const resolvedCard = target.card ?? (activeArea ? collectAreaReaderTargets(activeArea).find((t) => isSameReaderTarget(t, target))?.card : undefined);
       const resolvedTarget = resolvedCard ? { ...target, card: resolvedCard } : target;
-      setReader({ target: resolvedTarget, request: requests.current });
+      setReader({ target: resolvedTarget, request: requests.current, trail: startTrail(resolvedTarget) });
     },
     [activeArea],
   );
@@ -1922,7 +1948,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     onBlur={() => lightAreaEdges({ focused: null })}
                   >
                     <BoardActionsContext value={areaActions}>
-                      <BoardReadingContext value={reader?.target.card ?? null}>
+                      <BoardReadingContext value={reader?.trail.origin.card ?? null}>
                         <ReactFlow
                           id="board-area-flow"
                           className="board-flow board-flow-rows"
@@ -1989,6 +2015,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     onClose={closeReader}
                     onOpenInDocs={openInDocs}
                     onOpenFile={openLinked}
+                    active={active}
+                    back={readerBack ? { label: readerBack, onBack: goBack } : undefined}
+                    trailId={reader.trail.id}
                     onNext={nextTarget ? () => navigateToReaderTarget(nextTarget) : undefined}
                     onPrevious={previousTarget ? () => navigateToReaderTarget(previousTarget) : undefined}
                     nextTitle={nextTarget?.title}

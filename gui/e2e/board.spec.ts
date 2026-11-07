@@ -1463,9 +1463,13 @@ test.describe('Board, reader', () => {
     // The source document came from the work route; the file it links to is a plain file of the workspace.
     expect([...new Set(asked)]).toEqual(['docs/design.md']);
     await expect(reader(page).getByRole('heading', { name: 'The queue design', level: 1 })).toBeVisible();
-    // It was not a card that was opened, so no card is marked; and the keyboard goes back to the card that began it.
-    await expect(board(page).locator('[aria-current="true"]')).toHaveCount(0);
+    // The file followed is not a card: the card the trail began from stays marked (and only it); Escape steps back to it, and a second one closes with the keyboard on it.
+    await expect(board(page).locator('[aria-current="true"]')).toHaveCount(1);
+    await expect(board(page).locator('[aria-current="true"]')).toContainText('Export requirements');
     await page.keyboard.press('Escape');
+    await expect(readerTitle(page, 'Export requirements')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(reader(page)).toHaveCount(0);
     await expect(opener(page, 'Export requirements')).toBeFocused();
   });
 
