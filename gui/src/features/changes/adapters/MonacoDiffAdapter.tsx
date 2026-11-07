@@ -31,6 +31,7 @@ import {
   getOrCreateTextModel,
   registerCrossFileEditorOpener,
 } from '../utils/changesetModelStore.js';
+import { useCodeFontSize } from '../codeFontSize.js';
 
 // Ensure web workers and navigation contributions are configured
 ensureMonacoWorkerEnvironment();
@@ -60,6 +61,7 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
   onOpenFile,
   onLineSelect,
 }) => {
+  const [fontSize] = useCodeFontSize();
   const containerRef = useRef<HTMLDivElement>(null);
   const editorInstanceRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const decorationCollectionRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
@@ -96,6 +98,14 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
       renderSideBySide: viewMode === 'side-by-side',
     });
   }, [viewMode]);
+
+  // Dynamically update fontSize without recreating editor
+  useEffect(() => {
+    if (!editorInstanceRef.current) return;
+    editorInstanceRef.current.updateOptions({
+      fontSize,
+    });
+  }, [fontSize]);
 
   // Dynamically update whitespace trimming without recreating editor
   useEffect(() => {
@@ -197,7 +207,7 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
           alwaysConsumeMouseWheel: false,
         },
         lineNumbersMinChars: 3,
-        fontSize: 12,
+        fontSize,
         fontFamily: "'JetBrains Mono', Consolas, Menlo, monospace",
         theme: editorThemeName(),
         // Long lines wrap instead of running off the right edge of either side

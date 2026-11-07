@@ -10,6 +10,7 @@ import './MonacoDiffAdapter.js';
 import { editorThemeName, watchEditorTheme } from '../../../lib/editorTheme.js';
 import { getLanguageFromPath } from '../utils/languageDetector.js';
 import { getModifiedFileUri, getOrCreateTextModel, registerCrossFileEditorOpener } from '../utils/changesetModelStore.js';
+import { useCodeFontSize } from '../codeFontSize.js';
 
 export interface MonacoFileViewerProps {
   filePath: string;
@@ -23,11 +24,17 @@ export interface MonacoFileViewerProps {
 }
 
 export function MonacoFileViewer({ filePath, repoName, repoPath, content, targetLine, jumpKey, onOpenFile }: MonacoFileViewerProps) {
+  const [fontSize] = useCodeFontSize();
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const decorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const onOpenFileRef = useRef(onOpenFile);
   useEffect(() => { onOpenFileRef.current = onOpenFile; });
+
+  useEffect(() => {
+    if (!editorRef.current) return;
+    editorRef.current.updateOptions({ fontSize });
+  }, [fontSize]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -41,7 +48,7 @@ export function MonacoFileViewer({ filePath, repoName, repoPath, content, target
       minimap: { enabled: false },
       scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8, alwaysConsumeMouseWheel: false },
       lineNumbersMinChars: 3,
-      fontSize: 12,
+      fontSize,
       fontFamily: "'JetBrains Mono', Consolas, Menlo, monospace",
       theme: editorThemeName(),
       renderLineHighlight: 'all',

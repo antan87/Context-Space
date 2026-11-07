@@ -16,6 +16,8 @@ const FILES = [
   { file: 'README.md', type: 'added', additions: 5, deletions: 0 },
 ];
 const LISTING = [{ repoName: 'api', repoPath: '/tmp/api', files: FILES }];
+const ALL_FILES = [...FILES, { file: 'src/server/config.ts', type: 'clean', additions: 0, deletions: 0 }];
+const ALL_LISTING = [{ repoName: 'api', repoPath: '/tmp/api', files: ALL_FILES }];
 
 /** A 20-line file; the new version changes line 10 and adds a line after 12. */
 const original = (name: string) => Array.from({ length: 20 }, (_, i) => `// ${name} line ${i + 1}`).join('\n') + '\n';
@@ -56,9 +58,12 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [boardNote(1, { title: 'A note' })] }) }));
   await page.route('**/api/workspace/*/changes', (route) => route.fulfill({ json: { changes: LISTING } }));
   await page.route('**/api/workspace/*/changes/symbols', (route) => route.fulfill({ json: { symbols: [] } }));
-  await page.route('**/api/workspace/*/changes?include=all', (route) => route.fulfill({ json: { changes: LISTING } }));
+  await page.route('**/api/workspace/*/changes?include=all', (route) => route.fulfill({ json: { changes: ALL_LISTING } }));
   await page.route('**/api/workspace/*/changes/diff?*', (route) => {
     const name = new URL(route.request().url()).searchParams.get('file')!;
+    if (name === 'src/server/config.ts') {
+      return route.fulfill({ json: { diff: '', fileContent: '// config file\nconst port = 3000;\n' } });
+    }
     return route.fulfill({ json: { diff: patch(name), fileContent: modified(name), originalContent: original(name) } });
   });
   await page.route('**/api/workspace/*/repositories', (route) => route.fulfill({ json: { repositories: [{
@@ -200,6 +205,239 @@ for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }])
     });
   }
 }
+
+const codeFontSizeOf = async (page: Page) => {
+  const line = page.locator('[data-code-window] .monaco-editor .view-line').first();
+  await expect(line).toBeVisible();
+  return line.evaluate((el) => window.getComputedStyle(el).fontSize);
+};
+
+for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }]) {
+  test.describe(`larger code and full screen at ${size.width}x${size.height}`, () => {
+    test.use({ viewport: size });
+
+    test('code font size is 14 px by default, Larger and Smaller change it live in diff and Files, are disabled at ends, and survive reload', async ({ page }) => {
+      await openBoard(page, 'board');
+      await page.evaluate(() => localStorage.removeItem('contextspace.code-panel.font-size'));
+      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      const win = windowOf(page);
+      await expect(win.locator('.monaco-diff-editor')).toBeVisible();
+
+      // Default is 14 px
+      await expect.poll(() => codeFontSizeOf(page)).toBe('14px');
+
+      const smaller = win.getByRole('button', { name: 'Smaller code' });
+      const larger = win.getByRole('button', { name: 'Larger code' });
+      await expect(smaller).toBeEnabled();
+      await expect(larger).toBeEnabled();
+
+      // Step up live
+      await larger.click();
+      await expect.poll(() => codeFontSizeOf(page)).toBe('15px');
+
+      // Step down live
+      await smaller.click();
+      await expect.poll(() => codeFontSizeOf(page)).toBe('14px');
+
+      // Step down to minimum (11 px)
+      for (let i = 0; i < 3; i++) {
+        await smaller.click();
+      }
+      await expect.poll(() => codeFontSizeOf(page)).toBe('11px');
+      await expect(smaller).toBeDisabled();
+
+      // Step up to maximum (20 px)
+      for (let i = 0; i < 9; i++) {
+        await larger.click();
+      }
+      await expect.poll(() => codeFontSizeOf(page)).toBe('20px');
+      await expect(larger).toBeDisabled();
+
+      // Step back to 16 px
+      for (let i = 0; i < 4; i++) {
+        await smaller.click();
+      }
+      await expect.poll(() => codeFontSizeOf(page)).toBe('16px');
+
+      // Files view also has the controls and follows font size
+      await win.getByRole('button', { name: 'Files' }).click();
+      await win.getByRole('treeitem', { name: /config\.ts/ }).click();
+      await expect.poll(() => codeFontSizeOf(page)).toBe('16px');
+
+      await smaller.click();
+      await expect.poll(() => codeFontSizeOf(page)).toBe('15px');
+      await larger.click();
+      await expect.poll(() => codeFontSizeOf(page)).toBe('16px');
+
+      // Survives reload
+      await page.reload();
+      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      await expect(win.locator('.monaco-diff-editor')).toBeVisible();
+      await expect.poll(() => codeFontSizeOf(page)).toBe('16px');
+    });
+
+    test('full screen fills the viewport, double press on toolbar toggles it, Escape returns to window then closes, reopening starts in normal window, selection is kept', async ({ page }) => {
+      await openBoard(page, 'board');
+      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      const win = windowOf(page);
+      await expect(win.locator('.monaco-diff-editor')).toBeVisible();
+
+      // Choose a file
+      await win.getByRole('treeitem', { name: /routes\.ts/ }).click();
+      await expect(openName(page)).toHaveText('src/server/routes.ts');
+
+      // Normal window does not fill viewport
+      const normalBounds = await win.boundingBox();
+      expect(normalBounds!.width).toBeLessThan(size.width - 20);
+      expect(normalBounds!.height).toBeLessThan(size.height - 20);
+
+      // Full screen button
+      const fullScreenBtn = win.getByRole('button', { name: 'Full screen', exact: true });
+      await expect(fullScreenBtn).toBeVisible();
+      await fullScreenBtn.click();
+
+      // Fills viewport and toggle button stays focused
+      const exitBtn = win.getByRole('button', { name: 'Exit full screen' });
+      await expect(exitBtn).toBeVisible();
+      await expect(exitBtn).toBeFocused();
+
+      const fullBounds = await win.boundingBox();
+      expect(fullBounds!.x).toBe(0);
+      expect(fullBounds!.y).toBe(0);
+      expect(fullBounds!.width).toBe(size.width);
+      expect(fullBounds!.height).toBe(size.height);
+
+      // Selected file is kept
+      await expect(openName(page)).toHaveText('src/server/routes.ts');
+
+      // Double press on empty part of toolbar toggles back to normal window
+      const toolbar = win.getByRole('toolbar', { name: 'Code' });
+      await toolbar.dblclick({ position: { x: 300, y: 15 } });
+      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
+      const backBounds = await win.boundingBox();
+      expect(backBounds!.width).toBeLessThan(size.width - 20);
+
+      // Double press toggles to full screen again
+      await toolbar.dblclick({ position: { x: 300, y: 15 } });
+      await expect(win.getByRole('button', { name: 'Exit full screen' })).toBeVisible();
+      const fullAgainBounds = await win.boundingBox();
+      expect(fullAgainBounds!.width).toBe(size.width);
+
+      // First Escape steps back to normal window
+      await page.keyboard.press('Escape');
+      await expect(win).toBeVisible();
+      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
+      const escBounds = await win.boundingBox();
+      expect(escBounds!.width).toBeLessThan(size.width - 20);
+      await expect(openName(page)).toHaveText('src/server/routes.ts');
+
+      // Second Escape closes the window
+      await page.keyboard.press('Escape');
+      await expect(win).toBeHidden();
+
+      // Reopening starts in the normal window
+      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      await expect(win).toBeVisible();
+      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
+      const reopenBounds = await win.boundingBox();
+      expect(reopenBounds!.width).toBeLessThan(size.width - 20);
+      expect(reopenBounds!.height).toBeLessThan(size.height - 20);
+    });
+
+    test('in full screen, filter gets Escape first, next Escape leaves full screen, next Escape closes window', async ({ page }) => {
+      await openBoard(page, 'board');
+      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      const win = windowOf(page);
+      await expect(win.locator('.monaco-diff-editor')).toBeVisible();
+
+      // Enter full screen
+      await win.getByRole('button', { name: 'Full screen', exact: true }).click();
+      await expect(win.getByRole('button', { name: 'Exit full screen' })).toBeVisible();
+
+      // Type a filter
+      const filterInput = win.getByLabel('Filter files');
+      await filterInput.fill('routes');
+      await expect(filterInput).toHaveValue('routes');
+
+      // Press a file in the tree (moves focus to the treeitem)
+      const treeItem = win.getByRole('treeitem', { name: /routes\.ts/ });
+      await treeItem.click();
+
+      // Press Escape: filter clears and window stays in full screen
+      await page.keyboard.press('Escape');
+      await expect(filterInput).toHaveValue('');
+      await expect(win.getByRole('button', { name: 'Exit full screen' })).toBeVisible();
+
+      // Next Escape: leaves full screen
+      await page.keyboard.press('Escape');
+      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
+      await expect(win).toBeVisible();
+
+      // Next Escape: closes the window
+      await page.keyboard.press('Escape');
+      await expect(win).toBeHidden();
+    });
+
+    test('a double press on a disabled Review & commit does not toggle full screen', async ({ page }) => {
+      await page.route('**/api/workspace/*/changes', (route) => route.fulfill({ json: { changes: [] } }));
+      await openBoard(page, 'board');
+      await page.getByTestId('board-code-button').click();
+      const win = windowOf(page);
+      await expect(win).toBeVisible();
+
+      const reviewBtn = win.getByRole('button', { name: 'Review & commit' });
+      await expect(reviewBtn).toBeDisabled();
+
+      // Double press on disabled Review & commit
+      await reviewBtn.dblclick({ force: true });
+
+      // Does not toggle full screen: still normal window, button is still "Full screen"
+      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
+      await expect(win.getByRole('button', { name: 'Exit full screen' })).toHaveCount(0);
+    });
+  });
+}
+
+test.describe('full screen at narrow 700 px viewport', () => {
+  test.use({ viewport: { width: 700, height: 700 } });
+
+  test('Exit full screen and Close buttons are not covered by the narrow header and work', async ({ page }) => {
+    await openBoard(page, 'board');
+    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    const win = windowOf(page);
+    await expect(win.locator('.monaco-diff-editor')).toBeVisible();
+
+    // Enter full screen
+    await win.getByRole('button', { name: 'Full screen', exact: true }).click();
+    const exitBtn = win.getByRole('button', { name: 'Exit full screen' });
+    const closeBtn = win.getByRole('toolbar', { name: 'Code' }).getByRole('button', { name: 'Close', exact: true });
+    await expect(exitBtn).toBeVisible();
+    await expect(closeBtn).toBeVisible();
+
+    // elementFromPoint on Exit full screen and Close buttons returns those buttons
+    const exitTarget = await exitBtn.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return hit?.closest('button') === el;
+    });
+    expect(exitTarget).toBe(true);
+
+    const closeTarget = await closeBtn.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return hit?.closest('button') === el;
+    });
+    expect(closeTarget).toBe(true);
+
+    // They work: clicking Exit full screen steps back to normal window
+    await exitBtn.click();
+    await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
+
+    // And clicking Close closes the window
+    await closeBtn.click();
+    await expect(win).toBeHidden();
+  });
+});
 
 test.describe('the editor follows the app theme', () => {
   test.use({ viewport: { width: 1280, height: 800 } });

@@ -1,8 +1,9 @@
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import {
   ArrowDownUp, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ExternalLink, FileCode, GitCommitHorizontal, ListTree,
-  Flag, FolderTree, Loader2, MoreHorizontal, RefreshCw, Search, X,
+  Flag, FolderTree, Loader2, MoreHorizontal, RefreshCw, Search, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
+import { MAX_CODE_FONT_SIZE, MIN_CODE_FONT_SIZE, stepCodeFontSize, useCodeFontSize } from './codeFontSize.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { perfMark } from '../../lib/perfMarks.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
@@ -82,6 +83,8 @@ export interface CodeSectionProps {
    * none to take it (nothing open, disconnected, or a plain shell), and then the request is copied instead.
    */
   onAskAI?: (message: string) => Promise<boolean>;
+  /** Toggles full screen; called when a double press on the toolbar fires. */
+  onToggleFullScreen?: () => void;
 }
 
 const fileKey = (repoName: string, file: string) => `${repoName}\0${file}`;
@@ -114,6 +117,7 @@ export function CodeSection(props: CodeSectionProps) {
   const editorLabel = getEditorLabel(defaultEditor);
   // The person's own choice of side by side or inline; until they choose, it follows the room the code has.
   const [userViewMode, setUserViewMode] = useState<DiffViewMode | null>(null);
+  const [codeFontSize, setCodeFontSize] = useCodeFontSize();
 
   const [mode, setMode] = useState<Mode>('changes');
   const [repos, setRepos] = useState<CodeRepo[]>([]);
@@ -617,7 +621,17 @@ export function CodeSection(props: CodeSectionProps) {
 
   return (
     <section ref={setSectionElement} tabIndex={-1} aria-label="Workspace code" className="flex h-full min-h-0 min-w-0 flex-col bg-background outline-hidden">
-      <div role="toolbar" aria-label="Code" className="flex h-10 min-w-0 shrink-0 items-center gap-1 overflow-hidden border-b border-border px-1.5">
+      <div
+        role="toolbar"
+        aria-label="Code"
+        className="flex h-10 min-w-0 shrink-0 items-center gap-1 overflow-hidden border-b border-border px-1.5 select-none"
+        onDoubleClick={(event) => {
+          const target = event.target as HTMLElement | null;
+          if (!target || target !== event.currentTarget) return;
+          if (target.closest('button, a, [role="button"], [role="menu"], [role="group"], input, textarea, select')) return;
+          props.onToggleFullScreen?.();
+        }}
+      >
         <Button size="xs" variant={treeVisible ? 'secondary' : 'ghost'} className={iconButton} aria-label={treeVisible ? 'Hide the file tree' : 'Show the file tree'} aria-expanded={treeVisible}
           title={treeVisible ? 'Hide the file tree' : 'Show the file tree'} onClick={toggleTree}>
           <FolderTree className={cn('size-3.5', treeVisible && 'text-foreground')} />
@@ -633,7 +647,7 @@ export function CodeSection(props: CodeSectionProps) {
           </button>
         </div>
         {loading && <Loader2 className="size-3 animate-spin text-muted-foreground" aria-label="Refreshing" />}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        <div role="group" aria-label="Actions" className="ml-auto flex shrink-0 items-center gap-1">
           <Button size="xs" variant={mainView === 'commit' ? 'secondary' : 'outline'} disabled={changedFiles === 0} aria-pressed={mainView === 'commit'}
             aria-label="Review & commit" title="Review the changes and commit them"
             onClick={() => { setFinishOpen(false); patchCommit({ open: !commit.open }); }}>
@@ -781,6 +795,30 @@ export function CodeSection(props: CodeSectionProps) {
                     </Button>
                   </div>
                 )}
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="size-6 p-0"
+                    disabled={codeFontSize <= MIN_CODE_FONT_SIZE}
+                    aria-label="Smaller code"
+                    title="Smaller code"
+                    onClick={() => setCodeFontSize((s) => stepCodeFontSize(s, -1))}
+                  >
+                    <ZoomOut className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="size-6 p-0"
+                    disabled={codeFontSize >= MAX_CODE_FONT_SIZE}
+                    aria-label="Larger code"
+                    title="Larger code"
+                    onClick={() => setCodeFontSize((s) => stepCodeFontSize(s, 1))}
+                  >
+                    <ZoomIn className="size-3.5" />
+                  </Button>
+                </div>
                 <Button size="xs" variant="ghost" className="size-6 p-0" title={`Open in ${editorLabel}`} aria-label={`Open in ${editorLabel}`}
                   onClick={() => openInVsCodeAtLine(selection.repoPath, selection.file, selection.line ?? 1, 1, defaultEditor)}>
                   <ExternalLink className="size-3.5" />
