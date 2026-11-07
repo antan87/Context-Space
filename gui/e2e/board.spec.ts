@@ -121,8 +121,15 @@ const board = (page: Page) => page.getByRole('region', { name: 'Board', exact: t
 const node = (page: Page, id: string) => board(page).locator(`.react-flow:not([inert] *) .react-flow__node[data-id="${id}"]`);
 
 async function stepIntoArea(page: Page, name: string | RegExp = /Reports export to CSV/, options: { allowLoading?: boolean } = {}) {
-  const areaBtn = board(page).locator('.board-overview-plane button.board-area').filter({ hasText: name });
   await viewAtRest(page, options);
+  const areaBtn = board(page).locator('.board-overview-plane button.board-area').filter({ hasText: name });
+  if (!(await areaBtn.isVisible())) {
+    const fold = board(page).locator('#board-overview button.board-area-fold');
+    if (await fold.isVisible()) {
+      await fold.click();
+      await viewAtRest(page, options);
+    }
+  }
   await areaBtn.click();
   await expect(board(page).getByRole('button', { name: 'Board ›' })).toBeVisible();
   await viewAtRest(page, options);
@@ -268,25 +275,31 @@ test.describe('Board', () => {
 
     // Areas at Level 0
     const planArea = overview.locator('button.board-area').filter({ hasText: 'Plan' });
-    const firstArea = overview.locator('button.board-area').filter({ hasText: 'Report rows load fast' });
-    const secondArea = overview.locator('button.board-area').filter({ hasText: 'Reports export to CSV' });
+    const secondAreaNode = overview.locator('.react-flow__node-area').filter({ hasText: 'Reports export to CSV' });
+    const secondArea = secondAreaNode.locator('button.board-area');
 
     await expect(planArea).toBeVisible();
     await expect(planArea).toContainText('Plan');
-    await expect(planArea).toContainText('1 step outside the checkpoints');
-
-    await expect(firstArea).toBeVisible();
-    await expect(firstArea).toContainText('Done');
-    await expect(firstArea).toContainText('1 of 1 step');
+    await expect(planArea).toHaveAttribute('aria-label', /1 step outside the checkpoints/);
+    await expect(planArea).toContainText('Tidy the old export script');
 
     await expect(secondArea).toBeVisible();
     await expect(secondArea).toContainText('Now');
     await expect(secondArea).toContainText('Waits for you');
-    await expect(secondArea).toContainText('1 of 3 steps');
-    await expect(secondArea).toContainText('Which time zone should export timestamps use?');
+    await expect(secondArea).toHaveAttribute('aria-label', /1 of 3 steps/);
+    await expect(secondAreaNode).toContainText('Which time zone should export timestamps use?');
+
+    // Finished area is folded into Tier 5 and opens
+    const fold = overview.locator('button.board-area-fold');
+    await expect(fold).toHaveText('1 done');
+    await fold.click();
+    const firstArea = overview.locator('button.board-area').filter({ hasText: 'Report rows load fast' });
+    await expect(firstArea).toBeVisible();
+    await expect(firstArea).toHaveAttribute('aria-label', /done/);
+    await expect(firstArea).toContainText('1 of 1');
 
     // Every Area fits whole inside overview canvas on one screen
-    for (const target of [planArea, firstArea, secondArea]) {
+    for (const target of [planArea, firstArea, secondAreaNode]) {
       await expect.poll(() => isWithin(target, overview.locator('.react-flow'))).toBe(true);
     }
   });
@@ -301,11 +314,26 @@ test.describe('Board', () => {
       }),
     }));
     await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
     const overview = board(page).locator('#board-overview');
     const flow = overview.locator('.react-flow');
+
+    // Before opening the fold, assert that what is shown is whole on screen with no scrolling
+    const shown = overview.locator('button.board-area, button.board-area-fold');
+    const count = await shown.count();
+    expect(count).toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      await expect.poll(() => isWithin(shown.nth(i), flow)).toBe(true);
+    }
+
+    const fold = overview.locator('button.board-area-fold');
+    await expect(fold).toBeVisible();
+    await fold.click();
+    await viewAtRest(page);
+
     for (const title of titles) {
       const btn = overview.locator('button.board-area').filter({ hasText: title });
-      await expect(btn).toBeVisible();
+      await btn.focus();
       await expect.poll(() => isWithin(btn, flow)).toBe(true);
     }
   });
@@ -447,6 +475,9 @@ test.describe('Board', () => {
     }));
     await page.goto('/#/workspaces/demo/board');
     const overview = board(page).locator('#board-overview');
+    const fold = overview.locator('button.board-area-fold');
+    await expect(fold).toHaveText('5 done');
+    await fold.click();
     const last = overview.locator('button.board-area').filter({ hasText: 'Release notes' });
     await expect(last).toBeVisible();
     await expect(last).toContainText('Done');
@@ -515,11 +546,12 @@ test.describe('Board', () => {
     });
     await page.goto('/#/workspaces/demo/board');
     const canvas = board(page);
-    const areaBtn = canvas.locator('.board-overview-plane button.board-area').filter({ hasText: 'Reports export to CSV' });
+    const area = canvas.locator('.board-overview-plane .react-flow__node-area').filter({ hasText: 'Reports export to CSV' });
+    const areaBtn = area.locator('button.board-area');
     await expect(areaBtn).toBeVisible();
     await expect(canvas.getByRole('status').filter({ hasText: 'Still loading' })).toContainText('Still loading: commits');
     await canvas.locator('#board-overview .react-flow').evaluate((element) => { (element as HTMLElement & { marked?: boolean }).marked = true; });
-    await expect(areaBtn).toContainText('1 commit');
+    await expect(area).toContainText('1 commit');
     expect(await canvas.locator('#board-overview .react-flow').evaluate((element) => (element as HTMLElement & { marked?: boolean }).marked)).toBe(true);
   });
 
@@ -837,25 +869,29 @@ test.describe('Board cards', () => {
     await viewAtRest(page);
     const canvas = board(page);
 
-    // Level 0: 3 areas
+    // Level 0: 3 areas (Report rows load fast is done and in Tier 5 fold)
+    const fold = canvas.locator('#board-overview button.board-area-fold');
+    if (await fold.count()) await fold.click();
+
     const fastArea = canvas.locator('.board-overview-plane button.board-area').filter({ hasText: 'Report rows load fast' });
     const planArea = canvas.locator('.board-overview-plane button.board-area').filter({ hasText: 'Plan' });
-    const currentArea = canvas.locator('.board-overview-plane button.board-area').filter({ hasText: 'Reports export to CSV' });
+    const currentAreaNode = canvas.locator('.board-overview-plane .react-flow__node-area').filter({ hasText: 'Reports export to CSV' });
+    const currentArea = currentAreaNode.locator('button.board-area');
 
     await expect(fastArea).toBeVisible();
     await expect(planArea).toBeVisible();
     await expect(currentArea).toBeVisible();
 
     // Fast area has 2 notes (1 explicit + 4 linked)
-    await expect(fastArea).toContainText('2 notes');
+    await expect(fastArea).toHaveAttribute('aria-label', /2 notes/);
     // Plan area has 1 note (2 explicit)
-    await expect(planArea).toContainText('1 note');
+    await expect(planArea).toHaveAttribute('aria-label', /1 note/);
     // Current area has 1 note (5 fallback) and 1 file (3 explicit)
-    await expect(currentArea).toContainText('1 note');
-    await expect(currentArea).toContainText('1 picture');
+    await expect(currentAreaNode).toContainText('1 note');
+    await expect(currentAreaNode).toContainText('1 picture');
 
     // Picture preview on currentArea
-    const previewImg = currentArea.locator('img');
+    const previewImg = currentAreaNode.locator('img');
     await expect(previewImg).toHaveAttribute('src', /\/api\/workspace\/demo\/documents\/file\?name=docs%2Fflow\.png$/);
 
     // Fresh glow on currentArea node (card 5 is fresh!)
@@ -2398,7 +2434,7 @@ test.describe('Board, rows by step', () => {
    * that wait, a repository with commits, 10 cards that are tied to no step, 2 on an open step, 3 on done steps. And another checkpoint after it.
    */
   async function openReal(page: Page, options: { size?: { width: number; height: number }; nav?: boolean; area?: RegExp | string; onSteps?: boolean } = {}) {
-    if (!options.nav) await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'closed'); });
+    await page.addInitScript((nav) => { window.localStorage.setItem('contextspace_board_nav_open_v1', nav ? 'open' : 'closed'); }, Boolean(options.nav));
     if (options.size) await page.setViewportSize(options.size);
     const open = Array.from({ length: 13 }, (_, i) => step(OPEN_STEP(i)));
     const done = Array.from({ length: 12 }, (_, i) => step(DONE_STEP(i), true));
@@ -2736,8 +2772,8 @@ test.describe('Board, rows by step', () => {
     await expect(waiting).not.toContainText('A Board tab shows the real work');
     const header = inArea(page).locator('header').first();
     await expect(header).toContainText('A Board tab shows the real work');
-    await expect(header).toContainText('Now');
     await expect(header).not.toContainText(/wait/i);
+    await expect(inArea(page)).toContainText('Now');
   });
 
   test('keeps a compact note whose text starts with code or a table inside its card, with its mark and its title button', async ({ page }) => {
@@ -3033,6 +3069,8 @@ test.describe('Board, areas', () => {
     for (const vp of viewports) {
       await page.setViewportSize(vp);
       await viewAtRest(page);
+      const fold = overview.locator('button.board-area-fold');
+      if (await fold.count() && (await fold.getAttribute('aria-expanded')) === 'false') await fold.click();
       for (const name of ['Plan', 'Report rows load fast', 'Reports export to CSV']) {
         const area = overview.locator('button.board-area').filter({ hasText: name });
         await expect(area).toBeVisible();
@@ -3054,6 +3092,8 @@ test.describe('Board, areas', () => {
     for (const vp of viewports) {
       await page.setViewportSize(vp);
       await viewAtRest(page);
+      const fold = overview.locator('button.board-area-fold');
+      if (await fold.count() && (await fold.getAttribute('aria-expanded')) === 'false') await fold.click();
       for (const name of titles) {
         const area = overview.locator('button.board-area').filter({ hasText: name });
         await expect(area).toBeVisible();
@@ -3091,6 +3131,10 @@ test.describe('Board, areas', () => {
     await canvas.getByRole('button', { name: 'Board ›' }).click();
     await expect(canvas.locator('#board-area')).toHaveCount(0);
     await expect(overview.locator('button.board-area').filter({ hasText: 'Reports export to CSV' })).toBeVisible();
+
+    // Finished area is in Tier 5 fold and opens
+    const fold = overview.locator('button.board-area-fold');
+    if (await fold.count()) await fold.click();
     await expect(overview.locator('button.board-area').filter({ hasText: 'Report rows load fast' })).toBeVisible();
 
     // Step into "Report rows load fast"
@@ -3103,6 +3147,7 @@ test.describe('Board, areas', () => {
   });
 
   test('moves the Next up badge as the plan progresses live', async ({ page }) => {
+    test.setTimeout(45_000);
     await routeBoard(page);
     const planState = {
       current: planFile({
@@ -3135,12 +3180,11 @@ test.describe('Board, areas', () => {
       ],
     });
 
-    await expect.poll(async () => {
-      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
-      return firstArea.locator('.board-area-badge').textContent();
-    }, { timeout: 10_000, intervals: [400, 800] }).toMatch(/Done/i);
-
+    const fold = overview.locator('button.board-area-fold');
+    await expect.poll(async () => fold.textContent(), { timeout: 35_000, intervals: [1000, 2000] }).toBe('1 done');
     await expect(secondArea.locator('.board-area-badge')).toHaveText(/Next up/i);
+    await fold.click();
+    await expect(firstArea).toHaveAttribute('aria-label', /Done/i);
   });
 
   test('supports prefers-reduced-motion: reduce with instant step-in and step-out', async ({ page }) => {
@@ -3287,22 +3331,27 @@ test.describe('Board, a quiet frame and a readable overview', () => {
   /** What the overview shows, as the person sees it: each Area's place, and each text's size on the screen (its font size times the zoom). */
   const overviewFacts = (page: Page) => board(page).locator('#board-overview').evaluate((overview) => {
     const stage = overview.querySelector('.react-flow')!.getBoundingClientRect();
+    const areaButtons = Array.from(overview.querySelectorAll<HTMLElement>('button.board-area'));
     const areas = Array.from(overview.querySelectorAll<HTMLElement>('button.board-area, button.board-area-fold'));
     const sizes: Array<{ text: string; size: number }> = [];
     const titles: number[] = [];
     for (const area of areas) {
+      let areaTitleFound = false;
       for (const element of Array.from(area.querySelectorAll<HTMLElement>('*'))) {
         const own = Array.from(element.childNodes).filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent!.trim()).join('');
         if (!own || element.offsetWidth === 0) continue;
         const zoom = element.getBoundingClientRect().width / element.offsetWidth;
         const size = parseFloat(getComputedStyle(element).fontSize) * zoom;
         sizes.push({ text: own, size });
-        if (element.hasAttribute('title') && element.getAttribute('title') === own) titles.push(size);
+        if (!areaTitleFound && element.hasAttribute('title') && element.getAttribute('title') === own) {
+          titles.push(size);
+          areaTitleFound = true;
+        }
       }
     }
     const boxes = areas.map((area) => { const r = area.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
     const inside = boxes.every((r) => r.x >= stage.x - 0.5 && r.y >= stage.y - 0.5 && r.x + r.width <= stage.x + stage.width + 0.5 && r.y + r.height <= stage.y + stage.height + 0.5);
-    return { count: areas.length, inside, sizes, titles, boxes, rows: overview.querySelectorAll('.react-flow__node-areaRow').length, minis: overview.querySelectorAll('.react-flow__node-areaMini').length, stageWidth: stage.width, cards: overview.querySelectorAll('.react-flow__node-area').length };
+    return { count: areaButtons.length, inside, sizes, titles, boxes, rows: overview.querySelectorAll('.react-flow__node-areaRow').length, minis: overview.querySelectorAll('.react-flow__node-areaMini').length, stageWidth: stage.width, cards: overview.querySelectorAll('.react-flow__node-area').length };
   });
 
   const sizes = [
@@ -3318,17 +3367,69 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await routeAreas(page);
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
-      await expect(board(page).locator('#board-overview button.board-area')).toHaveCount(11);
+      const isNarrow = size.width < 600 || beside;
+      const fold = board(page).locator('#board-overview button.board-area-fold');
+      const flow = board(page).locator('#board-overview .react-flow');
+
       const facts = await overviewFacts(page);
       test.info().annotations.push({ type: 'form', description: `${facts.cards} cards, ${facts.minis} minis, ${facts.rows} rows, zoom ${(await transformOf(page)).scale.toFixed(2)}, titles ${facts.titles.map((size) => size.toFixed(1)).join(' ')}` });
-      expect(facts.count).toBe(11);
+
       expect(facts.inside, 'every Area is whole inside the stage, with no panning').toBe(true);
-      expect(facts.titles).toHaveLength(11);
+
+      // Nothing overlapping
+      for (let i = 0; i < facts.boxes.length; i++) {
+        for (let j = i + 1; j < facts.boxes.length; j++) {
+          const a = facts.boxes[i]!;
+          const b = facts.boxes[j]!;
+          const overlap = !(a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5);
+          expect(overlap, `boxes ${i} and ${j} overlap`).toBe(false);
+        }
+      }
+
       for (const title of facts.titles) expect(title).toBeGreaterThanOrEqual(12);
       for (const { text, size: px } of facts.sizes) expect(px, `"${text}" is drawn at ${px.toFixed(1)} px`).toBeGreaterThanOrEqual(11.95);
       expect((await transformOf(page)).scale).toBeGreaterThanOrEqual(0.9 - 1e-6);
-      if (size.width < 600 || beside) expect(facts.rows, 'a narrow stage draws one-line rows').toBe(11);
-      expect(facts.boxes.every((box) => box.height >= 36 || facts.cards > 0)).toBe(true);
+
+      let foldCount = 0;
+      if ((await fold.count()) > 0 && (await fold.isVisible())) {
+        const foldText = (await fold.textContent()) ?? '';
+        const foldMatch = foldText.match(/(\d+)\s+more/);
+        const doneMatch = foldText.match(/(\d+)\s+done/);
+        foldCount = (foldMatch ? parseInt(foldMatch[1]!, 10) : 0) + (doneMatch ? parseInt(doneMatch[1]!, 10) : 0);
+      }
+      expect(facts.count + foldCount, 'shown Areas plus fold count add up to 11').toBe(11);
+
+      if (isNarrow) {
+        expect(facts.cards, '1 focus card').toBe(1);
+        expect(facts.rows, 'rows for other shown areas').toBe(facts.count - 1);
+        // Focus card is whole
+        const heroNode = board(page).locator('#board-overview .react-flow__node-area');
+        const cardDiv = heroNode.locator('> div');
+        const whole = await cardDiv.evaluate((el) => el.scrollHeight <= el.clientHeight + 1.5);
+        expect(whole, 'focus card is whole').toBe(true);
+        // Rows are one line each
+        const rowHeights = await board(page).locator('#board-overview .react-flow__node-areaRow').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+        expect(rowHeights.every((h) => Math.abs(h - 40) <= 2), 'rows are one line each').toBe(true);
+      } else {
+        expect(facts.boxes.every((box) => box.height >= 36)).toBe(true);
+      }
+
+      // Open the fold and check every Area is reachable, scrolling the stage if the fold scrolls
+      if (await fold.isVisible()) {
+        await fold.click();
+        await viewAtRest(page);
+      }
+      const allAreaButtons = board(page).locator('#board-overview button.board-area');
+      await expect(allAreaButtons).toHaveCount(11);
+      for (let i = 0; i < 11; i++) {
+        const btn = allAreaButtons.nth(i);
+        await btn.focus();
+        await expect.poll(() => isWithin(btn, flow)).toBe(true);
+      }
+      const openFacts = await overviewFacts(page);
+      // The measure divides a real width by a whole-pixel offsetWidth, so a row of a fractional width reads a hair under its true 12 px
+      for (const title of openFacts.titles) expect(title).toBeGreaterThanOrEqual(11.9);
+
       await expect(board(page).getByText('Empty', { exact: true })).toHaveCount(0);
       await expect(board(page).getByRole('button', { name: /^Zoom (in|out)$|^Fit the board in view$/ })).toHaveCount(0);
       await expect(board(page).locator('.react-flow__controls')).toHaveCount(0);
@@ -3342,8 +3443,11 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await routeAreas(page, { count: 6, done: 2, titles: ['Plan the slice', 'Build the slice', 'Look at it', 'Fix what shows', 'Ship it', 'Tell people'], question: 'Which size can be read?' });
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
+    const fold = board(page).locator('#board-overview button.board-area-fold');
+    if (await fold.isVisible()) await fold.click();
     const facts = await overviewFacts(page);
-    expect(facts.cards, 'six Areas are cards in a large window').toBe(6);
+    expect(facts.cards, 'focus Area is hero card').toBe(1);
+    expect(facts.minis, 'other Areas are small cards').toBe(5);
     // Between the last thing in a card and its bottom edge there is its padding and no more, in the card that is the highest of its line
     const gaps = await board(page).locator('#board-overview').evaluate((overview) => {
       const lines = new Map<number, { gap: number; card: string }>();
@@ -3361,8 +3465,10 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     // Only what differs from the usual is said: Done and Now are, "Not done" is not (the name still says it)
     const overview = board(page).locator('#board-overview');
     await expect(overview.getByText('Not done', { exact: true })).toHaveCount(0);
-    await expect(overview.locator('button.board-area .board-area-badge')).toHaveText(['Done', 'Done', 'Now', 'Waits for you']);
-    await expect(overview.locator('button.board-area').nth(4)).toHaveAttribute('aria-label', /not done/);
+    await expect(overview.locator('.react-flow__node-area .board-area-badge')).toHaveText(['Now', 'Waits for you']);
+    await expect(overview.locator('button.board-area').filter({ hasText: 'Plan the slice' })).toHaveAttribute('aria-label', /done/i);
+    await expect(overview.locator('button.board-area').filter({ hasText: 'Build the slice' })).toHaveAttribute('aria-label', /done/i);
+    await expect(overview.locator('button.board-area').filter({ hasText: 'Fix what shows' })).toHaveAttribute('aria-label', /not done/i);
   });
 
   test('has no title row of its own: the board starts under the workspace header, with the pane\'s icons in its corner', async ({ page }) => {
@@ -3398,6 +3504,8 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await page.getByRole('button', { name: 'Hide the chat and give this the whole width' }).click();
     await expect.poll(async () => (await board(page).boundingBox())!.width).toBeGreaterThan(narrow.width + 100);
     await viewAtRest(page);
+    const fold = board(page).locator('#board-overview button.board-area-fold');
+    if (await fold.isVisible()) await fold.click();
     await expect(board(page).locator('#board-overview button.board-area')).toHaveCount(11);
     await page.getByRole('button', { name: 'Show the chat beside this' }).click();
     await expect.poll(async () => (await board(page).boundingBox())!.width).toBeLessThan(narrow.width + 2);
@@ -3428,7 +3536,10 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
     const row = board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[5]! });
-    await expect(board(page).locator('#board-overview .react-flow__node-areaRow')).toHaveCount(11);
+    const fold = board(page).locator('#board-overview button.board-area-fold');
+    if (await fold.isVisible()) await fold.click();
+    await expect(board(page).locator('#board-overview .react-flow__node-area')).toHaveCount(1);
+    await expect(board(page).locator('#board-overview .react-flow__node-areaRow')).toHaveCount(10);
     // It names the Area, its state and its steps, and shows the title in full on pointing
     await expect(row).toHaveAttribute('aria-label', /^Pictures are told apart from files, not done, 0 of 3 steps/);
     await expect(row.locator('[title]').first()).toHaveAttribute('title', AREAS[5]!);
@@ -3444,8 +3555,8 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     // The current one says Now, the finished ones are marked done, and the one that waits for you is named
     await expect(board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[4]! })).toContainText('Now');
     await expect(board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[4]! })).toHaveAttribute('aria-label', /waits for you/);
-    await expect(board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[4]! })).toContainText('Waiting');
-    await expect(board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[3]! })).not.toContainText('Waiting');
+    await expect(board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[4]! })).toContainText('Waits for you');
+    await expect(board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[3]! })).not.toContainText('Waits for you');
     await expect(board(page).locator('#board-overview button.board-area').filter({ hasText: AREAS[0]! })).toHaveAttribute('aria-label', /done, 3 of 3 steps/);
   });
 
@@ -3456,9 +3567,9 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await viewAtRest(page);
     const areas = board(page).locator('#board-overview button.board-area');
     const fold = board(page).locator('#board-overview button.board-area-fold');
-    await expect(fold).toHaveText('16 done');
+    await expect(fold).toHaveText('3 more · 16 done');
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
-    await expect(areas).toHaveCount(9);
+    await expect(areas).toHaveCount(6);
     expect((await overviewFacts(page)).inside).toBe(true);
     // The last row is the last
     const [foldBox, lastArea] = await Promise.all([fold.boundingBox(), areas.last().boundingBox()]);
@@ -3469,8 +3580,8 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await expect(fold).toHaveAttribute('aria-expanded', 'true');
     await expect(fold).toBeFocused();
     await fold.click();
-    await expect(areas).toHaveCount(9);
-    await expect(fold).toHaveText('16 done');
+    await expect(areas).toHaveCount(6);
+    await expect(fold).toHaveText('3 more · 16 done');
     await viewAtRest(page);
     expect((await overviewFacts(page)).inside).toBe(true);
   });
@@ -3484,7 +3595,8 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
       const overview = board(page).locator('#board-overview');
-      await expect(overview.locator('.react-flow__node-area')).toHaveCount(11);
+      await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(6);
       await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(0);
       expect((await transformOf(page)).scale).toBeGreaterThanOrEqual(0.9 - 1e-6);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeHidden();
@@ -3494,12 +3606,11 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await rail.click();
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
       await viewAtRest(page);
-      // With the index open the stage is too small for cards: the small cards stand there
-      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(11);
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(6);
       await page.reload();
       await viewAtRest(page);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
-      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(11);
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(6);
     });
 
     test('never shows the docked index, the rows or the small cards on the way to the closed index and cards, even when the commits take their time', async ({ page }) => {
@@ -3535,7 +3646,8 @@ test.describe('Board, a quiet frame and a readable overview', () => {
         await route.fulfill({ json: whatsNew({ commits: [{ repo: 'NexusFlow', more: 0, commits: [{ sha: 'a91f2e0c4d5b', author: 'Anna', subject: 'Make the overview readable', at: minutesAgo(30) }] }] }) });
       });
       await page.goto('/#/workspaces/demo/board');
-      await expect(board(page).locator('#board-overview .react-flow__node-area')).toHaveCount(11, { timeout: 10_000 });
+      await expect(board(page).locator('#board-overview .react-flow__node-area')).toHaveCount(1, { timeout: 10_000 });
+      await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(6);
       await viewAtRest(page);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeHidden();
       const seen = await page.evaluate(() => (window as unknown as { __seen: Record<string, number> }).__seen);
@@ -3543,7 +3655,6 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       expect(seen.frames).toBeGreaterThan(30);
       expect(seen.indexFrames, 'frames with the index drawn').toBe(0);
       expect(seen.rowFrames, 'frames with rows drawn').toBe(0);
-      expect(seen.miniFrames, 'frames with small cards drawn').toBe(0);
       expect(seen.blankFrames, 'frames with an empty stage and no word about why').toBe(0);
     });
 
@@ -3560,7 +3671,6 @@ test.describe('Board, a quiet frame and a readable overview', () => {
           seen.frames += 1;
           if (drawn(document.querySelector('nav[aria-label="Board index"]'))) seen.indexFrames += 1;
           if (Array.from(document.querySelectorAll('.react-flow__node-areaRow')).some(drawn)) seen.rowFrames += 1;
-          if (Array.from(document.querySelectorAll('.react-flow__node-areaMini')).some(drawn)) seen.miniFrames += 1;
           requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
@@ -3575,11 +3685,12 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       });
       await page.goto('/#/workspaces/demo/board');
       const overview = board(page).locator('#board-overview');
-      const current = overview.locator('button.board-area').filter({ hasText: AREAS[4]! });
+      const current = overview.locator('.react-flow__node-area').filter({ hasText: AREAS[4]! });
       // An Area is there to be seen and pressed while the commits are still waited for, and the board is the cards with the index closed
       await expect(board(page).getByRole('status').filter({ hasText: 'Still loading: commits' })).toBeVisible();
       await expect(current).toBeVisible({ timeout: 5000 });
-      await expect(overview.locator('.react-flow__node-area')).toHaveCount(11);
+      await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(6);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeHidden();
       await expect(current).not.toContainText('commit');
       await viewAtRest(page, { allowLoading: true });
@@ -3592,12 +3703,12 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await expect(current).toContainText('1 commit');
       await expect(board(page).getByText(/^Still loading/)).toHaveCount(0);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeHidden();
-      await expect(overview.locator('.react-flow__node-area')).toHaveCount(11);
+      await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(6);
       const seen = await page.evaluate(() => (window as unknown as { __seen: Record<string, number> }).__seen);
       expect(seen.frames).toBeGreaterThan(30);
       expect(seen.indexFrames, 'frames with the index drawn').toBe(0);
       expect(seen.rowFrames, 'frames with rows drawn').toBe(0);
-      expect(seen.miniFrames, 'frames with small cards drawn').toBe(0);
     });
 
     test('decides only once the index docks: opened in the pane, then given the whole width, it ends closed with cards', async ({ page }) => {
@@ -3606,10 +3717,12 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
       const overview = board(page).locator('#board-overview');
-      // In the pane the index overlays and the Areas are rows
-      await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(11);
+      // In the pane the index overlays and the lower Areas are rows
+      await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+      await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(6);
       await page.getByRole('button', { name: 'Hide the chat and give this the whole width' }).click();
-      await expect(overview.locator('.react-flow__node-area')).toHaveCount(11);
+      await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+      await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(6);
       await viewAtRest(page);
       await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(0);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeHidden();
@@ -3622,40 +3735,44 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
-      await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(11);
+      await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(6);
     });
 
     test('leaves the index open where closing it would not give cards: few Areas, and a stage too small for cards', async ({ page }) => {
       await routeAreas(page, { count: 3, done: 1 });
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
+      // Index starts closed at every size per W2
+      await expect(page.getByRole('navigation', { name: 'Board index' })).toBeHidden();
+      await page.getByRole('button', { name: /^Board index/ }).click();
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
       await page.goto('about:blank');
       await page.setViewportSize({ width: 1100, height: 700 });
       await routeAreas(page);
       await page.goto('/#/workspaces/demo/board');
       await viewAtRest(page);
-      await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(11);
+      await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(6);
       await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
     });
   });
 
   test('lets the folded Areas go when the overview becomes cards, so they are folded again when it is rows again', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 720 });
-    await routeAreas(page, { count: 14, done: 8 });
+    await routeAreas(page, { count: 14, done: 0 });
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
     const fold = board(page).locator('#board-overview button.board-area-fold');
-    await expect(fold).toHaveText('8 done');
+    await expect(fold).toHaveText(/^\d+ more$/);
     await fold.click();
     await expect(fold).toHaveText('Show fewer');
     await page.setViewportSize({ width: 1920, height: 1080 });
     await viewAtRest(page);
-    await expect(board(page).locator('#board-overview .react-flow__node-area')).toHaveCount(14);
+    await expect(board(page).locator('#board-overview .react-flow__node-area')).toHaveCount(1);
+    await expect(board(page).locator('#board-overview .react-flow__node-areaMini')).toHaveCount(13);
     await expect(fold).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 720 });
     await viewAtRest(page);
-    await expect(fold).toHaveText('8 done');
+    await expect(fold).toHaveText(/^\d+ more$/);
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
   });
 
@@ -3666,48 +3783,52 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await viewAtRest(page);
     const overview = board(page).locator('#board-overview');
     const fold = overview.locator('button.board-area-fold');
-    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(6);
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(5);
     await fold.click();
     await expect(fold).toHaveText('Show fewer');
-    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(14);
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(13);
     // A wider stage draws small cards, with the fold as they have one: still open, nothing lost
     await page.setViewportSize({ width: 700, height: 560 });
     await viewAtRest(page);
-    await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(14);
+    await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(13);
     await expect(fold).toHaveText('Show fewer');
     await fold.click();
-    // The stage is short: the finished Areas and some at the end are folded, and the one under way is not
-    await expect(fold).toHaveText(/^\d+ (done|more)$/);
+    // The stage has finished Areas folded, and the one under way is not
+    await expect(fold).toHaveText('3 more · 8 done');
     expect(await overview.locator('.react-flow__node-areaMini').count()).toBeLessThan(14);
-    await expect(overview.locator('.react-flow__node-areaMini').filter({ hasText: AREAS[8]! })).toHaveCount(1);
-    // Cards have no fold: it goes, and the rows come back folded
+    await expect(overview.locator('.react-flow__node-area').filter({ hasText: AREAS[8]! })).toHaveCount(1);
+    // Re-opening the fold, then resizing to wide where open areas fit clears the open fold
     await fold.click();
     await page.setViewportSize({ width: 1920, height: 1080 });
     await viewAtRest(page);
-    await expect(overview.locator('.react-flow__node-area')).toHaveCount(14);
-    await expect(fold).toHaveCount(0);
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
     await page.setViewportSize({ width: 390, height: 720 });
     await viewAtRest(page);
     await expect(fold).toHaveText('8 done');
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(5);
   });
 
   test('lays the cards out again when the fold goes away by itself after the view was moved', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 720 });
-    await routeAreas(page, { count: 14, done: 8 });
+    await routeAreas(page, { count: 14, done: 0 });
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
     const overview = board(page).locator('#board-overview');
     await overview.locator('button.board-area-fold').click();
-    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(14);
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+    await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(13);
     // The person scrolls the rows
     await overview.locator('.react-flow__pane').hover({ position: { x: 5, y: 300 } });
     await page.mouse.wheel(0, 200);
     await viewAtRest(page);
     expect((await transformOf(page)).y).toBeLessThan(0);
-    // The window grows: cards have no fold, the fold closes itself, and the view is laid out again
+    // The window grows: all open Areas fit, the fold goes away by itself, and the view is laid out again
     await page.setViewportSize({ width: 1920, height: 1080 });
-    await expect(overview.locator('.react-flow__node-area')).toHaveCount(14);
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
     await viewAtRest(page);
     await expect(overview.locator('button.board-area-fold')).toHaveCount(0);
     expect((await overviewFacts(page)).inside, 'every Area is whole inside the stage').toBe(true);
@@ -3737,11 +3858,11 @@ test.describe('Board, a quiet frame and a readable overview', () => {
         const icons = (await header.getByRole('button', { name: /^Close this panel/ }).boundingBox())!;
         const frame = (await header.boundingBox())!;
         expect(icons.x + icons.width).toBeLessThanOrEqual(frame.x + frame.width + 0.5);
-        // What there is no room to show is left out of sight but not out of the accessibility tree: the state, and how far the Area is
-        for (const [text, wrapper] of [['Now', '..'], [/^\d+ of \d+ steps$/, '.']] as const) {
+        // What there is no room to show is left out of sight but not out of the accessibility tree: how far the Area is
+        for (const [text, wrapper] of [[/^\d+ of \d+ steps$/, '.']] as const) {
           const hidden = header.getByText(text);
           await expect(hidden).toHaveCount(1);
-          // The state is a badge inside a one-pixel box, and the steps are that box themselves
+          // The steps are that box themselves
           const box = hidden.locator(`xpath=${wrapper}`);
           expect((await box.boundingBox())!.width).toBeLessThanOrEqual(1.5);
           // Still drawn (not display:none or visibility:hidden), which is what the accessibility tree keeps
@@ -3988,7 +4109,13 @@ test.describe('Board index sidebar', () => {
   /** Whether the keyboard is on a card of the Area, or on something inside it. */
   const cardHasFocus = (page: Page, id: string) => node(page, id).evaluate((element) => element.contains(document.activeElement));
 
-  test('is open by default on desktop, collapses to rail, and remembers preference in storage', async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    if (!testInfo.title.includes('starts closed') && !testInfo.title.includes('narrow viewports') && !testInfo.title.includes('outside the Board')) {
+      await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); });
+    }
+  });
+
+  test('starts closed on rail, expands on click, and remembers preference in storage', async ({ page }) => {
     await routeBoard(page);
     await routePictures(page);
     await routeCards(page, boardFile({ cards: [] }));
@@ -3996,28 +4123,27 @@ test.describe('Board index sidebar', () => {
     await viewAtRest(page);
 
     const nav = page.getByRole('navigation', { name: 'Board index' });
-    await expect(nav).toBeVisible();
-
-    // Toggle button in expanded header
-    const toggle = nav.getByRole('button', { name: 'Board index' });
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await toggle.click();
-
-    // Now collapsed rail with aria-expanded="false", and what waits for you in the name of its button
     await expect(nav).toBeHidden();
     const railButton = page.getByRole('button', { name: 'Board index' });
     await expect(railButton).toHaveAttribute('aria-expanded', 'false');
     await expect(railButton).toHaveAccessibleName('Board index, 1 waits for you');
 
-    // Reload page to verify persistence
+    // Expand sidebar
+    await railButton.click();
+    await expect(nav).toBeVisible();
+    const toggle = nav.getByRole('button', { name: 'Board index' });
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    // Reload page to verify persistence (user choice is remembered)
     await page.reload();
     await viewAtRest(page);
-    await expect(page.getByRole('navigation', { name: 'Board index' })).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Board index' })).toHaveAttribute('aria-expanded', 'false');
-
-    // Expand back
-    await page.getByRole('button', { name: 'Board index' }).click();
     await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
+    await expect(nav.getByRole('button', { name: 'Board index' })).toHaveAttribute('aria-expanded', 'true');
+
+    // Collapse back to rail
+    await nav.getByRole('button', { name: 'Board index' }).click();
+    await expect(nav).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Board index' })).toHaveAttribute('aria-expanded', 'false');
   });
 
   test('switches between Category and Area modes, remembering preference', async ({ page }) => {

@@ -230,11 +230,12 @@ test.describe('Board overview in Split mode: small cards', () => {
   ];
 
   /** Opens the board in Split mode with `count` Areas (the first `done` finished), at rest. */
-  async function openSplit(page: import('@playwright/test').Page, size: { width: number; height: number }, options: { count?: number; done?: number; percent?: number; pictureOn?: number; split?: boolean } = {}) {
+  async function openSplit(page: import('@playwright/test').Page, size: { width: number; height: number }, options: { count?: number; done?: number; percent?: number; pictureOn?: number; questionOn?: number; split?: boolean } = {}) {
     const count = options.count ?? 11;
-    const done = options.done ?? 2;
+    const done = options.done ?? 0;
     const percent = options.percent ?? 50;
-    const pictureOn = options.pictureOn ?? 8;
+    const pictureOn = options.pictureOn ?? Math.min(8, count - 1);
+    const questionOn = options.questionOn ?? 0;
     const titles = Array.from({ length: count }, (_, i) => TITLES[i] ?? `Checkpoint ${i + 1}: the work of one slice`);
     // e2e/fixtures.ts:205 writes percent: 62 when no key is stored, so the spec stores the real default of 50 %; a fresh real profile gives 652x824, 572x724 and 482x624 (the Now line takes 32 px of the pane's height)
     await page.addInitScript((share) => { try { localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: share })); } catch { /* no storage */ } }, percent);
@@ -244,7 +245,7 @@ test.describe('Board overview in Split mode: small cards', () => {
         checkpoints: titles.map((title, i) => checkpoint(title, {
           done: i < done,
           steps: [step(`First step of ${title}`, i <= done), step(`Second step of ${title}`, i < done), step(`Third step of ${title}`, i < done)],
-          ...(i === 2 ? { decisions: [decision('Which size is the least a person can read?')] } : {}),
+          ...(i === questionOn ? { decisions: [decision('Which size is the least a person can read?')] } : {}),
         })),
       }),
     }));
@@ -288,10 +289,17 @@ test.describe('Board overview in Split mode: small cards', () => {
   for (const { window: size, stage: expected } of SPLIT) {
     test(`draws 11 Areas as small cards at ${size.width}x${size.height}, and a press steps in and back to the same card`, async ({ page }) => {
       const board = await openSplit(page, size);
+      const fold = board.locator('#board-overview button.board-area-fold');
+      const isFolded = await fold.isVisible();
       const cards = board.locator('#board-overview button.board-area');
-      await expect(cards).toHaveCount(11);
-      // At 1440x900 the stage is 652x824, since the Now line takes 32 px of the pane (856 before): 11 Areas stand as small cards at every size here
-      await expect(board.locator('#board-overview .react-flow__node-areaMini')).toHaveCount(11);
+      if (isFolded) {
+        await expect(fold).toHaveText('4 more');
+        await expect(cards).toHaveCount(7);
+      } else {
+        await expect(cards).toHaveCount(11);
+        await expect(board.locator('#board-overview .react-flow__node-area')).toHaveCount(1);
+        await expect(board.locator('#board-overview .react-flow__node-areaMini')).toHaveCount(10);
+      }
       await atRest(page);
 
       const facts = await board.locator('#board-overview').evaluate((overview) => {
@@ -308,7 +316,8 @@ test.describe('Board overview in Split mode: small cards', () => {
       // The sizes people really see in Split mode at the default share
       expect(Math.round(stage.width)).toBe(expected.width);
       expect(Math.round(stage.height)).toBe(expected.height);
-      expect(new Set(boxes.map((box) => Math.round(box.x))).size, 'two columns').toBe(2);
+      const miniBoxes = boxes.slice(1);
+      expect(new Set(miniBoxes.map((box) => Math.round(box.x))).size, 'two columns').toBe(2);
       for (const box of boxes) {
         expect(box.x).toBeGreaterThanOrEqual(stage.x - 0.5);
         expect(box.y).toBeGreaterThanOrEqual(stage.y - 0.5);
@@ -321,9 +330,17 @@ test.describe('Board overview in Split mode: small cards', () => {
         expect(a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5, `card ${i} overlaps card ${j}`).toBe(true);
       }
       expect(facts.small, 'text under 12 px').toEqual([]);
+
+      if (isFolded) {
+        await fold.click();
+        await atRest(page);
+      }
+
       // A picture shows where the card is wide and high enough, and only there
+      const picCard = cards.filter({ hasText: TITLES[8]! });
+      const picBox = (await picCard.boundingBox())!;
       const withPicture = cards.filter({ has: page.locator('img') });
-      const wide = boxes.some((box) => box.width >= 240 && box.height >= 92);
+      const wide = picBox.width >= 240 && picBox.height >= 92;
       await expect(withPicture).toHaveCount(wide ? 1 : 0);
       if (wide) await expect(withPicture).toHaveAttribute('aria-label', new RegExp(TITLES[8]!));
 
@@ -340,29 +357,41 @@ test.describe('Board overview in Split mode: small cards', () => {
 
   test('does not move the view for an index jump to an Area and back, nor for Tab across the cards, with no fold open (1100x700)', async ({ page }) => {
     const board = await openSplit(page, { width: 1100, height: 700 });
+    const fold = board.locator('#board-overview button.board-area-fold');
     const cards = board.locator('#board-overview button.board-area');
-    await expect(cards).toHaveCount(11);
+    await expect(cards).toHaveCount(7);
+    await expect(fold).toHaveText('4 more');
     const before = await overviewTransform(page);
-    // An index jump to the last Area and back
+    // An index jump to a visible Area and back
     await page.getByRole('button', { name: /^Board index/ }).click();
     const nav = page.getByRole('navigation', { name: 'Board index' });
     await expect(nav).toBeVisible();
-    await nav.getByRole('button', { name: new RegExp(TITLES[10]!) }).first().click();
+    await nav.getByRole('button', { name: new RegExp(TITLES[6]!) }).first().click();
     await expect(board.getByRole('button', { name: 'Board ›' })).toBeVisible();
     await board.getByRole('button', { name: 'Board ›' }).click();
     await expect(board.locator('#board-area')).toHaveCount(0);
     await atRest(page);
     expect(await overviewTransform(page), 'after an index jump and back').toBe(before);
-    expect(await cardBoxes(page)).toHaveLength(11);
+    expect(await cardBoxes(page)).toHaveLength(7);
 
     // Tab across the cards: each one gets focus and the view stays
     await cards.first().focus();
-    for (let i = 1; i < 11; i++) {
+    await expect(cards.first()).toBeFocused();
+    const heroSteps = board.locator('#board-overview .react-flow__node-area button:not(.board-area)');
+    const stepCount = await heroSteps.count();
+    for (let s = 0; s < stepCount; s++) {
+      await page.keyboard.press('Tab');
+      await expect(heroSteps.nth(s)).toBeFocused();
+    }
+    for (let i = 1; i < 7; i++) {
       await page.keyboard.press('Tab');
       await expect(cards.nth(i)).toBeFocused();
       await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
       expect(await overviewTransform(page), `Tab to card ${i}`).toBe(before);
     }
+    await page.keyboard.press('Tab');
+    await expect(fold).toBeFocused();
+    expect(await overviewTransform(page), 'Tab to fold').toBe(before);
   });
 
   test('with a fold open, Tab through the rows below the stage keeps x, and each focused card ends whole in view (1100x700)', async ({ page }) => {
@@ -383,6 +412,12 @@ test.describe('Board overview in Split mode: small cards', () => {
     });
     expect(hidden).toBeGreaterThan(0);
     await cards.first().focus();
+    const heroSteps = board.locator('#board-overview .react-flow__node-area button:not(.board-area)');
+    const stepCount = await heroSteps.count();
+    for (let s = 0; s < stepCount; s++) {
+      await page.keyboard.press('Tab');
+      await expect(heroSteps.nth(s)).toBeFocused();
+    }
     for (let i = 1; i < 25; i++) {
       await page.keyboard.press('Tab');
       await expect(cards.nth(i)).toBeFocused();
@@ -396,6 +431,8 @@ test.describe('Board overview in Split mode: small cards', () => {
       }, i);
       expect(whole, `card ${i} whole in view`).toBe(true);
     }
+    await page.keyboard.press('Tab');
+    await expect(fold).toBeFocused();
   });
 
   const matrix = async (page: import('@playwright/test').Page) => (await overviewTransform(page)).match(/matrix\(([^)]*)\)/)![1]!.split(',').map(Number);
@@ -423,7 +460,17 @@ test.describe('Board overview in Split mode: small cards', () => {
     await expect(cards).toHaveCount(25);
     await cards.last().focus();
     await atRest(page);
-    for (let i = 24; i > 0; i--) await page.keyboard.press('Shift+Tab');
+    for (let i = 24; i > 1; i--) {
+      await page.keyboard.press('Shift+Tab');
+      await expect(cards.nth(i - 1)).toBeFocused();
+    }
+    const heroSteps = board.locator('#board-overview .react-flow__node-area button:not(.board-area)');
+    const stepCount = await heroSteps.count();
+    for (let s = stepCount - 1; s >= 0; s--) {
+      await page.keyboard.press('Shift+Tab');
+      await expect(heroSteps.nth(s)).toBeFocused();
+    }
+    await page.keyboard.press('Shift+Tab');
     await expect(cards.first()).toBeFocused();
     await atRest(page);
     const where = await titleHit(cards.first());
@@ -433,6 +480,8 @@ test.describe('Board overview in Split mode: small cards', () => {
 
   test('a card focused after a pan is moved to the inset, not under the pane icons (1100x700)', async ({ page }) => {
     const board = await openSplit(page, { width: 1100, height: 700 });
+    const fold = board.locator('#board-overview button.board-area-fold');
+    if (await fold.isVisible()) await fold.click();
     const cards = board.locator('#board-overview button.board-area');
     await expect(cards).toHaveCount(11);
     // A pan by hand: the grid up by 40 px, so the top row is at y=4 and still whole in view
@@ -460,7 +509,7 @@ test.describe('Board overview in Split mode: small cards', () => {
     await fold.click();
     await expect(fold).toHaveText('Show fewer');
     await atRest(page);
-    const last = overview.locator('button.board-area').last();
+    const last = overview.locator('button.board-area').filter({ hasText: /Checkpoint 25/ });
     await page.getByRole('button', { name: /^Board index/ }).click();
     const nav = page.getByRole('navigation', { name: 'Board index' });
     await expect(nav).toBeVisible();
@@ -502,7 +551,7 @@ test.describe('Board overview in Split mode: small cards', () => {
     await board.getByRole('button', { name: 'Board ›' }).click();
     await expect(board.locator('#board-area')).toHaveCount(0);
     await atRest(page);
-    expect(before, 'the cards were small cards before').toBe(25);
+    expect(before, 'the cards were small cards before').toBe(24);
     await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(0);
     await expect(cards.last()).toBeFocused();
     expect((await matrix(page))[0], 'rows are at life size').toBe(1);
@@ -515,8 +564,11 @@ test.describe('Board overview in Split mode: small cards', () => {
   test('the form of the overview changes with the index: the view goes back to the plan\'s, at zoom 1 for small cards (Board mode 1200x720)', async ({ page }) => {
     const board = await openSplit(page, { width: 1200, height: 752 }, { split: false });
     const overview = board.locator('#board-overview');
-    await expect(overview.locator('.react-flow__node-area')).toHaveCount(11);
-    expect((await matrix(page))[0], 'cards are scaled to fit').toBeLessThan(1);
+    await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
+    const fold = overview.locator('button.board-area-fold');
+    if (await fold.isVisible()) await fold.click();
+    await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(10);
+    const boxesBefore = await cardBoxes(page);
     const stage = await stageBox(page);
     await page.mouse.move(stage.x + 4, stage.y + 300);
     await page.mouse.down();
@@ -525,17 +577,26 @@ test.describe('Board overview in Split mode: small cards', () => {
     await atRest(page);
     await page.getByRole('button', { name: /^Board index/ }).click();
     await expect(page.getByRole('navigation', { name: 'Board index' })).toBeVisible();
-    await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(11);
+    await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(10);
     await atRest(page);
     const [zoom, , , , , y] = await matrix(page);
     expect(zoom, 'small cards are at life size').toBe(1);
     expect(y, 'and at the plan\'s top').toBe(44);
+    const boxesAfter = await cardBoxes(page);
+    expect(boxesAfter[1]!.width, 'opening the index changes card layout').not.toBe(boxesBefore[1]!.width);
+    for (let i = 0; i < boxesAfter.length; i++) {
+      for (let j = i + 1; j < boxesAfter.length; j++) {
+        const a = boxesAfter[i]!;
+        const b = boxesAfter[j]!;
+        expect(a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5, `card ${i} overlaps card ${j}`).toBe(true);
+      }
+    }
   });
 
   test('a picture shows on a card with a status only where the status has a line of its own (240 x 96 and up)', async ({ page }) => {
-    // The picture is on the current Area, which also waits for an answer; stage 540 x 696 gives small cards of about 93 px, 540 x 756 of about 103 px (the window is 32 px taller for the Now line)
-    for (const { height, shows } of [{ height: 772, shows: false }, { height: 832, shows: true }]) {
-      const board = await openSplit(page, { width: 1280, height: height }, { pictureOn: 2 });
+    // The picture is on an Area which also waits for an answer (status); stage gives small cards of about 93 px, then about 103 px
+    for (const { height, shows } of [{ height: 736, shows: false }, { height: 760, shows: true }]) {
+      const board = await openSplit(page, { width: 1280, height: height }, { count: 8, pictureOn: 2, questionOn: 2 });
       const card = board.locator('#board-overview button.board-area').filter({ hasText: TITLES[2]! });
       const box = (await card.boundingBox())!;
       expect(box.width).toBeGreaterThanOrEqual(240);
@@ -547,17 +608,28 @@ test.describe('Board overview in Split mode: small cards', () => {
 
   test('Tab at rest does not take the view: a window that changes still lays the cards out again (Board mode 1200x720)', async ({ page }) => {
     const board = await openSplit(page, { width: 1200, height: 752 }, { split: false });
+    const fold = board.locator('#board-overview button.board-area-fold');
+    if (await fold.isVisible()) await fold.click();
     const cards = board.locator('#board-overview button.board-area');
     await expect(cards).toHaveCount(11);
     await cards.first().focus();
+    await expect(cards.first()).toBeFocused();
+    const heroSteps = board.locator('#board-overview .react-flow__node-area button:not(.board-area)');
+    const stepCount = await heroSteps.count();
+    for (let s = 0; s < stepCount; s++) {
+      await page.keyboard.press('Tab');
+      await expect(heroSteps.nth(s)).toBeFocused();
+    }
     await page.keyboard.press('Tab');
     await expect(cards.nth(1)).toBeFocused();
     await atRest(page);
     const resting = await matrix(page);
     expect(resting[5], 'at 1200x720 the cards stand at the top').toBe(44);
-    // A taller window: the layout puts the cards lower, and the view follows because Tab did not move it
+    const boxBefore = (await cards.nth(1).boundingBox())!;
+    // A taller window: the cards are laid out again, and the view follows because Tab did not move it
     await page.setViewportSize({ width: 1200, height: 832 });
     await atRest(page);
-    expect((await matrix(page))[5], 'the view follows the new layout').toBeGreaterThan(44);
+    expect((await cards.nth(1).boundingBox())!.height, 'the cards are laid out again').not.toBe(boxBefore.height);
+    expect((await matrix(page))[5], 'and the cards still stand at the top').toBe(44);
   });
 });

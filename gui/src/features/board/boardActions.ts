@@ -49,6 +49,8 @@ export interface BoardActions {
   setRowTab?: (rowId: string, tab: 'media' | 'notes') => void;
   /** Steps into an area from Level 0 (Overview) into Level 1 (Area). */
   openArea?: (id: string, button: HTMLElement) => void;
+  /** Steps into an area directly targeting a specific step row. */
+  openStep?: (areaId: string, stepKey: string) => void;
   /** Selects a card to follow its thread (lights up connected chain and dims the rest), or null to clear. */
   selectThread?: (nodeId: string | null) => void;
   /** Submits an answer to a plan decision directly from a board card. */

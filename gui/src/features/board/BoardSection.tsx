@@ -274,14 +274,21 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   );
   const overviewLines = useMemo(() => overviewEdges(areas, overviewNodes, board?.links ?? []), [areas, overviewNodes, board?.links]);
   // Only rows and small cards fold, and only they scroll: a form without a fold (or one that fits every Area) leaves the folded Areas as they were
-  const hasFold = overview.nodes.some((node) => node.type === 'areaFold');
+  const foldNode = overview.nodes.find((node) => node.type === 'areaFold');
+  const foldKind = foldNode?.data?.kind;
+  const prevFoldKind = useRef(foldKind);
   useEffect(() => {
-    if (!hasFold && foldOpen) {
+    if (!foldNode && foldOpen) {
       // The fold went away by itself (the window grew): the view is laid out again, as when the person closes it
       overviewTaken.current = false;
       setFoldOpen(false);
+    } else if (prevFoldKind.current === 'more' && foldKind === 'done' && foldOpen) {
+      overviewTaken.current = false;
+      setFoldOpen(false);
     }
-  }, [hasFold, foldOpen]);
+    prevFoldKind.current = foldKind;
+  }, [foldNode, foldKind, foldOpen]);
+
   const totalArchived = board?.cards.filter((card) => card.archived).length ?? 0;
 
   // Reader state
@@ -347,7 +354,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const [navChoice, setNavChoice] = useState(readNavChoice);
   const [navAuto, setNavAuto] = useState<boolean | null>(null);
   const [navShown, setNavShown] = useState(false);
-  const navOpen = navChoice ?? navAuto ?? true;
+  const navOpen = navChoice ?? navAuto ?? false;
   const navUndecided = navChoice === null && navAuto === null && !navDock.overlays;
   // The plan, the documents and the notes make the Areas; the commits only add a line of counts to one, so the decision does not wait for them
   const areasLoading = [plan, guidance, boardQuery].some((query) => !query.data && !query.isError);
@@ -372,6 +379,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const navExpanded = navDock.overlays ? narrowNavOpen : navOpen;
   const onToggleNavOpen = useCallback(() => {
     navFocusDue.current = true;
+    overviewTaken.current = false;
     writeNavOpen(!navOpen);
     setNavChoice(!navOpen);
   }, [navOpen]);
@@ -451,6 +459,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
+    }
+    if (!overviewNodes.some((n) => n.id === areaId)) {
+      setFoldOpen(true);
     }
     const overviewNode = overviewNodes.find((n) => n.id === areaId);
     if (overviewNode && overviewFlow.current) {
@@ -547,6 +558,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (navDock.overlays) {
       if (!narrowNavOpen) openNarrowNav();
     } else if (!navOpen) {
+      overviewTaken.current = false;
       writeNavOpen(true);
       setNavChoice(true);
     }
@@ -671,9 +683,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   overviewNow.current = { nodes: overviewNodes, size: stageSize, viewport: overview.viewport };
 
   // Restore keyboard focus to Area button when stepping out
-  useLayoutEffect(() => {
-    const id = focusTarget.current;
-    if (!id || stepped?.phase === 'open') return;
+  const tryFocusArea = useCallback((id: string): boolean => {
+    if (steppedRef.current?.phase === 'open') return false;
     const nodeEl = Array.from(stageContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
       .find((el) => el.dataset.id === id);
     const btn = nodeEl?.querySelector<HTMLElement>('button.board-area');
@@ -681,16 +692,50 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       focusing.current = true;
       btn.focus({ preventScroll: true });
       focusing.current = false;
-      // The focus handler skips its own reveal while `focusing` is set, and the form of the overview may have changed (and moved the view) while the person was inside the Area
-      // A view the layout still moves to (not taken by the person) is where the card will be, so it is revealed from there, not from where the view happens to be now
       const { nodes, size, viewport } = overviewNow.current;
       const overviewNode = nodes.find((n) => n.id === id);
       if (overviewNode) revealOverviewNode(overviewFlow.current, overviewNode, size, takeOverview, overviewTaken.current ? undefined : viewport ?? undefined);
-      if (document.activeElement === btn || !stepped) {
+      if (document.activeElement === btn || !steppedRef.current) {
         focusTarget.current = null;
       }
+      return true;
     }
-  }, [stepped, stageContainer, takeOverview]);
+    return false;
+  }, [stageContainer, takeOverview]);
+
+  useLayoutEffect(() => {
+    const id = focusTarget.current;
+    if (!id || stepped?.phase === 'open') return;
+    if (!tryFocusArea(id) && !foldOpen) {
+      setFoldOpen(true);
+    }
+  }, [stepped, foldOpen, tryFocusArea]);
+
+  useEffect(() => {
+    const id = focusTarget.current;
+    if (!id || stepped?.phase === 'open') return;
+    let frame: number;
+    let cancelled = false;
+    const deadline = Date.now() + 2000;
+
+    const check = () => {
+      if (cancelled) return;
+      const currentId = focusTarget.current;
+      if (!currentId || steppedRef.current?.phase === 'open') return;
+      if (tryFocusArea(currentId)) return;
+      if (Date.now() < deadline) {
+        frame = requestAnimationFrame(check);
+      } else {
+        focusTarget.current = null;
+      }
+    };
+
+    frame = requestAnimationFrame(check);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [stepped, foldOpen, tryFocusArea, overviewNodes]);
 
   // Focus Back button when stepped into an area (skipping when a jump to an item is pending in this area)
   useLayoutEffect(() => {
@@ -807,7 +852,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // A press anywhere ends the looking after the keyboard: whoever pressed has put it where they want it, and putting it back on the opener
   // in the middle of a drag over a card's text (the focus moves, and the selection stops) is the one thing to avoid.
   useEffect(() => {
-    const leave = () => { openerRetry.current = null; };
+    const leave = () => {
+      openerRetry.current = null;
+      focusTarget.current = null;
+    };
     document.addEventListener('pointerdown', leave, true);
     return () => document.removeEventListener('pointerdown', leave, true);
   }, []);
@@ -1070,14 +1118,23 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return;
     }
 
+    const matchesTarget = (id: string | undefined, targetId: string) => {
+      if (!id) return false;
+      if (id === targetId) return true;
+      if (id.includes(':step:') && targetId.includes(':step:')) {
+        return id.split(':step:')[1] === targetId.split(':step:')[1];
+      }
+      return false;
+    };
+
     const nodeEl = Array.from(
       areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [],
-    ).find((el) => el.dataset.id === pendingJump.nodeId);
+    ).find((el) => matchesTarget(el.dataset.id, pendingJump.nodeId));
 
     if (!nodeEl) {
       // The cards of an Area that was just chosen are drawn a frame or two later (and the old Area's are on the screen until then):
       // look again each frame for a while, and give up at once on a card that this Area does not have
-      const drawn = areaNodes.some((areaNode) => areaNode.id === pendingJump.nodeId);
+      const drawn = areaNodes.some((areaNode) => matchesTarget(areaNode.id, pendingJump.nodeId));
       const place = drawn || !activeArea ? null : areaPlace(activeArea, { news: boardNewsView, size: areaCanvasSize }, pendingJump.nodeId);
       if (!drawn && (!place || jumpFrames.current >= JUMP_FRAMES)) {
         clearJump();
@@ -1104,11 +1161,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const jump = pendingJump;
     clearJump();
 
+    const actualId = nodeEl.dataset.id ?? jump.nodeId;
     // Trigger node highlight
-    setHighlightedNode({ id: jump.nodeId, request: jump.request });
+    setHighlightedNode({ id: actualId, request: jump.request });
 
     // Select thread (the add of a note only lights the note: a selected thread dims everything else)
-    setThreadSelectedId(jump.lightOnly ? null : jump.nodeId);
+    setThreadSelectedId(jump.lightOnly ? null : actualId);
 
     // The cards are not stops of their own (nothing is moved here), so the keyboard goes to the card's first control, or to the card itself
     const inner = firstControl(nodeEl);
@@ -1490,6 +1548,22 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     workspacePath,
     readOnly,
     openArea: stepInto,
+    openStep: (areaId: string, stepKey: string) => {
+      const area = areas.find((a) => a.id === areaId);
+      const rows = area ? areaRows(area, { news: newsView, size: stageSize }) : [];
+      let targetNodeId = `row:step:${stepKey}`;
+      for (const row of rows) {
+        if (row.id === `row:step:${stepKey}`) {
+          targetNodeId = `row:step:${stepKey}`;
+          break;
+        }
+        if (row.groups?.some((g) => g.key === stepKey)) {
+          targetNodeId = `${row.id}:step:${stepKey}`;
+          break;
+        }
+      }
+      jumpToItem({ areaId, nodeId: targetNodeId }, false, true);
+    },
     openInReader: () => {},
     toggleGroup: () => {},
     keepFocus: () => {},
@@ -1508,7 +1582,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
+  }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1796,14 +1870,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 >
                   {activeArea.data.title}
                 </h2>
-                {activeArea.data.kind === 'checkpoint' && (
-                  activeArea.data.done ? (
-                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="success">Done</Badge></span>
-                  ) : activeArea.data.current ? (
-                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant={activeArea.data.nowSet ? 'default' : 'outline'}>{activeArea.data.nowSet ? 'Now' : 'Next up'}</Badge></span>
-                  ) : (
-                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="outline">Not done</Badge></span>
-                  )
+                {activeArea.data.kind === 'checkpoint' && activeArea.data.done && (
+                  <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="success">Done</Badge></span>
                 )}
                 {activeArea.data.kind === 'plan' && <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="outline">Plan</Badge></span>}
                 {activeArea.data.waitingCount > 0 && !areaNodes.some((areaNode) => areaNode.id === activeArea.id) && (

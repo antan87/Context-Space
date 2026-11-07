@@ -107,7 +107,13 @@ export function useMarkNewsSeen(workspace: string) {
     mutationFn: (at: string) => apiFetch<{ ok: true }>(`/api/workspace/${encodeURIComponent(workspace)}/news/seen`, {
       method: 'POST', body: JSON.stringify({ reader: 'user', at }),
     }),
-    onSuccess: () => { queryClient.setQueryData<WhatsNewView>(newsKey(workspace), (news) => news && { ...news, empty: true }); },
+    onSuccess: () => {
+      queryClient.setQueryData<WhatsNewView>(newsKey(workspace), (news) => news && {
+        ...news,
+        empty: true,
+        plan: { items: [], more: 0 },
+      });
+    },
     onError: () => { void queryClient.invalidateQueries({ queryKey: newsKey(workspace) }); },
   });
 }

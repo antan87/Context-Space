@@ -96,33 +96,18 @@ describe('navStartsOpen', () => {
   });
   const areas = (count: number) => Array.from({ length: count }, (_, i) => areaOf(i));
 
-  it('starts closed when the Areas are rows with it open and cards with it closed', () => {
+  it('starts closed at every size and area count', () => {
     expect(navStartsOpen(areas(11), { width: 1160, height: 756 })).toBe(false);
     expect(navStartsOpen(areas(11), { width: 1200, height: 756 })).toBe(false);
-  });
-
-  it('starts closed when closing it turns small cards into cards, and open when both are small cards', () => {
-    // Eight Areas: small cards with it open, cards with it closed
     expect(navStartsOpen(areas(8), { width: 1100, height: 700 })).toBe(false);
-    expect(navStartsOpen(areas(8), { width: 1200, height: 700 })).toBe(false);
-    // Eleven at 1100x700 are small cards either way
-    expect(navStartsOpen(areas(11), { width: 1100, height: 700 })).toBe(true);
-  });
-
-  it('starts open when closing it would not turn the rows into cards', () => {
-    // Cards fit with it open too, or they do not fit even with it closed
-    expect(navStartsOpen(areas(3), { width: 1160, height: 756 })).toBe(true);
-    expect(navStartsOpen(areas(11), { width: 1100, height: 700 })).toBe(true);
-    expect(navStartsOpen(areas(25), { width: 1160, height: 756 })).toBe(true);
-    expect(navStartsOpen(areas(11), { width: 2000, height: 1100 })).toBe(true);
-  });
-
-  it('leaves it alone where it overlays the board, and while nothing is known', () => {
-    expect(navStartsOpen(areas(11), { width: 900, height: 756 })).toBe(true);
-    expect(navStartsOpen(areas(11), { width: 400, height: 700 })).toBe(true);
-    expect(navStartsOpen(areas(11), { width: 390, height: 650 })).toBe(true);
-    expect(navStartsOpen(areas(11), { width: 0, height: 0 })).toBe(true);
-    expect(navStartsOpen([], { width: 1160, height: 756 })).toBe(true);
+    expect(navStartsOpen(areas(3), { width: 1160, height: 756 })).toBe(false);
+    expect(navStartsOpen(areas(25), { width: 1160, height: 756 })).toBe(false);
+    expect(navStartsOpen(areas(11), { width: 2000, height: 1100 })).toBe(false);
+    expect(navStartsOpen(areas(11), { width: 900, height: 756 })).toBe(false);
+    expect(navStartsOpen(areas(11), { width: 400, height: 700 })).toBe(false);
+    expect(navStartsOpen(areas(11), { width: 390, height: 650 })).toBe(false);
+    expect(navStartsOpen(areas(11), { width: 0, height: 0 })).toBe(false);
+    expect(navStartsOpen([], { width: 1160, height: 756 })).toBe(false);
   });
 });
 

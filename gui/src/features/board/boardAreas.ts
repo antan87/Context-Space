@@ -13,7 +13,7 @@
 import type { RepoChangeSummary } from '../changes/changeSummary.js';
 import type { Edge, Node } from '@xyflow/react';
 import type { WorkDocument } from '../../types.js';
-import { focusOf } from '../plan/focus.js';
+import { focusOf, headingKeysOf } from '../plan/focus.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
@@ -32,7 +32,6 @@ import {
   type LaneCard,
   type Rect,
 } from './boardLayout.js';
-import { READABLE_ZOOM } from './boardRows.js';
 
 /** An Area card at Level 0. `height` is the least one (a title, its steps and nothing else): `areaCardHeight` is what the content needs. */
 export const AREA_SIZE = { width: 320, height: 100, gapX: 32, gapY: 24 } as const;
@@ -59,6 +58,7 @@ export const waitingText = (waiting: number) =>
   waiting === 1 ? 'Waits for you' : `${waiting} wait for you`;
 
 export type AreaPicture = { path: string; alt: string };
+export type AreaOpenStep = { key: string; text: string; done: boolean };
 
 export type AreaData = {
   kind: 'checkpoint' | 'plan' | 'work';
@@ -70,6 +70,23 @@ export type AreaData = {
   nowSet: boolean;
   /** The key of the focus step, in the focus Area. */
   focusStep?: string;
+  /** Up to 3 open workable steps (skipping headings) for the focus Area in Tier 1. */
+  openSteps?: AreaOpenStep[];
+  /** The next open step text that is not a heading (for Tier 4). */
+  nextOpenStep?: string;
+  /** The first waiting question's text for Tier 2. */
+  waitingQuestion?: string;
+  /** Summary of news items for this area (e.g. "2 commits, 1 picture") for Tier 3. */
+  newsSummary?: string;
+  /** Timestamp of the newest fresh change in this area. */
+  newestChangeTime?: number;
+  /** Flags deciding what the hero card draws whole so nothing is ever cut mid-line. */
+  heroShowPreview?: boolean;
+  heroShowPictures?: boolean;
+  heroShowFooter?: boolean;
+  heroOpenStepLimit?: number;
+  /** The tier of this Area in the overview (1..5). */
+  tier?: 1 | 2 | 3 | 4 | 5;
   stepsDone: number;
   stepsTotal: number;
   waitingCount: number;
@@ -97,11 +114,29 @@ export type AreaFoldData = {
   /** How many Areas it holds: the finished ones (`done`), or the finished ones and others that did not fit (`more`). */
   count: number;
   kind: 'done' | 'more';
+  /** How many open Areas did not fit, when both open and finished ones are folded. */
+  moreCount?: number;
+  /** How many finished Areas are folded, when both open and finished ones are folded. */
+  doneCount?: number;
   /** Whether they are shown: the row is then the one that folds them again. */
   expanded: boolean;
   /** What a press on the row does. The layout leaves it out: the board puts it in. */
   onToggle?: () => void;
 };
+/** What the fold row calls itself: "N done", "N more", or "M more · N done" when it holds both. */
+export function foldLabel(data: AreaFoldData): string {
+  if (data.expanded) return 'Show fewer';
+  if (data.moreCount && data.doneCount) {
+    return `${data.moreCount} more · ${data.doneCount} done`;
+  }
+  if (data.moreCount) {
+    return `${data.moreCount} more`;
+  }
+  if (data.doneCount) {
+    return `${data.doneCount} done`;
+  }
+  return `${data.count} ${data.kind}`;
+}
 /** The one last row of the overview that holds the Areas that did not fit. */
 export type AreaFoldNode = Node<AreaFoldData, 'areaFold'>;
 /** The same Area as a small card of the overview. */
@@ -218,12 +253,14 @@ export function buildBoardAreas({
 
   if (plan && ((plan.steps?.length ?? 0) > 0 || (plan.decisions ?? []).some((decision) => waitingKeys.has(decision.key)))) {
     const areaWaitingKeys = (plan.decisions ?? []).filter((d) => waitingKeys.has(d.key)).map((d) => d.key);
+    const steps = plan.steps ?? [];
+    const isPlanDone = steps.length > 0 ? steps.every((s) => s.done) && areaWaitingKeys.length === 0 : false;
     drafts.push({
       id: uniqueId('plan:own', taken),
       kind: 'plan',
       title: 'Plan',
-      done: false,
-      planItems: { steps: plan.steps ?? [], decisions: plan.decisions ?? [], waitingKeys: areaWaitingKeys },
+      done: isPlanDone,
+      planItems: { steps, decisions: plan.decisions ?? [], waitingKeys: areaWaitingKeys },
     });
   }
 
@@ -258,10 +295,12 @@ export function buildBoardAreas({
 
   const checkpoints = drafts.filter((a) => a.kind === 'checkpoint');
   // Where a card or document tied to nothing lives. It stays on the plan's own rule, so that it does not jump between Areas when the focus moves.
-  const placementAreaId = checkpoints.find((a) => !a.done)?.id ?? checkpoints.at(-1)?.id ?? drafts[0]!.id;
+  const openCheckpoints = checkpoints.filter((a) => !a.done);
+  const openDrafts = drafts.filter((a) => !a.done);
+  const placementAreaId = openCheckpoints[0]?.id ?? openDrafts[0]?.id ?? checkpoints.at(-1)?.id ?? drafts[0]!.id;
   // Where the work is now: the Area of the focus step. The commits tied to nothing and the work not committed yet follow it.
   const focus = focusOf(plan, undefined, focusNow);
-  const focusAreaId = (focus && (focus.checkpoint ? drafts.find((a) => a.checkpointKey === focus.checkpoint!.key) : drafts.find((a) => a.kind === 'plan')))?.id ?? placementAreaId;
+  const focusAreaId = (focus && (focus.checkpoint ? drafts.find((a) => a.checkpointKey === focus.checkpoint!.key && !a.done) : drafts.find((a) => a.kind === 'plan' && !a.done)))?.id ?? (openDrafts.length > 0 ? placementAreaId : (checkpoints.at(-1)?.id ?? drafts[0]!.id));
   const nowSet = focus?.source === 'set';
 
   const areaIds = new Set(drafts.map((a) => a.id));
@@ -329,6 +368,53 @@ export function buildBoardAreas({
     }
   }
 
+  // Map commit SHAs mentioned in steps, checks, proofs, or notes to their owning draft
+  const shaToDraftId = new Map<string, string>();
+  for (const draft of drafts) {
+    const texts: string[] = [draft.title];
+    if (draft.checkpointKey) texts.push(draft.checkpointKey);
+    for (const step of draft.planItems?.steps ?? []) {
+      texts.push(step.text);
+    }
+    for (const text of texts) {
+      const matches = text.match(/\b[0-9a-f]{7,40}\b/gi);
+      if (matches) {
+        for (const m of matches) {
+          shaToDraftId.set(m.toLowerCase().slice(0, 7), draft.id);
+        }
+      }
+    }
+  }
+
+  for (const repo of news?.commits ?? []) {
+    for (const commit of repo.commits ?? []) {
+      const shortSha = commit.sha.toLowerCase().slice(0, 7);
+      const matchedDraftId = shaToDraftId.get(shortSha);
+      if (matchedDraftId) {
+        ownerOf.set(`commit:${repo.repo}:${commit.sha}`, matchedDraftId);
+        const commitNodeId = commitNodeMap.get(commit);
+        if (commitNodeId) ownerOf.set(commitNodeId, matchedDraftId);
+      }
+    }
+  }
+
+  for (const repo of news?.commits ?? []) {
+    for (const commit of repo.commits ?? []) {
+      if (ownerOf.has(`commit:${repo.repo}:${commit.sha}`)) continue;
+      const subject = commit.subject.toLowerCase();
+      for (const draft of drafts) {
+        if (draft.id === focusAreaId) continue;
+        const key = draft.checkpointKey?.toLowerCase();
+        if (key && (subject.includes(`(${key})`) || subject.includes(`: ${key}`) || subject.includes(` ${key} `))) {
+          ownerOf.set(`commit:${repo.repo}:${commit.sha}`, draft.id);
+          const commitNodeId = commitNodeMap.get(commit);
+          if (commitNodeId) ownerOf.set(commitNodeId, draft.id);
+          break;
+        }
+      }
+    }
+  }
+
   // Fixed-point transitive ownership propagation
   let changed = true;
   while (changed) {
@@ -359,6 +445,7 @@ export function buildBoardAreas({
     warning?: string;
     fresh: boolean;
     freshKey?: string;
+    newestChangeTime?: number;
   };
 
   const partitions = new Map<string, AreaPartition>();
@@ -386,6 +473,8 @@ export function buildBoardAreas({
       if (!card.archived && isFresh(card, now)) {
         partition.fresh = true;
         partition.freshKey = card.updatedAt;
+        const cardTime = card.updatedAt ? Date.parse(card.updatedAt) : 0;
+        if (cardTime) partition.newestChangeTime = Math.max(partition.newestChangeTime ?? 0, cardTime);
       }
     }
   }
@@ -400,6 +489,8 @@ export function buildBoardAreas({
     if (isDocFresh(doc)) {
       partition.fresh = true;
       partition.freshKey = doc.updatedAt ?? doc.id;
+      const docTime = doc.updatedAt ? Date.parse(doc.updatedAt) : 0;
+      if (docTime) partition.newestChangeTime = Math.max(partition.newestChangeTime ?? 0, docTime);
     }
   }
 
@@ -422,6 +513,8 @@ export function buildBoardAreas({
         const partition = partitions.get(targetId) ?? partitions.get(focusAreaId)!;
         partition.fresh = true;
         partition.freshKey = commit.sha;
+        const commitTime = commit.at ? Date.parse(commit.at) : 0;
+        if (commitTime) partition.newestChangeTime = Math.max(partition.newestChangeTime ?? 0, commitTime);
       }
     }
 
@@ -453,6 +546,35 @@ export function buildBoardAreas({
         });
         if (repo.problem) {
           currentPartition.warning = 'Could not read everything';
+        }
+      }
+    }
+  }
+
+  // 4. Plan changes routing
+  const planKeyToDraftId = new Map<string, string>();
+  for (const draft of drafts) {
+    if (draft.checkpointKey) planKeyToDraftId.set(draft.checkpointKey, draft.id);
+    for (const step of draft.planItems?.steps ?? []) {
+      planKeyToDraftId.set(step.key, draft.id);
+    }
+    for (const dec of draft.planItems?.decisions ?? []) {
+      planKeyToDraftId.set(dec.key, draft.id);
+    }
+  }
+
+  const freshPlanChangesByArea = new Map<string, number>();
+  if (news && !news.empty) {
+    for (const change of news.plan?.items ?? []) {
+      const draftId = planKeyToDraftId.get(change.key);
+      if (draftId) {
+        freshPlanChangesByArea.set(draftId, (freshPlanChangesByArea.get(draftId) ?? 0) + 1);
+        const partition = partitions.get(draftId);
+        if (partition) {
+          partition.fresh = true;
+          partition.freshKey = change.at ?? change.key;
+          const changeTime = change.at ? Date.parse(change.at) : 0;
+          if (changeTime) partition.newestChangeTime = Math.max(partition.newestChangeTime ?? 0, changeTime);
         }
       }
     }
@@ -525,9 +647,44 @@ export function buildBoardAreas({
     }
 
     const firstWaiting = draft.planItems?.decisions.find((d) => waitingKeys.has(d.key));
+    const waitingQuestion = firstWaiting?.question;
     const newestCommit = newestFirst(repoEntries.flatMap((r) => r.commits))[0];
     const firstNote = p.cards.find((c) => c.kind === 'note');
     const preview = firstWaiting?.question ?? newestCommit?.subject ?? firstNote?.title;
+
+    // Steps for Tier 1 and Tier 4 (skipping headings)
+    const areaStepsList = draft.planItems?.steps ?? [];
+    const headings = headingKeysOf(areaStepsList);
+    const workableSteps = areaStepsList.filter((s) => !s.done && !headings.has(s.key));
+    const nextOpenStep = workableSteps[0]?.text;
+
+    const openSteps: AreaOpenStep[] = (isCurrent && focus?.step && !focus.step.done && !headings.has(focus.step.key))
+      ? [focus.step, ...workableSteps.filter((s) => s.key !== focus.step!.key)]
+          .slice(0, 3)
+          .map((s) => ({ key: s.key, text: s.text, done: s.done }))
+      : workableSteps.slice(0, 3).map((s) => ({ key: s.key, text: s.text, done: s.done }));
+
+    // News summary for Tier 3 ("2 commits, 1 picture")
+    let freshCommits = 0;
+    for (const r of repoEntries) {
+      freshCommits += r.commits.filter((c) => isCommitFresh(c.sha)).length;
+    }
+    const freshDocs = p.documents.filter((doc) => isDocFresh(doc));
+    const freshDocPictures = freshDocs.filter((d) => fileTypeOf(d.filename ?? d.title) === 'image').length;
+    const freshOtherDocs = freshDocs.length - freshDocPictures;
+    const freshCards = p.cards.filter((c) => !c.archived && isFresh(c, now));
+    const freshPictureCards = freshCards.filter((c) => c.kind === 'file' && fileTypeOf(c.path) === 'image').length;
+    const freshNotes = freshCards.filter((c) => c.kind === 'note').length;
+    const freshPictures = freshDocPictures + freshPictureCards;
+
+    const freshPlanChanges = freshPlanChangesByArea.get(draft.id) ?? 0;
+    const newsParts: string[] = [];
+    if (freshCommits > 0) newsParts.push(`${freshCommits} ${freshCommits === 1 ? 'commit' : 'commits'}`);
+    if (freshPictures > 0) newsParts.push(`${freshPictures} ${freshPictures === 1 ? 'picture' : 'pictures'}`);
+    if (freshOtherDocs > 0) newsParts.push(`${freshOtherDocs} ${freshOtherDocs === 1 ? 'document' : 'documents'}`);
+    if (freshNotes > 0) newsParts.push(`${freshNotes} ${freshNotes === 1 ? 'note' : 'notes'}`);
+    if (freshPlanChanges > 0) newsParts.push(`${freshPlanChanges} ${freshPlanChanges === 1 ? 'update' : 'updates'}`);
+    const newsSummary = newsParts.length > 0 ? newsParts.join(', ') : (p.fresh ? '1 update' : undefined);
 
     const allMemberNodeIds = [
       draft.id,
@@ -543,6 +700,11 @@ export function buildBoardAreas({
       current: isCurrent,
       nowSet: isCurrent && nowSet,
       ...(isCurrent && focus?.step ? { focusStep: focus.step.key } : {}),
+      ...(openSteps.length > 0 ? { openSteps } : {}),
+      ...(nextOpenStep ? { nextOpenStep } : {}),
+      ...(waitingQuestion ? { waitingQuestion } : {}),
+      ...(newsSummary ? { newsSummary } : {}),
+      ...(p.newestChangeTime ? { newestChangeTime: p.newestChangeTime } : {}),
       stepsDone: stepsDoneCount,
       stepsTotal: stepsTotalCount,
       waitingCount,
@@ -595,8 +757,8 @@ export function areaCounts(data: AreaData): string[] {
  * card less a tenth, since a line breaks at a word. It is a guess made without the browser; a text that is a little long takes the room
  * of a second line, and one that is a little short of the width stays on its one.
  */
-function cardTextLines(text: string, size: number, weight = 1): 1 | 2 {
-  return textEm(text) * size * weight > CARD_TEXT_WIDTH * 0.92 ? 2 : 1;
+function cardTextLines(text: string, size: number, weight = 1, width = CARD_TEXT_WIDTH): 1 | 2 {
+  return textEm(text) * size * weight > width * 0.92 ? 2 : 1;
 }
 
 /** The width of a text in ems, guessed without the browser from the width of each kind of letter (`EM`): times the font size, it is px. */
@@ -616,6 +778,130 @@ export function areaCardHeight(data: AreaData): number {
     : data.preview ? CARD.more + cardTextLines(data.preview, 13.5, 0.93) * CARD.text : 0;
   const footer = areaCounts(data).length > 0 || data.warning ? CARD.footer : 0;
   return 2 * CARD.pad + CARD.head + CARD.gap + title * CARD.line + (data.kind === 'work' ? 0 : CARD.steps) + middle + footer;
+}
+
+export interface HeroCardOptions {
+  width?: number;
+  showPictures?: boolean;
+  showPreview?: boolean;
+  showFooter?: boolean;
+  openStepLimit?: number;
+}
+
+/** How high the Tier 1 focus Area card needs to be for what it shows: title, open steps, pictures, counts. */
+export function heroCardHeight(data: AreaData, options: HeroCardOptions | number = AREA_SIZE.width): number {
+  const opts: HeroCardOptions = typeof options === 'number' ? { width: options } : options;
+  const width = opts.width ?? AREA_SIZE.width;
+  const textWidth = Math.max(100, width - 2 * CARD.pad - 2);
+  const title = cardTextLines(data.title, 14, 1.05, textWidth);
+
+  const stepLimit = opts.openStepLimit ?? 3;
+  const openSteps = (data.openSteps ?? []).slice(0, stepLimit);
+  const openStepsHeight = openSteps.length > 0 ? (openSteps.length * 28 + 8) : 0;
+  const progressHeight = data.kind !== 'work' ? CARD.steps : 0;
+  const stepsHeight = progressHeight + openStepsHeight;
+
+  const showPics = opts.showPictures ?? true;
+  const showPrev = opts.showPreview ?? true;
+  const middle = (showPics && data.pictures.length > 0)
+    ? CARD.pictures
+    : (showPrev && data.preview) ? CARD.more + cardTextLines(data.preview, 13.5, 0.93, textWidth) * CARD.text : 0;
+
+  const showFoot = opts.showFooter ?? true;
+  const footer = (showFoot && (areaCounts(data).length > 0 || data.warning)) ? CARD.footer : 0;
+
+  return 2 * CARD.pad + CARD.head + CARD.gap + title * CARD.line + stepsHeight + middle + footer + 2;
+}
+
+/** Computes what fits in the hero card whole without mid-line clipping. */
+export function fitHeroCard(data: AreaData, width: number, maxAvailableHeight: number): {
+  height: number;
+  config: { heroShowPictures: boolean; heroShowPreview: boolean; heroShowFooter: boolean; heroOpenStepLimit: number };
+} {
+  let config = { heroShowPictures: true, heroShowPreview: true, heroShowFooter: true, heroOpenStepLimit: 3 };
+  let height = heroCardHeight(data, { width, showPictures: config.heroShowPictures, showPreview: config.heroShowPreview, showFooter: config.heroShowFooter, openStepLimit: config.heroOpenStepLimit });
+  if (height <= maxAvailableHeight) {
+    return { height, config };
+  }
+
+  // 1. Drop preview or pictures whole
+  config = { ...config, heroShowPictures: false, heroShowPreview: false };
+  height = heroCardHeight(data, { width, showPictures: config.heroShowPictures, showPreview: config.heroShowPreview, showFooter: config.heroShowFooter, openStepLimit: config.heroOpenStepLimit });
+  if (height <= maxAvailableHeight) {
+    return { height, config };
+  }
+
+  // 2. Drop footer whole
+  config = { ...config, heroShowFooter: false };
+  height = heroCardHeight(data, { width, showPictures: config.heroShowPictures, showPreview: config.heroShowPreview, showFooter: config.heroShowFooter, openStepLimit: config.heroOpenStepLimit });
+  if (height <= maxAvailableHeight) {
+    return { height, config };
+  }
+
+  // 3. Drop open steps: 2 steps, then 1 step (never drop below 1 if open steps exist)
+  const minLimit = (data.openSteps && data.openSteps.length > 0) ? 1 : 0;
+  for (const limit of [2, 1]) {
+    if (limit < minLimit) break;
+    config = { ...config, heroOpenStepLimit: limit };
+    height = heroCardHeight(data, { width, showPictures: config.heroShowPictures, showPreview: config.heroShowPreview, showFooter: config.heroShowFooter, openStepLimit: config.heroOpenStepLimit });
+    if (height <= maxAvailableHeight || limit === minLimit) {
+      return { height, config };
+    }
+  }
+
+  return { height, config };
+}
+
+export interface OverviewTiers {
+  tier1: BoardArea[];
+  tier2: BoardArea[];
+  tier3: BoardArea[];
+  tier4: BoardArea[];
+  tier5: BoardArea[];
+}
+
+/**
+ * Pure function partitioning the Areas into the 5 tiers of Level 0:
+ * 1. The focus Area, large (the one under way or first open checkpoint)
+ * 2. Waits for you: Areas holding a question
+ * 3. Moved since you looked: Areas with something new from news data
+ * 4. Everything else still open, in plan order
+ * 5. Done: finished Areas
+ *
+ * Rules: each Area appears once, in the first tier that fits it. Tier 4 preserves plan order.
+ */
+export function partitionOverviewTiers(areas: BoardArea[]): OverviewTiers {
+  if (areas.length === 0) {
+    return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [] };
+  }
+  const allDone = areas.every((a) => a.data.done);
+  if (allDone) {
+    return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [...areas] };
+  }
+  const focusArea = areas.find((a) => a.data.current && !a.data.done) ?? areas.find((a) => !a.data.done);
+  if (!focusArea) {
+    return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [...areas] };
+  }
+  const tier1 = [focusArea];
+  let remaining = areas.filter((a) => a.id !== focusArea.id);
+
+  const tier2 = remaining.filter((a) => a.data.waitingCount > 0);
+  remaining = remaining.filter((a) => a.data.waitingCount === 0);
+
+  // Tier 3: Moved since you looked: Areas with something new from news data.
+  // Capped to at most 3 Areas with the newest changes so the tier still means something.
+  // Any areas beyond the cap stay in Tier 4 in plan order.
+  const tier3Candidates = remaining.filter((a) => Boolean(a.data.newsSummary));
+  const sortedTier3 = [...tier3Candidates].sort((a, b) => (b.data.newestChangeTime ?? 0) - (a.data.newestChangeTime ?? 0));
+  const MAX_TIER3 = 3;
+  const tier3 = sortedTier3.slice(0, MAX_TIER3);
+  const tier3Set = new Set(tier3.map((a) => a.id));
+  remaining = remaining.filter((a) => !tier3Set.has(a.id));
+
+  const tier5 = remaining.filter((a) => a.data.done);
+  const tier4 = remaining.filter((a) => !a.data.done);
+
+  return { tier1, tier2, tier3, tier4, tier5 };
 }
 
 /** The room the overview's Areas have, in px of the stage: the stage less its insets. */
@@ -642,120 +928,8 @@ function cardLines(areas: BoardArea[], cols: number): number[] {
   return heights;
 }
 
-/**
- * The cards of the overview in the columns that show them all whole at a readable zoom (never below `READABLE_ZOOM`, never
- * above life size), or null when no number of columns does. The one that is shown largest wins; the one closest to the stage's
- * proportions when they are as large.
- */
-function cardsPlan(areas: BoardArea[], size: Size): OverviewPlan | null {
-  const room = overviewRoom(size);
-  const targetRatio = room.width / room.height;
-  const extent = (cols: number) => {
-    const lines = cardLines(areas, cols);
-    return { lines, w: cols * AREA_SIZE.width + (cols - 1) * AREA_SIZE.gapX, h: lines.reduce((sum, line) => sum + line, 0) + (lines.length - 1) * AREA_SIZE.gapY };
-  };
-  let best: { cols: number; zoom: number; diff: number } | null = null;
-  for (let cols = 1; cols <= areas.length; cols++) {
-    const { w, h } = extent(cols);
-    const zoom = Math.min(1, room.width / w, room.height / h);
-    if (zoom < READABLE_ZOOM - 1e-9) continue;
-    const diff = Math.abs(w / h - targetRatio);
-    if (!best || zoom > best.zoom + 1e-5 || (Math.abs(zoom - best.zoom) <= 1e-5 && diff < best.diff)) best = { cols, zoom, diff };
-    // A few Areas that fit side by side at life size stand in one line
-    if (areas.length <= 3 && cols === areas.length && zoom >= 0.999) { best = { cols, zoom, diff }; break; }
-  }
-  if (!best) return null;
-  const { cols, zoom } = best;
-  const { lines, w, h } = extent(cols);
-  const tops = lines.map((_, line) => lines.slice(0, line).reduce((sum, above) => sum + above + AREA_SIZE.gapY, 0));
-  return {
-    form: 'cards',
-    nodes: areas.map((area, index): AreaNode => {
-      const line = Math.floor(index / cols);
-      return {
-        id: area.id,
-        type: 'area',
-        position: { x: (index % cols) * (AREA_SIZE.width + AREA_SIZE.gapX), y: tops[line]! },
-        width: AREA_SIZE.width,
-        height: lines[line]!,
-        measured: { width: AREA_SIZE.width, height: lines[line]! },
-        data: area.data,
-        ...FIXED,
-      };
-    }),
-    viewport: { x: (size.width - w * zoom) / 2, y: room.top + (room.height - h * zoom) / 2, zoom },
-  };
-}
-
 /** The id of the overview's one last row of folded Areas. */
 export const OVERVIEW_FOLD = 'overview:fold';
-
-/**
- * Which Areas stay when only `slots` places are free and the last one is taken by the fold: the finished ones go first, then the
- * ones at the end, the one under way never.
- */
-function foldAreas(areas: BoardArea[], slots: number): { shown: BoardArea[]; folded: BoardArea[] } {
-  if (areas.length <= slots) return { shown: areas, folded: [] };
-  const kept = new Set(areas.filter((area) => !area.data.done || area.data.current).map((area) => area.id));
-  // The last tile takes one slot, so the Areas that stay are one fewer than the slots
-  const trailing = areas.filter((area) => kept.has(area.id) && !area.data.current).reverse();
-  for (const area of trailing) {
-    if (kept.size <= slots - 1) break;
-    kept.delete(area.id);
-  }
-  return { shown: areas.filter((area) => kept.has(area.id)), folded: areas.filter((area) => !kept.has(area.id)) };
-}
-
-/** What the fold tile says about the Areas it holds. */
-const foldData = (folded: BoardArea[], expanded: boolean): AreaFoldData | null =>
-  folded.length > 0 ? { count: folded.length, kind: folded.every((area) => area.data.done) ? 'done' : 'more', expanded } : null;
-
-/**
- * One line to an Area at life size, in as few columns as show them all. When they are too many for the stage the finished ones
- * fold into one last row ("N done"), and when that is not enough the ones at the end fold with them ("N more"), the one under way
- * never. `expanded` shows them all, and the rows then go on below the stage: the view is for the person to move.
- */
-function rowsPlan(areas: BoardArea[], size: Size, expanded: boolean): OverviewPlan {
-  const room = overviewRoom(size);
-  const step = AREA_ROW.height + AREA_ROW.gap;
-  const perColumn = Math.max(1, Math.floor((room.height + AREA_ROW.gap) / step));
-  const maxCols = Math.max(1, Math.floor((room.width + AREA_ROW.gapX) / (AREA_ROW.minWidth + AREA_ROW.gapX)));
-  const slots = perColumn * maxCols;
-
-  const { shown, folded } = foldAreas(areas, slots);
-  const fold = foldData(folded, expanded);
-  const list = expanded ? areas : shown;
-  const lines = list.length + (fold ? 1 : 0);
-  const cols = Math.min(maxCols, Math.ceil(lines / perColumn));
-  const rows = Math.ceil(lines / cols);
-  const width = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (cols - 1) * AREA_ROW.gapX) / cols));
-  const place = (index: number) => ({ x: Math.floor(index / rows) * (width + AREA_ROW.gapX), y: (index % rows) * step });
-
-  const nodes: OverviewNode[] = list.map((area, index): AreaRowNode => ({
-    id: area.id,
-    type: 'areaRow',
-    position: place(index),
-    width,
-    height: AREA_ROW.height,
-    measured: { width, height: AREA_ROW.height },
-    data: area.data,
-    ...FIXED,
-  }));
-  if (fold) {
-    nodes.push({
-      id: OVERVIEW_FOLD,
-      type: 'areaFold',
-      position: place(list.length),
-      width,
-      height: AREA_ROW.height,
-      measured: { width, height: AREA_ROW.height },
-      data: fold,
-      ...FIXED,
-    } satisfies AreaFoldNode);
-  }
-  const total = cols * width + (cols - 1) * AREA_ROW.gapX;
-  return { form: 'rows', nodes, viewport: { x: room.x + (room.width - total) / 2, y: room.top, zoom: 1 } };
-}
 
 /** The smallest a small card is for a picture to sit beside its text. */
 export const MINI_PICTURE = { minWidth: 240, minHeight: 92 } as const;
@@ -771,95 +945,796 @@ export function miniShowsPicture(width: number, height: number, hasStatus: boole
   return !hasStatus || height >= MINI_STATUS_LINE;
 }
 
-/** How many columns of small cards, and how wide and high each card is, for `count` tiles in the room; null when none fits them all. */
-function miniGrid(count: number, room: ReturnType<typeof overviewRoom>): { cols: number; width: number; height: number } | null {
-  const { minWidth, maxWidth, minHeight, comfyHeight, maxHeight, gap } = AREA_MINI;
-  const maxCols = Math.floor((room.width + gap) / (minWidth + gap));
-  let best: { cols: number; width: number; height: number } | null = null;
-  for (let cols = 2; cols <= maxCols; cols++) {
-    const width = Math.min(maxWidth, Math.floor((room.width - (cols - 1) * gap) / cols));
-    const lines = Math.ceil(count / cols);
-    const height = Math.min(maxHeight, Math.floor((room.height - (lines - 1) * gap) / lines));
-    if (height < minHeight) continue;
-    // The fewest columns that are comfortable win; otherwise the one with the most height
-    if (height >= comfyHeight) return { cols, width, height };
-    if (!best || height > best.height) best = { cols, width, height };
-  }
-  return best;
-}
-
 /**
- * The Areas as small cards in two columns or more, at life size, between the cards and the rows. Too many fold as in the rows
- * (`foldAreas`); null when two columns do not fit, or the cards do not fit even with the fold.
- */
-function minisPlan(areas: BoardArea[], size: Size, expanded: boolean): OverviewPlan | null {
-  const room = overviewRoom(size);
-  const { minWidth, minHeight, gap } = AREA_MINI;
-  const maxCols = Math.floor((room.width + gap) / (minWidth + gap));
-  if (maxCols < 2) return null;
-
-  let grid = miniGrid(areas.length, room);
-  let shown = areas;
-  let fold: AreaFoldData | null = null;
-  if (!grid) {
-    const slots = maxCols * Math.max(1, Math.floor((room.height + gap) / (minHeight + gap)));
-    const split = foldAreas(areas, slots);
-    fold = foldData(split.folded, expanded);
-    if (!fold) return null;
-    shown = split.shown;
-    grid = miniGrid(shown.length + 1, room);
-    if (!grid) return null;
-  }
-  const { cols, width, height } = grid;
-  const list = expanded ? areas : shown;
-  const place = (index: number) => ({ x: (index % cols) * (width + gap), y: Math.floor(index / cols) * (height + gap) });
-  const nodes: OverviewNode[] = list.map((area, index): AreaMiniNode => ({
-    id: area.id,
-    type: 'areaMini',
-    position: place(index),
-    width,
-    height,
-    measured: { width, height },
-    data: area.data,
-    ...FIXED,
-  }));
-  if (fold) {
-    nodes.push({
-      id: OVERVIEW_FOLD,
-      type: 'areaFold',
-      position: place(list.length),
-      width,
-      height,
-      measured: { width, height },
-      data: fold,
-      ...FIXED,
-    } satisfies AreaFoldNode);
-  }
-  const total = cols * width + (cols - 1) * gap;
-  return { form: 'minis', nodes, viewport: { x: room.x + (room.width - total) / 2, y: room.top, zoom: 1 } };
-}
-
-/**
- * Lays out Level 0: the Areas as cards, as many columns as fit the stage at a readable size, and when they do not fit that
- * way, as small cards in two columns or more, and when those do not fit either, as one-line rows (the narrow pane, the phone, many Areas). Pure: the form follows from the stage's size and the Areas.
+ * Lays out Level 0: clear tiers top to bottom, all on one screen with no scrolling or panning:
+ * 1. The focus Area, large (hero card: title, Now/Next up step, next two open steps, pictures, counts, question count)
+ * 2. Waits for you: Areas holding a question, with the question's first words
+ * 3. Moved since you looked: Areas with something new from news data ("2 commits, 1 picture")
+ * 4. Everything else still open: small quiet rows or small cards in plan order, each with title, next open step, and 0 of 4
+ * 5. Done: folded into one line ("1 done"), which opens in place
+ *
+ * Rules: each Area appears once, in the first tier that fits it. Tier 4 preserves plan order.
+ * Pure: the form and layout follow from the stage's size and the Areas.
  */
 export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded?: boolean } = {}): OverviewPlan {
   if (areas.length === 0) return { form: 'cards', nodes: [], viewport: null };
   if (size.width <= 0 || size.height <= 0) {
-    // Not measured yet: a guess, drawn when the size is known
     const cols = Math.min(areas.length, 3);
     const lines = cardLines(areas, cols);
     const nodes = areas.map((area, index): AreaNode => {
       const line = Math.floor(index / cols);
       const height = lines[line]!;
       return {
-        id: area.id, type: 'area', position: { x: (index % cols) * (AREA_SIZE.width + AREA_SIZE.gapX), y: lines.slice(0, line).reduce((sum, above) => sum + above + AREA_SIZE.gapY, 0) },
-        width: AREA_SIZE.width, height, measured: { width: AREA_SIZE.width, height }, data: area.data, ...FIXED,
+        id: area.id,
+        type: 'area',
+        position: { x: (index % cols) * (AREA_SIZE.width + AREA_SIZE.gapX), y: lines.slice(0, line).reduce((sum, above) => sum + above + AREA_SIZE.gapY, 0) },
+        width: AREA_SIZE.width,
+        height,
+        measured: { width: AREA_SIZE.width, height },
+        data: area.data,
+        ...FIXED,
       };
     });
     return { form: 'cards', nodes, viewport: null };
   }
-  return cardsPlan(areas, size) ?? minisPlan(areas, size, options.expanded ?? false) ?? rowsPlan(areas, size, options.expanded ?? false);
+
+  const room = overviewRoom(size);
+
+  if (areas.length === 1) {
+    const area = areas[0]!;
+    const heroWidth = Math.min(room.width, AREA_SIZE.width);
+    const { height, config } = fitHeroCard(area.data, heroWidth, room.height);
+    const x = room.x + Math.floor((room.width - heroWidth) / 2);
+    const y = room.top + Math.floor((room.height - height) / 2);
+    const node: AreaNode = {
+      id: area.id,
+      type: 'area',
+      position: { x, y },
+      width: heroWidth,
+      height,
+      measured: { width: heroWidth, height },
+      data: { ...area.data, ...config, tier: 1 },
+      ...FIXED,
+    };
+    return { form: 'cards', nodes: [node], viewport: { x: 0, y: 0, zoom: 1 } };
+  }
+
+  const miniMaxCols = Math.floor((room.width + AREA_MINI.gap) / (AREA_MINI.minWidth + AREA_MINI.gap));
+
+  // If the stage is too narrow for 2 columns of small cards, or too short for a hero card, use rows
+  if (miniMaxCols < 2 || room.height < 150) {
+    const tiers = partitionOverviewTiers(areas);
+    const step = AREA_ROW.height + AREA_ROW.gap;
+
+    // If stage is too short (< 150) or there's no active focus Area (all done), draw all rows
+    if (room.height < 150 || tiers.tier1.length === 0) {
+      const perCol = Math.max(1, Math.floor((room.height + AREA_ROW.gap) / step));
+      const maxCols = Math.max(1, Math.floor((room.width + AREA_ROW.gapX) / (AREA_ROW.minWidth + AREA_ROW.gapX)));
+      const totalSlots = perCol * maxCols;
+      const hasDone = tiers.tier5.length > 0;
+
+      const totalOpen = (tiers.tier1[0] ? 1 : 0) + tiers.tier2.length + tiers.tier3.length + tiers.tier4.length;
+      const needFold = (hasDone && !options.expanded) || totalOpen > totalSlots;
+      const maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
+
+      let shownTier1: BoardArea[];
+      let shownTier2: BoardArea[];
+      let shownTier3: BoardArea[];
+      let shownTier4: BoardArea[];
+      let shownTier5: BoardArea[];
+
+      if (options.expanded) {
+        shownTier1 = tiers.tier1;
+        shownTier2 = tiers.tier2;
+        shownTier3 = tiers.tier3;
+        shownTier4 = tiers.tier4;
+        shownTier5 = tiers.tier5;
+      } else {
+        let rem = maxRowSlots;
+        shownTier1 = tiers.tier1[0] && rem > 0 ? (rem--, [tiers.tier1[0]]) : [];
+        shownTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shownTier2.length);
+        shownTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shownTier3.length);
+        shownTier4 = tiers.tier4.slice(0, rem);
+        shownTier5 = [];
+      }
+
+      const overflowOpen = Math.max(0, totalOpen - maxRowSlots);
+      const overflowDone = hasDone ? tiers.tier5.length : 0;
+      const hasFold = options.expanded ? (hasDone || totalOpen > totalSlots) : (overflowOpen + overflowDone > 0);
+      const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
+      const moreCount = overflowOpen;
+      const doneCount = overflowDone;
+      const foldDisplayCount = options.expanded ? (overflowOpen + doneCount) : (overflowOpen + overflowDone);
+
+      const rowItems: { area: BoardArea; tier: 1 | 2 | 3 | 4 | 5 }[] = [
+        ...shownTier1.map((area) => ({ area, tier: 1 as const })),
+        ...shownTier2.map((area) => ({ area, tier: 2 as const })),
+        ...shownTier3.map((area) => ({ area, tier: 3 as const })),
+        ...shownTier4.map((area) => ({ area, tier: 4 as const })),
+        ...shownTier5.map((area) => ({ area, tier: 5 as const })),
+      ];
+
+      const shutCount = rowItems.length + (hasFold && (foldDisplayCount > 0 || options.expanded) ? 1 : 0);
+      const actualCols = Math.min(maxCols, Math.max(1, Math.ceil(shutCount / perCol)));
+      const colWidth = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (actualCols - 1) * AREA_ROW.gapX) / actualCols));
+      const totalWidth = actualCols * colWidth + (actualCols - 1) * AREA_ROW.gapX;
+      const startX = room.x + Math.floor((room.width - totalWidth) / 2);
+
+      const nodes: OverviewNode[] = [];
+      rowItems.forEach(({ area, tier }, index) => {
+        const c = index % actualCols;
+        const r = Math.floor(index / actualCols);
+        nodes.push({
+          id: area.id,
+          type: 'areaRow',
+          position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: r * step },
+          width: colWidth,
+          height: AREA_ROW.height,
+          measured: { width: colWidth, height: AREA_ROW.height },
+          data: { ...area.data, tier },
+          ...FIXED,
+        });
+      });
+
+      if (hasFold && (foldDisplayCount > 0 || options.expanded)) {
+        const foldIndex = rowItems.length;
+        const c = foldIndex % actualCols;
+        const r = Math.floor(foldIndex / actualCols);
+        nodes.push({
+          id: OVERVIEW_FOLD,
+          type: 'areaFold',
+          position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: r * step },
+          width: colWidth,
+          height: AREA_ROW.height,
+          measured: { width: colWidth, height: AREA_ROW.height },
+          data: {
+            count: foldDisplayCount,
+            kind: foldKind,
+            ...(moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {}),
+            expanded: options.expanded ?? false,
+          },
+          ...FIXED,
+        });
+      }
+
+      return { form: 'rows', nodes, viewport: { x: 0, y: room.top, zoom: 1 } };
+    }
+
+    // Narrow stage (e.g. 420 pane or phone) with sufficient height: Tier 1 is hero card (with Now step alone), lower tiers are rows
+    const focusArea = tiers.tier1[0]!;
+    const heroWidth = Math.min(room.width, 560);
+    const hasDone = tiers.tier5.length > 0;
+
+    // In 420 pane or very short window: focus Area drops to Now step alone
+    const minLowerSpace = 8 + step + (hasDone || tiers.tier4.length > 0 ? step : 0);
+    const maxAvailableForHero = Math.max(100, room.height - minLowerSpace);
+    const { config: heroConfig } = fitHeroCard(focusArea.data, heroWidth, maxAvailableForHero);
+    const narrowStepLimit = (focusArea.data.openSteps && focusArea.data.openSteps.length > 0) ? 1 : 0;
+    const finalHeroConfig = {
+      ...heroConfig,
+      heroOpenStepLimit: Math.min(narrowStepLimit, heroConfig.heroOpenStepLimit),
+      heroShowPictures: false,
+      heroShowPreview: false,
+    };
+    const finalHeroHeight = heroCardHeight(focusArea.data, {
+      width: heroWidth,
+      showPictures: false,
+      showPreview: false,
+      showFooter: finalHeroConfig.heroShowFooter,
+      openStepLimit: finalHeroConfig.heroOpenStepLimit,
+    });
+
+    const heroX = room.x + Math.floor((room.width - heroWidth) / 2);
+    const heroY = 0;
+    const heroNode: AreaNode = {
+      id: focusArea.id,
+      type: 'area',
+      position: { x: heroX, y: heroY },
+      width: heroWidth,
+      height: finalHeroHeight,
+      measured: { width: heroWidth, height: finalHeroHeight },
+      data: { ...focusArea.data, ...finalHeroConfig, tier: 1 },
+      ...FIXED,
+    };
+
+    const tierGapY = 8;
+    const startY = heroY + finalHeroHeight + tierGapY;
+    const availableHeight = Math.max(1, room.height - startY);
+    const perCol = Math.max(1, Math.floor((availableHeight + AREA_ROW.gap) / step));
+    const totalSlots = perCol;
+
+    const totalOpenLower = tiers.tier2.length + tiers.tier3.length + tiers.tier4.length;
+    const needFold = (hasDone && !options.expanded) || totalOpenLower > totalSlots;
+    const maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
+
+    let shownTier2: BoardArea[];
+    let shownTier3: BoardArea[];
+    let shownTier4: BoardArea[];
+    let shownTier5: BoardArea[];
+
+    if (options.expanded) {
+      shownTier2 = tiers.tier2;
+      shownTier3 = tiers.tier3;
+      shownTier4 = tiers.tier4;
+      shownTier5 = tiers.tier5;
+    } else {
+      let rem = maxRowSlots;
+      shownTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shownTier2.length);
+      shownTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shownTier3.length);
+      shownTier4 = tiers.tier4.slice(0, rem);
+      shownTier5 = [];
+    }
+
+    const overflowOpen = Math.max(0, totalOpenLower - maxRowSlots);
+    const overflowDone = hasDone ? tiers.tier5.length : 0;
+    const hasFold = options.expanded ? (hasDone || totalOpenLower > totalSlots) : (overflowOpen + overflowDone > 0);
+    const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
+    const moreCount = overflowOpen;
+    const doneCount = overflowDone;
+    const foldDisplayCount = options.expanded ? (overflowOpen + doneCount) : (overflowOpen + overflowDone);
+
+    const colWidth = Math.min(AREA_ROW.maxWidth, room.width);
+    const startX = room.x + Math.floor((room.width - colWidth) / 2);
+
+    const rowItems: { area: BoardArea; tier: 2 | 3 | 4 | 5 }[] = [
+      ...shownTier2.map((area) => ({ area, tier: 2 as const })),
+      ...shownTier3.map((area) => ({ area, tier: 3 as const })),
+      ...shownTier4.map((area) => ({ area, tier: 4 as const })),
+      ...shownTier5.map((area) => ({ area, tier: 5 as const })),
+    ];
+
+    const nodes: OverviewNode[] = [heroNode];
+    rowItems.forEach(({ area, tier }, index) => {
+      nodes.push({
+        id: area.id,
+        type: 'areaRow',
+        position: { x: startX, y: startY + index * step },
+        width: colWidth,
+        height: AREA_ROW.height,
+        measured: { width: colWidth, height: AREA_ROW.height },
+        data: { ...area.data, tier },
+        ...FIXED,
+      });
+    });
+
+    if (hasFold && (foldDisplayCount > 0 || options.expanded)) {
+      nodes.push({
+        id: OVERVIEW_FOLD,
+        type: 'areaFold',
+        position: { x: startX, y: startY + rowItems.length * step },
+        width: colWidth,
+        height: AREA_ROW.height,
+        measured: { width: colWidth, height: AREA_ROW.height },
+        data: {
+          count: foldDisplayCount,
+          kind: foldKind,
+          ...(moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {}),
+          expanded: options.expanded ?? false,
+        },
+        ...FIXED,
+      });
+    }
+
+    return { form: 'rows', nodes, viewport: { x: 0, y: room.top, zoom: 1 } };
+  }
+
+  const tiers = partitionOverviewTiers(areas);
+
+  // Case: All areas are Done (tier1 is empty)
+  if (tiers.tier1.length === 0) {
+    const doneAreas = tiers.tier5;
+    const totalCount = doneAreas.length;
+    if (!options.expanded) {
+      const foldWidth = Math.min(room.width, 560);
+      const foldX = room.x + Math.floor((room.width - foldWidth) / 2);
+      const foldY = Math.floor((room.height - 36) / 2);
+      const foldNode: AreaFoldNode = {
+        id: OVERVIEW_FOLD,
+        type: 'areaFold',
+        position: { x: foldX, y: foldY },
+        width: foldWidth,
+        height: 36,
+        measured: { width: foldWidth, height: 36 },
+        data: { count: totalCount, kind: 'done', expanded: false },
+        ...FIXED,
+      };
+      return { form: 'minis', nodes: [foldNode], viewport: { x: 0, y: room.top, zoom: 1 } };
+    }
+
+    const miniMaxCols = Math.floor((room.width + AREA_MINI.gap) / (AREA_MINI.minWidth + AREA_MINI.gap));
+    const foldHeight = 36;
+    const foldGap = 8;
+    const cardAreaHeight = room.height - (foldHeight + foldGap);
+
+    let bestGrid: { cols: number; width: number; height: number } | null = null;
+    for (let cols = 2; cols <= miniMaxCols; cols++) {
+      const width = Math.min(AREA_MINI.maxWidth, Math.floor((room.width - (cols - 1) * AREA_MINI.gap) / cols));
+      const lines = Math.ceil(totalCount / cols);
+      const height = Math.min(AREA_MINI.maxHeight, Math.floor((cardAreaHeight - (lines - 1) * AREA_MINI.gap) / lines));
+      if (height < AREA_MINI.minHeight) continue;
+      if (height >= AREA_MINI.comfyHeight) { bestGrid = { cols, width, height }; break; }
+      if (!bestGrid || height > bestGrid.height) bestGrid = { cols, width, height };
+    }
+
+    if (bestGrid) {
+      const { cols, width, height } = bestGrid;
+      const gap = AREA_MINI.gap;
+      const totalWidth = cols * width + (cols - 1) * gap;
+      const startX = room.x + Math.floor((room.width - totalWidth) / 2);
+      const tierY = 0;
+      const nodes: OverviewNode[] = [];
+      doneAreas.forEach((area, index) => {
+        const c = index % cols;
+        const r = Math.floor(index / cols);
+        nodes.push({
+          id: area.id,
+          type: 'areaMini',
+          position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
+          width,
+          height,
+          measured: { width, height },
+          data: { ...area.data, tier: 5 },
+          ...FIXED,
+        });
+      });
+      const lines = Math.ceil(totalCount / cols);
+      const foldY = lines > 0 ? (lines - 1) * (height + gap) + height + foldGap : 0;
+      nodes.push({
+        id: OVERVIEW_FOLD,
+        type: 'areaFold',
+        position: { x: startX, y: foldY },
+        width: totalWidth,
+        height: foldHeight,
+        measured: { width: totalWidth, height: foldHeight },
+        data: { count: totalCount, kind: 'done', expanded: true },
+        ...FIXED,
+      });
+      return { form: 'minis', nodes, viewport: { x: 0, y: room.top, zoom: 1 } };
+    }
+
+    // Fallback to rows when expanded
+    const step = AREA_ROW.height + AREA_ROW.gap;
+    const maxCols = Math.max(1, Math.floor((room.width + AREA_ROW.gapX) / (AREA_ROW.minWidth + AREA_ROW.gapX)));
+    const actualCols = Math.min(maxCols, Math.max(1, Math.ceil(totalCount / 6)));
+    const colWidth = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (actualCols - 1) * AREA_ROW.gapX) / actualCols));
+    const totalWidth = actualCols * colWidth + (actualCols - 1) * AREA_ROW.gapX;
+    const startX = room.x + Math.floor((room.width - totalWidth) / 2);
+    let tierY = 0;
+    const nodes: OverviewNode[] = [];
+    doneAreas.forEach((area, index) => {
+      const c = index % actualCols;
+      const r = Math.floor(index / actualCols);
+      nodes.push({
+        id: area.id,
+        type: 'areaRow',
+        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
+        width: colWidth,
+        height: AREA_ROW.height,
+        measured: { width: colWidth, height: AREA_ROW.height },
+        data: { ...area.data, tier: 5 },
+        ...FIXED,
+      });
+    });
+    tierY += Math.ceil(totalCount / actualCols) * step;
+    nodes.push({
+      id: OVERVIEW_FOLD,
+      type: 'areaFold',
+      position: { x: startX, y: tierY },
+      width: totalWidth,
+      height: AREA_ROW.height,
+      measured: { width: totalWidth, height: AREA_ROW.height },
+      data: { count: totalCount, kind: 'done', expanded: true },
+      ...FIXED,
+    });
+    return { form: 'rows', nodes, viewport: { x: 0, y: room.top, zoom: 1 } };
+  }
+
+  // Multi-area workspace with an active focus Area
+  const focusArea = tiers.tier1[0]!;
+  const heroWidth = Math.min(room.width, 560);
+  const hasDone = tiers.tier5.length > 0;
+  const foldHeight = 36;
+  const foldGap = 6;
+
+  const tierGapY = 8;
+  const tier2Lines = tiers.tier2.length > 0 ? Math.ceil(tiers.tier2.length / 2) : 0;
+  const tier3Lines = tiers.tier3.length > 0 ? Math.ceil(tiers.tier3.length / 2) : 0;
+  const tier4Lines = tiers.tier4.length > 0 ? Math.ceil(tiers.tier4.length / 2) : 0;
+  const totalLowerLines = tier2Lines + tier3Lines + tier4Lines;
+  const foldReserved = (hasDone || tiers.tier4.length > 0) ? (foldHeight + foldGap) : 0;
+
+  const allComfySpace = tierGapY + totalLowerLines * (AREA_MINI.comfyHeight + AREA_MINI.gap) + foldReserved;
+  const allMinSpace = tierGapY + totalLowerLines * (AREA_MINI.minHeight + AREA_MINI.gap) + foldReserved;
+
+  const hero3Steps = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: false, showPreview: false, showFooter: false, openStepLimit: 3 });
+  const hero3StepsWithFooter = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: false, showPreview: false, showFooter: true, openStepLimit: 3 });
+  const heroFull = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: true, showPreview: true, showFooter: true, openStepLimit: 3 });
+
+  let maxAvailableForHero: number;
+  if (room.height - allComfySpace >= heroFull) {
+    maxAvailableForHero = room.height - allComfySpace;
+  } else if (room.height - allComfySpace >= hero3StepsWithFooter) {
+    maxAvailableForHero = room.height - allComfySpace;
+  } else if (room.height - allMinSpace >= heroFull) {
+    maxAvailableForHero = room.height - allMinSpace;
+  } else if (room.height - allMinSpace >= hero3StepsWithFooter) {
+    maxAvailableForHero = room.height - allMinSpace;
+  } else if (room.height - allMinSpace >= hero3Steps) {
+    maxAvailableForHero = room.height - allMinSpace;
+  } else {
+    // When lower tiers cannot all fit, Tier 4 folds into "N more" to make room for focus card's steps
+    const fixedLines = tier2Lines + tier3Lines;
+    const minLowerLines = Math.max(1, fixedLines + (fixedLines === 0 && tiers.tier4.length > 0 ? 1 : 0));
+    const minLowerSpace = tierGapY + minLowerLines * (AREA_MINI.minHeight + AREA_MINI.gap) + foldReserved;
+    const available = room.height - minLowerSpace;
+    if (available >= hero3StepsWithFooter) {
+      maxAvailableForHero = available;
+    } else {
+      maxAvailableForHero = Math.max(hero3Steps, available);
+    }
+  }
+
+  const { height: heroHeight, config: heroConfig } = fitHeroCard(focusArea.data, heroWidth, maxAvailableForHero);
+  const heroX = room.x + Math.floor((room.width - heroWidth) / 2);
+  const heroY = 0;
+
+  const heroNode: AreaNode = {
+    id: focusArea.id,
+    type: 'area',
+    position: { x: heroX, y: heroY },
+    width: heroWidth,
+    height: heroHeight,
+    measured: { width: heroWidth, height: heroHeight },
+    data: { ...focusArea.data, ...heroConfig, tier: 1 },
+    ...FIXED,
+  };
+
+  const startY = heroY + heroHeight + tierGapY;
+  const availableHeight = Math.max(1, room.height - startY);
+
+  // Try small cards ('minis')
+  if (miniMaxCols >= 2) {
+    let bestGrid: {
+      cols: number;
+      width: number;
+      height: number;
+      shownTier4: BoardArea[];
+      overflowTier4: BoardArea[];
+    } | null = null;
+
+    for (let cols = 2; cols <= miniMaxCols; cols++) {
+      const width = Math.min(AREA_MINI.maxWidth, Math.floor((room.width - (cols - 1) * AREA_MINI.gap) / cols));
+      const tier2Lines = tiers.tier2.length > 0 ? Math.ceil(tiers.tier2.length / cols) : 0;
+      const tier3Lines = tiers.tier3.length > 0 ? Math.ceil(tiers.tier3.length / cols) : 0;
+      const fixedLines = tier2Lines + tier3Lines;
+
+      let reservedBottom = hasDone ? (foldHeight + foldGap) : 0;
+      let cardAreaHeight = availableHeight - reservedBottom;
+      let maxCardLines = Math.max(0, Math.floor((cardAreaHeight + AREA_MINI.gap + 0.001) / (AREA_MINI.minHeight + AREA_MINI.gap)));
+
+      if (maxCardLines < fixedLines) continue;
+
+      let availableLinesForTier4 = maxCardLines - fixedLines;
+      const tier4NeededLines = tiers.tier4.length > 0 ? Math.ceil(tiers.tier4.length / cols) : 0;
+
+      let shownTier4 = tiers.tier4;
+      let overflowTier4: BoardArea[] = [];
+
+      if (tier4NeededLines > availableLinesForTier4) {
+        if (!hasDone) {
+          reservedBottom = foldHeight + foldGap;
+          cardAreaHeight = availableHeight - reservedBottom;
+          maxCardLines = Math.max(0, Math.floor((cardAreaHeight + AREA_MINI.gap + 0.001) / (AREA_MINI.minHeight + AREA_MINI.gap)));
+          availableLinesForTier4 = Math.max(0, maxCardLines - fixedLines);
+        }
+        const shownLines = availableLinesForTier4;
+        const shownCount = Math.min(tiers.tier4.length, shownLines * cols);
+        shownTier4 = tiers.tier4.slice(0, shownCount);
+        overflowTier4 = tiers.tier4.slice(shownCount);
+      }
+
+      const shownTier4Lines = shownTier4.length > 0 ? Math.ceil(shownTier4.length / cols) : 0;
+      const linesForSizing = fixedLines + shownTier4Lines;
+      const effectiveCardHeight = availableHeight - ((hasDone || overflowTier4.length > 0) ? (foldHeight + foldGap) : 0);
+
+      const height = linesForSizing > 0
+        ? Math.min(AREA_MINI.maxHeight, Math.floor((effectiveCardHeight - (linesForSizing - 1) * AREA_MINI.gap) / linesForSizing))
+        : AREA_MINI.comfyHeight;
+
+      if (height < AREA_MINI.minHeight) continue;
+
+      const isComfy = height >= AREA_MINI.comfyHeight;
+      const bestIsComfy = bestGrid && bestGrid.height >= AREA_MINI.comfyHeight;
+
+      let isBetter = false;
+      if (!bestGrid) {
+        isBetter = true;
+      } else if (isComfy && !bestIsComfy) {
+        isBetter = true;
+      } else if (isComfy && bestIsComfy) {
+        isBetter = overflowTier4.length < bestGrid.overflowTier4.length ||
+          (overflowTier4.length === bestGrid.overflowTier4.length && cols < bestGrid.cols);
+      } else if (!isComfy && !bestIsComfy) {
+        isBetter = overflowTier4.length < bestGrid.overflowTier4.length ||
+          (overflowTier4.length === bestGrid.overflowTier4.length && height > bestGrid.height);
+      }
+
+      if (isBetter) {
+        bestGrid = { cols, width, height, shownTier4, overflowTier4 };
+      }
+    }
+
+    if (bestGrid) {
+      const { cols, width, height, shownTier4, overflowTier4 } = bestGrid;
+      const gap = AREA_MINI.gap;
+      const totalWidth = cols * width + (cols - 1) * gap;
+      const startX = room.x + Math.floor((room.width - totalWidth) / 2);
+
+      const hasFold = hasDone || overflowTier4.length > 0;
+      const foldKind: 'done' | 'more' = (overflowTier4.length === 0 && hasDone) ? 'done' : 'more';
+      const foldCount = overflowTier4.length + (hasDone ? tiers.tier5.length : 0);
+      const moreCount = overflowTier4.length;
+      const doneCount = hasDone ? tiers.tier5.length : 0;
+
+      const nodes: OverviewNode[] = [heroNode];
+      let tierY = startY;
+
+      // Tier 2: Waits for you (starts own line)
+      if (tiers.tier2.length > 0) {
+        tiers.tier2.forEach((area, index) => {
+          const c = index % cols;
+          const r = Math.floor(index / cols);
+          nodes.push({
+            id: area.id,
+            type: 'areaMini',
+            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
+            width,
+            height,
+            measured: { width, height },
+            data: { ...area.data, tier: 2 },
+            ...FIXED,
+          });
+        });
+        tierY += Math.ceil(tiers.tier2.length / cols) * (height + gap);
+      }
+
+      // Tier 3: Moved since you looked (starts own line)
+      if (tiers.tier3.length > 0) {
+        tiers.tier3.forEach((area, index) => {
+          const c = index % cols;
+          const r = Math.floor(index / cols);
+          nodes.push({
+            id: area.id,
+            type: 'areaMini',
+            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
+            width,
+            height,
+            measured: { width, height },
+            data: { ...area.data, tier: 3 },
+            ...FIXED,
+          });
+        });
+        tierY += Math.ceil(tiers.tier3.length / cols) * (height + gap);
+      }
+
+      // Tier 4: Everything else still open (starts own line)
+      const tier4List = options.expanded ? tiers.tier4 : shownTier4;
+      if (tier4List.length > 0) {
+        tier4List.forEach((area, index) => {
+          const c = index % cols;
+          const r = Math.floor(index / cols);
+          nodes.push({
+            id: area.id,
+            type: 'areaMini',
+            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
+            width,
+            height,
+            measured: { width, height },
+            data: { ...area.data, tier: 4 },
+            ...FIXED,
+          });
+        });
+        tierY += Math.ceil(tier4List.length / cols) * (height + gap);
+      }
+
+      // Tier 5: Done areas (when expanded)
+      if (options.expanded && hasDone) {
+        tiers.tier5.forEach((area, index) => {
+          const c = index % cols;
+          const r = Math.floor(index / cols);
+          nodes.push({
+            id: area.id,
+            type: 'areaMini',
+            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
+            width,
+            height,
+            measured: { width, height },
+            data: { ...area.data, tier: 5 },
+            ...FIXED,
+          });
+        });
+        tierY += Math.ceil(tiers.tier5.length / cols) * (height + gap);
+      }
+
+      // Full-width fold line at bottom
+      if (hasFold) {
+        const foldTop = (nodes.length > 1) ? (tierY - gap + foldGap) : tierY;
+        nodes.push({
+          id: OVERVIEW_FOLD,
+          type: 'areaFold',
+          position: { x: startX, y: foldTop },
+          width: totalWidth,
+          height: foldHeight,
+          measured: { width: totalWidth, height: foldHeight },
+          data: {
+            count: foldCount,
+            kind: foldKind,
+            ...(moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {}),
+            expanded: options.expanded ?? false,
+          },
+          ...FIXED,
+        });
+      }
+
+      return { form: 'minis', nodes, viewport: { x: 0, y: room.top, zoom: 1 } };
+    }
+  }
+
+  // Fallback to rows ('rows')
+  const step = AREA_ROW.height + AREA_ROW.gap;
+  const maxCols = Math.max(1, Math.floor((room.width + AREA_ROW.gapX) / (AREA_ROW.minWidth + AREA_ROW.gapX)));
+
+  let bestGrid: {
+    cols: number;
+    colWidth: number;
+    shownTier4: BoardArea[];
+    overflowTier4: BoardArea[];
+  } | null = null;
+
+  for (let cols = 1; cols <= maxCols; cols++) {
+    const colWidth = Math.min(AREA_ROW.maxWidth, Math.floor((room.width - (cols - 1) * AREA_ROW.gapX) / cols));
+    const tier2Lines = tiers.tier2.length > 0 ? Math.ceil(tiers.tier2.length / cols) : 0;
+    const tier3Lines = tiers.tier3.length > 0 ? Math.ceil(tiers.tier3.length / cols) : 0;
+    const fixedLines = tier2Lines + tier3Lines;
+
+    let reservedBottom = hasDone ? (AREA_ROW.height + AREA_ROW.gap) : 0;
+    let cardAreaHeight = availableHeight - reservedBottom;
+    let maxRowLines = Math.max(0, Math.floor((cardAreaHeight + AREA_ROW.gap) / step));
+
+    let availableLinesForTier4 = Math.max(0, maxRowLines - fixedLines);
+    const tier4NeededLines = tiers.tier4.length > 0 ? Math.ceil(tiers.tier4.length / cols) : 0;
+
+    let shownTier4 = tiers.tier4;
+    let overflowTier4: BoardArea[] = [];
+
+    if (tier4NeededLines > availableLinesForTier4) {
+      if (!hasDone) {
+        reservedBottom = AREA_ROW.height + AREA_ROW.gap;
+        cardAreaHeight = availableHeight - reservedBottom;
+        maxRowLines = Math.max(0, Math.floor((cardAreaHeight + AREA_ROW.gap) / step));
+        availableLinesForTier4 = Math.max(0, maxRowLines - fixedLines);
+      }
+      const shownLines = availableLinesForTier4;
+      const shownCount = Math.min(tiers.tier4.length, shownLines * cols);
+      shownTier4 = tiers.tier4.slice(0, shownCount);
+      overflowTier4 = tiers.tier4.slice(shownCount);
+    }
+
+    bestGrid = { cols, colWidth, shownTier4, overflowTier4 };
+    if (cols >= 2 && cols <= maxCols) break;
+  }
+
+  const { cols: actualCols, colWidth, shownTier4, overflowTier4 } = bestGrid!;
+  const totalWidth = actualCols * colWidth + (actualCols - 1) * AREA_ROW.gapX;
+  const startX = room.x + Math.floor((room.width - totalWidth) / 2);
+
+  const hasFold = hasDone || overflowTier4.length > 0;
+  const foldKind: 'done' | 'more' = (overflowTier4.length === 0 && hasDone) ? 'done' : 'more';
+  const foldCount = overflowTier4.length + (hasDone ? tiers.tier5.length : 0);
+  const moreCount = overflowTier4.length;
+  const doneCount = hasDone ? tiers.tier5.length : 0;
+
+  const nodes: OverviewNode[] = [heroNode];
+  let tierY = startY;
+
+  // Tier 2: Waits for you (starts own line)
+  if (tiers.tier2.length > 0) {
+    tiers.tier2.forEach((area, index) => {
+      const c = index % actualCols;
+      const r = Math.floor(index / actualCols);
+      nodes.push({
+        id: area.id,
+        type: 'areaRow',
+        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
+        width: colWidth,
+        height: AREA_ROW.height,
+        measured: { width: colWidth, height: AREA_ROW.height },
+        data: { ...area.data, tier: 2 },
+        ...FIXED,
+      });
+    });
+    tierY += Math.ceil(tiers.tier2.length / actualCols) * step;
+  }
+
+  // Tier 3: Moved since you looked (starts own line)
+  if (tiers.tier3.length > 0) {
+    tiers.tier3.forEach((area, index) => {
+      const c = index % actualCols;
+      const r = Math.floor(index / actualCols);
+      nodes.push({
+        id: area.id,
+        type: 'areaRow',
+        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
+        width: colWidth,
+        height: AREA_ROW.height,
+        measured: { width: colWidth, height: AREA_ROW.height },
+        data: { ...area.data, tier: 3 },
+        ...FIXED,
+      });
+    });
+    tierY += Math.ceil(tiers.tier3.length / actualCols) * step;
+  }
+
+  // Tier 4: Everything else still open (starts own line)
+  const tier4List = options.expanded ? tiers.tier4 : shownTier4;
+  if (tier4List.length > 0) {
+    tier4List.forEach((area, index) => {
+      const c = index % actualCols;
+      const r = Math.floor(index / actualCols);
+      nodes.push({
+        id: area.id,
+        type: 'areaRow',
+        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
+        width: colWidth,
+        height: AREA_ROW.height,
+        measured: { width: colWidth, height: AREA_ROW.height },
+        data: { ...area.data, tier: 4 },
+        ...FIXED,
+      });
+    });
+    tierY += Math.ceil(tier4List.length / actualCols) * step;
+  }
+
+  // Tier 5: Done (when expanded)
+  if (options.expanded && hasDone) {
+    tiers.tier5.forEach((area, index) => {
+      const c = index % actualCols;
+      const r = Math.floor(index / actualCols);
+      nodes.push({
+        id: area.id,
+        type: 'areaRow',
+        position: { x: startX + c * (colWidth + AREA_ROW.gapX), y: tierY + r * step },
+        width: colWidth,
+        height: AREA_ROW.height,
+        measured: { width: colWidth, height: AREA_ROW.height },
+        data: { ...area.data, tier: 5 },
+        ...FIXED,
+      });
+    });
+    tierY += Math.ceil(tiers.tier5.length / actualCols) * step;
+  }
+
+  // Full-width fold line at bottom
+  if (hasFold) {
+    const foldTop = (nodes.length > 1) ? (tierY - AREA_ROW.gap + foldGap) : tierY;
+    nodes.push({
+      id: OVERVIEW_FOLD,
+      type: 'areaFold',
+      position: { x: startX, y: foldTop },
+      width: totalWidth,
+      height: AREA_ROW.height,
+      measured: { width: totalWidth, height: AREA_ROW.height },
+      data: {
+        count: foldCount,
+        kind: foldKind,
+        ...(moreCount > 0 && doneCount > 0 ? { moreCount, doneCount } : {}),
+        expanded: options.expanded ?? false,
+      },
+      ...FIXED,
+    });
+  }
+
+  return { form: 'rows', nodes, viewport: { x: 0, y: room.top, zoom: 1 } };
 }
 
 /** The nodes of the overview (`overviewPlan`). */
@@ -883,13 +1758,15 @@ export function overviewEdges(areas: BoardArea[], nodes: OverviewNode[], links: 
 
   // Only cards are linked by lines: one-line rows have none between them
   const rects = new Map<string, Rect>();
+  const nodeTypeMap = new Map<string, string>();
   for (const n of nodes) {
-    if (n.type !== 'area') continue;
+    if (n.type === 'areaFold') continue;
+    nodeTypeMap.set(n.id, n.type);
     rects.set(n.id, {
       x: n.position.x,
       y: n.position.y,
-      width: n.width ?? AREA_SIZE.width,
-      height: n.height ?? AREA_SIZE.height,
+      width: n.width ?? (n.type === 'areaRow' ? AREA_ROW.minWidth : AREA_SIZE.width),
+      height: n.height ?? (n.type === 'areaRow' ? AREA_ROW.height : AREA_SIZE.height),
     });
   }
 
@@ -908,6 +1785,11 @@ export function overviewEdges(areas: BoardArea[], nodes: OverviewNode[], links: 
     const sourceRect = rects.get(sourceArea);
     const targetRect = rects.get(targetArea);
     if (!sourceRect || !targetRect) continue;
+
+    // Only draw lines to/from full cards: no lines between two small cards or two rows
+    const sourceType = nodeTypeMap.get(sourceArea);
+    const targetType = nodeTypeMap.get(targetArea);
+    if (sourceType !== 'area' && targetType !== 'area') continue;
 
     const pairKey = `${sourceArea}\n${targetArea}`;
     const existing = seenPairs.get(pairKey);

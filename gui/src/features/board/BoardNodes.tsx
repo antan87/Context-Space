@@ -18,7 +18,7 @@ import { plainText, stripHeadingColon } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
-import { areaCounts, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { areaCounts, foldLabel, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
 import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
@@ -1578,54 +1578,103 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
   const counts = areaCounts(data);
   const stepsLabel = areaSteps(data);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
-  const footer = counts.length > 0 || Boolean(data.warning);
+  const showFooter = data.heroShowFooter ?? true;
+  const footer = showFooter && (counts.length > 0 || Boolean(data.warning));
+  const showPictures = data.heroShowPictures ?? true;
+  const showPreview = data.heroShowPreview ?? true;
+  const stepLimit = data.heroOpenStepLimit ?? 3;
 
   return (
     <div className="relative h-full w-full rounded-2xl">
       <Anchors />
       {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh" />}
-      <button
-        type="button"
-        onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
-        aria-label={areaLabel(data)}
+      <div
         className={cn(
-          'board-area nodrag nopan relative flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-card p-3 text-left text-card-foreground shadow-xs transition-colors hover:bg-accent/35',
+          'nodrag nopan relative flex h-full w-full flex-col overflow-hidden rounded-2xl border bg-card p-3 text-left text-card-foreground shadow-xs transition-colors hover:bg-accent/35',
           border,
         )}
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('button')) return;
+          actions?.openArea?.(id, event.currentTarget);
+        }}
       >
-        <span className={cn('flex h-5 w-full shrink-0 items-center gap-1.5 whitespace-nowrap', AREA_TEXT)}>
-          {data.kind === 'checkpoint' && (
-            data.done ? (
-              <Badge variant="success" className="board-area-badge sm:h-5 sm:text-[13.5px]">Done</Badge>
-            ) : data.current ? (
-              <Badge variant={data.nowSet ? 'default' : 'outline'} className="board-area-badge sm:h-5 sm:text-[13.5px]">{data.nowSet ? 'Now' : 'Next up'}</Badge>
-            ) : null
-          )}
-          {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge sm:h-5 sm:text-[13.5px]">Plan</Badge>}
-          {waiting > 0 && <Badge variant="warning" className="board-area-badge sm:h-5 sm:text-[13.5px]">{waitingText(waiting)}</Badge>}
-          <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
-        </span>
-
-        <span className="mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
-          {data.fresh && !data.current && !data.done && (
-            <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
-          )}
-          {data.title}
-        </span>
-
-        {data.kind !== 'work' && (
-          <span className="mt-1 block shrink-0">
-            <span className={cn('block truncate', AREA_TEXT)}>{stepsLabel}</span>
-            <span aria-hidden="true" className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted">
-              <span
-                className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')}
-                style={{ width: `${progress}%` }}
-              />
-            </span>
+        <button
+          type="button"
+          onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+          aria-label={areaLabel(data)}
+          className="board-area nodrag nopan flex w-full flex-col text-left focus-visible:outline-2 focus-visible:outline-ring rounded-lg cursor-pointer"
+        >
+          <span className={cn('flex h-5 w-full shrink-0 items-center gap-1.5 whitespace-nowrap', AREA_TEXT)}>
+            {data.kind === 'checkpoint' && (
+              data.done ? (
+                <Badge variant="success" className="board-area-badge sm:h-5 sm:text-[13.5px]">Done</Badge>
+              ) : data.current ? (
+                <Badge variant={data.nowSet ? 'default' : 'outline'} className="board-area-badge sm:h-5 sm:text-[13.5px]">{data.nowSet ? 'Now' : 'Next up'}</Badge>
+              ) : null
+            )}
+            {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge sm:h-5 sm:text-[13.5px]">Plan</Badge>}
+            {waiting > 0 && <Badge variant="warning" className="board-area-badge sm:h-5 sm:text-[13.5px]">{waitingText(waiting)}</Badge>}
+            <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
           </span>
+
+          <span className="mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
+            {data.fresh && !data.current && !data.done && (
+              <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+            )}
+            {data.title}
+          </span>
+
+          {data.kind !== 'work' && (
+            <span className="mt-1 block shrink-0 w-full">
+              <span className={cn('block truncate', AREA_TEXT)}>{stepsLabel}</span>
+              <span aria-hidden="true" className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted">
+                <span
+                  className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')}
+                  style={{ width: `${progress}%` }}
+                />
+              </span>
+            </span>
+          )}
+        </button>
+
+        {/* The open steps inside the focus Area: Now/Next up step and the next two open steps, each a real button in the tab order */}
+        {data.openSteps && data.openSteps.length > 0 && stepLimit > 0 && (
+          <div className="mt-2 space-y-1">
+            {data.openSteps.slice(0, stepLimit).map((step, idx) => {
+              const isNow = idx === 0 && data.nowSet;
+              const isNextUp = idx === 0 && !data.nowSet;
+              const text = plainText(step.text);
+              return (
+                <button
+                  key={step.key}
+                  type="button"
+                  title={text}
+                  aria-label={text}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    actions?.openStep?.(id, step.key);
+                  }}
+                  className={cn(
+                    'nodrag nopan flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring cursor-pointer',
+                    idx === 0 ? 'bg-muted/40 font-medium text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  {isNow && <span aria-hidden="true" className="board-now-dot size-2 shrink-0 rounded-full bg-state-now" />}
+                  {isNextUp && <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-muted-foreground/40" />}
+                  {idx > 0 && <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-muted-foreground/30" />}
+                  {idx === 0 && (
+                    <span className={cn('shrink-0 font-semibold', isNow ? 'text-state-now' : 'text-muted-foreground')}>
+                      {data.nowSet ? 'Now' : 'Next up'}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate">{text}</span>
+                </button>
+              );
+            })}
+          </div>
         )}
 
-        {visiblePics.length > 0 && actions ? (
+        {showPictures && visiblePics.length > 0 && actions ? (
           <span className="mt-2 flex h-16 shrink-0 items-center gap-2 overflow-hidden rounded-md">
             {visiblePics.map((pic) => (
               <img
@@ -1641,7 +1690,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
               />
             ))}
           </span>
-        ) : data.preview ? (
+        ) : showPreview && data.preview ? (
           <span className={cn('mt-2 line-clamp-2 shrink-0', AREA_TEXT)}>{data.preview}</span>
         ) : null}
 
@@ -1654,14 +1703,14 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
             </span>
           </>
         )}
-      </button>
+      </div>
     </div>
   );
 }
 
 /** Whether an Area is done, under way ("Now") or neither, as a mark that stays quiet: neither is the usual and says nothing. */
 function AreaMark({ data }: { data: AreaData }) {
-  if (data.done) return <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-state-done" />;
+  if (data.done) return <span className="inline-flex items-center"><CircleCheck aria-hidden="true" className="size-4 shrink-0 text-state-done" /><span className="sr-only">Done</span></span>;
   if (data.nowSet) return <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center"><span className="board-now-dot size-2 rounded-full bg-state-now" /></span>;
   return <Circle aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/50" />;
 }
@@ -1670,8 +1719,11 @@ function AreaMark({ data }: { data: AreaData }) {
 export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
   const actions = useContext(BoardActionsContext);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
+  const isNotStarted = data.kind !== 'work' && data.stepsTotal > 0 && data.stepsDone === 0;
+
   return (
-    <div className="relative h-full w-full rounded-lg">
+    <div className={cn('relative h-full w-full rounded-lg', isNotStarted && 'opacity-85')}>
+      <Anchors />
       {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-lg" />}
       <button
         type="button"
@@ -1686,16 +1738,37 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
           )}
           {data.title}
         </span>
-        {data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
-        {data.waitingCount > 0 && (
+        {/* Tier 2: Waits for you, with the question's first words */}
+        {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
+          <span className="min-w-0 max-w-[24ch] truncate text-xs font-medium text-state-needs" title={data.waitingQuestion ?? waitingText(data.waitingCount)}>
+            <span aria-hidden="true" className="mr-1 inline-block size-1.5 rounded-full bg-state-needs" />
+            {data.waitingQuestion ?? waitingText(data.waitingCount)}
+          </span>
+        )}
+        {/* Tier 3: Moved since you looked, saying what ("2 commits, 1 picture") */}
+        {data.tier === 3 && data.newsSummary && (
+          <span className="shrink-0 text-xs text-muted-foreground" title={data.newsSummary}>
+            {data.newsSummary}
+          </span>
+        )}
+        {/* Tier 4: its next open step in place of a bare count, and 0 of 4 quietly at the end */}
+        {data.tier === 4 && data.nextOpenStep && (
+          <span className="min-w-0 max-w-[28ch] truncate text-xs text-muted-foreground" title={data.nextOpenStep}>
+            {data.nextOpenStep}
+          </span>
+        )}
+        {!data.done && data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
+        {data.waitingCount > 0 && data.tier !== 2 && (
           <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
             <span className="size-1.5 rounded-full bg-state-needs" />Waiting
           </span>
         )}
         {data.kind !== 'work' && data.stepsTotal > 0 && (
           <>
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{data.stepsDone} of {data.stepsTotal}</span>
-            <span aria-hidden="true" className={cn('h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20', data.waitingCount > 0 && 'hidden @[24rem]:block')}>
+            <span className={cn('shrink-0 text-xs tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
+              {data.stepsDone} of {data.stepsTotal}
+            </span>
+            <span aria-hidden="true" className={cn('h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20', (data.waitingCount > 0 || Boolean(data.nextOpenStep)) && 'hidden @[28rem]:block')}>
               <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
             </span>
           </>
@@ -1713,23 +1786,44 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const actions = useContext(BoardActionsContext);
   const [failedPics, setFailedPics] = useState<string[]>([]);
   const picture = data.pictures.find((pic) => !failedPics.includes(pic.path));
-  const hasStatus = (data.current && data.kind !== 'work') || data.waitingCount > 0;
+  const hasStatus = (data.current && data.kind !== 'work') ||
+    data.waitingCount > 0 ||
+    Boolean(data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0)) ||
+    Boolean(data.tier === 3 && data.newsSummary);
   const showPicture = Boolean(picture && actions && miniShowsPicture(width ?? 0, height ?? 0, hasStatus));
   const statusLine = (height ?? 0) >= MINI_STATUS_LINE;
   const hasSteps = data.kind !== 'work' && data.stepsTotal > 0;
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
+  const isNotStarted = data.kind !== 'work' && data.stepsTotal > 0 && data.stepsDone === 0;
+
   const status = (
     <>
-      {data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium leading-4', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
-      {data.waitingCount > 0 && (
+      {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
+        <span aria-hidden="true" title={data.waitingQuestion ?? waitingText(data.waitingCount)} className="flex max-w-[22ch] shrink-0 items-center gap-1 truncate text-xs font-medium leading-4 text-state-needs">
+          <span className="size-1.5 rounded-full bg-state-needs" />{data.waitingQuestion ?? 'Waiting'}
+        </span>
+      )}
+      {data.tier === 3 && data.newsSummary && (
+        <span className="shrink-0 truncate text-xs leading-4 text-muted-foreground" title={data.newsSummary}>
+          {data.newsSummary}
+        </span>
+      )}
+      {!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' && (
+        <span className={cn('shrink-0 text-xs font-medium leading-4', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>
+          {data.nowSet ? 'Now' : 'Next up'}
+        </span>
+      )}
+      {data.tier !== 2 && data.waitingCount > 0 && (
         <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium leading-4 text-state-needs">
           <span className="size-1.5 rounded-full bg-state-needs" />Waiting
         </span>
       )}
     </>
   );
+
   return (
-    <div className="relative h-full w-full rounded-xl">
+    <div className={cn('relative h-full w-full rounded-xl', isNotStarted && 'opacity-85')}>
+      <Anchors />
       {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-xl" />}
       <button
         type="button"
@@ -1758,9 +1852,14 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
           {(hasSteps || (!statusLine && hasStatus)) && (
             <span className="flex min-w-0 items-center gap-2">
               {!statusLine && status}
+              {data.tier === 4 && data.nextOpenStep && (
+                <span className="min-w-0 max-w-[22ch] truncate text-xs leading-4 text-muted-foreground" title={data.nextOpenStep}>
+                  {data.nextOpenStep}
+                </span>
+              )}
               {hasSteps && (
                 <>
-                  <span className="shrink-0 text-xs leading-4 tabular-nums text-muted-foreground">{data.stepsDone} of {data.stepsTotal}</span>
+                  <span className={cn('shrink-0 text-xs leading-4 tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>{data.stepsDone} of {data.stepsTotal}</span>
                   <span aria-hidden="true" className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted-foreground/20">
                     <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
                   </span>
@@ -1794,7 +1893,7 @@ export function BoardAreaFold({ data }: NodeProps<AreaFoldNode>) {
       className="board-area-fold nodrag nopan relative flex h-full w-full items-center gap-2.5 rounded-lg px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/45 hover:text-foreground"
     >
       {data.expanded ? <ChevronUp aria-hidden="true" className="size-4 shrink-0" /> : <ChevronDown aria-hidden="true" className="size-4 shrink-0" />}
-      {data.expanded ? 'Show fewer' : `${data.count} ${data.kind}`}
+      {foldLabel(data)}
     </button>
   );
 }

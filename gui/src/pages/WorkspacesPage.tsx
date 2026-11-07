@@ -743,6 +743,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
       <div className="flex h-full min-h-0 min-w-0 flex-col w-full">
         <WorkspaceHeader
           compact={showChat}
+          nowLine={subTab === 'board'}
           workspaceId={selected.branchName}
           title={selected.name || selected.branchName}
           branchName={selected.name ? selected.branchName : undefined}

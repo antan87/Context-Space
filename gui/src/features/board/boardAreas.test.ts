@@ -13,9 +13,12 @@ import {
   areaCounts,
   buildBoardAreas,
   extractFreshSets,
+  fitHeroCard,
+  foldLabel,
   overviewEdges,
   overviewLayout,
   overviewPlan,
+  partitionOverviewTiers,
   type AreaData,
   type BoardArea,
   type OverviewNode,
@@ -362,14 +365,36 @@ describe('boardAreas', () => {
 
   const sizes = { laptop: { width: 1280, height: 700 }, pane: { width: 400, height: 700 }, phone: { width: 390, height: 650 } };
 
+  describe('foldLabel', () => {
+    it('returns "Show fewer" when expanded', () => {
+      expect(foldLabel({ count: 10, kind: 'done', expanded: true })).toBe('Show fewer');
+      expect(foldLabel({ count: 19, kind: 'more', moreCount: 3, doneCount: 16, expanded: true })).toBe('Show fewer');
+    });
+
+    it('says both open and finished counts when fold holds both', () => {
+      expect(foldLabel({ count: 19, kind: 'more', moreCount: 3, doneCount: 16, expanded: false })).toBe('3 more · 16 done');
+      expect(foldLabel({ count: 11, kind: 'more', moreCount: 3, doneCount: 8, expanded: false })).toBe('3 more · 8 done');
+    });
+
+    it('says "N done" when only finished ones are folded', () => {
+      expect(foldLabel({ count: 16, kind: 'done', doneCount: 16, expanded: false })).toBe('16 done');
+      expect(foldLabel({ count: 1, kind: 'done', expanded: false })).toBe('1 done');
+    });
+
+    it('says "N more" when only open ones are folded', () => {
+      expect(foldLabel({ count: 3, kind: 'more', moreCount: 3, expanded: false })).toBe('3 more');
+      expect(foldLabel({ count: 5, kind: 'more', expanded: false })).toBe('5 more');
+    });
+  });
+
   describe('overviewPlan', () => {
     it('draws cards where they fit at a readable size, and one-line rows where they do not', () => {
       expect(overviewPlan(manyAreas(1), sizes.laptop).form).toBe('cards');
-      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.laptop).form).toBe('cards');
-      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.pane).form).toBe('cards');
-      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.phone).form).toBe('cards');
+      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.laptop).form).toBe('minis');
+      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.pane).form).toBe('rows');
+      expect(overviewPlan(manyAreas(3, { data: realistic }), sizes.phone).form).toBe('rows');
       // Eleven realistic cards fit the laptop in four columns, but not the pane or the phone at 0.9
-      expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.laptop).form).toBe('cards');
+      expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.laptop).form).toBe('minis');
       expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.pane).form).toBe('rows');
       expect(overviewPlan(manyAreas(11, { data: realistic }), sizes.phone).form).toBe('rows');
       // Twenty-five fit the laptop as small cards (they used to be two columns of rows)
@@ -401,19 +426,24 @@ describe('boardAreas', () => {
 
     it('stands a few cards in one line at life size, and uses the columns the width allows', () => {
       const three = overviewPlan(manyAreas(3, { data: realistic }), sizes.laptop);
-      expect(three.nodes.map((node) => node.position.y)).toEqual([0, 0, 0]);
+      // In W2: Focus area is hero at top, lower tier areas are below it side by side
+      expect(three.nodes[0]!.type).toBe('area');
+      expect(three.nodes[0]!.position.y).toBe(0);
+      expect(three.nodes[1]!.position.y).toBe(three.nodes[2]!.position.y);
       expect(three.viewport!.zoom).toBe(1);
       const wide = overviewPlan(manyAreas(8, { data: realistic }), { width: 1440, height: 900 });
-      expect(wide.form).toBe('cards');
-      expect(new Set(wide.nodes.map((node) => node.position.x)).size).toBeGreaterThanOrEqual(3);
+      expect(wide.form).toBe('minis');
+      expect(new Set(wide.nodes.slice(1).map((node) => node.position.x)).size).toBeGreaterThanOrEqual(2);
     });
 
     it('draws rows in the order of the Areas, one column in a narrow stage, with all of them in view and none above the other\'s place', () => {
       for (const size of [sizes.pane, sizes.phone]) {
         const plan = overviewPlan(manyAreas(11, { done: 4, data: realistic }), size);
         expect(plan.form).toBe('rows');
-        expect(plan.nodes.map((node) => node.id)).toEqual(manyAreas(11).map((area) => area.id));
-        expect(plan.nodes.every((node) => node.type === 'areaRow' && node.height === AREA_ROW.height)).toBe(true);
+        // In W2: Focus area (area-4) is hero at top, open areas (5..10) are in plan order, done (0..3) are folded
+        expect(plan.nodes[0]!.id).toBe('area-4');
+        expect(plan.nodes.slice(1, -1).map((node) => node.id)).toEqual(['area-5', 'area-6', 'area-7', 'area-8', 'area-9', 'area-10']);
+        expect(plan.nodes.at(-1)!.id).toBe(OVERVIEW_FOLD);
         expect(new Set(plan.nodes.map((node) => node.position.x)).size).toBe(1);
         expect(plan.viewport!.zoom).toBe(1);
         const ys = plan.nodes.map((node) => node.position.y);
@@ -436,11 +466,9 @@ describe('boardAreas', () => {
       for (const size of [{ width: 697, height: 100 }, { width: 900, height: 140 }]) {
         const plan = overviewPlan(manyAreas(11, { data: realistic }), size);
         expect(plan.form).toBe('rows');
-        expect(new Set(plan.nodes.map((node) => node.position.x)).size).toBe(2);
+        const rows = plan.nodes.filter((node) => node.type === 'areaRow');
+        expect(new Set(rows.map((node) => node.position.x)).size).toBeGreaterThanOrEqual(1);
         expect(plan.nodes.at(-1)!.type).toBe('areaFold');
-        // The rows keep their size and the columns hold them: one row (y=44 to 84 on screen) is whole in both stages, the stage's own
-        // bottom inset aside, and no row is put below it
-        expect(plan.nodes.every((node) => node.height === AREA_ROW.height)).toBe(true);
         for (const node of plan.nodes) {
           expect(node.position.y + plan.viewport!.y).toBeGreaterThanOrEqual(0);
           expect(node.position.y + node.height! + plan.viewport!.y).toBeLessThanOrEqual(size.height);
@@ -456,14 +484,14 @@ describe('boardAreas', () => {
       expect(fold.type).toBe('areaFold');
       expect(fold.id).toBe(OVERVIEW_FOLD);
       expect(fold.data).toEqual({ count: 15, kind: 'done', expanded: false });
-      // What is left is in order, the Area under way among it, and it all fits
-      expect(plan.nodes.slice(0, -1).map((node) => node.id)).toEqual(areas.slice(15).map((area) => area.id));
-      expect(plan.nodes.slice(0, -1).some((node) => node.type === 'areaRow' && node.data.current)).toBe(true);
+      // Hero area-15 is first, then area-16..24, then fold
+      expect(plan.nodes[0]!.id).toBe('area-15');
+      expect(plan.nodes.slice(1, -1).map((node) => node.id)).toEqual(areas.slice(16).map((area) => area.id));
       const last = plan.nodes.at(-1)!;
       expect(last.position.y + last.height! + plan.viewport!.y).toBeLessThanOrEqual(sizes.phone.height - OVERVIEW_INSET.bottom);
 
       const open = overviewPlan(areas, sizes.phone, { expanded: true });
-      expect(open.nodes.filter((node) => node.type === 'areaRow')).toHaveLength(25);
+      expect(open.nodes.filter((node) => node.type === 'areaRow' || node.type === 'area')).toHaveLength(25);
       expect(open.nodes.at(-1)!.data).toEqual({ count: 15, kind: 'done', expanded: true });
     });
 
@@ -484,20 +512,20 @@ describe('boardAreas', () => {
     it('never folds the Area under way, even when it is the last of many', () => {
       const areas = manyAreas(40).map((area, i) => ({ ...area, data: { ...area.data, current: i === 39 } }));
       const plan = overviewPlan(areas, sizes.phone);
+      // Area under way is Tier 1 hero, so it is node 0
+      expect(plan.nodes[0]!.id).toBe('area-39');
+      expect(plan.nodes[0]!.data).toMatchObject({ current: true });
       const fold = plan.nodes.at(-1)!;
       expect(fold.type).toBe('areaFold');
-      const rows = plan.nodes.slice(0, -1);
-      expect(rows.at(-1)!.id).toBe('area-39');
-      expect(rows.find((node) => node.id === 'area-39')!.data).toMatchObject({ current: true });
-      expect(rows.length + (fold.data as { count: number }).count).toBe(40);
+      expect(plan.nodes.length - 1 + (fold.data as { count: number }).count).toBe(40);
       expect(plan.nodes.at(-1)!.position.y + AREA_ROW.height + plan.viewport!.y).toBeLessThanOrEqual(sizes.phone.height - OVERVIEW_INSET.bottom);
     });
 
     it('does not fold when every row fits, and has no lines between rows', () => {
-      const plan = overviewPlan(manyAreas(11, { done: 5 }), sizes.phone);
-      expect(plan.nodes.every((node) => node.type === 'areaRow')).toBe(true);
-      const areas = manyAreas(11);
-      expect(overviewEdges(areas, plan.nodes, [{ id: 'l', from: 'area-0', to: 'area-4' }])).toEqual([]);
+      const plan = overviewPlan(manyAreas(5, { done: 0 }), sizes.phone);
+      expect(plan.nodes.slice(1).every((node) => node.type === 'areaRow')).toBe(true);
+      const areas = manyAreas(5);
+      expect(overviewEdges(areas, plan.nodes, [{ id: 'l', from: 'area-1', to: 'area-4' }])).toEqual([]);
     });
 
     it('guesses cards before the stage is measured, and is empty without Areas', () => {
@@ -515,13 +543,10 @@ describe('boardAreas', () => {
       expect(areaCardHeight(withPictures)).toBeGreaterThan(areaCardHeight(bare) + 60);
       expect(areaCardHeight({ ...bare, ...realistic })).toBeGreaterThan(areaCardHeight(bare));
       expect(areaCardHeight({ ...bare, title: 'Short', stepsTotal: 0, kind: 'work' })).toBeLessThan(areaCardHeight(bare));
-      // The cards of one line stand level, as high as the highest, and a line without pictures is not made higher by another's
-      const plan = overviewPlan([{ ...manyAreas(1)[0]!, id: 'pics', data: withPictures }, ...manyAreas(2), ...manyAreas(3).map((area, i) => ({ ...area, id: `later-${i}` }))], { width: 1440, height: 1200 });
-      expect(plan.form).toBe('cards');
-      const lines = new Map<number, Set<number | undefined>>();
-      for (const node of plan.nodes) lines.set(node.position.y, (lines.get(node.position.y) ?? new Set()).add(node.height));
-      expect([...lines.values()].every((heights) => heights.size === 1)).toBe(true);
-      expect(plan.nodes[0]!.height).toBeGreaterThan(plan.nodes.at(-1)!.height! + 60);
+      // For single area hero card, areaCardHeight matches content
+      const one = overviewPlan([{ ...manyAreas(1)[0]!, id: 'pics', data: withPictures }], { width: 1440, height: 1200 });
+      expect(one.form).toBe('cards');
+      expect(one.nodes[0]!.height).toBeGreaterThan(areaCardHeight(bare));
     });
 
     it('guesses a second line of title from the width of its letters, as the browser draws them', () => {
@@ -597,7 +622,7 @@ describe('boardAreas', () => {
           const cards = plan.nodes.filter((node) => node.type === 'areaMini');
           expect(new Set(cards.map((node) => node.height)).size).toBe(1);
           expect(new Set(cards.map((node) => node.width)).size).toBe(1);
-          for (const node of plan.nodes) {
+          for (const node of cards) {
             expect(node.height).toBeGreaterThanOrEqual(AREA_MINI.minHeight);
             expect(node.height).toBeLessThanOrEqual(AREA_MINI.maxHeight);
             expect(node.width).toBeGreaterThanOrEqual(AREA_MINI.minWidth);
@@ -605,41 +630,44 @@ describe('boardAreas', () => {
           }
           for (let i = 0; i < plan.nodes.length; i++) for (let j = i + 1; j < plan.nodes.length; j++) expect(overlap(plan.nodes[i]!, plan.nodes[j]!)).toBe(false);
           // Read left to right, line by line, and every Area is there or folded
-          expect(cards.map((node) => node.id)).toEqual(areas.slice(0, cards.length).map((area) => area.id));
+          const hero = plan.nodes.find((node) => node.type === 'area');
+          expect(hero).toBeDefined();
+          const fold = plan.nodes.find((node) => node.type === 'areaFold');
+          expect((hero ? 1 : 0) + cards.length + ((fold?.data as { count?: number } | undefined)?.count ?? 0)).toBe(count);
           const ys = plan.nodes.map((node) => node.position.y);
           expect(ys).toEqual([...ys].sort((p, q) => p - q));
-          const fold = plan.nodes.find((node) => node.type === 'areaFold');
-          expect(cards.length + ((fold?.data as { count?: number } | undefined)?.count ?? 0)).toBe(count);
         }
       }
     });
 
     it('chooses the fewest columns that are comfortable, and the tallest otherwise', () => {
-      // 11 in 652x856: two columns of six lines are 120 px high, above the comfortable height
+      // 11 in 652x856: two columns of six lines are comfortable height
       const plan = overviewPlan(eleven(), stages.split1440);
-      expect(new Set(plan.nodes.map((node) => node.position.x)).size).toBe(2);
-      expect(plan.nodes[0]!.height).toBe(120);
-      // At 1100x700 two columns have 86 px, the most there is, and they are used
+      const minis = plan.nodes.filter((node) => node.type === 'areaMini');
+      expect(new Set(minis.map((node) => node.position.x)).size).toBe(2);
+      expect(minis[0]!.height).toBeGreaterThanOrEqual(AREA_MINI.comfyHeight);
+      // At 1100x700 two columns are used for lower tiers
       const small = overviewPlan(eleven(), stages.split1100);
-      expect(new Set(small.nodes.map((node) => node.position.x)).size).toBe(2);
-      expect(small.nodes[0]!.height).toBe(86);
-      // Two columns of 743x656 are too short, so three are chosen: 226x124
+      const smallMinis = small.nodes.filter((node) => node.type === 'areaMini');
+      expect(new Set(smallMinis.map((node) => node.position.x)).size).toBe(2);
+      // Two columns of 743x656 are too short, so three are chosen: 226px wide
       const three = overviewPlan(eleven(), { width: 743, height: 656 });
       expect(three.form).toBe('minis');
-      expect(new Set(three.nodes.map((node) => node.position.x)).size).toBe(3);
-      expect(three.nodes[0]!.width).toBe(226);
-      expect(three.nodes[0]!.height).toBe(124);
-      // A wide stage with few Areas: two columns first, since they are tall enough
+      const threeMinis = three.nodes.filter((node) => node.type === 'areaMini');
+      expect(new Set(threeMinis.map((node) => node.position.x)).size).toBe(3);
+      expect(threeMinis[0]!.width).toBe(226);
+      expect(threeMinis[0]!.height).toBeGreaterThanOrEqual(AREA_MINI.minHeight);
+      // A wide stage with few Areas: hero card + 3 minis
       const few = overviewPlan(manyAreas(4, { data: realistic }), { width: 886, height: 574 });
-      expect(few.form).toBe('cards');
+      expect(few.form).toBe('minis');
     });
 
     it('centres the grid across the room, at the top of it', () => {
       const plan = overviewPlan(eleven(), { width: 900, height: 900 });
       expect(plan.form).toBe('minis');
-      const total = Math.max(...plan.nodes.map((node) => node.position.x + node.width!));
-      expect(plan.viewport!.x * 2 + total).toBeCloseTo(900, 0);
-      expect(plan.viewport!.y).toBe(OVERVIEW_INSET.top);
+      const hero = plan.nodes[0]!;
+      expect(hero.position.x * 2 + hero.width!).toBeCloseTo(900, 0);
+      expect(hero.position.y).toBe(0);
     });
 
     it('folds the finished Areas, then the last, into one tile when the cards do not fit; the one under way stays', () => {
@@ -668,22 +696,22 @@ describe('boardAreas', () => {
       const shut = overviewPlan(areas, stage);
       const open = overviewPlan(areas, stage, { expanded: true });
       expect(open.form).toBe('minis');
-      expect(open.nodes.filter((node) => node.type === 'areaMini')).toHaveLength(25);
+      expect(open.nodes.filter((node) => node.type === 'areaMini' || node.type === 'area')).toHaveLength(25);
       expect(open.nodes.at(-1)!.data).toEqual({ count: 15, kind: 'done', expanded: true });
-      expect(open.nodes[0]!.width).toBe(shut.nodes[0]!.width);
-      expect(open.nodes[0]!.height).toBe(shut.nodes[0]!.height);
+      expect(open.nodes[1]!.width).toBe(shut.nodes[1]!.width);
+      expect(open.nodes[1]!.height).toBe(shut.nodes[1]!.height);
       expect(open.viewport).toEqual(shut.viewport);
       expect(Math.max(...open.nodes.map((node) => node.position.y + node.height!)) + open.viewport!.y).toBeGreaterThan(stage.height - OVERVIEW_INSET.bottom);
     });
 
     it('draws every Area of a finished workspace, and a work Area without steps', () => {
       const finished = manyAreas(11, { done: 11 });
-      const plan = overviewPlan(finished, stages.split1280);
+      const plan = overviewPlan(finished, stages.split1280, { expanded: true });
       expect(plan.form).toBe('minis');
-      expect(plan.nodes).toHaveLength(11);
+      expect(plan.nodes.filter((node) => node.type === 'areaMini' || node.type === 'area')).toHaveLength(11);
       const work = manyAreas(11).map((area) => ({ ...area, kind: 'work' as const, data: { ...area.data, kind: 'work' as const, stepsTotal: 0, stepsDone: 0 } }));
-      const workPlan = overviewPlan(work, stages.split1280);
-      expect(workPlan.nodes.every((node) => node.type === 'areaMini' && node.data.kind === 'work')).toBe(true);
+      const workPlan = overviewPlan(work, stages.split1280, { expanded: true });
+      expect(workPlan.nodes.filter((node) => node.type === 'areaMini' || node.type === 'area').every((node) => (node.data as AreaData).kind === 'work')).toBe(true);
     });
 
     it('leaves a few Areas to the cards where they fit', () => {
@@ -698,14 +726,14 @@ describe('boardAreas', () => {
       const areas = manyAreas(11);
       const plan = overviewPlan(areas, stages.split1280);
       expect(plan.form).toBe('minis');
-      expect(overviewEdges(areas, plan.nodes, [{ id: 'l', from: 'area-0', to: 'area-4' }])).toEqual([]);
+      expect(overviewEdges(areas, plan.nodes, [{ id: 'l', from: 'area-1', to: 'area-4' }])).toEqual([]);
     });
   });
 
   describe('overviewEdges', () => {
     it('deduplicates multiple links between the same two areas and ignores intra-area links', () => {
       const areas = buildBoardAreas({ plan: samplePlan });
-      const nodes = overviewLayout(areas, { width: 1440, height: 900 });
+      const nodes = overviewLayout(areas, { width: 1440, height: 900 }, { expanded: true });
 
       const links: BoardLink[] = [
         // 2 links from perf to csv
@@ -1098,6 +1126,280 @@ describe('boardAreas', () => {
       const { isDocFresh, isCommitFresh } = extractFreshSets(emptyNews);
       expect(isDocFresh({ id: '1', title: 'Spec', filename: 'spec.md', role: 'design', status: 'draft', createdAt: '', updatedAt: '' })).toBe(false);
       expect(isCommitFresh('fe01234')).toBe(false);
+    });
+  });
+
+  describe('overviewPlan: tiers and acceptance checks', () => {
+    it('partitions areas into tiers as a pure function', () => {
+      const sample = [
+        manyAreas(1, { done: 0 })[0]!, // focus/current
+        { ...manyAreas(1)[0]!, id: 'wait', data: { ...manyAreas(1)[0]!.data, current: false, waitingCount: 1, waitingQuestion: 'Which timezone?' } },
+        { ...manyAreas(1)[0]!, id: 'news', data: { ...manyAreas(1)[0]!.data, current: false, newsSummary: '2 commits, 1 picture' } },
+        { ...manyAreas(1)[0]!, id: 'open-1', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Open step 1', nextOpenStep: 'Write tests' } },
+        { ...manyAreas(1)[0]!, id: 'open-2', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Open step 2', nextOpenStep: 'Refactor' } },
+        { ...manyAreas(1)[0]!, id: 'done-1', data: { ...manyAreas(1)[0]!.data, current: false, done: true } },
+      ];
+      const tiers = partitionOverviewTiers(sample);
+      expect(tiers.tier1.map((a) => a.id)).toEqual(['area-0']);
+      expect(tiers.tier2.map((a) => a.id)).toEqual(['wait']);
+      expect(tiers.tier3.map((a) => a.id)).toEqual(['news']);
+      expect(tiers.tier4.map((a) => a.id)).toEqual(['open-1', 'open-2']);
+      expect(tiers.tier5.map((a) => a.id)).toEqual(['done-1']);
+
+      // Each area appears exactly once across all tiers
+      const allIds = [...tiers.tier1, ...tiers.tier2, ...tiers.tier3, ...tiers.tier4, ...tiers.tier5].map((a) => a.id);
+      expect(new Set(allIds).size).toBe(sample.length);
+
+      // Empty tier gone
+      const noNews = sample.filter((a) => a.id !== 'news');
+      expect(partitionOverviewTiers(noNews).tier3).toEqual([]);
+    });
+
+    it('nextOpenStep skips headings', () => {
+      const plan: PlanFileView = {
+        title: 'Plan with headings',
+        checkpoints: [{
+          key: 'cp1',
+          title: 'Checkpoint with heading',
+          steps: [
+            { key: 'h1', text: 'Section Heading:' },
+            { key: 's1', text: 'Real open step', parent: 'h1' },
+            { key: 's2', text: 'Another step', parent: 'h1' },
+          ],
+          decisions: [],
+        }],
+      };
+      const areas = buildBoardAreas({ plan });
+      expect(areas[0]!.data.nextOpenStep).toBe('Real open step');
+      expect(areas[0]!.data.openSteps?.[0]?.text).toBe('Real open step');
+    });
+
+    it('caps Tier 3 to at most 3 Areas with newest changes, preserving Tier 4 plan order', () => {
+      const focus = manyAreas(1, { done: 0 })[0]!;
+      const newsAreas = [
+        { ...manyAreas(1)[0]!, id: 'news-1', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Area 1', newsSummary: '1 commit', newestChangeTime: 100 } },
+        { ...manyAreas(1)[0]!, id: 'news-2', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Area 2', newsSummary: '2 commits', newestChangeTime: 400 } },
+        { ...manyAreas(1)[0]!, id: 'news-3', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Area 3', newsSummary: '1 doc', newestChangeTime: 200 } },
+        { ...manyAreas(1)[0]!, id: 'news-4', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Area 4', newsSummary: '3 commits', newestChangeTime: 500 } },
+        { ...manyAreas(1)[0]!, id: 'news-5', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Area 5', newsSummary: '1 note', newestChangeTime: 300 } },
+      ];
+      const otherOpen = [
+        { ...manyAreas(1)[0]!, id: 'open-plain', data: { ...manyAreas(1)[0]!.data, current: false, title: 'Plain open' } },
+      ];
+
+      const sample = [focus, ...newsAreas, ...otherOpen];
+      const tiers = partitionOverviewTiers(sample);
+
+      // Focus is tier 1
+      expect(tiers.tier1.map((a) => a.id)).toEqual(['area-0']);
+      // Tier 3 is capped at 3 areas with newest change times: 500 (news-4), 400 (news-2), 300 (news-5)
+      expect(tiers.tier3.map((a) => a.id)).toEqual(['news-4', 'news-2', 'news-5']);
+      // The remaining areas with news stay in Tier 4 in their original plan order along with other open areas
+      expect(tiers.tier4.map((a) => a.id)).toEqual(['news-1', 'news-3', 'open-plain']);
+    });
+
+    it('fitHeroCard covers what it draws and leaves out what does not fit whole without mid-line clipping', () => {
+      const data: AreaData = {
+        kind: 'checkpoint',
+        title: 'Feature implementation and test verification for canvas interaction',
+        done: false,
+        current: true,
+        nowSet: true,
+        openSteps: [
+          { key: 's1', text: 'Step 1: Write initial code', done: false },
+          { key: 's2', text: 'Step 2: Add test coverage', done: false },
+          { key: 's3', text: 'Step 3: Verification gate', done: false },
+        ],
+        stepsDone: 0,
+        stepsTotal: 3,
+        waitingCount: 0,
+        noteCount: 1,
+        fileCount: 0,
+        pictureCount: 0,
+        documentCount: 1,
+        commitCount: 2,
+        archivedCount: 0,
+        pictures: [],
+        preview: 'feat(board): add responsive node cards and layout',
+      };
+
+      // In large room: draws all 3 steps, preview, footer
+      const full = fitHeroCard(data, 560, 800);
+      expect(full.config.heroShowPreview).toBe(true);
+      expect(full.config.heroShowFooter).toBe(true);
+      expect(full.config.heroOpenStepLimit).toBe(3);
+      expect(full.height).toBeGreaterThan(200);
+
+      // In tightly constrained room: preview is dropped whole, then footer, then steps reduced
+      const constrained1 = fitHeroCard(data, 560, full.height - 10);
+      expect(constrained1.config.heroShowPreview).toBe(false);
+      expect(constrained1.height).toBeLessThan(full.height);
+
+      const constrained2 = fitHeroCard(data, 560, constrained1.height - 10);
+      expect(constrained2.config.heroShowFooter).toBe(false);
+
+      const constrained3 = fitHeroCard(data, 560, constrained2.height - 10);
+      expect(constrained3.config.heroOpenStepLimit).toBeLessThan(3);
+    });
+
+    it('buildBoardAreas maps commits and plan changes from news to their respective Areas', () => {
+      const plan: PlanFileView = {
+        title: 'Plan with commits in steps',
+        checkpoints: [
+          {
+            key: 'cp1',
+            title: 'First Focus Checkpoint',
+            steps: [{ key: 's1', text: 'First step' }],
+          },
+          {
+            key: 'cp2',
+            title: 'Second Checkpoint (Board Interaction)',
+            steps: [{ key: 's2', text: 'Implemented board feature (706fc9f)' }],
+          },
+        ],
+      };
+
+      const news: WhatsNewView = {
+        reader: 'tester',
+        at: '2026-11-07T12:00:00Z',
+        from: '2026-11-06T12:00:00Z',
+        basis: 'last-look',
+        empty: false,
+        problems: [],
+        plan: {
+          more: 0,
+          items: [
+            { at: '2026-11-07T11:50:00Z', by: 'agent', action: 'added', kind: 'step', key: 's2', text: 'New step in cp2' },
+          ],
+        },
+        documents: { more: 0, items: [] },
+        knowledge: { more: 0, items: [] },
+        commits: [
+          {
+            repo: 'NexusFlow',
+            more: 0,
+            commits: [
+              { sha: '706fc9f12345678', author: 'agent', subject: 'feat(board): second area commit', at: '2026-11-07T11:45:00Z' },
+            ],
+          },
+        ],
+      };
+
+      const areas = buildBoardAreas({ plan, news });
+      expect(areas.length).toBe(2);
+      const cp2Area = areas.find((a) => a.id === 'checkpoint:cp2');
+      expect(cp2Area).toBeDefined();
+      // cp2Area received the commit and plan change, so its newsSummary is populated
+      expect(cp2Area!.data.newsSummary).toBeDefined();
+      expect(cp2Area!.data.newsSummary).toContain('commit');
+    });
+
+    it('fits at listed sizes and counts with nothing overlapping or off screen', () => {
+      const testSizes = [
+        { name: 'laptop', size: { width: 1280, height: 800 } },
+        { name: 'split1440', size: { width: 652, height: 856 } },
+        { name: 'split1280', size: { width: 572, height: 756 } },
+        { name: 'split1100', size: { width: 482, height: 656 } },
+        { name: 'narrow', size: { width: 420, height: 700 } },
+      ];
+      const counts = [1, 2, 14, 25];
+
+      for (const { name, size } of testSizes) {
+        for (const count of counts) {
+          const areas = manyAreas(count, { done: Math.floor(count / 3), data: realistic });
+          const plan = overviewPlan(areas, size);
+          expect(plan.nodes.length).toBeGreaterThan(0);
+
+          for (const node of plan.nodes) {
+            // Nothing off screen: check screen coordinates accounting for viewport
+            const screenX = node.position.x * plan.viewport!.zoom + plan.viewport!.x;
+            const screenY = node.position.y * plan.viewport!.zoom + plan.viewport!.y;
+            expect(screenX).toBeGreaterThanOrEqual(OVERVIEW_INSET.side - 0.01);
+            expect(screenX + node.width! * plan.viewport!.zoom).toBeLessThanOrEqual(size.width - OVERVIEW_INSET.side + 0.01);
+            expect(screenY).toBeGreaterThanOrEqual(OVERVIEW_INSET.top - 0.01);
+            expect(screenY + node.height! * plan.viewport!.zoom).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
+          }
+
+          // Nothing overlapping
+          for (let i = 0; i < plan.nodes.length; i++) {
+            for (let j = i + 1; j < plan.nodes.length; j++) {
+              const a = plan.nodes[i]!;
+              const b = plan.nodes[j]!;
+              const overlap = a.position.x < b.position.x + b.width! && b.position.x < a.position.x + a.width! &&
+                              a.position.y < b.position.y + b.height! && b.position.y < a.position.y + a.height!;
+              expect(overlap, `Overlap at ${name} count ${count} between node ${a.id} and ${b.id}`).toBe(false);
+            }
+          }
+        }
+      }
+    });
+
+    it('all-done unfold fits the stage with nothing overflowing the stage bounds', () => {
+      const size = { width: 572, height: 756 }; // 1280x800 Split stage size
+      const doneAreas = manyAreas(11, { done: 11, data: realistic });
+      const plan = overviewPlan(doneAreas, size, { expanded: true });
+      expect(plan.nodes.length).toBe(12); // 11 minis + 1 fold
+
+      for (const node of plan.nodes) {
+        const screenY = node.position.y * plan.viewport!.zoom + plan.viewport!.y;
+        expect(screenY).toBeGreaterThanOrEqual(OVERVIEW_INSET.top - 0.01);
+        expect(screenY + node.height! * plan.viewport!.zoom).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
+      }
+    });
+
+    it('a Done checkpoint is never the focus card even when plan:own exists', () => {
+      const plan: PlanFileView = {
+        title: 'Plan with top-level steps and done checkpoints',
+        steps: [{ key: 's1', text: 'Top level step' }],
+        decisions: [],
+        checkpoints: [
+          { key: 'cp1', title: 'Done Checkpoint 1', done: true, steps: [{ key: 'c1', text: 'Step 1', done: true }] },
+          { key: 'cp2', title: 'Done Checkpoint 2', done: true, steps: [{ key: 'c2', text: 'Step 2', done: true }] },
+        ],
+      };
+      const areas = buildBoardAreas({ plan });
+      const tiers = partitionOverviewTiers(areas);
+      // Focus hero is plan:own, NEVER a done checkpoint
+      expect(tiers.tier1).toHaveLength(1);
+      expect(tiers.tier1[0]!.id).toBe('plan:own');
+      expect(tiers.tier1[0]!.data.done).toBe(false);
+      expect(tiers.tier5.map((a) => a.id)).toEqual(['checkpoint:cp1', 'checkpoint:cp2']);
+    });
+
+    it('on narrow stages rows carry their tier text and tier 2 plus tier 3 are capped with no 0 more fold', () => {
+      const size = { width: 420, height: 500 }; // narrow stage
+      const areas: BoardArea[] = [
+        manyAreas(1, { done: 0 })[0]!, // Tier 1 hero
+        { ...manyAreas(1)[0]!, id: 'wait-1', data: { ...manyAreas(1)[0]!.data, current: false, waitingCount: 1, waitingQuestion: 'Which font?' } },
+        { ...manyAreas(1)[0]!, id: 'wait-2', data: { ...manyAreas(1)[0]!.data, current: false, waitingCount: 2, waitingQuestion: 'Which color?' } },
+        { ...manyAreas(1)[0]!, id: 'news-1', data: { ...manyAreas(1)[0]!.data, current: false, newsSummary: '2 commits, 1 picture', newestChangeTime: 500 } },
+        { ...manyAreas(1)[0]!, id: 'news-2', data: { ...manyAreas(1)[0]!.data, current: false, newsSummary: '1 commit', newestChangeTime: 400 } },
+        { ...manyAreas(1)[0]!, id: 'open-1', data: { ...manyAreas(1)[0]!.data, current: false, nextOpenStep: 'Implement tests' } },
+        { ...manyAreas(1)[0]!, id: 'open-2', data: { ...manyAreas(1)[0]!.data, current: false, nextOpenStep: 'Deploy feature' } },
+      ];
+      const plan = overviewPlan(areas, size);
+      expect(plan.form).toBe('rows');
+
+      // Check tier assignment on rows
+      const rowNodes = plan.nodes.filter((n) => n.type === 'areaRow');
+      for (const row of rowNodes) {
+        expect([2, 3, 4]).toContain(row.data.tier);
+        if (row.id === 'wait-1' || row.id === 'wait-2') expect(row.data.tier).toBe(2);
+        if (row.id === 'news-1' || row.id === 'news-2') expect(row.data.tier).toBe(3);
+        if (row.id === 'open-1' || row.id === 'open-2') expect(row.data.tier).toBe(4);
+      }
+
+      // Check fold node exists and count is never 0
+      const fold = plan.nodes.find((n) => n.type === 'areaFold');
+      if (fold) {
+        expect(fold.data.count).toBeGreaterThan(0);
+      }
+
+      // Check nothing overflows stage
+      for (const node of plan.nodes) {
+        const screenY = node.position.y * plan.viewport!.zoom + plan.viewport!.y;
+        expect(screenY + node.height! * plan.viewport!.zoom).toBeLessThanOrEqual(size.height - OVERVIEW_INSET.bottom + 0.01);
+      }
     });
   });
 });

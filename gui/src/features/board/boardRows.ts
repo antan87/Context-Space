@@ -433,7 +433,20 @@ function waitingFoldedAtRest(area: BoardArea, options: Pick<AreaBoardLayoutOptio
 
 /** The id of the row that holds a node (a card, a document, a commit), so a jump to it can open the row. Null for what is not in a row. */
 export function areaRowOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now' | 'size'>, nodeId: string): string | null {
-  return areaRows(area, options).find((row) => row.items.some((item) => item.id === nodeId))?.id ?? null;
+  const rows = areaRows(area, options);
+  const itemRow = rows.find((row) => row.items.some((item) => item.id === nodeId));
+  if (itemRow) return itemRow.id;
+  const directRow = rows.find((row) => row.id === nodeId);
+  if (directRow) return directRow.id;
+  const groupRow = rows.find((row) =>
+    row.groups?.some((group) =>
+      `${row.id}:step:${group.key}` === nodeId ||
+      `row:step:${group.key}` === nodeId ||
+      group.key === nodeId
+    )
+  );
+  if (groupRow) return groupRow.id;
+  return null;
 }
 
 /**
@@ -442,18 +455,23 @@ export function areaRowOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions,
  */
 export function areaPlace(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now' | 'size'>, nodeId: string): { row: string | null; page: number; tab?: LooseTab } | null {
   const row = areaRowOf(area, options, nodeId);
+  const isMatch = (node: BoardNode) =>
+    node.id === nodeId ||
+    nodeId.endsWith(`:${node.id}`) ||
+    node.id.endsWith(`:${nodeId}`) ||
+    (node.id.includes(':step:') && nodeId.includes(':step:') && node.id.split(':step:')[1] === nodeId.split(':step:')[1]);
   if (row === null) return area.id === nodeId && areaBoardLayout(area, options).some((node) => node.id === nodeId) ? { row: null, page: 0 } : null;
   // A row with tabs also says which tab holds the node, and is laid out with that tab
   const tabs = areaRows(area, options).find((entry) => entry.id === row)?.tabs;
   const tab: LooseTab | undefined = tabs ? (tabs.media.some((item) => item.id === nodeId) ? 'media' : 'notes') : undefined;
   const drawn = { ...options, ...(tab ? { tab } : {}) };
   const named = tab ? { tab } : {};
-  if (areaBoardLayout(area, drawn).some((node) => node.id === nodeId)) return { row: null, page: 0, ...named };
+  if (areaBoardLayout(area, drawn).some(isMatch)) return { row: null, page: 0, ...named };
   const first = areaLayout(area, { ...drawn, openRow: row, page: 0 });
   const pages = first.open?.pages ?? 1;
   for (let page = 0; page < pages; page += 1) {
     const nodes = page === 0 ? first.nodes : areaLayout(area, { ...drawn, openRow: row, page }).nodes;
-    if (nodes.some((node) => node.id === nodeId)) return { row, page, ...named };
+    if (nodes.some(isMatch)) return { row, page, ...named };
   }
   return { row, page: 0, ...named };
 }

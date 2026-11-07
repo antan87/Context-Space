@@ -29,6 +29,8 @@ interface WorkspaceHeaderProps {
   menuItems?: ReactNode;
   /** Just who this is and its actions. The chat shows where the work stands in its own toolbar. */
   compact?: boolean;
+  /** Whether the board's own Now line is showing: the header chip is dropped then to cut repeats. */
+  nowLine?: boolean;
 }
 
 /**
@@ -37,7 +39,7 @@ interface WorkspaceHeaderProps {
  * workspace lives, the next checkpoint, the changes, warnings that need action) is one press away in the menu, so the
  * board and the other panes start high. A warning puts a dot on the menu and a line in it.
  */
-export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCount, changedFiles, verification, warns = true, actions, menuItems, compact = false }: WorkspaceHeaderProps) {
+export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCount, changedFiles, verification, warns = true, actions, menuItems, compact = false, nowLine = false }: WorkspaceHeaderProps) {
   const [copied, setCopied] = useState(false);
   const [shown, setShown] = useState<WorkspaceWarning | null>(null);
   const navigate = useNavigate();
@@ -68,7 +70,7 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
     const observer = new ResizeObserver(measure);
     observer.observe(slot);
     return () => observer.disconnect();
-  }, [hasNow, done, compact]);
+  }, [hasNow, done, compact, nowLine]);
   const { warnings, dismiss } = useWorkspaceWarnings(workspaceId, warns);
   const place = `${mode === 'in-place' ? 'In place' : 'Worktree'} · ${repoCount} ${repoCount === 1 ? 'repository' : 'repositories'}`;
   const changes = changedFiles === null ? 'Unknown' : changedFiles === 0 ? 'None' : `${changedFiles} ${changedFiles === 1 ? 'file' : 'files'}`;
@@ -89,8 +91,8 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
             <span className="truncate">{branchName}</span>
             {copied ? <Check aria-hidden="true" size={12} className="shrink-0 text-[var(--state-done)]" /> : <Copy aria-hidden="true" size={12} className="shrink-0 opacity-0 transition-opacity group-hover/branch:opacity-100 group-focus-visible/branch:opacity-100" />}
           </button>}
-          {/* Where the task stands: one chip. On a phone the board says it. */}
-          {!compact && (now || done) && <div ref={chipSlot} aria-label="Task status" role="group" className="@container hidden min-w-0 max-w-[28ch] grow basis-0 sm:flex">
+          {/* Where the task stands: one chip. On a phone the board says it. Dropped on the board while the Now line shows. */}
+          {!compact && !nowLine && (now || done) && <div ref={chipSlot} aria-label="Task status" role="group" className="@container hidden min-w-0 max-w-[28ch] grow basis-0 sm:flex">
             {now ? (
               <Link
                 to={`${base}/board`}
