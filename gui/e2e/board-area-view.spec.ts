@@ -33,7 +33,9 @@ function plan(decisions: Array<ReturnType<typeof decision>>, check?: string, sec
     s('c2', 'C2: Segment the loose cards into `Media`, `Notes` and `Commits`', false, 'slice-c'),
     ...Array.from({ length: 6 }, (_, i) => s(`later-${i}`, `Later step ${i} with a few words to read`)),
   ];
+  // Someone said the work is on this step, so the Now row is it (the plan's order alone says Next up)
   return planFile({
+    now: { key: 'c1-bug', by: 'claude', at: new Date().toISOString() },
     title: 'New canvas',
     checkpoints: [
       {
@@ -1163,6 +1165,8 @@ test.describe('a note that was added always shows, and the tab that shows holds 
   });
 
   test('a line runs from a note to a picture on the other tab, to the row header, on hover and when its thread is followed', async ({ page }) => {
+    // 32 px taller than the laptop window: the Now line takes that much of the pane, and this is about what fits below it
+    await page.setViewportSize({ width: 1280, height: 832 });
     await routeBoard(page, TWO(), { loose: true, linked: true });
     await stepIn(page, true);
     const area = page.locator('#board-area');

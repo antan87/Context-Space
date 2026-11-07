@@ -16,7 +16,7 @@ export function renderPlanFileInstructions(): string {
     '',
     `The plan is \`${PLAN_FILE}\`: what the work is for, the checkpoints someone could demo, the steps under each, and the decisions only the user can make. Read it before you start. Any AI or person may change it, so read it again before you change it.`,
     '',
-    '- Keep it true with your own file edits: tick a step (`- [x]`) when it is done, add the steps you find under the checkpoint they serve, and rewrite what turned out different.',
+    '- Keep it true with your own file edits: tick a step (`- [x]`) when it is done, add the steps you find under the checkpoint they serve, and rewrite what turned out different. When you start a step, run `ctxspace plan now "<step>"`: the board shows it as Now.',
     '- A question only the user can answer: add `- [ ] Decide: <question>` under what it holds up, with a `Suggested:` line (answers separated by ` · `) and an `If no answer:` line. Carry on with everything it does not hold up.',
     '- When the user answers, however you asked, tick the decision and add `Answer: <their words>`. Never answer it yourself.',
     '- A checkpoint with a `Check:` line is done when its check passes: `ctxspace plan done "<checkpoint>"` runs the check and ticks it only then.',

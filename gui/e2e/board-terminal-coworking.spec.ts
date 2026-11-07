@@ -224,9 +224,9 @@ test.describe('Board overview in Split mode: small cards', () => {
 
   /** The stage the board has in Split mode at the default 50 % share, with the app's sidebar on its rail (measured). */
   const SPLIT = [
-    { window: { width: 1440, height: 900 }, stage: { width: 652, height: 856 } },
-    { window: { width: 1280, height: 800 }, stage: { width: 572, height: 756 } },
-    { window: { width: 1100, height: 700 }, stage: { width: 482, height: 656 } },
+    { window: { width: 1440, height: 900 }, stage: { width: 652, height: 824 } },
+    { window: { width: 1280, height: 800 }, stage: { width: 572, height: 724 } },
+    { window: { width: 1100, height: 700 }, stage: { width: 482, height: 624 } },
   ];
 
   /** Opens the board in Split mode with `count` Areas (the first `done` finished), at rest. */
@@ -236,7 +236,7 @@ test.describe('Board overview in Split mode: small cards', () => {
     const percent = options.percent ?? 50;
     const pictureOn = options.pictureOn ?? 8;
     const titles = Array.from({ length: count }, (_, i) => TITLES[i] ?? `Checkpoint ${i + 1}: the work of one slice`);
-    // e2e/fixtures.ts:205 writes percent: 62 when no key is stored, so the spec stores the real default of 50 %; a fresh real profile gives 652x856, 572x756 and 482x656
+    // e2e/fixtures.ts:205 writes percent: 62 when no key is stored, so the spec stores the real default of 50 %; a fresh real profile gives 652x824, 572x724 and 482x624 (the Now line takes 32 px of the pane's height)
     await page.addInitScript((share) => { try { localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: share })); } catch { /* no storage */ } }, percent);
     await page.route('**/api/workspace/*/plan', (route) => route.fulfill({
       json: planFile({
@@ -286,17 +286,11 @@ test.describe('Board overview in Split mode: small cards', () => {
   }
 
   for (const { window: size, stage: expected } of SPLIT) {
-    test(`draws 11 Areas as ${size.width >= 1440 ? `cards at ${size.width}x${size.height}` : `two columns of small cards at ${size.width}x${size.height}, and a press steps in and back to the same card`}`, async ({ page }) => {
+    test(`draws 11 Areas as small cards at ${size.width}x${size.height}, and a press steps in and back to the same card`, async ({ page }) => {
       const board = await openSplit(page, size);
       const cards = board.locator('#board-overview button.board-area');
       await expect(cards).toHaveCount(11);
-      // These Areas have no preview line, so at 1440x900 (652x856) they are still short enough to stand as full cards; below that they are small cards
-      if (size.width >= 1440) {
-        const box = (await board.locator('#board-overview .react-flow').boundingBox())!;
-        expect([Math.round(box.width), Math.round(box.height)]).toEqual([expected.width, expected.height]);
-        await expect(board.locator('#board-overview .react-flow__node-area')).toHaveCount(11);
-        return;
-      }
+      // At 1440x900 the stage is 652x824, since the Now line takes 32 px of the pane (856 before): 11 Areas stand as small cards at every size here
       await expect(board.locator('#board-overview .react-flow__node-areaMini')).toHaveCount(11);
       await atRest(page);
 
@@ -519,7 +513,7 @@ test.describe('Board overview in Split mode: small cards', () => {
   });
 
   test('the form of the overview changes with the index: the view goes back to the plan\'s, at zoom 1 for small cards (Board mode 1200x720)', async ({ page }) => {
-    const board = await openSplit(page, { width: 1200, height: 720 }, { split: false });
+    const board = await openSplit(page, { width: 1200, height: 752 }, { split: false });
     const overview = board.locator('#board-overview');
     await expect(overview.locator('.react-flow__node-area')).toHaveCount(11);
     expect((await matrix(page))[0], 'cards are scaled to fit').toBeLessThan(1);
@@ -539,8 +533,8 @@ test.describe('Board overview in Split mode: small cards', () => {
   });
 
   test('a picture shows on a card with a status only where the status has a line of its own (240 x 96 and up)', async ({ page }) => {
-    // The picture is on the current Area, which also waits for an answer; stage 540 x 696 gives small cards of about 93 px, 540 x 756 of about 103 px
-    for (const { height, shows } of [{ height: 740, shows: false }, { height: 800, shows: true }]) {
+    // The picture is on the current Area, which also waits for an answer; stage 540 x 696 gives small cards of about 93 px, 540 x 756 of about 103 px (the window is 32 px taller for the Now line)
+    for (const { height, shows } of [{ height: 772, shows: false }, { height: 832, shows: true }]) {
       const board = await openSplit(page, { width: 1280, height: height }, { pictureOn: 2 });
       const card = board.locator('#board-overview button.board-area').filter({ hasText: TITLES[2]! });
       const box = (await card.boundingBox())!;
@@ -552,7 +546,7 @@ test.describe('Board overview in Split mode: small cards', () => {
   });
 
   test('Tab at rest does not take the view: a window that changes still lays the cards out again (Board mode 1200x720)', async ({ page }) => {
-    const board = await openSplit(page, { width: 1200, height: 720 }, { split: false });
+    const board = await openSplit(page, { width: 1200, height: 752 }, { split: false });
     const cards = board.locator('#board-overview button.board-area');
     await expect(cards).toHaveCount(11);
     await cards.first().focus();
@@ -562,7 +556,7 @@ test.describe('Board overview in Split mode: small cards', () => {
     const resting = await matrix(page);
     expect(resting[5], 'at 1200x720 the cards stand at the top').toBe(44);
     // A taller window: the layout puts the cards lower, and the view follows because Tab did not move it
-    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.setViewportSize({ width: 1200, height: 832 });
     await atRest(page);
     expect((await matrix(page))[5], 'the view follows the new layout').toBeGreaterThan(44);
   });

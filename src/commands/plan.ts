@@ -12,8 +12,8 @@ import { Command, Option } from 'commander';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { PlanError, type PlanActor } from '../core/plan.js';
-import { PLAN_FILE, PlanFileError, addToPlan, answerDecision, openDecisions, planItems, planKey, setDone, type PlanFile } from '../core/plan-file.js';
-import { changePlanFile, readPlanChanges, readPlanChecks, readPlanFile, runPlanCheck } from '../core/plan-file-store.js';
+import { PLAN_FILE, PlanFileError, addToPlan, answerDecision, findPlanItem, openDecisions, planItems, setDone, type PlanFile } from '../core/plan-file.js';
+import { changePlanFile, clearPlanNow, readPlanChanges, readPlanChecks, readPlanFile, runPlanCheck, setPlanNow } from '../core/plan-file-store.js';
 import { planFileToJson, proofWords, renderPlanChanges, renderPlanStanding, standingLine } from '../core/plan-file-text.js';
 
 /** Options every `ctxspace plan` command takes. */
@@ -44,6 +44,8 @@ export const PLAN_EXAMPLES = [
   '  ctxspace plan add "Add the Export button" --under "Reports export to CSV"',
   '  ctxspace plan decide "Export archived reports?" --under "Reports export to CSV" --suggest "Yes" --suggest "No" --if-no-answer "No"',
   '  ctxspace plan answer "Export archived reports?" "Yes, all of them"',
+  '  ctxspace plan now "Write the CSV writer"              say which step you are working on, so the board shows it',
+  '  ctxspace plan now --clear                              say nobody is working on a particular step',
   '  ctxspace plan log                                      what changed lately, and who changed it',
   '',
   `Most changes need no command: edit ${PLAN_FILE} directly.`,
@@ -81,17 +83,7 @@ export function planChangeBy(options: { as?: string; harness?: string }, env: No
  * are named, so the caller can say which.
  */
 export function findByWords(plan: PlanFile, words: string, only?: 'checkpoint' | 'decision'): ReturnType<typeof planItems>[number] {
-  const items = planItems(plan).filter((item) => !only || (only === 'decision' ? 'question' in item : 'title' in item));
-  const nameOf = (item: (typeof items)[number]) => ('question' in item ? item.question : 'title' in item ? item.title : item.text);
-  const wanted = words.trim().toLowerCase();
-  const exact = items.filter((item) => item.key === words.trim() || item.key === planKey(words) || nameOf(item).toLowerCase() === wanted);
-  const matches = exact.length ? exact : items.filter((item) => nameOf(item).toLowerCase().startsWith(wanted) || planKey(nameOf(item)).startsWith(planKey(words)));
-  const what = only ?? 'item';
-  if (!wanted || !matches.length) throw new PlanFileError(`No ${what} in ${PLAN_FILE} matches "${words}". Run "ctxspace plan" to see them.`, 'not_found');
-  if (matches.length > 1) {
-    throw new PlanFileError(`"${words}" matches ${matches.length} items: ${matches.slice(0, 5).map((item) => `"${nameOf(item)}"`).join(', ')}. Use more of the words.`, 'invalid');
-  }
-  return matches[0]!;
+  return findPlanItem(plan, words, only);
 }
 
 /** `ctxspace plan`: where the plan stands. */
@@ -141,6 +133,24 @@ export async function planCheck(context: PlanCommandContext, words?: string): Pr
   if (context.json) context.print(JSON.stringify({ ok: evidence.canProgress, message, proof: evidence }, null, 2));
   else context.print(message);
   if (!evidence.canProgress) process.exitCode = 1;
+}
+
+/**
+ * `ctxspace plan now <words>`: says which step is being worked on, so the board and the header show it as Now. It is
+ * kept beside the plan, not in it, and ticking or removing the step clears it. `--clear` says none.
+ */
+export async function planNow(context: PlanCommandContext, words: string, clear = false): Promise<void> {
+  if (clear) {
+    const had = await clearPlanNow(context.workspacePath);
+    const message = had ? 'No step is marked as being worked on now.' : 'No step was marked as being worked on.';
+    context.print(context.json ? JSON.stringify({ ok: true, message }, null, 2) : message);
+    return;
+  }
+  const { plan } = await readPlanFile(context.workspacePath);
+  const step = findPlanItem(plan, words, 'step');
+  const { text } = await setPlanNow(context.workspacePath, step.key, context.by, context.now);
+  const message = `Working on "${text}" now.`;
+  context.print(context.json ? JSON.stringify({ ok: true, message, key: step.key, by: context.by }, null, 2) : message);
 }
 
 /** `ctxspace plan answer <decision> <answer>`: ticks the decision and writes the answer under it. */
@@ -250,6 +260,13 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
     .option('--detail <text>', 'Why it is asked'))
     .action(action<PlanCommonOptions & { under?: string; suggest: string[]; ifNoAnswer?: string; detail?: string }, [string[]]>((context, options, words) =>
       planAdd(context, { decision: { question: words.join(' '), suggested: options.suggest, ifNoAnswer: options.ifNoAnswer, detail: options.detail } }, options.under)));
+
+  common(plan.command('now').description('Say which step you are working on now, so the board shows it as Now').argument('[words...]', 'The step, or the start of its words')
+    .option('--clear', 'Say that no step is being worked on'))
+    .action(action<PlanCommonOptions & { clear?: boolean }, [string[]]>((context, options, words) => {
+      if (!options.clear && words.length === 0) throw new PlanFileError('Name the step you are working on, or use --clear.', 'invalid');
+      return planNow(context, words.join(' '), Boolean(options.clear));
+    }));
 
   common(plan.command('log').description('What changed lately, and who changed it'))
     .action(action<PlanCommonOptions, []>((context) => planLog(context)));

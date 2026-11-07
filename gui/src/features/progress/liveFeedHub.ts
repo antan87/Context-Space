@@ -17,7 +17,7 @@ import { progressFactsKey } from '../../lib/api/queries.js';
 import type { LiveEvent, ScreenEvent } from '../../types.js';
 import { boardKey } from '../board/boardData.js';
 import { planFileKey } from '../plan/planFile.js';
-import { newsKey } from '../plan/whatsNew.js';
+import { newsKey, recentCommitsKey } from '../plan/whatsNew.js';
 import { addScreenEvent, connectScreenFeed, type ScreenFeedOptions } from './screenFeed.js';
 
 /** A burst of events (the replay when a stream opens) asks for one fresh read, not one each. */
@@ -74,7 +74,7 @@ export function createLiveFeedHub(connect: (options: ScreenFeedOptions) => { clo
         }
         // PLAN.md changed by an AI's own edit or the CLI shows at once everywhere it is read, not at the next poll.
         if (live.type === 'plan') {
-          for (const queryKey of [planFileKey(workspace), newsKey(workspace), ['workspace-work', workspace], ['workspace-lifecycle', workspace], ['needs-you']]) invalidate(queryKey);
+          for (const queryKey of [planFileKey(workspace), newsKey(workspace), recentCommitsKey(workspace), ['workspace-work', workspace], ['workspace-lifecycle', workspace], ['needs-you']]) invalidate(queryKey);
         }
         if (live.type === 'screen') {
           const events = addScreenEvent(entry.state.events, live.event);

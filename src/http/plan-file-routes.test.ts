@@ -211,4 +211,27 @@ describe('plan routes', () => {
     });
     expect(missing.status).toBe(404);
   });
+
+  it('says which step is worked on now, sends it with the plan, and clears it when the step is ticked', async () => {
+    const postNow = (body: unknown) => app.request('/api/workspace/reports/plan/now', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await get()).now).toBeNull();
+    const set = await postNow({ key: 'write-the-csv-writer' });
+    expect(set.status).toBe(200);
+    const body = await set.json();
+    expect(body.message).toBe('Working on "Write the CSV writer" now.');
+    expect(body.plan.now).toMatchObject({ key: 'write-the-csv-writer', by: 'user' });
+    expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(PLAN);
+
+    expect((await postNow({ key: 'export-archived-reports' })).status).toBe(400);
+    expect((await postNow({ key: 'reports-export-to-csv' })).status).toBe(400);
+    expect((await postNow({ key: 'nothing-like-it' })).status).toBe(404);
+    expect((await postNow({ nonsense: true })).status).toBe(400);
+
+    await post({ type: 'tick', key: 'write-the-csv-writer', done: true, expected: 'Write the CSV writer' });
+    expect((await get()).now).toBeNull();
+
+    await postNow({ key: 'write-the-csv-writer' });
+    const cleared = await (await postNow({ clear: true })).json();
+    expect(cleared.plan.now).toBeNull();
+  });
 });

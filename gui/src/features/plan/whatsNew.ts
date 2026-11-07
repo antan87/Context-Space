@@ -29,6 +29,8 @@ export interface WhatsNewView {
   documents: NewsSection<NewsDocument>;
   knowledge: NewsSection<NewsKnowledge>;
   commits: NewsRepo[];
+  /** Only on what the Board draws (`boardNews`): the commits that are new to the reader, a part of `commits`, which is the recent ones. */
+  unseenCommits?: NewsRepo[];
   problems: string[];
   empty: boolean;
 }
@@ -51,6 +53,51 @@ export function useWhatsNew(workspace: string | null) {
     enabled: Boolean(workspace),
     staleTime: 30_000,
   });
+}
+
+/** The commits of the last few days, whatever the user has seen: the Board draws these, so that Got it never takes work off it. */
+export interface RecentCommits { at: string; from: string; commits: NewsRepo[] }
+
+export const recentCommitsKey = (workspace: string | null) => ['recent-commits', workspace] as const;
+
+export function useRecentCommits(workspace: string | null) {
+  return useQuery({
+    queryKey: recentCommitsKey(workspace),
+    queryFn: async ({ signal }) => {
+      const recent = await apiFetch<RecentCommits>(`/api/workspace/${encodeURIComponent(workspace!)}/recent-commits`, { signal });
+      if (typeof recent?.at !== 'string' || !Array.isArray(recent.commits)) throw new Error('the commits came back in a form this version of the app does not read');
+      return recent;
+    },
+    enabled: Boolean(workspace),
+    staleTime: 30_000,
+    // The Board does without it (it keeps what the news lists), so a failure is not retried or shown
+    retry: false,
+  });
+}
+
+/**
+ * What the Board draws its commits from: the recent commits (the last few days) and whatever the news lists, each once, with the
+ * news only saying which are new. Marking the news as seen empties `news`, and takes nothing off the board. A recent list that could
+ * not be read leaves the news's own commits, as before.
+ */
+export function boardNews(news: WhatsNewView | undefined, recent: RecentCommits | undefined): WhatsNewView | undefined {
+  if (!news) return undefined;
+  if (!recent) return { ...news, unseenCommits: news.commits };
+  const unseen = news.empty ? [] : news.commits;
+  const commits = [...recent.commits.map((repo) => repo.repo), ...news.commits.map((repo) => repo.repo)].filter((name, index, all) => all.indexOf(name) === index).map((name): NewsRepo => {
+    const a = recent.commits.find((repo) => repo.repo === name);
+    const b = news.commits.find((repo) => repo.repo === name);
+    const seen = new Set<string>();
+    const list = [...(a?.commits ?? []), ...(b?.commits ?? [])].filter((commit) => {
+      const key = commit.sha.slice(0, 7);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).sort((x, y) => (y.at > x.at ? 1 : y.at < x.at ? -1 : 0));
+    const problem = a?.problem ?? b?.problem;
+    return { repo: name, commits: list, more: Math.max(a?.more ?? 0, b?.more ?? 0), ...(a?.moreAtLeast || b?.moreAtLeast ? { moreAtLeast: true as const } : {}), ...(problem && list.length === 0 ? { problem } : {}) };
+  });
+  return { ...news, basis: 'first-look', from: recent.from < news.from ? recent.from : news.from, commits, unseenCommits: unseen };
 }
 
 /** Got it: the user has seen the list made at `at`. A list that changed since is refused, and read again. */
@@ -110,23 +157,50 @@ export function newsSummary(news: WhatsNewView, now: Date = new Date()): string 
 
 export interface NewsGroup { title: string; lines: string[] }
 
+/** What a line of the list is about, so that a screen can take the reader to it: a plan item, a document by name, or a commit. */
+export type NewsRef =
+  | { kind: 'plan'; item: PlanFileChange['kind']; key: string; removed: boolean }
+  | { kind: 'document'; name: string }
+  | { kind: 'commit'; repo: string; sha: string };
+
+/** One line of the list, the group it is under, when it happened (the newest first when sorted) and what it is about, if anything. */
+export interface NewsEntry { group: string; text: string; at?: string; ref?: NewsRef }
+
 const withTime = (text: string, at: string, now: Date) => {
   const when = agoText(at, now);
   return when ? `${text} · ${when}` : text;
 };
 
-/** The same short lines `ctxspace news` prints, under the headings Plan, Documents, Knowledge and Commits. */
-export function newsGroups(news: WhatsNewView, now: Date = new Date()): NewsGroup[] {
-  const more = (n: number, what = 'more') => (n ? [`and ${n} ${what}`] : []);
+/** Every line of the list, in the order of `ctxspace news`: the groups Plan, Documents, Knowledge, Commits and Not read. */
+export function newsEntries(news: WhatsNewView, now: Date = new Date()): NewsEntry[] {
+  const more = (group: string, n: number, what = 'more'): NewsEntry[] => (n ? [{ group, text: `and ${n} ${what}` }] : []);
   const problems = [...news.commits.filter((repo) => repo.problem).map((repo) => `${repo.repo} could not be read: ${repo.problem}`), ...news.problems];
   return [
-    { title: 'Plan', lines: [...more(news.plan.more, 'earlier, not shown'), ...news.plan.items.map((change) => withTime(changeLine(change), change.at, now))] },
-    { title: 'Documents', lines: [...news.documents.items.map((document) => withTime(`${document.name} ${document.change}`, document.at, now)), ...more(news.documents.more)] },
-    { title: 'Knowledge', lines: [...news.knowledge.items.map((entry) => `${entry.type ?? 'note'} “${entry.title}”${entry.date ? ` · ${entry.date}` : ''}`), ...more(news.knowledge.more)] },
-    { title: 'Commits', lines: news.commits.flatMap((repo) => [
-      ...repo.commits.map((commit) => withTime(`${repo.repo}: ${commit.sha} ${commit.subject} (${commit.author})`, commit.at, now)),
-      ...(repo.more ? [`and ${repo.more}${repo.moreAtLeast ? '+' : ''} more in ${repo.repo}`] : []),
-    ]) },
-    { title: 'Not read', lines: problems },
-  ].filter((group) => group.lines.length > 0);
+    ...more('Plan', news.plan.more, 'earlier, not shown'),
+    ...news.plan.items.map((change): NewsEntry => ({ group: 'Plan', text: withTime(changeLine(change), change.at, now), at: change.at, ref: { kind: 'plan', item: change.kind, key: change.key, removed: change.action === 'removed' } })),
+    ...news.documents.items.map((document): NewsEntry => ({ group: 'Documents', text: withTime(`${document.name} ${document.change}`, document.at, now), at: document.at, ref: { kind: 'document', name: document.name } })),
+    ...more('Documents', news.documents.more),
+    ...news.knowledge.items.map((entry): NewsEntry => ({ group: 'Knowledge', text: `${entry.type ?? 'note'} “${entry.title}”${entry.date ? ` · ${entry.date}` : ''}` })),
+    ...more('Knowledge', news.knowledge.more),
+    ...news.commits.flatMap((repo): NewsEntry[] => [
+      ...repo.commits.map((commit): NewsEntry => ({ group: 'Commits', text: withTime(`${repo.repo}: ${commit.sha} ${commit.subject} (${commit.author})`, commit.at, now), at: commit.at, ref: { kind: 'commit', repo: repo.repo, sha: commit.sha } })),
+      ...(repo.more ? [{ group: 'Commits', text: `and ${repo.more}${repo.moreAtLeast ? '+' : ''} more in ${repo.repo}` }] : []),
+    ]),
+    ...problems.map((text): NewsEntry => ({ group: 'Not read', text })),
+  ];
+}
+
+/** The same short lines `ctxspace news` prints, under the headings Plan, Documents, Knowledge and Commits. */
+export function newsGroups(news: WhatsNewView, now: Date = new Date()): NewsGroup[] {
+  const entries = newsEntries(news, now);
+  return ['Plan', 'Documents', 'Knowledge', 'Commits', 'Not read']
+    .map((title) => ({ title, lines: entries.filter((entry) => entry.group === title).map((entry) => entry.text) }))
+    .filter((group) => group.lines.length > 0);
+}
+
+/** How many things are new: plan changes, documents, knowledge entries and commits, including those past the ones listed. Zero when it was seen. */
+export function newsTotal(news: WhatsNewView | undefined): number {
+  if (!news || news.empty) return 0;
+  return news.plan.items.length + news.plan.more + news.documents.items.length + news.documents.more + news.knowledge.items.length + news.knowledge.more
+    + news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0);
 }

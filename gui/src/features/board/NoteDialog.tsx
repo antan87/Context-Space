@@ -77,33 +77,37 @@ export function NoteDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Synchronize initial state when opening dialog
+  // What the fields start from is read when the dialog opens or switches to another note, and at no other time: the board changing under
+  // an open dialog (a live change, the plan read again) must never overwrite what is typed.
+  const latest = useRef({ note, defaultAreaId, defaultStepKey, areas });
+  useEffect(() => { latest.current = { note, defaultAreaId, defaultStepKey, areas }; });
+  const noteId = note?.id;
   useEffect(() => {
-    if (open) {
-      if (note) {
-        setTitle(note.title);
-        setBody(note.body);
-        setPinned(note.pinned);
-        setArea(note.area ?? '');
-        setStep(note.step ?? '');
-      } else {
-        setTitle('');
-        setBody('');
-        setPinned(false);
-        setArea(defaultAreaId ?? areas[0]?.id ?? '');
-        setStep(defaultStepKey ?? '');
-      }
-      setPreview(false);
-      setError(null);
-      setIsSubmitting(false);
-
-      // Autofocus title input smoothly after open
-      const timer = setTimeout(() => {
-        titleInputRef.current?.focus();
-      }, 50);
-      return () => clearTimeout(timer);
+    if (!open) return undefined;
+    const { note: current, defaultAreaId: area0, defaultStepKey: step0, areas: choices } = latest.current;
+    if (current) {
+      setTitle(current.title);
+      setBody(current.body);
+      setPinned(current.pinned);
+      setArea(current.area ?? '');
+      setStep(current.step ?? '');
+    } else {
+      setTitle('');
+      setBody('');
+      setPinned(false);
+      setArea(area0 ?? choices[0]?.id ?? '');
+      setStep(step0 ?? '');
     }
-  }, [open, note, defaultAreaId, defaultStepKey, areas]);
+    setPreview(false);
+    setError(null);
+    setIsSubmitting(false);
+
+    // Autofocus title input smoothly after open
+    const timer = setTimeout(() => {
+      titleInputRef.current?.focus();
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [open, noteId]);
 
   const selectedAreaObj = areas.find((a) => a.id === area);
   const availableSteps = selectedAreaObj?.steps ?? [];

@@ -81,6 +81,13 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
     return { message, plan: await planFileForApp(root) };
   }));
 
+  // Says which step is being worked on, or (clear) that none is. Local state; PLAN.md is not touched.
+  app.post('/api/workspace/:id/plan/now', bodyLimit({ maxSize: 4_000 }), handle(async (root, c) => {
+    const body = z.union([z.object({ key }).strict(), z.object({ clear: z.literal(true) }).strict()]).parse(await c.req.json());
+    const { message } = await changePlanFileForApp(root, 'key' in body ? { type: 'now', key: body.key } : { type: 'now-clear' });
+    return { message, plan: await planFileForApp(root) };
+  }));
+
   app.post('/api/workspace/:id/plan/checkpoints/:key/check', handle(async (root, c) => {
     const checkpointKey = key.parse(c.req.param('key'));
     const currentPlan = await planFileForApp(root);

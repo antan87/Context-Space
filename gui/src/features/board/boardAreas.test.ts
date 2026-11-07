@@ -163,6 +163,61 @@ describe('boardAreas', () => {
       expect(csv.cards.map((c) => c.id)).toContain('card-renamed');
     });
 
+    describe('the focus Area', () => {
+      const looseCard = sampleCard('loose-card', 'Tied to nothing');
+      const news: WhatsNewView = {
+        basis: 'first-look', from: '2026-10-01T00:00:00Z', at: '2026-10-02T00:00:00Z',
+        commits: [{ repo: 'billing', more: 0, commits: [{ sha: '1122334455667788', subject: 'General commit', author: 'Bob', at: '2026-10-01T11:00:00Z' }] }],
+      };
+      const board: BoardView = { cards: [looseCard], positions: {}, links: [] };
+      const recently = (key: string) => ({ key, by: 'claude', at: new Date().toISOString() });
+
+      it('is the plan\'s first open checkpoint with nothing set, and is not called Now', () => {
+        const csv = buildBoardAreas({ plan: samplePlan }).find((a) => a.data.current)!;
+        expect(csv.id).toBe('checkpoint:csv');
+        expect(csv.data).toMatchObject({ nowSet: false, focusStep: 'c2' });
+      });
+
+      it('moves to the Area of the step someone is working on, which is then Now', () => {
+        const areas = buildBoardAreas({ plan: { ...samplePlan, now: recently('s1') } });
+        const focus = areas.filter((a) => a.data.current);
+        expect(focus.map((a) => a.id)).toEqual(['checkpoint:ship']);
+        expect(focus[0]!.data).toMatchObject({ nowSet: true, focusStep: 's1' });
+        expect(areas.filter((a) => a.data.nowSet)).toHaveLength(1);
+      });
+
+      it('leaves cards and documents tied to nothing where they were, and brings the commits tied to nothing to the focus Area', () => {
+        const doc = sampleDoc('doc-loose', 'Loose doc');
+        const before = buildBoardAreas({ plan: samplePlan, board, news, documents: [doc] });
+        const after = buildBoardAreas({ plan: { ...samplePlan, now: recently('s1') }, board, news, documents: [doc] });
+        const where = (areas: BoardArea[], pick: (a: BoardArea) => boolean) => areas.find(pick)!.id;
+        expect(where(before, (a) => a.cards.some((c) => c.id === 'loose-card'))).toBe('checkpoint:csv');
+        expect(where(after, (a) => a.cards.some((c) => c.id === 'loose-card'))).toBe('checkpoint:csv');
+        expect(where(before, (a) => a.documents.some((d) => d.id === 'doc-loose'))).toBe('checkpoint:csv');
+        expect(where(after, (a) => a.documents.some((d) => d.id === 'doc-loose'))).toBe('checkpoint:csv');
+        expect(where(before, (a) => a.data.commitCount > 0)).toBe('checkpoint:csv');
+        expect(where(after, (a) => a.data.commitCount > 0)).toBe('checkpoint:ship');
+      });
+
+      it('lights an Area for what changed in the last minute by the clock of the build, whatever time the focus is held at', () => {
+        const now = Date.now();
+        const card = sampleCard('fresh-card', 'Just added', 'checkpoint:ship', { updatedBy: 'claude', updatedAt: new Date(now - 10_000).toISOString() } as never);
+        const areas = buildBoardAreas({ plan: samplePlan, board: { cards: [card], positions: {}, links: [] }, now, focusNow: now - 70_000 });
+        expect(areas.find((a) => a.id === 'checkpoint:ship')!.data.fresh).toBe(true);
+        // and the focus is the one for the time it was held at
+        const held = buildBoardAreas({ plan: { ...samplePlan, now: { key: 's1', by: 'claude', at: new Date(now - 70_000).toISOString() } }, now, focusNow: now - 70_000 });
+        expect(held.find((a) => a.data.nowSet)!.id).toBe('checkpoint:ship');
+      });
+
+      it('ignores a step that is done, gone, or set more than a day ago', () => {
+        for (const now of [recently('c1'), recently('gone'), { key: 's1', by: 'claude', at: new Date(Date.now() - 25 * 3600_000).toISOString() }]) {
+          const areas = buildBoardAreas({ plan: { ...samplePlan, now } });
+          expect(areas.find((a) => a.data.current)!.id).toBe('checkpoint:csv');
+          expect(areas.some((a) => a.data.nowSet)).toBe(false);
+        }
+      });
+    });
+
     it('tracks archived cards in archivedCount and hides them from visible cards unless showArchived is true', () => {
       const activeCard = sampleCard('active-1', 'Active note');
       const archivedCard = sampleCard('arch-1', 'Archived note', undefined, { archived: true });
@@ -297,7 +352,7 @@ describe('boardAreas', () => {
   const manyAreas = (count: number, options: { done?: number; data?: Partial<AreaData> } = {}): BoardArea[] => Array.from({ length: count }, (_, i) => {
     const done = i < (options.done ?? 0);
     const data: AreaData = {
-      kind: 'checkpoint', title: `Checkpoint ${i + 1}: the work of one slice`, done, current: i === (options.done ?? 0), stepsDone: done ? 3 : 1, stepsTotal: 3,
+      kind: 'checkpoint', title: `Checkpoint ${i + 1}: the work of one slice`, done, current: i === (options.done ?? 0), nowSet: false, stepsDone: done ? 3 : 1, stepsTotal: 3,
       waitingCount: 0, noteCount: 0, fileCount: 0, pictureCount: 0, documentCount: 0, commitCount: 0, archivedCount: 0, pictures: [], fresh: false, ...options.data,
     };
     return { id: `area-${i}`, kind: 'checkpoint', data, documents: [], repos: [], cards: [], archivedCount: 0, allMemberNodeIds: [`area-${i}`] };

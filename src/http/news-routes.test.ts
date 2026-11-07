@@ -154,4 +154,13 @@ describe('news routes', () => {
     const broken = await app.request('/api/workspace/reports/news/seen', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{ nope' });
     expect(broken.status).toBe(400);
   });
+
+  it('serves the Board its recent commits without touching the pending record, and a read with since does not replace it', async () => {
+    const report = (await get('?reader=user')).body;
+    const recent = await (await app.request('/api/workspace/reports/recent-commits')).json();
+    expect(recent).toMatchObject({ commits: [] });
+    await get(`?reader=user&since=${encodeURIComponent(hoursAgo(5).toISOString())}`);
+    // the first report is still the one that can be marked
+    expect(await post({ reader: 'user', at: report.at })).toEqual({ status: 200, body: { ok: true } });
+  });
 });

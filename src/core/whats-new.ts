@@ -457,3 +457,17 @@ export async function markSeen(workspacePath: string, reader: string, at: string
   if (Number.isNaN(when.getTime())) throw new Error('"at" is not a date and time.');
   await promotePending(root, newsReaderName(reader), when.getTime());
 }
+
+/**
+ * The commits of the last few days, whatever a reader has seen: what the Board draws, so that marking the news as seen never takes
+ * work off the board. It reads and records nothing. The shape is the news report's commits, newest first per repository.
+ */
+export async function recentCommits(workspacePath: string, options: { now?: Date; days?: number; limit?: number } = {}): Promise<{ at: string; from: string; commits: NewsRepo[] }> {
+  const root = await fs.realpath(workspacePath);
+  const now = options.now ?? new Date();
+  const from = new Date(now.getTime() - (options.days ?? FIRST_LOOK_DAYS) * 24 * 60 * 60 * 1000).toISOString();
+  const repos = await getWorkspaceRepoPaths(root).catch(() => []);
+  const heads = await Promise.all(repos.map(repoHead));
+  const commits = await Promise.all(heads.map((repo) => repoNews(repo, undefined, from, options.limit ?? NEWS_LIMIT)));
+  return { at: now.toISOString(), from, commits };
+}

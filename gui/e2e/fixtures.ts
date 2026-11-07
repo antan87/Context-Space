@@ -167,6 +167,8 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/workspace/*/plan', json(planFile()));
     // Nothing changed since the user last looked, so no card above the plan; a spec about it routes its own.
     await page.route('**/api/workspace/*/news', json(whatsNew()));
+    // The Board's recent commits (what it draws, whatever was seen): none unless a spec says
+    await page.route('**/api/workspace/*/recent-commits', (route) => route.fulfill({ json: { at: new Date().toISOString(), from: new Date(Date.now() - 3 * 86_400_000).toISOString(), commits: [] } }));
     // Nothing has been put on the board; a spec about the board routes its own.
     await page.route('**/api/workspace/*/board', json(boardFile()));
     // Nothing is moved on the board either: a place that is sent anyway is refused. A spec about moving things routes its own.

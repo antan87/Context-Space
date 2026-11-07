@@ -70,7 +70,12 @@ export interface PlanFileView {
   /** The keys of the decisions that wait for the user's answer. */
   waiting: string[];
   changes: PlanFileChange[];
+  /** The step someone said they are working on now (an AI or a person), when it is still an open step. */
+  now?: PlanNow | null;
 }
+
+/** Who said which step is being worked on now, and when. */
+export interface PlanNow { key: string; by: string; at: string }
 
 export type PlanFileChangeInput =
   | { type: 'tick'; key: string; done: boolean; expected: string }
@@ -201,6 +206,19 @@ export function useTickPlanStep(workspace: string) {
       }
       void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) });
     },
+  });
+}
+
+/** Say which step is being worked on now (`key`), or that none is (`null`). Local state: the plan file is not changed. */
+export function useSetPlanNow(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string | null) => apiFetch<{ message: string; plan: PlanFileView }>(
+      `/api/workspace/${encodeURIComponent(workspace)}/plan/now`,
+      { method: 'POST', body: JSON.stringify(key === null ? { clear: true } : { key }) },
+    ),
+    onSuccess: (result) => { queryClient.setQueryData(planFileKey(workspace), result.plan); },
+    onError: () => { void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) }); },
   });
 }
 

@@ -469,3 +469,64 @@ test.describe('Canvas Note Creation & In-Place Editing (Milestone 2, Slice 2.1)'
     expect(updateRequest).toBeDefined();
   });
 });
+
+test.describe('what is typed in the note dialog survives the clock and the board changing', () => {
+  const focusWindow = (page: Page) => page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const NOTE: MockCard = {
+    id: '11111111-2222-4000-8000-333333333333', kind: 'note', title: 'Original Title', body: 'Original markdown content', pinned: false, archived: false,
+    area: 'checkpoint:reports-export-to-csv', by: 'user', at: '2026-10-23T10:00:00.000Z', updatedBy: 'user', updatedAt: '2026-10-23T10:00:00.000Z',
+  };
+
+  test('a new note keeps its title and text past a minute and a window focus', async ({ page }) => {
+    await page.clock.install({ time: new Date() });
+    await setupBoardRoutes(page);
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByRole('button', { name: /note/i }).first().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByPlaceholder('Note title...').fill('A draft I am writing');
+    await dialog.getByPlaceholder('Write Markdown, lists, notes, or links...').fill('Half of a long thought');
+    await page.clock.fastForward('01:05');
+    await focusWindow(page);
+    await page.clock.fastForward('01:00');
+    await expect(dialog.getByPlaceholder('Note title...')).toHaveValue('A draft I am writing');
+    await expect(dialog.getByPlaceholder('Write Markdown, lists, notes, or links...')).toHaveValue('Half of a long thought');
+  });
+
+  test('an edit keeps what was changed, not the saved text, past a minute and a window focus', async ({ page }) => {
+    await page.clock.install({ time: new Date() });
+    await setupBoardRoutes(page, [NOTE]);
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' }).click();
+    await page.locator('#board-area').locator('article').filter({ hasText: 'Original Title' }).dblclick();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: 'Edit note' })).toBeVisible();
+    await dialog.getByPlaceholder('Note title...').fill('Changed but not saved');
+    await dialog.getByPlaceholder('Write Markdown, lists, notes, or links...').fill('Changed body');
+    await page.clock.fastForward('01:05');
+    await focusWindow(page);
+    await page.clock.fastForward('01:00');
+    await expect(dialog.getByPlaceholder('Note title...')).toHaveValue('Changed but not saved');
+    await expect(dialog.getByPlaceholder('Write Markdown, lists, notes, or links...')).toHaveValue('Changed body');
+  });
+
+  test('a live change to the board while typing leaves the text, in a new note and in an edit', async ({ page }) => {
+    await page.clock.install({ time: new Date() });
+    const state = await setupBoardRoutes(page, [NOTE]);
+    let reads = 0;
+    await page.route('**/api/workspace/demo/board', (route) => { reads += 1; return route.fulfill({ json: state.board }); });
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' }).click();
+    await page.locator('#board-area').locator('article').filter({ hasText: 'Original Title' }).dblclick();
+    const dialog = page.getByRole('dialog');
+    const title = dialog.getByPlaceholder('Note title...');
+    await title.fill('Mid-sentence in an edit');
+    const before = reads;
+    // the AI changes the very note and adds another while the dialog is open
+    state.board = { ...state.board, revision: state.board.revision + 1, cards: [{ ...NOTE, title: 'Changed by the AI', body: 'New body from the AI', updatedBy: 'claude', updatedAt: new Date().toISOString() }, { ...NOTE, id: '11111111-2222-4000-8000-444444444444', title: 'A second note by the AI' }] };
+    await page.clock.fastForward('00:35');
+    await expect.poll(() => reads).toBeGreaterThan(before);
+    await page.clock.fastForward('00:35');
+    await expect(title).toHaveValue('Mid-sentence in an edit');
+    await expect(dialog.getByPlaceholder('Write Markdown, lists, notes, or links...')).toHaveValue('Original markdown content');
+  });
+});

@@ -14,6 +14,8 @@ import {
   SCREEN_NOTE_LIMIT, SCREEN_REASON_LIMIT, SCREEN_TEXT_LIMIT, SCREEN_TITLE_LIMIT,
   appendScreenEvent,
 } from '../core/screen-events.js';
+import { findPlanItem } from '../core/plan-file.js';
+import { clearPlanNow, readPlanFile, setPlanNow } from '../core/plan-file-store.js';
 import { resolveScreenRepo, resolveScreenTarget, SCREEN_PATH_MAX_LENGTH } from '../core/screen-paths.js';
 import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
 import type { NexusFlowTool } from './tools.js';
@@ -121,6 +123,12 @@ const nextSchema = z.object({
 
 const contextSchema = z.object({ harness });
 
+const currentStepSchema = z.object({
+  step: z.string().min(1).max(300).optional().describe('The step you are starting, as its key or the start of its words in PLAN.md.'),
+  clear: z.boolean().optional().describe('true says no step is being worked on.'),
+  harness,
+});
+
 export const screenTools: NexusFlowTool[] = [
   screenTool(
     'show_in_reader',
@@ -196,5 +204,22 @@ export const screenTools: NexusFlowTool[] = [
     contextSchema,
     async (_input, { root }) => readScreenContext(root),
     true,
+  ),
+
+  screenTool(
+    'set_current_step',
+    `Say which plan step you are working on now, when you start it. The board and the header then show that step as Now, with your name and when; without it they show only the plan's order as "Next up". Give the step (its key, or the start of its words); clear: true says none. It only shows where you are: PLAN.md is not changed, and ticking or removing the step clears it.`,
+    currentStepSchema,
+    async (input, { workspacePath }) => {
+      if (input.clear) {
+        await clearPlanNow(workspacePath);
+        return { cleared: true, message: 'No step is marked as being worked on.' };
+      }
+      if (!input.step) throw new Error('Give the step you are working on, or clear: true.');
+      const { plan } = await readPlanFile(workspacePath);
+      const item = findPlanItem(plan, input.step, 'step');
+      const { text } = await setPlanNow(workspacePath, item.key, (input.harness ?? 'ai').trim().toLowerCase() || 'ai');
+      return { step: text, message: `The board shows "${text}" as Now.` };
+    },
   ),
 ];

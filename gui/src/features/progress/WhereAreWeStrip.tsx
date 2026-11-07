@@ -6,6 +6,7 @@ import { ContextRing } from '../../components/ui/context-ring.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { Popover, PopoverPopup } from '../../components/ui/popover.js';
 import { ApiError } from '../../lib/api/client.js';
+import { focusText as textOf, focusWord, type Focus } from '../plan/focus.js';
 import { cn } from '../../lib/utils.js';
 import type { OpenQuestion, ProgressFacts, WorkGuidance } from '../../types.js';
 import { ProgressPanel } from './ProgressPanel.js';
@@ -26,6 +27,8 @@ export interface WhereAreWeBarProps {
   /** Questions in the plan that wait for the developer, beside the AI's chat questions. */
   planQuestions?: number;
   toggleRef?: Ref<HTMLButtonElement>;
+  /** What the work is on (`focusOf`): Now when someone said which step, else Next up. Without one (no plan, or nothing open in it), the older lifecycle's current milestone is named. */
+  focus?: Focus | null;
   onToggle: () => void;
   onNext: (action: NextAction) => void;
 }
@@ -34,14 +37,15 @@ export interface WhereAreWeBarProps {
  * Where the work stands, in one line in the chat's toolbar: the ring, what is being worked on now (else the
  * goal), the state, a few checkable facts, and the Next button. The goal is in the tooltip.
  */
-export function WhereAreWeBar({ facts, guidance, action, expanded, panelId, notice, planQuestions = 0, toggleRef, onToggle, onNext }: WhereAreWeBarProps) {
+export function WhereAreWeBar({ facts, guidance, action, expanded, panelId, notice, planQuestions = 0, toggleRef, focus, onToggle, onNext }: WhereAreWeBarProps) {
   const goal = goalLine(guidance, facts);
   const current = facts.milestones.find((milestone) => milestone.id === facts.currentMilestoneId);
   const state = planQuestions > 0 && stripState(facts).tone !== 'needs' ? { tone: 'needs' as const, label: 'Needs you' } : stripState(facts);
   const line = factsLine(facts);
+  const focusText = textOf(focus);
   const tooltip = [goal.full ?? goal.text, ...line].filter(Boolean).join(' · ');
   // "Continue" on the milestone already named as Now says nothing more, so it is one word there.
-  const nextLabel = action && current && action.label === `Continue "${current.title}"` ? 'Continue' : action?.label;
+  const nextLabel = action && ((focusText && action.label === `Continue "${focusText}"`) || (!focusText && current && action.label === `Continue "${current.title}"`)) ? 'Continue' : action?.label;
   // What is worked on keeps its room first; the state, Next and the facts follow as the toolbar allows.
   return (
     <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
@@ -52,8 +56,9 @@ export function WhereAreWeBar({ facts, guidance, action, expanded, panelId, noti
         {/* The counts are in the facts line, so the ring is left out of the accessible name. */}
         <ContextRing aria-hidden="true" size={RING_SIZE} milestones={ringMilestones(facts)} currentIndex={currentMilestoneIndex(facts)} />
         <span className="min-w-[4rem] flex-1 truncate text-xs font-medium text-foreground">
-          {current ? <><span className="font-normal text-muted-foreground">Now · </span>{current.title}</>
-            : goal.text || <span className="font-normal text-muted-foreground">No goal set yet</span>}
+          {focusText ? <><span className="font-normal text-muted-foreground">{focusWord(focus!)} · </span>{focusText}</>
+            : current ? <><span className="font-normal text-muted-foreground">Now · </span>{current.title}</>
+              : goal.text || <span className="font-normal text-muted-foreground">No goal set yet</span>}
         </span>
         <span className="hidden shrink-0 @[16rem]:inline"><span className="state-chip text-[11px]" data-tone={state.tone}>{state.label}</span></span>
         <span className="hidden min-w-0 shrink truncate text-[11px] text-muted-foreground @[46rem]:inline">
@@ -134,6 +139,7 @@ export function AnswerBar({ question, context, earlier, acknowledging, onFill, o
 export function WhereAreWeSummary({ strip }: { strip: WhereAreWe }) {
   const anchor = useRef<HTMLElement>(null);
   const { facts, factsQuery } = strip;
+  const focus = strip.focus;
   if (!facts) {
     return (
       <section aria-label="Where are we" className="flex min-w-0 items-center gap-2 px-1.5 text-[12px] text-muted-foreground">
@@ -151,7 +157,7 @@ export function WhereAreWeSummary({ strip }: { strip: WhereAreWe }) {
     <section aria-label="Where are we" ref={anchor} className="@container min-w-0">
       <WhereAreWeBar
         facts={facts} guidance={strip.guidance} action={strip.action} expanded={strip.expanded} panelId={strip.panelId} notice={strip.notice}
-        planQuestions={strip.planQuestions.length} toggleRef={strip.toggleRef}
+        planQuestions={strip.planQuestions.length} toggleRef={strip.toggleRef} focus={focus}
         onToggle={() => { if (strip.expanded) strip.closePanel(); else strip.openPanel(); }} onNext={strip.runNext}
       />
       <Popover open={strip.expanded} onOpenChange={(open) => { if (!open) strip.closePanel(); }}>

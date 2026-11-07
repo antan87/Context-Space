@@ -14,9 +14,12 @@ import { Spinner } from '../../components/ui/spinner.js';
 import { useWorkGuidance } from '../../lib/api/queries.js';
 import { cn } from '../../lib/utils.js';
 import { usePageVisible } from '../../lib/usePageVisible.js';
+import { useClockTick } from '../../lib/useClockTick.js';
 import { goToWorkspace } from '../chat/chatRoute.js';
-import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useTickPlanStep } from '../plan/planFile.js';
-import { useWhatsNew } from '../plan/whatsNew.js';
+import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useSetPlanNow, useTickPlanStep } from '../plan/planFile.js';
+import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.js';
+import { boardNews, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
+import { isTypingTarget } from '../../app/typingTarget.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests, openCodeWindow, useCodeWindowOpen } from '../workspace-shell/openRequests.js';
 import { filesChangedText } from '../changes/changeSummary.js';
@@ -60,6 +63,8 @@ import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
 import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
+import { BoardNowLine } from './BoardNowLine.js';
+import { firstWaiting, newsLines as buildNewsLines, nowLineParts, nowLineTarget, type NewsLine } from './nowLine.js';
 import { findThreadChain } from './boardThread.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 
@@ -201,6 +206,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
   const news = useWhatsNew(workspaceId);
+  // The board draws the recent commits; the news only says which are new, so Got it never takes work off it
+  const recent = useRecentCommits(workspaceId);
 
   const visible = usePageVisible();
   const listening = active && visible;
@@ -209,8 +216,15 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const navigateTo = useNavigate();
 
   const planView = plan.data;
+  // The focus and the "5 min ago" are worked out from this, so an idle board lets a claim run out
+  const clock = useClockTick();
+  // The Areas are built for a time that moves only when the focus does, so a tick leaves them (and the dialogs drawn from them) as they are
+  const focusNow = useMemo(() => focusSignature(focusOf(planView, undefined, clock)), [planView, clock]);
+  const [built, setBuilt] = useState(() => stableNow(undefined, focusNow, clock));
+  if (built.signature !== focusNow) setBuilt(stableNow(built, focusNow, clock));
   const documents = guidance.data?.documents;
   const newsView = news.data;
+  const boardNewsView = useMemo(() => boardNews(newsView, recent.data), [newsView, recent.data]);
   const board = boardQuery.data;
   const [showArchived, setShowArchived] = useState(false);
 
@@ -230,8 +244,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const codeOpen = useCodeWindowOpen(workspaceId);
   const { summary: changes } = useRepoChanges(workspaceId, { enabled: listening && !readOnly, paused: codeOpen });
   const areas = useMemo(
-    () => buildBoardAreas({ plan: planView, documents, news: newsView, board, showArchived }).map((area) => (area.data.current && changes.repos.length > 0 ? { ...area, uncommitted: changes.repos } : area)),
-    [planView, documents, newsView, board, showArchived, changes.repos],
+    () => buildBoardAreas({ plan: planView, documents, news: boardNewsView, board, showArchived, focusNow: built.at }).map((area) => (area.data.current && changes.repos.length > 0 ? { ...area, uncommitted: changes.repos } : area)),
+    [planView, documents, boardNewsView, board, showArchived, changes.repos, built.at],
   );
 
   // Plane 0 (Overview) elements
@@ -490,6 +504,50 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     );
   }, [jumpToArea, stepped, setReader, setNarrowNavOpen, overviewNodes, stageContainer, stageSize, takeOverview]);
 
+  // The Now line: what is happening, what waits, what is new, and the way to search
+  const focus = useMemo(() => focusOf(planView, undefined, clock), [planView, clock]);
+  const nowParts = useMemo(() => nowLineParts({ focus, areas, news: newsView, now: new Date(clock) }), [focus, areas, newsView, clock]);
+  const newsLines = useMemo(() => (newsView && !newsView.empty ? buildNewsLines(newsView, areas, new Date(clock)) : []), [newsView, areas, clock]);
+  const markSeen = useMarkNewsSeen(workspaceId);
+  const goToNow = useCallback(() => {
+    const target = nowLineTarget(areas, focus);
+    if (!target) return;
+    if (target.nodeId) jumpToItem({ areaId: target.areaId, nodeId: target.nodeId }, false, true);
+    else jumpToArea(target.areaId);
+  }, [areas, focus, jumpToItem, jumpToArea]);
+  const goToQuestion = useCallback(() => {
+    const waiting = firstWaiting(areas);
+    if (waiting) jumpToItem(waiting, false);
+  }, [areas, jumpToItem]);
+  const goToNews = useCallback((line: NewsLine) => {
+    if (!line.jump) return;
+    if (line.jump.nodeId) jumpToItem({ areaId: line.jump.areaId, nodeId: line.jump.nodeId, readerTarget: line.jump.readerTarget }, false);
+    else jumpToArea(line.jump.areaId);
+  }, [jumpToItem, jumpToArea]);
+  // The search is the Board index's own: opening it (it may be folded to its rail, or a drawer) and putting the keyboard in its box
+  const [searchRequest, setSearchRequest] = useState(0);
+  const openSearch = useCallback(() => {
+    if (navDock.overlays) {
+      if (!narrowNavOpen) openNarrowNav();
+    } else if (!navOpen) {
+      writeNavOpen(true);
+      setNavChoice(true);
+    }
+    setSearchRequest((n) => n + 1);
+  }, [navDock.overlays, narrowNavOpen, navOpen, openNarrowNav]);
+  useEffect(() => {
+    if (!active || areas.length === 0) return undefined;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== '/' || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      // Another pane that owns the key while the keyboard is in it (the chat's saved conversations) keeps it; a modal dialog keeps it from the Board behind it
+      if (isTypingTarget(event.target) || isCodeWindowOpen() || document.querySelector('[role="dialog"]') || document.activeElement?.closest('[data-slash-owner]')) return;
+      event.preventDefault();
+      openSearch();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [active, areas.length, openSearch]);
+
   // Stepped fallback redirect if active area disappeared
   useEffect(() => {
     if (!stepped) return;
@@ -681,8 +739,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, []);
   // The tab that shows when none was chosen is decided once, when the row first shows with tabs, and held: a picture arriving later does not turn it
   const looseDefault = useMemo(
-    () => (stepped && activeArea ? areaRows(activeArea, { news: newsView }).find((row) => row.tabs)?.tabs?.first : undefined),
-    [stepped, activeArea, newsView],
+    () => (stepped && activeArea ? areaRows(activeArea, { news: boardNewsView }).find((row) => row.tabs)?.tabs?.first : undefined),
+    [stepped, activeArea, boardNewsView],
   );
   useEffect(() => {
     if (!steppedAreaId || !looseDefault) return;
@@ -698,12 +756,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const areaReady = areaCanvasSize.width > 0 && areaCanvasSize.height > 0;
   const areaDrawn = useMemo(() => {
     if (!activeArea || !areaReady) return { nodes: [] as BoardNode[], open: null };
-    const { nodes, open } = areaLayout(activeArea, { news: newsView, size: areaCanvasSize, openRow, page: openPage, ...(looseTab ? { tab: looseTab } : {}) });
+    const { nodes, open } = areaLayout(activeArea, { news: boardNewsView, size: areaCanvasSize, openRow, page: openPage, ...(looseTab ? { tab: looseTab } : {}) });
     return { nodes: nodes.map((node) => (node.width !== undefined && node.height !== undefined ? { ...node, measured: { width: node.width, height: node.height } } : node) as BoardNode[][number]), open };
-  }, [activeArea, areaReady, newsView, areaCanvasSize, openRow, openPage, looseTab]);
+  }, [activeArea, areaReady, boardNewsView, areaCanvasSize, openRow, openPage, looseTab]);
   const areaNodes = areaDrawn.nodes;
   const areaOpen = areaDrawn.open;
-  const rowIds = useMemo(() => (activeArea && areaReady ? areaRowIds(activeArea, { news: newsView, size: areaCanvasSize }) : []), [activeArea, areaReady, newsView, areaCanvasSize]);
+  const rowIds = useMemo(() => (activeArea && areaReady ? areaRowIds(activeArea, { news: boardNewsView, size: areaCanvasSize }) : []), [activeArea, areaReady, boardNewsView, areaCanvasSize]);
 
   // A row that is no longer there (a live change took its things away), or a page past the end, is let go at once, so Escape works on the first press
   useEffect(() => {
@@ -754,14 +812,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     // The canvas has its whole size again and the card is on another page of the row, or in a row that is folded: its row is opened at its page
     if (!target && retry.placedFor !== areaSizeKey && activeArea && areaReady && !areaNodes.some((areaNode) => areaNode.id === (retry.card ?? retry.was.node))) {
       retry.placedFor = areaSizeKey;
-      const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, retry.card ?? retry.was.node);
+      const place = areaPlace(activeArea, { news: boardNewsView, size: areaCanvasSize }, retry.card ?? retry.was.node);
       if (place) showPlace(activeArea.id, place);
     }
     // The rows may be laid out again a frame or two after the reader closed, so the keyboard is looked after for a few frames
     if (Date.now() > retry.until) { openerRetry.current = null; return; }
     const frame = requestAnimationFrame(() => setOpenerTick((tick) => (tick + 1) % 1000));
     return () => cancelAnimationFrame(frame);
-  }, [openerTick, areaNodes, findOpener, activeArea, areaReady, newsView, areaCanvasSize, areaSizeKey, showPlace, findCardControl]);
+  }, [openerTick, areaNodes, findOpener, activeArea, areaReady, boardNewsView, areaCanvasSize, areaSizeKey, showPlace, findCardControl]);
 
   const activeReaderCardId = useMemo(() => {
     if (!reader?.target) return null;
@@ -787,9 +845,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     lastAreaSize.current = areaSizeKey;
     const card = activeReaderCardId;
     if (!changed || !card || !activeArea || !areaReady || areaNodes.some((areaNode) => areaNode.id === card)) return;
-    const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, card);
+    const place = areaPlace(activeArea, { news: boardNewsView, size: areaCanvasSize }, card);
     if (place) showPlace(activeArea.id, place);
-  }, [areaSizeKey, activeReaderCardId, activeArea, areaReady, areaNodes, newsView, areaCanvasSize, showPlace]);
+  }, [areaSizeKey, activeReaderCardId, activeArea, areaReady, areaNodes, boardNewsView, areaCanvasSize, showPlace]);
 
   // Opening or closing a row: the control that was pressed is swapped for another node, so the keyboard is put on the row's control again
   const rowFocus = useRef<{ rowId: string; pressed: HTMLElement | null } | null>(null);
@@ -801,11 +859,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // A press that changes what the row shows ends the thread only when what it then shows holds nothing of it (no card of it, no "+N more", pager or header that holds one): the board is never left dark with nothing lit
   const keepsThread = useCallback((next: { openRow: string | null; page: number; tab: LooseTab | undefined }) => {
     if (!threadSelectedId || !activeArea || !areaReady) return false;
-    const { nodes } = areaLayout(activeArea, { news: newsView, size: areaCanvasSize, openRow: next.openRow, page: next.page, ...(next.tab ? { tab: next.tab } : {}) });
+    const { nodes } = areaLayout(activeArea, { news: boardNewsView, size: areaCanvasSize, openRow: next.openRow, page: next.page, ...(next.tab ? { tab: next.tab } : {}) });
     const reached = findThreadChain({ selectedId: threadSelectedId, nodes: nodes as BoardNode[], links: board?.links ?? [], cards: board?.cards ?? [] });
     reached.delete(threadSelectedId);
     return nodes.some((node) => reached.has(node.id) || nodeHolds(node as BoardNode)?.some((id) => reached.has(id)));
-  }, [threadSelectedId, activeArea, areaReady, newsView, areaCanvasSize, board]);
+  }, [threadSelectedId, activeArea, areaReady, boardNewsView, areaCanvasSize, board]);
   const toggleRow = useCallback((rowId: string) => {
     keepFocusOn(rowId);
     const closing = openState && openState.areaId === steppedAreaId && openState.rowId === rowId;
@@ -882,7 +940,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
     setHighlightedNode({ id: activeReaderCardId, request: ++jumpSeq.current });
 
-    const place = areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, activeReaderCardId);
+    const place = areaPlace(activeArea, { news: boardNewsView, size: areaCanvasSize }, activeReaderCardId);
     if (place?.tab) chooseTab(activeArea.id, place.tab);
     if (place?.row) {
       const targetRow = place.row;
@@ -894,7 +952,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         return { areaId: activeArea.id, rowId: targetRow, page: targetPage };
       });
     }
-  }, [reader, activeReaderCardId, activeArea, areaReady, newsView, areaCanvasSize, chooseTab]);
+  }, [reader, activeReaderCardId, activeArea, areaReady, boardNewsView, areaCanvasSize, chooseTab]);
 
   const threadChain = useMemo(() => {
     if (!threadSelectedId) return null;
@@ -1001,7 +1059,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       // The cards of an Area that was just chosen are drawn a frame or two later (and the old Area's are on the screen until then):
       // look again each frame for a while, and give up at once on a card that this Area does not have
       const drawn = areaNodes.some((areaNode) => areaNode.id === pendingJump.nodeId);
-      const place = drawn || !activeArea ? null : areaPlace(activeArea, { news: newsView, size: areaCanvasSize }, pendingJump.nodeId);
+      const place = drawn || !activeArea ? null : areaPlace(activeArea, { news: boardNewsView, size: areaCanvasSize }, pendingJump.nodeId);
       if (!drawn && (!place || jumpFrames.current >= JUMP_FRAMES)) {
         clearJump();
         backButtonRef.current?.focus({ preventScroll: true });
@@ -1056,7 +1114,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     areaCanvasSize,
     areaCanvasContainer,
     areaNodes,
-    newsView,
+    boardNewsView,
     jumpTick,
     openInReader,
     clearJump,
@@ -1238,6 +1296,17 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const answerMutation = useAnswerDecision(workspaceId);
   const tickStepMutation = useTickPlanStep(workspaceId);
   const runCheckMutation = useRunCheckpointCheck(workspaceId);
+  const setNowMutation = useSetPlanNow(workspaceId);
+  const setNow = useCallback(async (key: string | null) => {
+    try {
+      await setNowMutation.mutateAsync(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [setNowMutation]);
+  const nowKeys = useMemo(() => workableKeys(planView), [planView]);
+  const nowKey = focus?.source === 'set' ? focus.step?.key ?? null : null;
 
   const answerDecision = useCallback(async (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => {
     setDecisionErrors((prev) => {
@@ -1402,6 +1471,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     answerDecision,
     decisionErrors,
     toggleStep,
+    setNow,
+    nowKeys,
+    nowKey,
     runCheck,
     busyStepKeys,
     stepErrors,
@@ -1410,7 +1482,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
+  }), [workspaceId, workspacePath, readOnly, stepInto, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1426,6 +1498,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     answerDecision,
     decisionErrors,
     toggleStep,
+    setNow,
+    nowKeys,
+    nowKey,
     runCheck,
     busyStepKeys,
     stepErrors,
@@ -1434,7 +1509,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
+  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const backdropPress = useRef({ down: false, up: false });
 
@@ -1549,6 +1624,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           onJumpToArea={jumpToArea}
           onJumpToItem={jumpToItem}
           toggleButtonRef={navToggleRef}
+          focusSearch={searchRequest}
         />
         <div
           className="relative flex min-h-0 min-w-0 flex-1"
@@ -1698,7 +1774,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   activeArea.data.done ? (
                     <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="success">Done</Badge></span>
                   ) : activeArea.data.current ? (
-                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="default">Current</Badge></span>
+                    <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant={activeArea.data.nowSet ? 'default' : 'outline'}>{activeArea.data.nowSet ? 'Now' : 'Next up'}</Badge></span>
                   ) : (
                     <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="outline">Not done</Badge></span>
                   )
@@ -1951,12 +2027,26 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   return (
     <div
       ref={root}
+      data-board-pane
       className="relative flex h-full min-h-0 min-w-0 flex-col"
       onClickCapture={(event) => {
         pressedLink.current = event.target instanceof Element ? event.target.closest<HTMLElement>('a') : null;
       }}
     >
       {notices}
+      {areas.length > 0 && (
+        <BoardNowLine
+          parts={nowParts}
+          news={newsView}
+          newsLines={newsLines}
+          readOnly={readOnly}
+          gotIt={{ pending: markSeen.isPending, error: markSeen.error instanceof Error ? markSeen.error.message : undefined, onGotIt: () => { if (newsView) markSeen.mutate(newsView.at); } }}
+          onNow={goToNow}
+          onQuestion={goToQuestion}
+          onNewsLine={goToNews}
+          onSearch={openSearch}
+        />
+      )}
       {body}
       {areas.length === 0 && paneCorner}
       <NoteDialog

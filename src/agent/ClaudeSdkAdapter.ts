@@ -28,6 +28,8 @@ const READONLY_MCP_TOOLS = new Set([
   'get_work_context', 'read_work_document', 'board_read',
   // They only show things to the user or alert them; none edits a file, so none needs an approval prompt.
   'request_user_input', 'show_in_reader', 'annotate_document', 'suggest_next', 'get_screen_context',
+  // It only says which plan step is worked on now; PLAN.md is not touched.
+  'set_current_step',
 ]);
 
 const WORKSPACE_EDIT_MCP_TOOLS = new Set([

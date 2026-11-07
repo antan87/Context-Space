@@ -278,6 +278,18 @@ describe('watchLiveEvents', () => {
     controller.abort();
   });
 
+  it('says the plan changed when someone says which step is being worked on', async () => {
+    await fs.writeFile(path.join(dir, PLAN_FILE), '# Plan\n\n- [ ] A step\n');
+    const controller = new AbortController();
+    const feed = new Feed(watchLiveEvents(dir, { signal: controller.signal, pollMs: 10 }));
+    expect(await feed.take(1, 200)).toHaveLength(0);
+
+    await fs.mkdir(path.join(dir, '.contextspace'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.contextspace', 'plan-now.json'), JSON.stringify({ key: 'a-step', by: 'claude', at: new Date().toISOString() }));
+    expect((await feed.take(1))[0]).toMatchObject({ type: 'plan' });
+    controller.abort();
+  });
+
   it('replays at most the newest events to a screen that has just opened', async () => {
     await fs.mkdir(ledgerDir, { recursive: true });
     const total = SCREEN_EVENT_REPLAY_LIMIT + 10;

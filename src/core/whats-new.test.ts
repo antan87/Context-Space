@@ -6,7 +6,7 @@ import { execa } from 'execa';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 import { readPlanFile } from './plan-file-store.js';
-import { NEWS_LIMIT, NewsChangedError, markSeen, newsReaderName, whatsNew } from './whats-new.js';
+import { NEWS_LIMIT, NewsChangedError, markSeen, newsReaderName, recentCommits, whatsNew } from './whats-new.js';
 
 // Well in the past, so a time marked "now" is never in the future of the machine running the tests.
 const NOW = new Date('2026-06-17T12:00:00.000Z');
@@ -398,5 +398,28 @@ describe('reader names', () => {
     expect(newsReaderName(' Claude ')).toBe('claude');
     expect(newsReaderName('Claude Code')).toBe('claude-code');
     for (const name of ['', '__proto__', '../x', 'a/b', 'x'.repeat(41)]) expect(() => newsReaderName(name)).toThrow('not a name to read as');
+  });
+});
+
+describe('the commits the Board draws', () => {
+  it('are the last three days whatever the reader has seen, and marking the news seen takes none away', async () => {
+    await commit('Too old', ago(24 * 5));
+    await commit('Before the look', ago(30));
+    const first = await whatsNew(root, 'user', { now: NOW, mark: true });
+    expect(first.commits[0]!.commits).toHaveLength(1);
+    const recent = await recentCommits(root, { now: NOW });
+    expect(recent.commits[0]!.commits.map((c) => c.subject)).toEqual(['Before the look']);
+    // after the look the news has no commits, the Board's list still has them, and a later one is added to them
+    await commit('After the look', ago(1));
+    const again = await recentCommits(root, { now: NOW });
+    expect(again.commits[0]!.commits.map((c) => c.subject)).toEqual(['After the look', 'Before the look']);
+    expect((await whatsNew(root, 'user', { now: NOW })).commits[0]!.commits.map((c) => c.subject)).toEqual(['After the look']);
+    expect(await readSeen()).toMatchObject({ readers: { user: { at: NOW.toISOString() } } });
+  });
+
+  it('reads and records nothing', async () => {
+    await commit('A commit', ago(2));
+    await recentCommits(root, { now: NOW });
+    await expect(fs.access(seenFile())).rejects.toThrow();
   });
 });

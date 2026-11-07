@@ -35,6 +35,8 @@ const planOf = (open: number, done: number, decisions = 0): PlanFileView => {
     ], steps: [], decisions: [], waiting: list.map((d) => d.key),
   };
 };
+/** The plan with a step marked as worked on now, by an AI, just now. */
+const withNow = (plan: PlanFileView, key: string): PlanFileView => ({ ...plan, now: { key, by: 'claude', at: new Date().toISOString() } });
 const areaOf = (plan: PlanFileView, cards: BoardCard[], opts: { docs?: WorkDocument[]; news?: WhatsNewView; id?: string } = {}) =>
   buildBoardAreas({ plan, documents: opts.docs, news: opts.news, board: { cards, positions: {}, links: [] } as BoardView }).find((a) => a.id === (opts.id ?? 'checkpoint:cp'))!;
 
@@ -52,8 +54,8 @@ describe('areaBoardLayout v2: which row is which', () => {
     card('plain', 'Plain', { at: at(3) }),
   ];
 
-  it('puts the current step first (the open step with the newest card), then the steps with cards, what is tied to no step, documents, commits, and one line each for the steps with no cards and the done steps', () => {
-    const area = areaOf(planOf(4, 2, 2), cards, { docs: [doc('d1', 'Doc')], news: newsOf() });
+  it('puts the focus step first (the step someone said they work on), then the steps with cards, what is tied to no step, documents, commits, and one line each for the steps with no cards and the done steps', () => {
+    const area = areaOf(withNow(planOf(4, 2, 2), 's0'), cards, { docs: [doc('d1', 'Doc')], news: newsOf() });
     const rows = areaRows(area, { news: newsOf(), size: big });
     expect(rows.map((r) => r.id)).toEqual(['row:step:s0', 'row:step:s1', 'lane:board', 'lane:documents', 'lane:commits:api', 'row:more-steps', 'row:done']);
     expect(rows.map((r) => r.state)).toEqual(['current', 'open', 'plain', 'plain', 'plain', 'open', 'done']);
@@ -66,17 +68,19 @@ describe('areaBoardLayout v2: which row is which', () => {
     expect(byId(nodes, 'row:done').type).toBe('fold');
   });
 
-  it('is the step with the newest card, not the first open step, when this Area is the current one', () => {
-    const rows = areaRows(areaOf(planOf(3, 0), [card('x', 'X', { step: 's2', at: at(9) }), card('y', 'Y', { step: 's0', at: at(2) })]), { size: big });
+  it('is the step someone said they work on, not the first open step, and says Now', () => {
+    const rows = areaRows(areaOf(withNow(planOf(3, 0), 's2'), [card('x', 'X', { step: 's0', at: at(9) })]), { size: big });
     expect(rows[0]!.id).toBe('row:step:s2');
     expect(rows[0]!.state).toBe('current');
     expect(rows[0]!.title).toBe('Now');
   });
 
-  it('is the first open step when no open step has a card', () => {
-    const rows = areaRows(areaOf(planOf(3, 0), [card('x', 'X')]), { size: big });
-    expect(rows[0]!.id).toBe('row:step:s0');
-    expect(rows[0]!.state).toBe('current');
+  it('is the first open step, however new the cards of another are, when nobody said: it says Next up, never Now', () => {
+    const area = areaOf(planOf(3, 0), [card('x', 'X', { step: 's2', at: at(9) }), card('y', 'Y', { step: 's0', at: at(2) })]);
+    expect(area.data).toMatchObject({ current: true, nowSet: false });
+    const rows = areaRows(area, { size: big });
+    expect(rows[0]).toMatchObject({ id: 'row:step:s0', state: 'next', title: 'Next up' });
+    expect(rows.some((r) => r.state === 'current' || r.title === 'Now')).toBe(false);
   });
 
   it('says "Next step" and never "Current" in an Area that is not the current one', () => {
@@ -93,7 +97,7 @@ describe('areaBoardLayout v2: which row is which', () => {
     expect(nodes.filter((n) => n.type === 'step').every((n) => (n as { data: { state: string } }).data.state !== 'current')).toBe(true);
     // and the Area that is current says so
     const current = areas.find((a) => a.id === 'checkpoint:earlier')!;
-    expect(areaRows(current, { size: big })[0]).toMatchObject({ state: 'current', id: 'row:step:e2' });
+    expect(areaRows(current, { size: big })[0]).toMatchObject({ state: 'next', title: 'Next up', id: 'row:step:e1' });
   });
 
   it('shows pinned cards first, then the newest, and puts the cards of other or missing steps under "Not tied to a step"', () => {
@@ -344,7 +348,7 @@ describe('areaBoardLayout v2: the space is filled', () => {
   it('gives the current step a header that says the whole step, even when nothing is on it', () => {
     const nodes = areaBoardLayout(area(), { news: newsOf(1, 5), size: { width: 678, height: 574 } });
     const head = byId(nodes, 'row:step:s0') as BoardNode & { height: number; data: { text: string; prominent: boolean; empty: boolean; state: string } };
-    expect(head.data).toMatchObject({ prominent: true, empty: true, state: 'current', text: 'Open step 0 with some words' });
+    expect(head.data).toMatchObject({ prominent: true, empty: true, state: 'next', title: 'Next up', text: 'Open step 0 with some words' });
     expect(head.height).toBe(ROW_SIZE.current);
     expect(head.width).toBeGreaterThan(400);
   });
@@ -621,7 +625,7 @@ describe('areaBoardLayout: what the Now row is', () => {
 
   it('is never a heading: a step with open steps under it', () => {
     const rows = rowsOf([step('h', '**Audit & Polish**:'), step('a', 'Slice A', false, 'h'), step('b', 'Slice B', false, 'h')]);
-    expect(rows[0]).toMatchObject({ id: 'row:step:a', state: 'current', text: 'Slice A', heading: '**Audit & Polish**:' });
+    expect(rows[0]).toMatchObject({ id: 'row:step:a', state: 'next', text: 'Slice A', heading: '**Audit & Polish**:' });
     expect(rows.find((r) => r.id === 'row:more-steps')!.groups!.map((g) => g.key)).toEqual(['h', 'b']);
   });
 
@@ -638,10 +642,14 @@ describe('areaBoardLayout: what the Now row is', () => {
     expect(rows[0]).toMatchObject({ id: 'row:step:leaf', heading: 'Middle' });
   });
 
-  it('is still the leaf with the newest card, when the Area where only headings\' children are open is the current one', () => {
+  it('is the first leaf under a heading, whatever cards the others or the heading have, and the leaf someone chose when one is set', () => {
     const steps = [step('h', 'Heading'), step('a', 'Child A', false, 'h'), step('b', 'Child B', false, 'h')];
-    const rows = rowsOf(steps, [card('x', 'X', { step: 'b', at: at(9) }), card('y', 'Y', { step: 'h', at: at(20) })]);
-    expect(rows[0]).toMatchObject({ id: 'row:step:b', state: 'current' });
+    const cards = [card('x', 'X', { step: 'b', at: at(9) }), card('y', 'Y', { step: 'h', at: at(20) })];
+    expect(rowsOf(steps, cards)[0]).toMatchObject({ id: 'row:step:a', state: 'next' });
+    const chosen = areaRows(areaOf(withNow(planWith(steps), 'b'), cards), { size: big });
+    expect(chosen[0]).toMatchObject({ id: 'row:step:b', state: 'current' });
+    // a heading someone names is not a step to work on: the plan's order stands
+    expect(areaRows(areaOf(withNow(planWith(steps), 'h'), cards), { size: big })[0]).toMatchObject({ id: 'row:step:a', state: 'next' });
   });
 
   it('counts a heading as a step for the counts, and keeps it in the "more open steps" line', () => {

@@ -57,6 +57,12 @@ export interface BoardActions {
   decisionErrors?: Record<string, string>;
   /** Toggles a plan step (or checkpoint) done state directly from the board. */
   toggleStep?: (key: string, done: boolean, expected?: string) => Promise<boolean>;
+  /** Says which step is worked on now (its key), or that none is (null). Local to the workspace: PLAN.md is not changed. Returns true if it worked. */
+  setNow?: (key: string | null) => Promise<boolean>;
+  /** The keys of the open steps that can be worked on now (not headings). */
+  nowKeys?: Set<string>;
+  /** The step someone said they work on now, when it is set. */
+  nowKey?: string | null;
   /** Runs a verification check for a checkpoint directly from the board. */
   runCheck?: (checkpointKey: string) => Promise<boolean>;
   /** Step keys currently busy mutating. */

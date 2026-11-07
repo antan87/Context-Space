@@ -13,6 +13,7 @@
 import type { RepoChangeSummary } from '../changes/changeSummary.js';
 import type { Edge, Node } from '@xyflow/react';
 import type { WorkDocument } from '../../types.js';
+import { focusOf } from '../plan/focus.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
@@ -63,7 +64,12 @@ export type AreaData = {
   kind: 'checkpoint' | 'plan' | 'work';
   title: string;
   done: boolean;
+  /** The focus Area: the one the work is on (the step someone said they work on, else the plan's first open checkpoint). It is Now only when `nowSet`. */
   current: boolean;
+  /** Someone said which step is being worked on and it is in this Area: only then is it called Now. A guess from the plan's order is "Next up". */
+  nowSet: boolean;
+  /** The key of the focus step, in the focus Area. */
+  focusStep?: string;
   stepsDone: number;
   stepsTotal: number;
   waitingCount: number;
@@ -135,7 +141,10 @@ export interface BuildBoardAreasSources {
   news?: WhatsNewView;
   board?: BoardView;
   showArchived?: boolean;
+  /** When the Areas are built, for what changed within the last minute (`isFresh`). Default: the time of the call. */
   now?: number;
+  /** The time the focus is worked out at (a set step runs out after a day). Default: `now`. The Board holds it still between focus changes. */
+  focusNow?: number;
 }
 
 /**
@@ -147,7 +156,7 @@ export function extractFreshSets(news?: WhatsNewView) {
   const freshDocNames = new Set<string>();
 
   if (news && !news.empty) {
-    for (const repo of news.commits ?? []) {
+    for (const repo of news.unseenCommits ?? news.commits ?? []) {
       for (const commit of repo.commits ?? []) {
         if (commit.sha) {
           freshShas.add(commit.sha);
@@ -188,6 +197,7 @@ export function buildBoardAreas({
   board,
   showArchived = false,
   now = Date.now(),
+  focusNow = now,
 }: BuildBoardAreasSources): BoardArea[] {
   const taken = new Set<string>();
   const waitingKeys = new Set(plan?.waiting ?? []);
@@ -247,7 +257,12 @@ export function buildBoardAreas({
   }
 
   const checkpoints = drafts.filter((a) => a.kind === 'checkpoint');
-  const currentAreaId = checkpoints.find((a) => !a.done)?.id ?? checkpoints.at(-1)?.id ?? drafts[0]!.id;
+  // Where a card or document tied to nothing lives. It stays on the plan's own rule, so that it does not jump between Areas when the focus moves.
+  const placementAreaId = checkpoints.find((a) => !a.done)?.id ?? checkpoints.at(-1)?.id ?? drafts[0]!.id;
+  // Where the work is now: the Area of the focus step. The commits tied to nothing and the work not committed yet follow it.
+  const focus = focusOf(plan, undefined, focusNow);
+  const focusAreaId = (focus && (focus.checkpoint ? drafts.find((a) => a.checkpointKey === focus.checkpoint!.key) : drafts.find((a) => a.kind === 'plan')))?.id ?? placementAreaId;
+  const nowSet = focus?.source === 'set';
 
   const areaIds = new Set(drafts.map((a) => a.id));
   const links = board?.links ?? [];
@@ -361,8 +376,8 @@ export function buildBoardAreas({
 
   // 1. Cards routing
   for (const card of cardList) {
-    const targetId = ownerOf.get(card.id) ?? currentAreaId;
-    const partition = partitions.get(targetId) ?? partitions.get(currentAreaId)!;
+    const targetId = ownerOf.get(card.id) ?? placementAreaId;
+    const partition = partitions.get(targetId) ?? partitions.get(placementAreaId)!;
     if (card.archived) {
       partition.archivedCount += 1;
     }
@@ -378,8 +393,8 @@ export function buildBoardAreas({
   // 2. Documents routing
   for (const doc of documents ?? []) {
     const docNodeId = docNodeMap.get(doc)!;
-    const targetId = ownerOf.get(docNodeId) ?? ownerOf.get(`document:${doc.id}`) ?? currentAreaId;
-    const partition = partitions.get(targetId) ?? partitions.get(currentAreaId)!;
+    const targetId = ownerOf.get(docNodeId) ?? ownerOf.get(`document:${doc.id}`) ?? placementAreaId;
+    const partition = partitions.get(targetId) ?? partitions.get(placementAreaId)!;
     partition.documents.push(doc);
     partition.docNodeIds.push(docNodeId);
     if (isDocFresh(doc)) {
@@ -396,7 +411,7 @@ export function buildBoardAreas({
 
     for (const commit of visibleCommits) {
       const commitNodeId = commitNodeMap.get(commit)!;
-      const targetId = ownerOf.get(commitNodeId) ?? ownerOf.get(`commit:${repo.repo}:${commit.sha}`) ?? currentAreaId;
+      const targetId = ownerOf.get(commitNodeId) ?? ownerOf.get(`commit:${repo.repo}:${commit.sha}`) ?? focusAreaId;
       if (!commitsByArea.has(targetId)) {
         commitsByArea.set(targetId, { commits: [], nodeIds: [] });
       }
@@ -404,16 +419,16 @@ export function buildBoardAreas({
       group.commits.push(commit);
       group.nodeIds.push(commitNodeId);
       if (isCommitFresh(commit.sha)) {
-        const partition = partitions.get(targetId) ?? partitions.get(currentAreaId)!;
+        const partition = partitions.get(targetId) ?? partitions.get(focusAreaId)!;
         partition.fresh = true;
         partition.freshKey = commit.sha;
       }
     }
 
     for (const [targetId, { commits: areaCommits, nodeIds }] of commitsByArea.entries()) {
-      const partition = partitions.get(targetId) ?? partitions.get(currentAreaId)!;
-      const repoMore = targetId === currentAreaId ? overflow : 0;
-      const repoMoreAtLeast = targetId === currentAreaId && overflow > 0 ? repo.moreAtLeast : undefined;
+      const partition = partitions.get(targetId) ?? partitions.get(focusAreaId)!;
+      const repoMore = targetId === focusAreaId ? overflow : 0;
+      const repoMoreAtLeast = targetId === focusAreaId && overflow > 0 ? repo.moreAtLeast : undefined;
       partition.repos.set(repo.repo, {
         repo: { ...repo, more: repoMore, moreAtLeast: repoMoreAtLeast },
         commits: areaCommits,
@@ -424,9 +439,9 @@ export function buildBoardAreas({
       }
     }
 
-    if (!partitions.get(currentAreaId)!.repos.has(repo.repo)) {
+    if (!partitions.get(focusAreaId)!.repos.has(repo.repo)) {
       if ((commitsByArea.size === 0 && Boolean(repo.problem)) || overflow > 0) {
-        const currentPartition = partitions.get(currentAreaId)!;
+        const currentPartition = partitions.get(focusAreaId)!;
         currentPartition.repos.set(repo.repo, {
           repo: {
             ...repo,
@@ -449,7 +464,7 @@ export function buildBoardAreas({
   for (const draft of drafts) {
     const laneTaken = new Set<string>();
     const p = partitions.get(draft.id)!;
-    const isCurrent = draft.id === currentAreaId;
+    const isCurrent = draft.id === focusAreaId;
 
     let stepsDoneCount = 0;
     let stepsTotalCount = 0;
@@ -526,6 +541,8 @@ export function buildBoardAreas({
       title: draft.title,
       done: draft.done,
       current: isCurrent,
+      nowSet: isCurrent && nowSet,
+      ...(isCurrent && focus?.step ? { focusStep: focus.step.key } : {}),
       stepsDone: stepsDoneCount,
       stepsTotal: stepsTotalCount,
       waitingCount,

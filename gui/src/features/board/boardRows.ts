@@ -281,23 +281,19 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
     else loose.push(card);
   }
   const plans = (cards: BoardCard[]): LaneCard[] => cards.map((card) => compact(cardPlan(card, now)));
-  const newestAt = (key: string) => Math.max(0, ...(byStep.get(key) ?? []).map((card) => Date.parse(card.at) || 0));
 
   const open = steps.filter((entry) => !entry.done);
   const finished = steps.filter((entry) => entry.done);
   // A step with open steps under it (at any depth) is a heading for them: the work is on those, so it is never the Now or Next row.
   const headings = headingKeys(steps);
   const leaves = open.filter((entry) => !headings.has(entry.key));
-  // The current step is the one with the newest card, when this Area is the current one; else, and in every other Area, the first open step
-  let head = leaves[0];
-  if (area.data.current) {
-    for (const entry of leaves) if ((byStep.get(entry.key)?.length ?? 0) > 0 && (!head || (byStep.get(head.key)?.length ?? 0) === 0 || newestAt(entry.key) > newestAt(head.key))) head = entry;
-  }
+  // The head is the focus step in the focus Area (the step someone said they work on, else the plan's first open step), and the first open step in every other Area
+  const head = (area.data.current && area.data.focusStep ? leaves.find((entry) => entry.key === area.data.focusStep) : undefined) ?? leaves[0];
   const rows: AreaRow[] = [];
   if (head) {
     const items = plans(byStep.get(head.key) ?? []);
     const above = head.parent ? steps.find((entry) => entry.key === head!.parent)?.text : undefined;
-    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.current ? 'Now' : 'Next', text: head.text, ...(above ? { heading: above } : {}), state: area.data.current ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : '' });
+    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.nowSet ? 'Now' : area.data.current ? 'Next up' : 'Next', text: head.text, ...(above ? { heading: above } : {}), state: area.data.nowSet ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : '' });
   }
   const others = open.filter((entry) => entry !== head);
   let withCards = others.filter((entry) => (byStep.get(entry.key)?.length ?? 0) > 0);

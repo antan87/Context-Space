@@ -29,7 +29,7 @@ import {
   type InputRequest,
 } from './attention.js';
 import { resolveWorkspaceChatLedger } from './constants.js';
-import { PLAN_FILE } from './plan-file.js';
+import { PLAN_FILE, PLAN_NOW_FILE } from './plan-file.js';
 import { readLedgerTail } from './ledger-tail.js';
 import {
   cleanLineNumber as lineNumber,
@@ -405,12 +405,14 @@ export async function* watchLiveEvents(
   let last = '';
   let first = true;
   const planFile = path.join(workspaceRoot, PLAN_FILE);
+  // Saying which step is being worked on reads the plan again too.
+  const nowFile = path.join(workspaceRoot, PLAN_NOW_FILE);
   let planLast: string | undefined;
 
   while (!options.signal?.aborted) {
     const now = clock();
     // A plan written by any tool is on screen within a poll, not at the next read of the plan.
-    const planNow = await signature([planFile]);
+    const planNow = await signature([planFile, nowFile]);
     if (planLast !== undefined && planNow !== planLast) yield { type: 'plan', timestamp: new Date(now).toISOString() };
     planLast = planNow;
     // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.

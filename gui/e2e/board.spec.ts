@@ -31,7 +31,9 @@ async function routeWork(page: Page, documents: WorkDocument[]) {
 }
 
 async function routeBoard(page: Page) {
+  // Someone said the work is on the queue step: that is the Now of the board (the plan's order alone says Next up)
   await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({
+    now: { key: 'background-job-queue-for-large-exports', by: 'claude', at: new Date().toISOString() },
     title: 'Reports CSV export',
     checkpoints: [
       checkpoint('Report rows load fast', { done: true, steps: [step('Query the report rows', true)] }),
@@ -278,7 +280,7 @@ test.describe('Board', () => {
     await expect(firstArea).toContainText('1 of 1 step');
 
     await expect(secondArea).toBeVisible();
-    await expect(secondArea).toContainText('Current');
+    await expect(secondArea).toContainText('Now');
     await expect(secondArea).toContainText('Waits for you');
     await expect(secondArea).toContainText('1 of 3 steps');
     await expect(secondArea).toContainText('Which time zone should export timestamps use?');
@@ -428,7 +430,7 @@ test.describe('Board', () => {
     const overview = canvas.locator('#board-overview');
     const current = overview.locator('button.board-area').filter({ hasText: 'Reports export to CSV' });
     await expect(current).toBeVisible();
-    await expect(current).toContainText('Current');
+    await expect(current).toContainText('Now');
     await expect.poll(() => isWithin(current, overview.locator('.react-flow'))).toBe(true);
 
     await expect(canvas.getByRole('button', { name: /^Zoom (in|out)$|^Fit the board in view$/ })).toHaveCount(0);
@@ -476,13 +478,13 @@ test.describe('Board', () => {
     expect((await transformOf(page)).scale).toBeCloseTo(fitted.scale, 3);
   });
 
-  test('says there are no new commits, in one card, when there are none', async ({ page }) => {
+  test('says there are no commits in the last days, in one card, when there are none', async ({ page }) => {
     await routeBoard(page);
     await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [{ repo: 'api', more: 0, commits: [] }] }) }));
     await page.goto('/#/workspaces/demo/board');
     await stepIntoArea(page, /Reports export to CSV/, { allowLoading: true });
     const canvas = board(page);
-    await expect(canvas.getByText('No new commits since you last looked.')).toBeVisible();
+    await expect(canvas.getByText('No commits in the last 3 days.')).toBeVisible();
     await expect(canvas.getByRole('button', { name: /^Commits/ })).toBeVisible();
     await expect(canvas.getByRole('button', { name: /^api/ })).toHaveCount(0);
     await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toHaveCount(0);
@@ -496,12 +498,12 @@ test.describe('Board', () => {
     const canvas = board(page);
     await expect(canvas.getByRole('button', { name: /^gone/ })).toBeVisible();
     await expect(canvas.getByText('Could not be read: The folder is missing.')).toBeVisible();
-    await expect(canvas.getByText(/No new commits/)).toHaveCount(0);
+    await expect(canvas.getByText(/No commits in/)).toHaveCount(0);
 
     await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [{ repo: 'gone', more: 0, commits: [], problem: 'The folder is missing.' }, { repo: 'api', more: 0, commits: [] }] }) }));
     await page.reload();
     await stepIntoArea(page);
-    await expect(canvas.getByText('No new commits in the other repositories since you last looked.')).toBeVisible();
+    await expect(canvas.getByText('No commits in the other repositories in the last 3 days.')).toBeVisible();
     await expect(canvas.getByRole('button', { name: /^api/ })).toHaveCount(0);
   });
 
@@ -2396,7 +2398,8 @@ test.describe('Board, rows by step', () => {
     if (options.size) await page.setViewportSize(options.size);
     const open = Array.from({ length: 13 }, (_, i) => step(OPEN_STEP(i)));
     const done = Array.from({ length: 12 }, (_, i) => step(DONE_STEP(i), true));
-    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ title: 'Real', checkpoints: [
+    // The work is on the step with the newest cards (or the first open one when it has none): someone said so
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ title: 'Real', now: { key: key(OPEN_STEP(options.onSteps === false ? 0 : 3)), by: 'claude', at: new Date().toISOString() }, checkpoints: [
       checkpoint('Concept', { done: true, steps: [step('Drew the idea', true)] }),
       checkpoint('A Board tab shows the real work', { steps: [...done, ...open], decisions: [decision('Which time zone?'), decision('Which delimiter?')] }),
       checkpoint('Later work', { steps: [step('Plan the later work'), step('Do the later work')] }),
@@ -2729,7 +2732,7 @@ test.describe('Board, rows by step', () => {
     await expect(waiting).not.toContainText('A Board tab shows the real work');
     const header = inArea(page).locator('header').first();
     await expect(header).toContainText('A Board tab shows the real work');
-    await expect(header).toContainText('Current');
+    await expect(header).toContainText('Now');
     await expect(header).not.toContainText(/wait/i);
   });
 
@@ -2955,7 +2958,8 @@ test.describe('Board, rows by step', () => {
   });
 
   test('folds the rows with the least priority first when the canvas is short, and a press opens one', async ({ page }) => {
-    await openReal(page, { size: { width: 1280, height: 640 } });
+    await openReal(page, { size: { width: 1280, height: 672 } });
+    // (32 px taller than before: the Now line takes that much of the pane)
     // Something is folded (commits, then what is tied to no step ...), and the current step and the waiting decisions never are
     await expect(rowButton(page, /^Now/)).toBeVisible();
     await expect(inArea(page).getByRole('article', { name: 'Waits for you' })).toBeVisible();
@@ -3094,7 +3098,7 @@ test.describe('Board, areas', () => {
     await expect(stepped.getByRole('article', { name: 'Export note' })).toHaveCount(0);
   });
 
-  test('moves the Current badge as the plan progresses live', async ({ page }) => {
+  test('moves the Next up badge as the plan progresses live', async ({ page }) => {
     await routeBoard(page);
     const planState = {
       current: planFile({
@@ -3114,7 +3118,7 @@ test.describe('Board, areas', () => {
     const secondArea = overview.locator('button.board-area').filter({ hasText: 'Second checkpoint' });
 
     await expect(firstArea).toBeVisible();
-    await expect(firstArea.locator('.board-area-badge')).toHaveText(/Current/i);
+    await expect(firstArea.locator('.board-area-badge')).toHaveText(/Next up/i);
 
     // Progress the plan: First checkpoint completes
     planState.current = planFile({
@@ -3132,7 +3136,7 @@ test.describe('Board, areas', () => {
       return firstArea.locator('.board-area-badge').textContent();
     }, { timeout: 10_000, intervals: [400, 800] }).toMatch(/Done/i);
 
-    await expect(secondArea.locator('.board-area-badge')).toHaveText(/Current/i);
+    await expect(secondArea.locator('.board-area-badge')).toHaveText(/Next up/i);
   });
 
   test('supports prefers-reduced-motion: reduce with instant step-in and step-out', async ({ page }) => {
@@ -3253,6 +3257,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     const titles = Array.from({ length: count }, (_, i) => options.titles?.[i] ?? AREAS[i] ?? `Slice ${i + 1}: more of the same work`);
     await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({
       title: 'A board that is quiet',
+      now: { key: `second-step-of-${(titles[done] ?? "").toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`, by: 'claude', at: new Date().toISOString() },
       checkpoints: titles.map((title, i) => checkpoint(title, {
         done: i < done,
         steps: [step(`First step of ${title}`, i <= done), step(`Second step of ${title}`, i < done), step(`Third step of ${title}`, i < done)],
@@ -3349,10 +3354,10 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     expect(gaps.length).toBeGreaterThan(0);
     for (const { gap, card } of gaps) expect(gap, card).toBeLessThanOrEqual(14);
     await expect(board(page).getByText(/^Empty$|no items yet/)).toHaveCount(0);
-    // Only what differs from the usual is said: Done and Current are, "Not done" is not (the name still says it)
+    // Only what differs from the usual is said: Done and Now are, "Not done" is not (the name still says it)
     const overview = board(page).locator('#board-overview');
     await expect(overview.getByText('Not done', { exact: true })).toHaveCount(0);
-    await expect(overview.locator('button.board-area .board-area-badge')).toHaveText(['Done', 'Done', 'Current', 'Waits for you']);
+    await expect(overview.locator('button.board-area .board-area-badge')).toHaveText(['Done', 'Done', 'Now', 'Waits for you']);
     await expect(overview.locator('button.board-area').nth(4)).toHaveAttribute('aria-label', /not done/);
   });
 
@@ -3729,7 +3734,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
         const frame = (await header.boundingBox())!;
         expect(icons.x + icons.width).toBeLessThanOrEqual(frame.x + frame.width + 0.5);
         // What there is no room to show is left out of sight but not out of the accessibility tree: the state, and how far the Area is
-        for (const [text, wrapper] of [['Current', '..'], [/^\d+ of \d+ steps$/, '.']] as const) {
+        for (const [text, wrapper] of [['Now', '..'], [/^\d+ of \d+ steps$/, '.']] as const) {
           const hidden = header.getByText(text);
           await expect(hidden).toHaveCount(1);
           // The state is a badge inside a one-pixel box, and the steps are that box themselves

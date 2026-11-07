@@ -39,11 +39,18 @@ export function ResumeSessions({ workspace, active, busy, status, fill, embedded
   const [search, setSearch] = useState('');
   const [includeChildren, setIncludeChildren] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isCodeWindowOpen()) return;
-      if (e.key === '/' && !isTypingTarget(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // "/" is this search's only when this list is on screen (a hidden one never takes it), and, with the Board beside it, only while the
+      // keyboard is in this list: with it in neither pane, the key goes to the Board's search
+      const section = sectionRef.current;
+      const shown = Boolean(section && section.getClientRects().length > 0 && !section.closest('[inert]'));
+      const boardShown = Array.from(document.querySelectorAll('[data-board-pane]')).some((pane) => pane.getClientRects().length > 0);
+      const slashIsMine = shown && !document.querySelector('[role="dialog"]') && (!boardShown || Boolean(section?.contains(document.activeElement)));
+      if (e.key === '/' && slashIsMine && !isTypingTarget(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
@@ -67,7 +74,7 @@ export function ResumeSessions({ workspace, active, busy, status, fill, embedded
   const children = sessions.filter(s => s.threadKind === 'subagent').length;
   const visible = sessions.filter(s => (includeChildren || s.threadKind !== 'subagent') && matchesResumeSession(s, search))
     .sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
-  return <section aria-label="Continue a conversation" className={`min-h-0 overflow-auto ${embedded ? 'px-4 pb-4 pt-2' : 'border-b border-border bg-card p-3'} ${fill ? 'flex-1' : 'max-h-[45%]'}`}>
+  return <section ref={sectionRef} data-slash-owner aria-label="Continue a conversation" className={`min-h-0 overflow-auto ${embedded ? 'px-4 pb-4 pt-2' : 'border-b border-border bg-card p-3'} ${fill ? 'flex-1' : 'max-h-[45%]'}`}>
     <div className="flex items-center justify-between gap-2"><h3 className="flex items-center gap-1.5 text-xs font-semibold"><History className="size-3.5 text-muted-foreground" />{embedded ? 'Or continue a saved conversation' : 'Continue a conversation'}</h3><span className="flex items-center gap-1">{embedded && <Link to={`/workspaces/${encodeURIComponent(workspace)}/sessions`} title="Every conversation, with its transcript and token use, beside the chat" className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">Full history</Link>}<Button size="xs" variant="ghost" aria-label="Refresh saved sessions" onClick={() => { for (const history of histories) void history.refetch(); }}><RefreshCw className="size-3" /></Button></span></div>
     {!embedded && <p className="mt-1 text-xs text-muted-foreground">Choose a saved conversation. It opens in the CLI tool that created it.</p>}
     {includeChildren && <p className="mt-1 text-[11px] text-muted-foreground">Subagents are delegated tasks. Continue their main conversation to pick up your work.</p>}

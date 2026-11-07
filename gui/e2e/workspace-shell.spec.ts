@@ -39,9 +39,10 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(header).not.toContainText('Make invoice totals load under a second');
   const status = page.getByRole('group', { name: 'Task status' });
   await expect(status).not.toContainText('Stage');
-  // One chip: Now is the first checkpoint still open, and it goes to the plan. Next, the place, the changes and the checks move one press away.
-  await expect(status).toContainText('Now Cache invoice lookups');
-  await expect(status).not.toContainText('Next');
+  // One chip: with nobody having said which step is worked on it says Next up, with the plan's first open step, and it goes to the plan. Next, the place, the changes and the checks move one press away.
+  await expect(status).toContainText('Next up Expire them on change');
+  await expect(status).not.toContainText('Now');
+  await expect(status).not.toContainText('Report the speed-up');
   await expect(status).not.toContainText('3 files');
   await expect(header.getByRole('link', { name: 'Checks passed' })).toBeVisible();
   await expect(header.getByRole('link', { name: 'Checks passed' })).toHaveAttribute('href', /#?\/workspaces\/demo\/plan$/);
@@ -126,7 +127,7 @@ test('the header is one 48 px line at laptop size, and the moved items are reach
   await expect(header).toBeVisible();
   expect((await header.boundingBox())!.height).toBeLessThanOrEqual(48);
   // Now goes to the plan, opened with Enter on the focused chip.
-  await header.getByRole('link', { name: /^Now/ }).focus();
+  await header.getByRole('link', { name: /^Next up/ }).focus();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/#\/workspaces\/demo\/plan$/);
   // Next and Changes are in the menu, each reached with the keyboard.
@@ -173,11 +174,11 @@ test.describe('a long name, where the Now chip reaches its limit', () => {
       // Settle: the slot has the same width on two reads in a row.
       let last = -2;
       await expect.poll(async () => { const now = await slotWidth(); const stable = now === last; last = now; return stable; }, { intervals: [60] }).toBe(true);
-      const chip = await header.getByRole('link', { name: /^Now/ }).isVisible();
+      const chip = await header.getByRole('link', { name: /^Next up/ }).isVisible();
       seen.add(chip);
       await header.getByRole('button', { name: 'Workspace actions' }).click();
       await expect(page.getByRole('menuitem', { name: /^Changes/ })).toBeVisible();
-      const item = await page.getByRole('menuitem', { name: /^Now ·/ }).count();
+      const item = await page.getByRole('menuitem', { name: /^Next up ·/ }).count();
       await page.keyboard.press('Escape');
       await expect(page.getByRole('menu')).toHaveCount(0);
       expect.soft(item, `at ${width} px the chip is ${chip ? 'shown' : 'hidden'} and the menu item count is ${item}`).toBe(chip ? 0 : 1);
@@ -243,9 +244,9 @@ test.describe('a long name and a long branch', () => {
     expect((await title.boundingBox())!.width).toBeGreaterThanOrEqual(120);
     // The chip is gone rather than a sliver; Now is one press away in the menu.
     const header = page.locator('header').filter({ has: title });
-    await expect(header.getByRole('link', { name: /^Now/ })).toBeHidden();
+    await expect(header.getByRole('link', { name: /^Next up/ })).toBeHidden();
     await header.getByRole('button', { name: 'Workspace actions' }).click();
-    await expect(page.getByRole('menuitem', { name: /Now ·\s*Cache invoice lookups/ })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: /Next up ·\s*Cache invoice lookups/ })).toBeVisible();
     // The place is a menu item, so arrowing through the menu reads it.
     await expect(page.getByRole('menuitem', { name: 'Worktree · 1 repository' })).toHaveAttribute('aria-disabled', 'true');
     await page.screenshot({ path: process.env.SHOT_DIR ? `${process.env.SHOT_DIR}/header-820.png` : 'test-results/header-820.png' });

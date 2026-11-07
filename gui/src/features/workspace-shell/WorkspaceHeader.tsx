@@ -6,6 +6,8 @@ import { cn } from '../../lib/utils.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '../../components/ui/menu.js';
 import type { VerificationGateTelemetry } from '../cockpit/cockpitStore.js';
+import { useClockTick } from '../../lib/useClockTick.js';
+import { focusOf, focusWord } from '../plan/focus.js';
 import { usePlanFile } from '../plan/planFile.js';
 import { verificationTitle, verificationText } from './workspaceStatus.js';
 import { WarningDialog, useWorkspaceWarnings, type WorkspaceWarning } from './WorkspaceMarks.js';
@@ -40,11 +42,15 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
   const [shown, setShown] = useState<WorkspaceWarning | null>(null);
   const navigate = useNavigate();
   const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
-  // Now and Next are the plan's first two checkpoints still open.
+  // The chip says what the work is on: the step someone said they work on (Now), else the plan's first open step (Next up). Next is the
+  // checkpoint that follows the one the work is in.
   const plan = usePlanFile(workspaceId).data;
   const open = plan?.checkpoints.filter((checkpoint) => !checkpoint.done) ?? [];
-  const now = open[0];
-  const next = open[1];
+  const focus = focusOf(plan, undefined, useClockTick());
+  const focusTitle = focus ? (focus.step?.text ?? focus.checkpoint?.title) : undefined;
+  const now = focusTitle ? { title: focusTitle } : undefined;
+  const nowWord = focus ? focusWord(focus) : 'Now';
+  const next = focus?.checkpoint ? open[open.findIndex((checkpoint) => checkpoint.key === focus.checkpoint!.key) + 1] : undefined;
   const done = Boolean(plan?.checkpoints.length) && open.length === 0;
   // The chip goes entirely when it cannot show about ten characters of the checkpoint; the menu then carries Now.
   const hasNow = Boolean(now);
@@ -90,7 +96,7 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
                 to={`${base}/board`}
                 className="hidden h-6 min-w-0 items-center gap-1.5 rounded-md border border-border/40 bg-muted/20 px-2 text-xs transition-colors hover:border-border/70 hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring @[8.5rem]:inline-flex"
               >
-                <span className="text-muted-foreground">Now</span>{' '}
+                <span className="whitespace-nowrap text-muted-foreground">{nowWord}</span>{' '}
                 <span className="inline-block max-w-[22ch] truncate font-medium text-foreground sm:max-w-[28ch]" title={now.title}><InlinePlanMarkdown content={now.title} /></span>
               </Link>
             ) : (
@@ -127,7 +133,7 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
                 <FolderGit2 aria-hidden="true" size={12} /> <span>{place}</span>
               </MenuItem>
               {now && !chipFits && <MenuItem onClick={() => navigate(`${base}/board`)} className="flex items-center gap-2 py-1.5 text-xs">
-                <Circle aria-hidden="true" size={12} /> <span className="shrink-0 text-muted-foreground">Now ·</span> <span className="min-w-0 truncate" title={now.title}><InlinePlanMarkdown content={now.title} /></span>
+                <Circle aria-hidden="true" size={12} /> <span className="shrink-0 text-muted-foreground">{nowWord} ·</span> <span className="min-w-0 truncate" title={now.title}><InlinePlanMarkdown content={now.title} /></span>
               </MenuItem>}
               {next && <MenuItem onClick={() => navigate(`${base}/board`)} className="flex items-center gap-2 py-1.5 text-xs">
                 <ArrowRight aria-hidden="true" size={12} /> <span className="shrink-0 text-muted-foreground">Next</span> <span className="min-w-0 truncate" title={next.title}><InlinePlanMarkdown content={next.title} /></span>

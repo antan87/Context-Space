@@ -6,7 +6,7 @@
  */
 
 import { PLAN_FILE, PlanFileError, addToPlan, answerDecision, openDecisions, planText, setDone, type NewDecision, type PlanDecision } from './plan-file.js';
-import { changePlanFile, readPlanChanges, readPlanChecks, readPlanFile, runPlanCheck, type PlanFileRead } from './plan-file-store.js';
+import { changePlanFile, clearPlanNow, readPlanChanges, readPlanChecks, readPlanFile, readPlanNow, runPlanCheck, setPlanNow, type PlanFileRead, type PlanNow } from './plan-file-store.js';
 import type { PlanEvidence } from '../types.js';
 
 const decisionView = (decision: PlanDecision) => ({
@@ -18,7 +18,7 @@ const decisionView = (decision: PlanDecision) => ({
   ...(decision.checkpoint ? { checkpoint: decision.checkpoint } : {}),
 });
 
-function view(read: PlanFileRead, checks: Record<string, PlanEvidence>, changes: Awaited<ReturnType<typeof readPlanChanges>>) {
+function view(read: PlanFileRead, checks: Record<string, PlanEvidence>, changes: Awaited<ReturnType<typeof readPlanChanges>>, now: PlanNow | null) {
   const { plan } = read;
   const free = planText(read.text);
   return {
@@ -43,13 +43,15 @@ function view(read: PlanFileRead, checks: Record<string, PlanEvidence>, changes:
     /** The decisions that wait for the user's answer. */
     waiting: openDecisions(plan).map((decision) => decision.key),
     changes,
+    /** The step someone said they are working on, when it is still an open step. */
+    now,
   };
 }
 
 /** Everything the Plan tab shows. */
 export async function planFileForApp(workspacePath: string) {
   const read = await readPlanFile(workspacePath);
-  return view(read, await readPlanChecks(workspacePath), await readPlanChanges(workspacePath, 15));
+  return view(read, await readPlanChecks(workspacePath), await readPlanChanges(workspacePath, 15), await readPlanNow(workspacePath, read.plan));
 }
 
 export type PlanFileForApp = Awaited<ReturnType<typeof planFileForApp>>;
@@ -61,6 +63,8 @@ export type PlanFileAppChange =
   | { type: 'add'; step: string; checkpoint?: string }
   | { type: 'decide'; decision: NewDecision; checkpoint?: string }
   | { type: 'check'; key: string }
+  | { type: 'now'; key: string }
+  | { type: 'now-clear' }
   | { type: 'reopen'; key: string; reason: string; expected: string };
 
 /**
@@ -98,6 +102,13 @@ export async function changePlanFileForApp(workspacePath: string, change: PlanFi
         return addToPlan(unticked, { step: `Reopened: ${change.reason}` }, { checkpoint: change.key }).text;
       }, { by });
       return { message: `Reopened "${change.expected}".` };
+    case 'now': {
+      const { text } = await setPlanNow(workspacePath, change.key, by);
+      return { message: `Working on "${text}" now.` };
+    }
+    case 'now-clear':
+      await clearPlanNow(workspacePath);
+      return { message: 'No step is marked as being worked on.' };
     case 'check': {
       const evidence = await runPlanCheck(workspacePath, change.key);
       return { message: evidence.canProgress ? 'The check passed.' : `The check ${evidence.lastVerificationStatus === 'timeout' ? 'took too long' : 'failed'}.` };

@@ -1557,7 +1557,7 @@ function areaLabel(data: AreaData): string {
   const counts = areaCounts(data);
   return summaryLabel([
     data.title,
-    data.done ? 'done' : data.current ? 'current' : data.kind === 'checkpoint' ? 'not done' : undefined,
+    data.done ? 'done' : data.nowSet ? 'now' : data.current ? 'next up' : data.kind === 'checkpoint' ? 'not done' : undefined,
     data.kind !== 'work' ? areaSteps(data).toLowerCase() : undefined,
     data.waitingCount > 0 ? (data.waitingCount === 1 ? 'waits for you' : `${data.waitingCount} wait for you`) : undefined,
     counts.length > 0 ? counts.join(', ') : undefined,
@@ -1598,11 +1598,10 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
             data.done ? (
               <Badge variant="success" className="board-area-badge sm:h-5 sm:text-[13.5px]">Done</Badge>
             ) : data.current ? (
-              <Badge variant="default" className="board-area-badge sm:h-5 sm:text-[13.5px]">Current</Badge>
+              <Badge variant={data.nowSet ? 'default' : 'outline'} className="board-area-badge sm:h-5 sm:text-[13.5px]">{data.nowSet ? 'Now' : 'Next up'}</Badge>
             ) : null
           )}
           {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge sm:h-5 sm:text-[13.5px]">Plan</Badge>}
-          {data.kind === 'work' && <Badge variant="default" className="board-area-badge sm:h-5 sm:text-[13.5px]">Current</Badge>}
           {waiting > 0 && <Badge variant="warning" className="board-area-badge sm:h-5 sm:text-[13.5px]">{waitingText(waiting)}</Badge>}
           <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
         </span>
@@ -1663,7 +1662,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
 /** Whether an Area is done, under way ("Now") or neither, as a mark that stays quiet: neither is the usual and says nothing. */
 function AreaMark({ data }: { data: AreaData }) {
   if (data.done) return <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-state-done" />;
-  if (data.current) return <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center"><span className="board-now-dot size-2 rounded-full bg-state-now" /></span>;
+  if (data.nowSet) return <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center"><span className="board-now-dot size-2 rounded-full bg-state-now" /></span>;
   return <Circle aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/50" />;
 }
 
@@ -1687,7 +1686,7 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
           )}
           {data.title}
         </span>
-        {data.current && <span className="shrink-0 text-xs font-medium text-state-now">Now</span>}
+        {data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
         {data.waitingCount > 0 && (
           <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
             <span className="size-1.5 rounded-full bg-state-needs" />Waiting
@@ -1714,14 +1713,14 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const actions = useContext(BoardActionsContext);
   const [failedPics, setFailedPics] = useState<string[]>([]);
   const picture = data.pictures.find((pic) => !failedPics.includes(pic.path));
-  const hasStatus = data.current || data.waitingCount > 0;
+  const hasStatus = (data.current && data.kind !== 'work') || data.waitingCount > 0;
   const showPicture = Boolean(picture && actions && miniShowsPicture(width ?? 0, height ?? 0, hasStatus));
   const statusLine = (height ?? 0) >= MINI_STATUS_LINE;
   const hasSteps = data.kind !== 'work' && data.stepsTotal > 0;
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
   const status = (
     <>
-      {data.current && <span className="shrink-0 text-xs font-medium leading-4 text-state-now">Now</span>}
+      {data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium leading-4', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
       {data.waitingCount > 0 && (
         <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium leading-4 text-state-needs">
           <span className="size-1.5 rounded-full bg-state-needs" />Waiting
@@ -1804,6 +1803,8 @@ export function BoardAreaFold({ data }: NodeProps<AreaFoldNode>) {
 // ─── Rows inside an Area ────────────────────────────────────────────────────
 
 const STATE_LABEL = { current: 'Now', next: 'Next', open: 'Step', done: 'Done', plain: '' } as const;
+/** What a step row calls itself: the plan's first step in the focus Area is "Next up", not "Next". */
+const stateWord = (data: { state: keyof typeof STATE_LABEL; title: string }) => (data.state === 'next' && data.title === 'Next up' ? 'Next up' : STATE_LABEL[data.state]);
 
 /** A dialog showing the untruncated step title, its status, and controls to toggle or close. */
 function StepDetailDialog({
@@ -1837,6 +1838,10 @@ function StepDetailDialog({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const actions = useContext(BoardActionsContext);
+  // Saying which step is worked on is for the open steps that can be worked on, not for headings or done steps
+  const canSetNow = Boolean(actions?.setNow && !actions.readOnly && stepKey && !isDone && actions.nowKeys?.has(stepKey));
+  const isNowStep = Boolean(stepKey && actions?.nowKey === stepKey);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -1863,7 +1868,7 @@ function StepDetailDialog({
             <Badge variant={isDone ? 'success' : 'outline'}>
               {isDone ? 'Done' : 'Open'}
             </Badge>
-            {state === 'current' && <Badge variant="secondary">Current</Badge>}
+            {state === 'current' && <Badge variant="secondary">Now</Badge>}
             <DialogTitle className="text-sm font-semibold text-muted-foreground">
               Step details
             </DialogTitle>
@@ -1885,6 +1890,18 @@ function StepDetailDialog({
           </div>
         </DialogPanel>
         <DialogFooter variant="bare">
+          {canSetNow && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={isBusy}
+              data-testid="step-dialog-now"
+              onClick={() => { void actions!.setNow!(isNowStep ? null : stepKey!).then((ok) => { if (ok) setOpen(false); }); }}
+            >
+              {isNowStep ? 'Stop working on this' : 'Work on this now'}
+            </Button>
+          )}
           {onToggle && (
             <Button
               type="button"
@@ -1949,7 +1966,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   const isBusy = Boolean(data.stepKey && actions?.busyStepKeys?.has(data.stepKey));
   const stepError = data.stepKey ? actions?.stepErrors?.[data.stepKey] : undefined;
   const stepPlain = plainText(data.text ?? data.title);
-  const label = [isStep ? `${STATE_LABEL[data.state]}: ${stepPlain}` : data.title, data.summary || data.caption].filter(Boolean).join(', ');
+  const label = [isStep ? `${stateWord(data)}: ${stepPlain}` : data.title, data.summary || data.caption].filter(Boolean).join(', ');
   const Chevron = data.expanded ? ChevronUp : ChevronDown;
 
   if (data.static) {
@@ -2013,7 +2030,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
           }
         >
           <span className="truncate text-[12.5px] leading-4 text-muted-foreground">
-            {STATE_LABEL[data.state]}
+            {stateWord(data)}
             {stepError && <span role="alert" className="ml-1 text-[12.5px] text-destructive">{stepError}</span>}
           </span>
           <span
@@ -2079,7 +2096,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   if (isStep && data.prominent) {
     const first = <>
       <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', data.state === 'current' ? 'board-now-dot bg-state-now' : 'bg-muted-foreground/60')} />
-      <span className="shrink-0">{STATE_LABEL[data.state]}</span>
+      <span className="shrink-0">{stateWord(data)}</span>
       {stepError && <span role="alert" className="min-w-0 truncate text-[12.5px] font-normal text-destructive">{stepError}</span>}
       {data.heading && !stepError && <span className="hidden min-w-0 flex-1 items-center gap-1.5 text-[12.5px] font-normal text-muted-foreground @[40rem]/now:flex"><span aria-hidden="true">·</span><span className="truncate" title={plainText(data.heading)}>{plainText(data.heading)}</span></span>}
     </>;

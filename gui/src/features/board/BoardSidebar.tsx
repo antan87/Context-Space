@@ -46,6 +46,8 @@ export interface BoardSidebarProps {
   onJumpToArea: (areaId: string) => void;
   onJumpToItem: (item: NavItem, openReader?: boolean) => void;
   toggleButtonRef?: Ref<HTMLButtonElement>;
+  /** A number that goes up each time something asks for the search box (the Now line, the `/` key): the index opens if it is folded, and the box takes the keyboard. */
+  focusSearch?: number;
 }
 
 function ItemIcon({ item }: { item: NavItem }) {
@@ -88,6 +90,7 @@ export function BoardSidebar({
   onJumpToArea,
   onJumpToItem,
   toggleButtonRef,
+  focusSearch = 0,
 }: BoardSidebarProps) {
   const searchId = useId();
   const panelPrefix = useId();
@@ -103,6 +106,18 @@ export function BoardSidebar({
   useEffect(() => {
     if (dock.overlays && narrowOpen) searchRef.current?.focus({ preventScroll: true });
   }, [dock.overlays, narrowOpen]);
+
+  // The Now line's search asks for the box: once the index is open, the keyboard goes to it
+  const searchHandled = useRef(0);
+  useEffect(() => {
+    if (!focusSearch || focusSearch === searchHandled.current || !expanded) return undefined;
+    const frame = requestAnimationFrame(() => {
+      searchHandled.current = focusSearch;
+      searchRef.current?.focus({ preventScroll: true });
+      searchRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusSearch, expanded]);
 
   const handleToggle = () => {
     if (!dock.overlays) onToggleOpen();

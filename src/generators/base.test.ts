@@ -326,6 +326,7 @@ describe('buildContextContent', () => {
       expect(section).toContain('`- [ ] Decide: <question>`');
       expect(section).toContain('Never answer it yourself.');
       expect(section).toContain('`ctxspace plan done "<checkpoint>"`');
+      expect(section).toContain('When you start a step, run `ctxspace plan now "<step>"`');
       // The plan instructions every session loads stay short: they were over 3 KB of rules and commands.
       expect(section.length).toBeLessThan(1400);
       expect(content).toContain('./.contextspace/bin/ctxspace');

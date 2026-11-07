@@ -196,8 +196,8 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
             ? { text: waitingText(area.data.waitingCount), variant: 'warning' }
             : area.data.done
               ? { text: 'Done', variant: 'success' }
-              : area.data.current
-                ? { text: 'Current', variant: 'default' }
+              : area.data.current && area.data.kind !== 'work'
+                ? { text: area.data.nowSet ? 'Now' : 'Next up', variant: area.data.nowSet ? 'default' : 'outline' }
                 : area.data.kind === 'plan'
                   ? { text: 'Plan', variant: 'outline' }
                   : undefined,
