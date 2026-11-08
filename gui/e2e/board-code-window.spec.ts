@@ -878,6 +878,11 @@ test.describe('two repositories in one workspace', () => {
 
   test('board shows changes across both repos, Code window tree navigates both, and commit form commits both', async ({ page }) => {
     let commitPayload: any = null;
+    let committed = false;
+    const newCommits = [
+      { repo: 'api', more: 0, commits: [{ sha: 'aaa1111def', subject: 'New API commit', author: 'A', at: new Date().toISOString() }] },
+      { repo: 'web', more: 0, commits: [{ sha: 'bbb2222abc', subject: 'New web commit', author: 'B', at: new Date().toISOString() }] },
+    ];
 
     const TWO_REPO_CHANGES = [
       {
@@ -939,12 +944,15 @@ test.describe('two repositories in one workspace', () => {
     await page.route('**/api/workspace/demo/repositories', (route) => route.fulfill({ json: { repositories: TWO_REPOSITORIES } }));
     await page.route('**/api/workspace/demo/news', (route) => route.fulfill({
       json: whatsNew({
-        commits: [
+        commits: committed ? newCommits : [
           { repo: 'api', more: 0, commits: [{ sha: 'abc1234def', subject: 'API commit', author: 'A', at: new Date().toISOString() }] },
           { repo: 'web', more: 0, commits: [{ sha: 'fed4321cba', subject: 'Web commit', author: 'B', at: new Date().toISOString() }] },
         ],
         empty: false,
       }),
+    }));
+    await page.route('**/api/workspace/demo/recent-commits', (route) => route.fulfill({
+      json: { at: new Date().toISOString(), from: new Date(Date.now() - 86400000).toISOString(), commits: committed ? newCommits : [] },
     }));
     await page.route('**/api/workspace/demo/changes/diff?**', (route) => {
       const url = new URL(route.request().url());
@@ -960,6 +968,7 @@ test.describe('two repositories in one workspace', () => {
     });
     await page.route('**/api/workspace/demo/commit', async (route) => {
       commitPayload = route.request().postDataJSON();
+      committed = true;
       await route.fulfill({
         json: {
           skipped: [],
@@ -1037,6 +1046,9 @@ test.describe('two repositories in one workspace', () => {
         web: ['src/client/App.tsx'],
       },
     });
+    await win.locator('button[title="Close"]').click();
+    await expect(page.locator('.react-flow__node-commit').filter({ hasText: 'New API commit' })).toBeVisible();
+    await expect(page.locator('.react-flow__node-commit').filter({ hasText: 'New web commit' })).toBeVisible();
   });
 
   test('with one editable repo and one read-only reference repo, only editable repo is committable', async ({ page }) => {
