@@ -5,6 +5,7 @@ import { API_BASE } from '../../lib/apiBase.js';
 import { agoText } from '../plan/whatsNew.js';
 import { fileTitle } from './boardDock.js';
 import { authorName } from './boardLayout.js';
+import type { AreaCountKind } from './boardCountNav.js';
 
 /** A file of the workspace for the reader beside the board, and what to call it. `card` is the board card it is the content of. */
 export interface ReaderTarget {
@@ -51,6 +52,8 @@ export interface BoardActions {
   openArea?: (id: string, button: HTMLElement) => void;
   /** Steps into an area directly targeting a specific step row. */
   openStep?: (areaId: string, stepKey: string) => void;
+  /** Steps into an area targeting a specific count kind (e.g. 'pictures', 'notes', 'files', 'commits', 'updates'). */
+  openCount?: (areaId: string, kind: AreaCountKind, button?: HTMLElement | null) => void;
   /** Selects a card to follow its thread (lights up connected chain and dims the rest), or null to clear. */
   selectThread?: (nodeId: string | null) => void;
   /** Submits an answer to a plan decision directly from a board card. */

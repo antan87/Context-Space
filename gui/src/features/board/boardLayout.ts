@@ -20,6 +20,7 @@ import type { WorkDocument } from '../../types.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardPoint, BoardView } from './boardData.js';
+export type { BoardCard, BoardLink, BoardPoint, BoardView };
 import { groupOpen, type Folds } from './boardFolds.js';
 
 /**

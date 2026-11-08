@@ -19,6 +19,20 @@ import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
 import { resolveCommitContext } from './commitContext.js';
 import {
+  areaCountItems,
+  resolveCountTarget,
+  type AreaCountItem,
+  type AreaCountKind,
+  type AreaCountTarget,
+} from './boardCountNav.js';
+export {
+  areaCountItems,
+  resolveCountTarget,
+  type AreaCountItem,
+  type AreaCountKind,
+  type AreaCountTarget,
+};
+import {
   BOARD_LIMITS,
   BOARD_SIZE,
   cardOrder,
@@ -105,6 +119,16 @@ export type AreaData = {
   /** True when any visible card in this area was made/updated in the last minute by an AI (`isFresh`). */
   fresh: boolean;
   freshKey?: string;
+  /** The key of the step that changed, when there are fresh plan changes. */
+  freshStepKey?: string;
+  /** The key of the decision that changed, when there are fresh decision updates. */
+  freshDecisionKey?: string;
+  /** The key of the checkpoint that changed, when there are fresh checkpoint updates. */
+  freshCheckpointKey?: string;
+  /** Number of fresh updates in this area. */
+  updateCount?: number;
+  /** Items of fresh updates and changes for Tier 3, each an interactive count. */
+  newsItems?: AreaCountItem[];
 };
 
 export type AreaNode = Node<AreaData, 'area'>;
@@ -451,6 +475,9 @@ export function buildBoardAreas({
     warning?: string;
     fresh: boolean;
     freshKey?: string;
+    freshStepKey?: string;
+    freshDecisionKey?: string;
+    freshCheckpointKey?: string;
     newestChangeTime?: number;
   };
 
@@ -558,29 +585,46 @@ export function buildBoardAreas({
   }
 
   // 4. Plan changes routing
-  const planKeyToDraftId = new Map<string, string>();
+  const planKeyType = new Map<string, { draftId: string; kind: 'step' | 'decision' | 'checkpoint' }>();
   for (const draft of drafts) {
-    if (draft.checkpointKey) planKeyToDraftId.set(draft.checkpointKey, draft.id);
+    if (draft.checkpointKey) planKeyType.set(draft.checkpointKey, { draftId: draft.id, kind: 'checkpoint' });
     for (const step of draft.planItems?.steps ?? []) {
-      planKeyToDraftId.set(step.key, draft.id);
+      planKeyType.set(step.key, { draftId: draft.id, kind: 'step' });
     }
     for (const dec of draft.planItems?.decisions ?? []) {
-      planKeyToDraftId.set(dec.key, draft.id);
+      planKeyType.set(dec.key, { draftId: draft.id, kind: 'decision' });
     }
   }
 
   const freshPlanChangesByArea = new Map<string, number>();
   if (news && !news.empty) {
     for (const change of news.plan?.items ?? []) {
-      const draftId = planKeyToDraftId.get(change.key);
-      if (draftId) {
+      const match = planKeyType.get(change.key);
+      if (match) {
+        const { draftId, kind } = match;
         freshPlanChangesByArea.set(draftId, (freshPlanChangesByArea.get(draftId) ?? 0) + 1);
         const partition = partitions.get(draftId);
         if (partition) {
           partition.fresh = true;
           partition.freshKey = change.at ?? change.key;
           const changeTime = change.at ? Date.parse(change.at) : 0;
+          const isNewer = !partition.newestChangeTime || changeTime >= partition.newestChangeTime;
           if (changeTime) partition.newestChangeTime = Math.max(partition.newestChangeTime ?? 0, changeTime);
+          if (isNewer) {
+            if (kind === 'decision') {
+              partition.freshDecisionKey = change.key;
+              partition.freshStepKey = undefined;
+              partition.freshCheckpointKey = undefined;
+            } else if (kind === 'step') {
+              partition.freshStepKey = change.key;
+              partition.freshDecisionKey = undefined;
+              partition.freshCheckpointKey = undefined;
+            } else if (kind === 'checkpoint') {
+              partition.freshCheckpointKey = change.key;
+              partition.freshStepKey = undefined;
+              partition.freshDecisionKey = undefined;
+            }
+          }
         }
       }
     }
@@ -684,13 +728,31 @@ export function buildBoardAreas({
     const freshPictures = freshDocPictures + freshPictureCards;
 
     const freshPlanChanges = freshPlanChangesByArea.get(draft.id) ?? 0;
-    const newsParts: string[] = [];
-    if (freshCommits > 0) newsParts.push(`${freshCommits} ${freshCommits === 1 ? 'commit' : 'commits'}`);
-    if (freshPictures > 0) newsParts.push(`${freshPictures} ${freshPictures === 1 ? 'picture' : 'pictures'}`);
-    if (freshOtherDocs > 0) newsParts.push(`${freshOtherDocs} ${freshOtherDocs === 1 ? 'document' : 'documents'}`);
-    if (freshNotes > 0) newsParts.push(`${freshNotes} ${freshNotes === 1 ? 'note' : 'notes'}`);
-    if (freshPlanChanges > 0) newsParts.push(`${freshPlanChanges} ${freshPlanChanges === 1 ? 'update' : 'updates'}`);
-    const newsSummary = newsParts.length > 0 ? newsParts.join(', ') : (p.fresh ? '1 update' : undefined);
+    const newsItems: AreaCountItem[] = [];
+    if (freshCommits > 0) {
+      const label = `${freshCommits} ${freshCommits === 1 ? 'commit' : 'commits'}`;
+      newsItems.push({ kind: 'commits', count: freshCommits, label, actionLabel: `Show the ${label}` });
+    }
+    if (freshPictures > 0) {
+      const label = `${freshPictures} ${freshPictures === 1 ? 'picture' : 'pictures'}`;
+      newsItems.push({ kind: 'pictures', count: freshPictures, label, actionLabel: `Show the ${label}` });
+    }
+    if (freshOtherDocs > 0) {
+      const label = `${freshOtherDocs} ${freshOtherDocs === 1 ? 'document' : 'documents'}`;
+      newsItems.push({ kind: 'documents', count: freshOtherDocs, label, actionLabel: `Show the ${label}` });
+    }
+    if (freshNotes > 0) {
+      const label = `${freshNotes} ${freshNotes === 1 ? 'note' : 'notes'}`;
+      newsItems.push({ kind: 'notes', count: freshNotes, label, actionLabel: `Show the ${label}` });
+    }
+    if (freshPlanChanges > 0) {
+      const label = `${freshPlanChanges} ${freshPlanChanges === 1 ? 'update' : 'updates'}`;
+      newsItems.push({ kind: 'updates', count: freshPlanChanges, label, actionLabel: `Show the ${label}` });
+    }
+    if (newsItems.length === 0 && p.fresh) {
+      newsItems.push({ kind: 'updates', count: 1, label: '1 update', actionLabel: 'Show the 1 update' });
+    }
+    const newsSummary = newsItems.length > 0 ? newsItems.map((item) => item.label).join(', ') : undefined;
 
     const allMemberNodeIds = [
       draft.id,
@@ -710,6 +772,7 @@ export function buildBoardAreas({
       ...(nextOpenStep ? { nextOpenStep } : {}),
       ...(waitingQuestion ? { waitingQuestion } : {}),
       ...(newsSummary ? { newsSummary } : {}),
+      ...(newsItems.length > 0 ? { newsItems } : {}),
       ...(p.newestChangeTime ? { newestChangeTime: p.newestChangeTime } : {}),
       stepsDone: stepsDoneCount,
       stepsTotal: stepsTotalCount,
@@ -725,6 +788,10 @@ export function buildBoardAreas({
       warning: p.warning,
       fresh: p.fresh,
       ...(p.freshKey ? { freshKey: p.freshKey } : {}),
+      ...(p.freshStepKey ? { freshStepKey: p.freshStepKey } : {}),
+      ...(p.freshDecisionKey ? { freshDecisionKey: p.freshDecisionKey } : {}),
+      ...(p.freshCheckpointKey ? { freshCheckpointKey: p.freshCheckpointKey } : {}),
+      ...(freshPlanChanges > 0 ? { updateCount: freshPlanChanges } : {}),
     };
 
     result.push({
@@ -748,14 +815,7 @@ export function buildBoardAreas({
 
 /** What an Area card counts, as words: "2 notes", "1 commit". Nothing that is zero. */
 export function areaCounts(data: AreaData): string[] {
-  const items: string[] = [];
-  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
-  if (data.noteCount > 0) items.push(plural(data.noteCount, 'note', 'notes'));
-  if (data.pictureCount > 0) items.push(plural(data.pictureCount, 'picture', 'pictures'));
-  if (data.fileCount > data.pictureCount) items.push(plural(data.fileCount - data.pictureCount, 'file', 'files'));
-  if (data.documentCount > 0) items.push(plural(data.documentCount, 'document', 'documents'));
-  if (data.commitCount > 0) items.push(plural(data.commitCount, 'commit', 'commits'));
-  return items;
+  return areaCountItems(data).map((item) => item.label);
 }
 
 /**
@@ -776,13 +836,38 @@ export function textEm(text: string): number {
   return em;
 }
 
+/** How high the interactive footer needs to be: each count is at least 24px tall, with spacing, wrapping cleanly if there are many counts. */
+export function cardFooterHeight(data: AreaData, width: number = AREA_SIZE.width): number {
+  const items = areaCountItems(data);
+  if (items.length === 0 && !data.warning) return 0;
+  const availableWidth = Math.max(100, width - 2 * CARD.pad - 2);
+  let currentLineWidth = 0;
+  let lines = 1;
+  for (let i = 0; i < items.length; i++) {
+    const itemWidth = textEm(items[i]!.label) * 12 + 16;
+    if (currentLineWidth > 0 && currentLineWidth + itemWidth + 12 > availableWidth) {
+      lines += 1;
+      currentLineWidth = itemWidth;
+    } else {
+      currentLineWidth += itemWidth + (i > 0 ? 12 : 0);
+    }
+  }
+  if (data.warning) {
+    const warningWidth = textEm(data.warning) * 12 + 8;
+    if (currentLineWidth > 0 && currentLineWidth + warningWidth + 12 > availableWidth) {
+      lines += 1;
+    }
+  }
+  return 8 + 8 + 1 + lines * 24 + (lines - 1) * 2 + 2;
+}
+
 /** How high an Area card needs to be for what it shows: its pictures or its preview, and its counts, only when it has them. */
 export function areaCardHeight(data: AreaData): number {
   const title = cardTextLines(data.title, 14);
   const middle = data.pictures.length > 0
     ? CARD.pictures
     : data.preview ? CARD.more + cardTextLines(data.preview, 13.5, 0.93) * CARD.text : 0;
-  const footer = areaCounts(data).length > 0 || data.warning ? CARD.footer : 0;
+  const footer = cardFooterHeight(data, AREA_SIZE.width);
   return 2 * CARD.pad + CARD.head + CARD.gap + title * CARD.line + (data.kind === 'work' ? 0 : CARD.steps) + middle + footer;
 }
 
@@ -814,7 +899,7 @@ export function heroCardHeight(data: AreaData, options: HeroCardOptions | number
     : (showPrev && data.preview) ? CARD.more + cardTextLines(data.preview, 13.5, 0.93, textWidth) * CARD.text : 0;
 
   const showFoot = opts.showFooter ?? true;
-  const footer = (showFoot && (areaCounts(data).length > 0 || data.warning)) ? CARD.footer : 0;
+  const footer = showFoot ? cardFooterHeight(data, width) : 0;
 
   return 2 * CARD.pad + CARD.head + CARD.gap + title * CARD.line + stepsHeight + middle + footer + 2;
 }

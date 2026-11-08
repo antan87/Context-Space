@@ -87,7 +87,7 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
     await expect(heroBtn).toBeVisible();
 
     // 1. Verify 3 step buttons are visible and whole
-    const stepButtons = heroNode.locator('button:not(.board-area)');
+    const stepButtons = heroNode.locator('button[data-step-key]');
     await expect(stepButtons).toHaveCount(3);
     for (let i = 0; i < 3; i++) {
       const btn = stepButtons.nth(i);

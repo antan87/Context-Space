@@ -462,6 +462,10 @@ test.describe('Board overview in Split mode: small cards', () => {
     await atRest(page);
     for (let i = 24; i > 1; i--) {
       await page.keyboard.press('Shift+Tab');
+      if (i - 1 === 18) {
+        await expect(overview.locator('button[aria-label="The overview"]')).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+      }
       await expect(cards.nth(i - 1)).toBeFocused();
     }
     const heroSteps = board.locator('#board-overview .react-flow__node-area button:not(.board-area)');

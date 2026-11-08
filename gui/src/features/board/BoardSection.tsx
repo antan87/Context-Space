@@ -36,8 +36,10 @@ import {
   overviewEdges,
   OVERVIEW_INSET,
   overviewPlan,
+  resolveCountTarget,
   stepsText,
   waitingText,
+  type AreaCountKind,
   type LooseTab,
   type OverviewNode,
 } from './boardAreas.js';
@@ -306,8 +308,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const label = opener.current?.getAttribute('aria-label') ?? (opener.current instanceof HTMLAnchorElement ? opener.current.textContent?.trim() : null);
     openerWas.current = node && label ? { node, label } : null;
     requests.current += 1;
-    setReader({ target, request: requests.current, trail: startTrail(target) });
-  }, [setReader]);
+    const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
+    const matching = allTargets.find((t) => isSameReaderTarget(t, target) || t.path === target.path);
+    const resolved: ReaderTarget = matching
+      ? { ...matching, ...target, ...(matching.card ? { card: matching.card } : {}), ...(matching.text ? { text: matching.text } : {}), ...(matching.byline ? { byline: matching.byline } : {}) }
+      : target;
+    setReader({ target: resolved, request: requests.current, trail: startTrail(resolved) });
+  }, [areas, setReader]);
 
   const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from), [show]);
   const closeReader = useCallback(() => {
@@ -363,6 +370,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     setNavAuto(navStartsOpen(areas, boardRowSize));
   }, [navUndecided, areasLoading, areas, boardRowSize]);
   const stageWidth = boardRowSize.width - (navOpen ? SIDEBAR.width : SIDEBAR.railWidth);
+  const stageDock = readerDock(stageWidth);
   const navSettling = navChoice === null && !navShown && !navDock.overlays;
   useLayoutEffect(() => {
     if (navSettling && !navUndecided && Math.abs(stageSize.width - stageWidth) <= 1 && stageSize.height > 0) setNavShown(true);
@@ -596,6 +604,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const stepInto = useCallback((areaId: string, buttonEl: HTMLElement) => {
     clearJump();
     setThreadSelectedId(null);
+    setReader(null);
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
@@ -648,13 +657,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     return nodeEl ? (firstControl(nodeEl, 'button') ?? firstControl(nodeEl)) : null;
   }, [areaCanvasContainer]);
   const findOpener = useCallback((was: { node: string; label: string }) => {
-    const nodeEl = Array.from(areaCanvasContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
+    const container = stepped ? areaCanvasContainer : stageContainer;
+    const nodeEl = Array.from(container?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
       .find((el) => el.dataset.id === was.node);
     if (!nodeEl) return null;
     return nodeEl.querySelector<HTMLElement>(`[aria-label="${was.label.replace(/["\\]/g, '\\$&')}"]`)
       ?? Array.from(nodeEl.querySelectorAll<HTMLAnchorElement>('a')).find((a) => a.textContent?.trim() === was.label)
       ?? null;
-  }, [areaCanvasContainer]);
+  }, [stepped, areaCanvasContainer, stageContainer]);
   useLayoutEffect(() => {
     if (reader) { wasReaderOpen.current = true; return; }
     if (!wasReaderOpen.current) return;
@@ -664,19 +674,19 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const from = opener.current;
     const was = openerWas.current;
     // The reader was walked on to another card: that card is where the keyboard and the view come back to
-    const card = was && read && read !== was.node ? read : null;
+    const card = stepped && was && read && read !== was.node ? read : null;
     opener.current = null;
     openerWas.current = null;
     if (skipFocusReturn.current) { skipFocusReturn.current = false; return; }
-    const target = card ? findCardControl(card) : from?.isConnected ? from : was ? findOpener(was) : null;
+    const target = (stepped && card) ? findCardControl(card) : from?.isConnected ? from : was ? findOpener(was) : null;
     focusing.current = true;
-    (target ?? areaCanvasContainer?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
+    (target ?? (stepped ? areaCanvasContainer : stageContainer)?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
     focusing.current = false;
     if (was) {
       openerRetry.current = { was, card, until: Date.now() + 1500, placedFor: null };
       setOpenerTick((tick) => (tick + 1) % 1000);
     }
-  }, [reader, areaCanvasContainer, findOpener, findCardControl]);
+  }, [reader, stepped, areaCanvasContainer, stageContainer, findOpener, findCardControl]);
 
   // The newest nodes and stage size for the focus return below, which must not run again when they change
   const overviewNow = useRef({ nodes: overviewNodes, size: stageSize, viewport: overview.viewport });
@@ -864,7 +874,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   useEffect(() => {
     const retry = openerRetry.current;
     if (!retry) return;
-    const target = retry.card ? findCardControl(retry.card) : findOpener(retry.was);
+    const target = (stepped && retry.card) ? findCardControl(retry.card) : findOpener(retry.was);
     const active = document.activeElement;
     const adrift = !active || active === document.body || (active instanceof HTMLElement && active.classList.contains('react-flow'));
     // The keyboard has been put somewhere else meanwhile: leave it
@@ -1225,14 +1235,42 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const pane = root.current;
     if (!reader || !pane) return undefined;
     const press: { down: 'no' | 'close' | 'same'; up: 'no' | 'close' | 'same'; ignored: boolean; x: number; y: number } = { down: 'no', up: 'no', ignored: false, x: 0, y: 0 };
+    const currentCovers = stepped ? areaDock.covers : stageDock.covers;
     const classify = (target: EventTarget | null): 'no' | 'close' | 'same' => {
       if (!(target instanceof Element) || target.closest('[data-board-reader]')) return 'no';
-      if (layout === 'large' || areaDock.covers) return 'close';
-      if (!target.closest('#board-area')) return 'no';
-      const nodeEl = target.closest('.react-flow__node');
-      if (!nodeEl) return 'close';
-      if (/react-flow__node-(fold|more|pager|step)(\s|$)/.test(nodeEl.getAttribute('class') ?? '')) return 'close';
-      return activeReaderCardId !== null && nodeEl.getAttribute('data-id') === activeReaderCardId ? 'same' : 'no';
+      if (stepped) {
+        if (!target.closest('#board-area')) return 'close';
+        const nodeEl = target.closest('.react-flow__node');
+        if (!nodeEl) return 'close';
+        if (/react-flow__node-(fold|more|pager|step)(\s|$)/.test(nodeEl.getAttribute('class') ?? '')) return 'close';
+        if (activeReaderCardId !== null && nodeEl.getAttribute('data-id') === activeReaderCardId) return 'same';
+        return layout === 'large' || currentCovers ? 'close' : 'no';
+      }
+      // Level 0 overview (!stepped):
+      if (!target.closest('#board-overview')) return 'close';
+      const clickedBtn = target.closest('button');
+      const openPath = reader?.target.path;
+      const isSameThumbnail = Boolean(
+        clickedBtn &&
+        openPath &&
+        (clickedBtn === opener.current ||
+         clickedBtn.getAttribute('data-path') === openPath ||
+         clickedBtn.getAttribute('aria-label') === (reader?.target.title || openPath) ||
+         clickedBtn.querySelector(`img[src*="${encodeURIComponent(openPath)}"]`) ||
+         clickedBtn.querySelector(`img[src*="${openPath}"]`))
+      );
+      if (isSameThumbnail) return 'same';
+      if (layout === 'large' || currentCovers) return 'close';
+      if (clickedBtn) {
+        const isAnotherThumb = Boolean(
+          clickedBtn.hasAttribute('data-path') ||
+          clickedBtn.getAttribute('aria-label')?.includes('Picture') ||
+          clickedBtn.querySelector('img')
+        );
+        if (isAnotherThumb) return 'no';
+        return 'close';
+      }
+      return 'close';
     };
     const onDown = (event: PointerEvent) => {
       press.ignored = document.querySelector('[data-slot="menu-popup"]') !== null;
@@ -1242,7 +1280,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       press.y = event.clientY;
     };
     // A drag (an attempt to pan, or a selection) is not a press
-    const onUp = (event: PointerEvent) => { press.up = layout !== 'large' && !areaDock.covers && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8 ? 'no' : classify(event.target); };
+    const onUp = (event: PointerEvent) => {
+      press.up = layout !== 'large' && !currentCovers && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8 ? 'no' : classify(event.target);
+    };
     const onClick = (event: MouseEvent) => {
       const { down, up, ignored } = press;
       press.down = 'no';
@@ -1251,7 +1291,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       if (down === 'same') {
         // Nothing else of the press happens: the card would open the reader again, and select its thread
         event.stopPropagation();
-      } else if (event.target instanceof Element && layout !== 'large' && !areaDock.covers && event.target.closest('button, a, [role="button"], [role="tab"]')) {
+      } else if (event.target instanceof Element && event.target.closest('button, a, [role="button"], [role="tab"]')) {
         // The control that was pressed keeps the keyboard
         skipFocusReturn.current = true;
       }
@@ -1265,7 +1305,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       pane.removeEventListener('pointerup', onUp, true);
       pane.removeEventListener('click', onClick);
     };
-  }, [reader, layout, areaDock.covers, activeReaderCardId, closeReader]);
+  }, [reader, layout, areaDock.covers, stageDock.covers, stepped, activeReaderCardId, closeReader]);
 
   // Reader Escape handling. Escape that closes the reader's open menu is the menu's alone: whether one was open is seen first, in the
   // capture phase, because the menu is already closing by the time this listener runs.
@@ -1343,8 +1383,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [stepped, threadSelectedId, reader, active, navDock.overlays, narrowNavOpen]);
 
-  // Reader sequential element navigation within the active area
-  const areaReaderTargets = useMemo(() => (activeArea ? collectAreaReaderTargets(activeArea) : []), [activeArea]);
+  // Reader sequential element navigation within the active area (or the area owning the Level 0 open target)
+  const readerArea = useMemo(() => {
+    if (activeArea) return activeArea;
+    if (!reader) return null;
+    return areas.find((a) => collectAreaReaderTargets(a).some((t) => isSameReaderTarget(t, reader.target) || t.path === reader.target.path)) ?? null;
+  }, [activeArea, reader, areas]);
+
+  const areaReaderTargets = useMemo(() => (readerArea ? collectAreaReaderTargets(readerArea) : []), [readerArea]);
 
   const currentReaderIndex = useMemo(() => {
     if (!reader) return -1;
@@ -1366,11 +1412,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const navigateToReaderTarget = useCallback(
     (target: ReaderTarget) => {
       requests.current += 1;
-      const resolvedCard = target.card ?? (activeArea ? collectAreaReaderTargets(activeArea).find((t) => isSameReaderTarget(t, target))?.card : undefined);
+      const targetArea = readerArea ?? activeArea;
+      const resolvedCard = target.card ?? (targetArea ? collectAreaReaderTargets(targetArea).find((t) => isSameReaderTarget(t, target))?.card : undefined);
       const resolvedTarget = resolvedCard ? { ...target, card: resolvedCard } : target;
       setReader({ target: resolvedTarget, request: requests.current, trail: startTrail(resolvedTarget) });
     },
-    [activeArea],
+    [readerArea, activeArea],
   );
 
   const [decisionErrors, setDecisionErrors] = useState<Record<string, string>>({});
@@ -1564,7 +1611,58 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       }
       jumpToItem({ areaId, nodeId: targetNodeId }, false, true);
     },
-    openInReader: () => {},
+    openCount: (areaId: string, kind: AreaCountKind, buttonEl?: HTMLElement | null) => {
+      const area = areas.find((a) => a.id === areaId);
+      if (!area) return;
+      const target = resolveCountTarget(area, kind);
+      clearJump();
+      setThreadSelectedId(null);
+      if (buttonEl) {
+        stepInto(areaId, buttonEl);
+      } else {
+        const nodeEl = stageContainer?.querySelector<HTMLElement>(`.react-flow__node[data-id="${areaId}"]`);
+        stepInto(areaId, nodeEl ?? document.body);
+      }
+      if (target.tab) {
+        chooseTab(areaId, target.tab);
+      }
+      let targetPage = target.page ?? 0;
+      if (target.cardId) {
+        const place = areaPlace(area, { news: newsView, size: stageSize }, target.cardId);
+        if (place) {
+          if (place.row) target.rowId = place.row;
+          if (place.tab) {
+            target.tab = place.tab;
+            chooseTab(areaId, place.tab);
+          }
+          targetPage = place.page;
+        }
+      }
+      if (target.rowId) {
+        openRef.current = { rowId: target.rowId, page: targetPage };
+        setOpenState({ areaId, rowId: target.rowId, page: targetPage });
+      }
+      if (target.cardId) {
+        jumpToItem({ areaId, nodeId: target.cardId }, false, true);
+      } else if (target.stepKey) {
+        const rows = areaRows(area, { news: newsView, size: stageSize });
+        let targetNodeId = `row:step:${target.stepKey}`;
+        for (const row of rows) {
+          if (row.id === `row:step:${target.stepKey}`) {
+            targetNodeId = `row:step:${target.stepKey}`;
+            break;
+          }
+          if (row.groups?.some((g) => g.key === target.stepKey)) {
+            targetNodeId = `${row.id}:step:${target.stepKey}`;
+            break;
+          }
+        }
+        jumpToItem({ areaId, nodeId: targetNodeId }, false, true);
+      } else if (target.rowId === 'row:waiting') {
+        jumpToItem({ areaId, nodeId: 'row:waiting' }, false, true);
+      }
+    },
+    openInReader,
     toggleGroup: () => {},
     keepFocus: () => {},
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
@@ -1582,7 +1680,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize]);
+  }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, clearJump, openInReader, chooseTab, setOpenState, stageContainer, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1733,89 +1831,115 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           {/* Plane 0 Overview: recedes behind scrim when stepped into */}
           <div
             id="board-overview"
-          className="board-overview-plane absolute inset-0"
-          data-receded={stepped?.phase === 'open'}
-          inert={stepped?.phase === 'open' ? true : undefined}
-        >
-          <div
-            ref={setStageContainer}
-            className="absolute inset-0"
-            onPointerDownCapture={(event) => {
-              overviewTakenBefore.current = overviewTaken.current;
-              if (isViewGesture(stageContainer, event.target)) overviewTaken.current = true;
-            }}
-            onMouseDownCapture={(event) => {
-              if (event.detail >= 2) overviewTaken.current = overviewTakenBefore.current;
-            }}
-            onWheelCapture={(event) => {
-              if (stageContainer?.contains(event.target as Node)) overviewTaken.current = true;
-            }}
-            onFocusCapture={(event) => {
-              if (!focusing.current) showFocused(overviewFlow.current, event, stageSize, () => { overviewTaken.current = true; });
-            }}
+            className="board-overview-plane absolute inset-0 flex"
+            data-receded={stepped?.phase === 'open'}
+            inert={stepped?.phase === 'open' || (!stepped && Boolean(reader) && (layout === 'large' || stageDock.covers)) ? true : undefined}
           >
-            {stepped?.phase !== 'open' && paneCorner}
-            {totalArchived > 0 && (
-              <div className="absolute left-3 top-2 z-10">
-                <Button
-                  size="xs"
-                  variant={showArchived ? 'secondary' : 'outline'}
-                  aria-pressed={showArchived}
-                  onClick={() => setShowArchived((s) => !s)}
-                >
-                  <Archive aria-hidden="true" />
-                  Archived ({totalArchived})
-                </Button>
+            <div className="relative min-w-0 flex-1">
+              <div
+                ref={setStageContainer}
+                className="absolute inset-0"
+                onPointerDownCapture={(event) => {
+                  overviewTakenBefore.current = overviewTaken.current;
+                  if (isViewGesture(stageContainer, event.target)) overviewTaken.current = true;
+                }}
+                onMouseDownCapture={(event) => {
+                  if (event.detail >= 2) overviewTaken.current = overviewTakenBefore.current;
+                }}
+                onWheelCapture={(event) => {
+                  if (stageContainer?.contains(event.target as Node)) overviewTaken.current = true;
+                }}
+                onFocusCapture={(event) => {
+                  if (!focusing.current) showFocused(overviewFlow.current, event, stageSize, () => { overviewTaken.current = true; });
+                }}
+              >
+                {stepped?.phase !== 'open' && paneCorner}
+                {totalArchived > 0 && (
+                  <div className="absolute left-3 top-2 z-10">
+                    <Button
+                      size="xs"
+                      variant={showArchived ? 'secondary' : 'outline'}
+                      aria-pressed={showArchived}
+                      onClick={() => setShowArchived((s) => !s)}
+                    >
+                      <Archive aria-hidden="true" />
+                      Archived ({totalArchived})
+                    </Button>
+                  </div>
+                )}
+                <BoardActionsContext value={overviewActions}>
+                    <ReactFlow
+                      id="board-overview-flow"
+                      className="board-flow"
+                      proOptions={{ hideAttribution: true }}
+                      aria-label="Board overview canvas. Arrow keys pan, zero puts the board back in view. Press an area to step into it."
+                      tabIndex={0}
+                      nodes={overviewNodes}
+                      edges={overviewLines}
+                      nodeTypes={OVERVIEW_NODE_TYPES}
+                      defaultEdgeOptions={EDGE_OPTIONS}
+                      defaultViewport={overviewViewport ?? undefined}
+                      connectionMode={ConnectionMode.Loose}
+                      onInit={(instance) => {
+                        overviewFlow.current = instance;
+                        setOverviewInstance(instance);
+                      }}
+                      onPaneClick={() => setThreadSelectedId(null)}
+                      onKeyDown={(event) => {
+                        navigate(overviewFlow.current, event, () => { overviewTaken.current = true; }, () => {
+                          overviewTaken.current = false;
+                          if (overviewViewport) void overviewFlow.current?.setViewport(overviewViewport, { duration: moveMs(200) });
+                        });
+                      }}
+                      nodesDraggable={false}
+                      nodesConnectable={false}
+                      nodesFocusable={false}
+                      edgesFocusable={false}
+                      elementsSelectable={false}
+                      deleteKeyCode={null}
+                      panActivationKeyCode={null}
+                      selectionKeyCode={null}
+                      multiSelectionKeyCode={null}
+                      zoomActivationKeyCode={null}
+                      disableKeyboardA11y
+                      zoomOnScroll={false}
+                      zoomOnPinch={false}
+                      zoomOnDoubleClick={false}
+                      panOnScroll={foldOpen}
+                      minZoom={READABLE_ZOOM}
+                      maxZoom={1}
+                      attributionPosition="bottom-center"
+                    >
+                      <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
+                    </ReactFlow>
+                </BoardActionsContext>
               </div>
+            </div>
+            {!stepped && reader && (
+              <BoardReader
+                workspaceId={workspaceId}
+                workspacePath={workspacePath}
+                target={reader.target}
+                request={reader.request}
+                layout={layout}
+                onLayout={changeLayout}
+                covers={stageDock.covers}
+                width={stageDock.width}
+                onClose={closeReader}
+                onOpenInDocs={openInDocs}
+                onOpenFile={openLinked}
+                active={active}
+                back={readerBack ? { label: readerBack, onBack: goBack } : undefined}
+                trailId={reader.trail.id}
+                onNext={nextTarget ? () => navigateToReaderTarget(nextTarget) : undefined}
+                onPrevious={previousTarget ? () => navigateToReaderTarget(previousTarget) : undefined}
+                nextTitle={nextTarget?.title}
+                previousTitle={previousTarget?.title}
+                indexInfo={readerIndexInfo}
+                onAskInCLI={askInCLI}
+              />
             )}
-            <BoardActionsContext value={overviewActions}>
-                <ReactFlow
-                  id="board-overview-flow"
-                  className="board-flow"
-                  proOptions={{ hideAttribution: true }}
-                  aria-label="Board overview canvas. Arrow keys pan, zero puts the board back in view. Press an area to step into it."
-                  tabIndex={0}
-                  nodes={overviewNodes}
-                  edges={overviewLines}
-                  nodeTypes={OVERVIEW_NODE_TYPES}
-                  defaultEdgeOptions={EDGE_OPTIONS}
-                  defaultViewport={overviewViewport ?? undefined}
-                  connectionMode={ConnectionMode.Loose}
-                  onInit={(instance) => {
-                    overviewFlow.current = instance;
-                    setOverviewInstance(instance);
-                  }}
-                  onPaneClick={() => setThreadSelectedId(null)}
-                  onKeyDown={(event) => {
-                    navigate(overviewFlow.current, event, () => { overviewTaken.current = true; }, () => {
-                      overviewTaken.current = false;
-                      if (overviewViewport) void overviewFlow.current?.setViewport(overviewViewport, { duration: moveMs(200) });
-                    });
-                  }}
-                  nodesDraggable={false}
-                  nodesConnectable={false}
-                  nodesFocusable={false}
-                  edgesFocusable={false}
-                  elementsSelectable={false}
-                  deleteKeyCode={null}
-                  panActivationKeyCode={null}
-                  selectionKeyCode={null}
-                  multiSelectionKeyCode={null}
-                  zoomActivationKeyCode={null}
-                  disableKeyboardA11y
-                  zoomOnScroll={false}
-                  zoomOnPinch={false}
-                  zoomOnDoubleClick={false}
-                  panOnScroll={foldOpen}
-                  minZoom={READABLE_ZOOM}
-                  maxZoom={1}
-                  attributionPosition="bottom-center"
-                >
-                  <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
-                </ReactFlow>
-            </BoardActionsContext>
           </div>
-        </div>
 
         {/* Plane 1 Stepped Area Surface */}
         {stepped && activeArea && (

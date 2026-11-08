@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
+import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, Terminal, type LucideIcon } from 'lucide-react';
 
@@ -18,7 +18,7 @@ import { plainText, stripHeadingColon } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
-import { areaCounts, foldLabel, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { areaCountItems, areaCounts, foldLabel, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
 import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
@@ -1575,11 +1575,11 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
   const visiblePics = data.pictures.filter((pic) => !failedPics.includes(pic.path));
   const waiting = data.waitingCount;
   const border = waiting > 0 ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border';
-  const counts = areaCounts(data);
+  const countItems = areaCountItems(data);
   const stepsLabel = areaSteps(data);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
   const showFooter = data.heroShowFooter ?? true;
-  const footer = showFooter && (counts.length > 0 || Boolean(data.warning));
+  const footer = showFooter && (countItems.length > 0 || Boolean(data.warning));
   const showPictures = data.heroShowPictures ?? true;
   const showPreview = data.heroShowPreview ?? true;
   const stepLimit = data.heroOpenStepLimit ?? 3;
@@ -1648,6 +1648,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                 <button
                   key={step.key}
                   type="button"
+                  data-step-key={step.key}
                   title={text}
                   aria-label={text}
                   onClick={(e) => {
@@ -1675,21 +1676,33 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
         )}
 
         {showPictures && visiblePics.length > 0 && actions ? (
-          <span className="mt-2 flex h-16 shrink-0 items-center gap-2 overflow-hidden rounded-md">
+          <div className="mt-2 flex h-16 shrink-0 items-center gap-2 overflow-hidden rounded-md">
             {visiblePics.map((pic) => (
-              <img
+              <button
                 key={pic.path}
-                src={documentFileUrl(actions.workspaceId, pic.path)}
-                alt=""
-                aria-hidden="true"
-                loading="lazy"
-                onError={() => {
-                  setFailedPics((prev) => (prev.includes(pic.path) ? prev : [...prev, pic.path]));
+                type="button"
+                data-path={pic.path}
+                aria-label={pic.alt || pic.path}
+                title={pic.alt || pic.path}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  actions.openInReader({ path: pic.path, title: pic.alt || pic.path }, e.currentTarget);
                 }}
-                className="h-full w-20 rounded border border-border/50 object-cover"
-              />
+                className="nodrag nopan relative h-full w-20 shrink-0 overflow-hidden rounded border border-border/50 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:opacity-85 transition-opacity"
+              >
+                <img
+                  src={documentFileUrl(actions.workspaceId, pic.path)}
+                  alt=""
+                  aria-hidden="true"
+                  loading="lazy"
+                  onError={() => {
+                    setFailedPics((prev) => (prev.includes(pic.path) ? prev : [...prev, pic.path]));
+                  }}
+                  className="h-full w-full object-cover"
+                />
+              </button>
             ))}
-          </span>
+          </div>
         ) : showPreview && data.preview ? (
           <span className={cn('mt-2 line-clamp-2 shrink-0', AREA_TEXT)}>{data.preview}</span>
         ) : null}
@@ -1697,10 +1710,26 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
         {footer && (
           <>
             <span aria-hidden="true" className="min-h-2 flex-1" />
-            <span className={cn('flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-border/50 pt-2', AREA_TEXT)}>
-              {counts.length > 0 && <span className="truncate">{counts.join(' · ')}</span>}
+            <div className={cn('flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-border/50 pt-2', AREA_TEXT)}>
+              {countItems.map((item, idx) => (
+                <Fragment key={item.kind}>
+                  {idx > 0 && <span aria-hidden="true" className="select-none text-muted-foreground/60">·</span>}
+                  <button
+                    type="button"
+                    aria-label={item.actionLabel}
+                    title={item.actionLabel}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      actions?.openCount?.(id, item.kind, e.currentTarget);
+                    }}
+                    className="nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+                  >
+                    {item.label}
+                  </button>
+                </Fragment>
+              ))}
               {data.warning && <span className="text-destructive-foreground">{data.warning}</span>}
-            </span>
+            </div>
           </>
         )}
       </div>
@@ -1722,14 +1751,23 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
   const isNotStarted = data.kind !== 'work' && data.stepsTotal > 0 && data.stepsDone === 0;
 
   return (
-    <div className={cn('relative h-full w-full rounded-lg', isNotStarted && 'opacity-85')}>
+    <div
+      className={cn(
+        'relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-lg bg-card px-3 text-left text-card-foreground transition-colors hover:bg-accent',
+        isNotStarted && 'opacity-85'
+      )}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest('button')) return;
+        actions?.openArea?.(id, event.currentTarget);
+      }}
+    >
       <Anchors />
       {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-lg" />}
       <button
         type="button"
         onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
         aria-label={areaLabel(data)}
-        className="board-area nodrag nopan @container relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-lg bg-card px-3 text-left text-card-foreground transition-colors hover:bg-accent"
+        className="board-area nodrag nopan flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded"
       >
         <AreaMark data={data} />
         <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5 text-foreground" title={data.title}>
@@ -1738,42 +1776,62 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
           )}
           {data.title}
         </span>
-        {/* Tier 2: Waits for you, with the question's first words */}
-        {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
-          <span className="min-w-0 max-w-[24ch] truncate text-xs font-medium text-state-needs" title={data.waitingQuestion ?? waitingText(data.waitingCount)}>
-            <span aria-hidden="true" className="mr-1 inline-block size-1.5 rounded-full bg-state-needs" />
-            {data.waitingQuestion ?? waitingText(data.waitingCount)}
-          </span>
-        )}
-        {/* Tier 3: Moved since you looked, saying what ("2 commits, 1 picture") */}
-        {data.tier === 3 && data.newsSummary && (
-          <span className="shrink-0 text-xs text-muted-foreground" title={data.newsSummary}>
-            {data.newsSummary}
-          </span>
-        )}
-        {/* Tier 4: its next open step in place of a bare count, and 0 of 4 quietly at the end */}
-        {data.tier === 4 && data.nextOpenStep && (
-          <span className="min-w-0 max-w-[28ch] truncate text-xs text-muted-foreground" title={data.nextOpenStep}>
-            {data.nextOpenStep}
-          </span>
-        )}
-        {!data.done && data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
-        {data.waitingCount > 0 && data.tier !== 2 && (
-          <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
-            <span className="size-1.5 rounded-full bg-state-needs" />Waiting
-          </span>
-        )}
-        {data.kind !== 'work' && data.stepsTotal > 0 && (
-          <>
-            <span className={cn('shrink-0 text-xs tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
-              {data.stepsDone} of {data.stepsTotal}
-            </span>
-            <span aria-hidden="true" className={cn('h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20', (data.waitingCount > 0 || Boolean(data.nextOpenStep)) && 'hidden @[28rem]:block')}>
-              <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
-            </span>
-          </>
-        )}
       </button>
+      {/* Tier 2: Waits for you, with the question's first words */}
+      {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
+        <span className="min-w-0 max-w-[24ch] truncate text-xs font-medium text-state-needs" title={data.waitingQuestion ?? waitingText(data.waitingCount)}>
+          <span aria-hidden="true" className="mr-1 inline-block size-1.5 rounded-full bg-state-needs" />
+          {data.waitingQuestion ?? waitingText(data.waitingCount)}
+        </span>
+      )}
+      {/* Tier 3: Moved since you looked, saying what ("2 commits, 1 picture") */}
+      {data.tier === 3 && data.newsItems && data.newsItems.length > 0 ? (
+        <span className="flex shrink-0 items-center gap-1 text-xs" title={data.newsSummary}>
+          {data.newsItems.map((item, idx) => (
+            <Fragment key={item.kind}>
+              {idx > 0 && <span aria-hidden="true" className="-ml-1 select-none text-muted-foreground/60">,</span>}
+              <button
+                type="button"
+                aria-label={item.actionLabel}
+                title={item.actionLabel}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  actions?.openCount?.(id, item.kind, e.currentTarget);
+                }}
+                className="nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+              >
+                {item.label}
+              </button>
+            </Fragment>
+          ))}
+        </span>
+      ) : data.tier === 3 && data.newsSummary ? (
+        <span className="shrink-0 text-xs text-muted-foreground" title={data.newsSummary}>
+          {data.newsSummary}
+        </span>
+      ) : null}
+      {/* Tier 4: its next open step in place of a bare count, and 0 of 4 quietly at the end */}
+      {data.tier === 4 && data.nextOpenStep && (
+        <span className="min-w-0 max-w-[28ch] truncate text-xs text-muted-foreground" title={data.nextOpenStep}>
+          {data.nextOpenStep}
+        </span>
+      )}
+      {!data.done && data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
+      {data.waitingCount > 0 && data.tier !== 2 && (
+        <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
+          <span className="size-1.5 rounded-full bg-state-needs" />Waiting
+        </span>
+      )}
+      {data.kind !== 'work' && data.stepsTotal > 0 && (
+        <>
+          <span className={cn('shrink-0 text-xs tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
+            {data.stepsDone} of {data.stepsTotal}
+          </span>
+          <span aria-hidden="true" className={cn('h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20', (data.waitingCount > 0 || Boolean(data.nextOpenStep)) && 'hidden @[28rem]:block')}>
+            <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -1784,17 +1842,40 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
  */
 export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNode>) {
   const actions = useContext(BoardActionsContext);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const placeholderRef = useRef<HTMLSpanElement>(null);
   const [failedPics, setFailedPics] = useState<string[]>([]);
   const picture = data.pictures.find((pic) => !failedPics.includes(pic.path));
   const hasStatus = (data.current && data.kind !== 'work') ||
     data.waitingCount > 0 ||
     Boolean(data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0)) ||
-    Boolean(data.tier === 3 && data.newsSummary);
+    Boolean(data.tier === 3 && (data.newsItems?.length || data.newsSummary));
   const showPicture = Boolean(picture && actions && miniShowsPicture(width ?? 0, height ?? 0, hasStatus));
   const statusLine = (height ?? 0) >= MINI_STATUS_LINE;
   const hasSteps = data.kind !== 'work' && data.stepsTotal > 0;
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
   const isNotStarted = data.kind !== 'work' && data.stepsTotal > 0 && data.stepsDone === 0;
+
+  const hasCountButtons = Boolean(data.tier === 3 && data.newsItems && data.newsItems.length > 0 && actions);
+
+  const isTwoLineTitle = (data.title?.length ?? 0) > 25;
+  const [overlayPos, setOverlayPos] = useState<{ top: number; left: number }>({
+    top: statusLine ? (isTwoLineTitle ? 52 : 34) : 48,
+    left: statusLine ? 36 : 12,
+  });
+
+  useLayoutEffect(() => {
+    if (placeholderRef.current && cardRef.current) {
+      const pRect = placeholderRef.current.getBoundingClientRect();
+      const cardRect = cardRef.current.getBoundingClientRect();
+      if (cardRect.width > 0 && pRect.width > 0) {
+        setOverlayPos({
+          top: Math.round(pRect.top - cardRect.top),
+          left: Math.round(pRect.left - cardRect.left),
+        });
+      }
+    }
+  }, [data.title, data.newsSummary, width, height, statusLine]);
 
   const status = (
     <>
@@ -1804,7 +1885,14 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
         </span>
       )}
       {data.tier === 3 && data.newsSummary && (
-        <span className="shrink-0 truncate text-xs leading-4 text-muted-foreground" title={data.newsSummary}>
+        <span
+          ref={placeholderRef}
+          className={cn(
+            'flex shrink-0 items-center truncate text-xs leading-4 text-muted-foreground',
+            hasCountButtons ? 'h-6 invisible' : ''
+          )}
+          title={data.newsSummary}
+        >
           {data.newsSummary}
         </span>
       )}
@@ -1822,7 +1910,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   );
 
   return (
-    <div className={cn('relative h-full w-full rounded-xl', isNotStarted && 'opacity-85')}>
+    <div ref={cardRef} className={cn('relative h-full w-full rounded-xl', isNotStarted && 'opacity-85')}>
       <Anchors />
       {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-xl" />}
       <button
@@ -1879,6 +1967,47 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
           />
         )}
       </button>
+
+      {/* Sibling count buttons for Tier 3, positioned over the status line */}
+      {hasCountButtons && data.newsItems && (
+        <span
+          className="nodrag nopan absolute z-10 flex items-center gap-1 text-xs leading-4"
+          style={{ top: `${overlayPos.top}px`, left: `${overlayPos.left}px` }}
+        >
+          {data.newsItems.map((item, idx) => (
+            <Fragment key={item.kind}>
+              {idx > 0 && <span aria-hidden="true" className="-ml-1 select-none text-muted-foreground/60">,</span>}
+              <button
+                type="button"
+                aria-label={item.actionLabel}
+                title={item.actionLabel}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  actions?.openCount?.(id, item.kind, e.currentTarget);
+                }}
+                className="nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+              >
+                {item.label}
+              </button>
+            </Fragment>
+          ))}
+        </span>
+      )}
+
+      {/* Sibling thumbnail button over picture */}
+      {showPicture && picture && actions && (
+        <button
+          type="button"
+          data-path={picture.path}
+          aria-label={picture.alt || picture.path}
+          title={picture.alt || picture.path}
+          onClick={(e) => {
+            e.stopPropagation();
+            actions.openInReader({ path: picture.path, title: picture.alt || picture.path }, e.currentTarget);
+          }}
+          className="nodrag nopan absolute right-3 top-2.5 bottom-2.5 w-20 rounded-lg cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:bg-black/10 dark:hover:bg-white/10 transition-colors z-10"
+        />
+      )}
     </div>
   );
 }
