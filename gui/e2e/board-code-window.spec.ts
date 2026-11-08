@@ -872,3 +872,275 @@ test.describe('the commit form is kept per workspace', () => {
     expect(posts.demo).toEqual({ message: 'demo message', noPush: true, files: { api: ['src/server/handler.ts', 'src/server/routes.ts'] } });
   });
 });
+
+test.describe('two repositories in one workspace', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test('board shows changes across both repos, Code window tree navigates both, and commit form commits both', async ({ page }) => {
+    let commitPayload: any = null;
+
+    const TWO_REPO_CHANGES = [
+      {
+        repoName: 'api',
+        repoPath: '/tmp/api',
+        files: [
+          { file: 'src/server/handler.ts', type: 'modified', additions: 12, deletions: 3 },
+          { file: 'README.md', type: 'added', additions: 5, deletions: 0 },
+        ],
+      },
+      {
+        repoName: 'web',
+        repoPath: '/tmp/web',
+        files: [
+          { file: 'src/client/App.tsx', type: 'modified', additions: 20, deletions: 4 },
+          { file: 'package.json', type: 'modified', additions: 1, deletions: 1 },
+        ],
+      },
+    ];
+
+    const TWO_REPOSITORIES = [
+      {
+        name: 'api',
+        access: 'read-write',
+        editable: true,
+        path: '/tmp/api',
+        sourcePath: '/tmp/api',
+        branch: 'feat/two-repos',
+        expectedBranch: 'feat/two-repos',
+        onExpectedBranch: true,
+        baseBranch: 'main',
+        headSha: '1111111',
+        dirty: true,
+        changedFiles: [{ code: 'M', path: 'src/server/handler.ts' }, { code: 'A', path: 'README.md' }],
+        ahead: 0,
+        behind: 0,
+        remoteUrl: 'git@github.com:org/api.git',
+      },
+      {
+        name: 'web',
+        access: 'read-write',
+        editable: true,
+        path: '/tmp/web',
+        sourcePath: '/tmp/web',
+        branch: 'feat/two-repos',
+        expectedBranch: 'feat/two-repos',
+        onExpectedBranch: true,
+        baseBranch: 'main',
+        headSha: '2222222',
+        dirty: true,
+        changedFiles: [{ code: 'M', path: 'src/client/App.tsx' }, { code: 'M', path: 'package.json' }],
+        ahead: 0,
+        behind: 0,
+        remoteUrl: 'git@github.com:org/web.git',
+      },
+    ];
+
+    await page.route('**/api/workspace/demo/changes', (route) => route.fulfill({ json: { changes: TWO_REPO_CHANGES } }));
+    await page.route('**/api/workspace/demo/repositories', (route) => route.fulfill({ json: { repositories: TWO_REPOSITORIES } }));
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({
+      json: whatsNew({
+        commits: [
+          { repo: 'api', more: 0, commits: [{ sha: 'abc1234def', subject: 'API commit', author: 'A', at: new Date().toISOString() }] },
+          { repo: 'web', more: 0, commits: [{ sha: 'fed4321cba', subject: 'Web commit', author: 'B', at: new Date().toISOString() }] },
+        ],
+        empty: false,
+      }),
+    }));
+    await page.route('**/api/workspace/demo/changes/diff?**', (route) => {
+      const url = new URL(route.request().url());
+      const repo = url.searchParams.get('repo') ?? 'api';
+      const file = url.searchParams.get('file') ?? 'test.ts';
+      return route.fulfill({
+        json: {
+          original: `// original ${repo} ${file}`,
+          modified: `// modified ${repo} ${file}`,
+          patch: `--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-// original\n+// modified`,
+        },
+      });
+    });
+    await page.route('**/api/workspace/demo/commit', async (route) => {
+      commitPayload = route.request().postDataJSON();
+      await route.fulfill({
+        json: {
+          skipped: [],
+          results: [
+            { repoName: 'api', success: true, committed: true, pushed: false, branch: 'feat/two-repos', commitHash: 'aaa1111', filesChanged: 2, message: 'ok' },
+            { repoName: 'web', success: true, committed: true, pushed: false, branch: 'feat/two-repos', commitHash: 'bbb2222', filesChanged: 1, message: 'ok' },
+          ],
+        },
+      });
+    });
+
+    await openBoard(page, 'board');
+
+    // 1. Board header Code button shows total changes across both repos (2 in api + 2 in web = 4 files)
+    const codeBtn = page.getByTestId('board-code-button');
+    await expect(codeBtn).toBeVisible();
+    await expect(codeBtn).toContainText('4');
+    await expect(codeBtn).toHaveAttribute('aria-label', 'Code, 4 files changed');
+
+    // 2. Open an Area to verify uncommitted cards for both repos
+    await page.locator('button.board-area').first().click();
+    await expect(page.locator('#board-area')).toBeVisible();
+
+    // Verify uncommitted cards for both repos exist
+    const uncommittedApi = page.locator('[data-uncommitted^="uncommitted:api"]');
+    const uncommittedWeb = page.locator('[data-uncommitted^="uncommitted:web"]');
+    await expect(uncommittedApi).toBeVisible();
+    await expect(uncommittedWeb).toBeVisible();
+    await expect(uncommittedApi).toContainText('2 files changed');
+    await expect(uncommittedWeb).toContainText('2 files changed');
+
+    // 3. Clicking web's uncommitted card opens CodeWindow directly on web's first file
+    await uncommittedWeb.getByRole('button', { name: /Open .* in Code/ }).click();
+    const win = windowOf(page);
+    await expect(win).toBeVisible();
+    await expect(openName(page)).toContainText('src/client/App.tsx');
+
+    // 4. File tree shows both repos with their file counts
+    await expect(win.getByRole('button', { name: 'api 2' })).toBeVisible();
+    await expect(win.getByRole('button', { name: 'web 2' })).toBeVisible();
+    await expect(win.getByRole('tree', { name: 'api changed files' })).toBeVisible();
+    await expect(win.getByRole('tree', { name: 'web changed files' })).toBeVisible();
+
+    // Step navigation between files across repos with [ and ]
+    await page.keyboard.press(']');
+    await expect(openName(page)).toContainText('package.json');
+
+    // 5. Review & commit form shows both repos
+    await win.getByRole('button', { name: 'Review & commit' }).click();
+    const form = win.getByRole('region', { name: 'Review commit' });
+    await expect(form).toBeVisible();
+
+    const repoApiSection = form.getByTestId('commit-repo-api');
+    const repoWebSection = form.getByTestId('commit-repo-web');
+    await expect(repoApiSection).toBeVisible();
+    await expect(repoWebSection).toBeVisible();
+
+    // Untick one file in web (package.json)
+    await repoWebSection.getByRole('checkbox', { name: 'Include web/package.json' }).click();
+
+    // Summary counts updated: 4 total - 1 excluded = 3 files in 2 repositories
+    const summary = form.getByTestId('commit-review-summary');
+    await expect(summary).toContainText('Commit 3 files');
+
+    // Commit both repos with message
+    await form.getByLabel('Commit message').fill('feat: two repo commit');
+    await form.getByRole('button', { name: /^Commit/ }).last().click();
+
+    await expect.poll(() => commitPayload).toBeTruthy();
+    expect(commitPayload).toEqual({
+      message: 'feat: two repo commit',
+      noPush: false,
+      files: {
+        api: ['src/server/handler.ts', 'README.md'],
+        web: ['src/client/App.tsx'],
+      },
+    });
+  });
+
+  test('with one editable repo and one read-only reference repo, only editable repo is committable', async ({ page }) => {
+    let commitPayload: any = null;
+
+    const TWO_REPO_CHANGES = [
+      {
+        repoName: 'api',
+        repoPath: '/tmp/api',
+        files: [{ file: 'src/server/handler.ts', type: 'modified', additions: 12, deletions: 3 }],
+      },
+      {
+        repoName: 'ref-docs',
+        repoPath: '/tmp/ref-docs',
+        files: [{ file: 'guide.md', type: 'modified', additions: 5, deletions: 1 }],
+      },
+    ];
+
+    const TWO_REPOSITORIES = [
+      {
+        name: 'api',
+        access: 'read-write',
+        editable: true,
+        path: '/tmp/api',
+        sourcePath: '/tmp/api',
+        branch: 'feat/two-repos',
+        expectedBranch: 'feat/two-repos',
+        onExpectedBranch: true,
+        baseBranch: 'main',
+        headSha: '1111111',
+        dirty: true,
+        changedFiles: [{ code: 'M', path: 'src/server/handler.ts' }],
+        ahead: 0,
+        behind: 0,
+        remoteUrl: 'git@github.com:org/api.git',
+      },
+      {
+        name: 'ref-docs',
+        access: 'read-only',
+        editable: false,
+        path: '/tmp/ref-docs',
+        sourcePath: '/tmp/ref-docs',
+        branch: 'main',
+        expectedBranch: null,
+        onExpectedBranch: true,
+        baseBranch: 'main',
+        headSha: '9999999',
+        dirty: true,
+        changedFiles: [{ code: 'M', path: 'guide.md' }],
+        ahead: 0,
+        behind: 0,
+        remoteUrl: 'git@github.com:org/ref-docs.git',
+      },
+    ];
+
+    await page.route('**/api/workspace/demo/changes', (route) => route.fulfill({ json: { changes: TWO_REPO_CHANGES } }));
+    await page.route('**/api/workspace/demo/repositories', (route) => route.fulfill({ json: { repositories: TWO_REPOSITORIES } }));
+    await page.route('**/api/workspace/demo/commit', async (route) => {
+      commitPayload = route.request().postDataJSON();
+      await route.fulfill({
+        json: {
+          skipped: [],
+          results: [{ repoName: 'api', success: true, committed: true, pushed: false, branch: 'feat/two-repos', commitHash: 'aaa1111', filesChanged: 1, message: 'ok' }],
+        },
+      });
+    });
+
+    await openBoard(page, 'board');
+
+    // Open Code window
+    await page.getByTestId('board-code-button').click();
+    const win = windowOf(page);
+    await expect(win).toBeVisible();
+
+    // Review & commit form
+    await win.getByRole('button', { name: 'Review & commit' }).click();
+    const form = win.getByRole('region', { name: 'Review commit' });
+    await expect(form).toBeVisible();
+
+    // api is committable with checkbox
+    const repoApiSection = form.getByTestId('commit-repo-api');
+    await expect(repoApiSection.getByRole('checkbox', { name: 'Commit changes in api' })).toBeVisible();
+
+    // ref-docs shows read-only reference notice and no commit checkbox
+    const refSection = form.getByTestId('commit-repo-ref-docs');
+    await expect(refSection).toContainText('read-only reference');
+    await expect(refSection.getByRole('checkbox')).toHaveCount(0);
+    await expect(refSection).toContainText('Not committed: this is your own checkout. Prepare it for editing to work on it in this workspace.');
+
+    // Only 1 file is selected for commit
+    const summary = form.getByTestId('commit-review-summary');
+    await expect(summary).toContainText('Commit 1 file');
+
+    // Commit only api
+    await form.getByLabel('Commit message').fill('feat: commit editable only');
+    await form.getByRole('button', { name: /^Commit/ }).last().click();
+
+    await expect.poll(() => commitPayload).toBeTruthy();
+    expect(commitPayload).toEqual({
+      message: 'feat: commit editable only',
+      noPush: false,
+      files: {
+        api: ['src/server/handler.ts'],
+      },
+    });
+  });
+});
