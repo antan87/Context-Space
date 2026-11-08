@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { CircleHelp, Search } from 'lucide-react';
+import { ChevronLeft, CircleHelp, Search } from 'lucide-react';
 
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
@@ -15,6 +15,7 @@ export interface BoardNowLineProps {
   newsLines: NewsLine[];
   readOnly?: boolean;
   gotIt: { pending: boolean; error?: string; onGotIt: () => void };
+  back?: { label: string; onBack: () => void };
   onNow: () => void;
   onQuestion: () => void;
   onNewsLine: (line: NewsLine) => void;
@@ -31,7 +32,7 @@ const PART = 'nodrag nopan inline-flex min-h-6 min-w-0 shrink-0 cursor-pointer i
  * search. Each part is a button that goes there. The step's words give way first, then the Area's name, then who and when; the question
  * count, the news count and search stay at any width.
  */
-export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, onNow, onQuestion, onNewsLine, onSearch }: BoardNowLineProps) {
+export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, back, onNow, onQuestion, onNewsLine, onSearch }: BoardNowLineProps) {
   const [newsOpen, setNewsOpen] = useState(false);
   const newsButton = useRef<HTMLButtonElement>(null);
   const isNow = parts.word === 'Now';
@@ -62,6 +63,19 @@ export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, 
 
   return (
     <div ref={root} role="group" aria-label="Where the work is" data-testid="board-now-line" className="@container flex h-8 shrink-0 items-center gap-1 border-b border-border/50 px-2">
+      {back && (
+        <button
+          type="button"
+          data-testid="board-back-button"
+          aria-label={`Back to ${back.label}`}
+          title={`Back to ${back.label} (Alt+←)`}
+          onClick={back.onBack}
+          className={cn(PART, 'max-w-40 font-medium text-foreground')}
+        >
+          <ChevronLeft aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">{back.label}</span>
+        </button>
+      )}
       {parts.word ? (
         <button type="button" data-testid="board-now-main" title={full} aria-label={`${parts.word}: ${parts.text}`} onClick={onNow} className={cn(PART, 'min-w-0 shrink justify-start gap-2 overflow-hidden')}>
           {isNow && <span aria-hidden="true" className="board-now-dot size-2 shrink-0 rounded-full bg-state-now" />}

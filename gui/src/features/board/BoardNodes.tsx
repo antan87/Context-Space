@@ -1653,7 +1653,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                   aria-label={text}
                   onClick={(e) => {
                     e.stopPropagation();
-                    actions?.openStep?.(id, step.key);
+                    actions?.openStep?.(id, step.key, e.currentTarget);
                   }}
                   className={cn(
                     'nodrag nopan flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring cursor-pointer',
@@ -1716,6 +1716,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                   {idx > 0 && <span aria-hidden="true" className="select-none text-muted-foreground/60">·</span>}
                   <button
                     type="button"
+                    data-count-kind={item.kind}
                     aria-label={item.actionLabel}
                     title={item.actionLabel}
                     onClick={(e) => {

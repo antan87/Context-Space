@@ -337,6 +337,7 @@ export function BoardSidebar({
                     >
                       <button
                         type="button"
+                        data-nav-item={item.id}
                         className="flex min-w-0 flex-1 items-start gap-2 text-left"
                         onClick={() => onJumpToItem(item, false)}
                       >

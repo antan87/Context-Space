@@ -3,7 +3,7 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
-import { Archive, Code2, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
+import { Archive, ChevronLeft, Code2, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
 
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -70,6 +70,16 @@ import { firstWaiting, newsLines as buildNewsLines, nowLineParts, nowLineTarget,
 import { findThreadChain } from './boardThread.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 import { backLabel, backTarget, backTrail, pushTrail, startTrail, type ReaderTrail } from './boardReaderTrail.js';
+import {
+  backBoardLabel,
+  backBoardTarget,
+  backBoardTrail,
+  canGoBackBoard,
+  createBoardTrail,
+  pushBoardTrail,
+  type BoardTrail,
+  type BoardTrailFocus,
+} from './boardTrail.js';
 
 const OVERVIEW_NODE_TYPES: NodeTypes = { area: BoardArea, areaRow: BoardAreaRow, areaMini: BoardAreaMini, areaFold: BoardAreaFold, checkpoint: BoardCheckpoint };
 const AREA_NODE_TYPES: NodeTypes = {
@@ -217,6 +227,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const connected = useFeedConnected(workspaceId, listening);
   const boardQuery = useBoard(workspaceId, { poll: listening && !connected });
   const navigateTo = useNavigate();
+  const root = useRef<HTMLDivElement>(null);
 
   const planView = plan.data;
   // The focus and the "5 min ago" are worked out from this, so an idle board lets a claim run out
@@ -436,6 +447,86 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const focusTarget = useRef<string | null>(null);
   const focusing = useRef(false);
 
+  const activeArea = areas.find((a) => a.id === stepped?.areaId);
+  const [areaAddStepOpen, setAreaAddStepOpen] = useState(false);
+  const [areaAddStepText, setAreaAddStepText] = useState('');
+  const [areaAddStepError, setAreaAddStepError] = useState<string | null>(null);
+
+  // Which row of the Area is open, and its page, if any (not saved). One at a time; it belongs to the Area it was opened in.
+  const [openState, setOpenState] = useState<{ areaId: string; rowId: string; page: number } | null>(null);
+  const steppedAreaId = stepped?.areaId;
+  const openRow = openState && openState.areaId === steppedAreaId ? openState.rowId : null;
+  const openPage = openState && openState.areaId === steppedAreaId ? openState.page : 0;
+  const openRef = useRef<{ rowId: string | null; page: number }>({ rowId: null, page: 0 });
+  useLayoutEffect(() => { openRef.current = { rowId: openRow, page: openPage }; }, [openRow, openPage]);
+  useEffect(() => {
+    if (!stepped) setOpenState(null);
+  }, [stepped]);
+  // Which tab of the row that is not tied to a step shows, if one was chosen (not saved); it belongs to the Area it was chosen in
+  const [tabState, setTabState] = useState<{ areaId: string; tab: LooseTab } | null>(null);
+  const looseTab = tabState && tabState.areaId === steppedAreaId ? tabState.tab : undefined;
+  useEffect(() => {
+    if (!stepped) setTabState(null);
+  }, [stepped]);
+  const chooseTab = useCallback((areaId: string, tab: LooseTab) => {
+    setTabState((curr) => (curr && curr.areaId === areaId && curr.tab === tab ? curr : { areaId, tab }));
+  }, []);
+
+  // Board trail: places left before a jump (from Now line, news, index, count, step, picture)
+  const [boardTrail, setBoardTrail] = useState<BoardTrail>(createBoardTrail);
+  const boardTrailRef = useRef<BoardTrail>(boardTrail);
+  useLayoutEffect(() => { boardTrailRef.current = boardTrail; }, [boardTrail]);
+  const boardBackFocus = useRef<BoardTrailFocus | null>(null);
+
+  const recordBoardJump = useCallback((originEl?: HTMLElement | null, originAreaId?: string) => {
+    const active = (originEl && originEl.isConnected)
+      ? originEl
+      : (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    const nodeEl = active?.closest<HTMLElement>('.react-flow__node');
+    const rawTestId = active?.dataset?.testid ?? active?.closest<HTMLElement>('[data-testid]:not(.react-flow__node):not([data-testid^="rf__"])')?.dataset?.testid;
+    const testId = rawTestId?.startsWith('rf__') ? undefined : rawTestId;
+    const navItem = active?.dataset?.navItem ?? active?.closest<HTMLElement>('[data-nav-item]')?.dataset?.navItem;
+    const countKind = active?.dataset?.countKind ?? active?.closest<HTMLElement>('[data-count-kind]')?.dataset?.countKind;
+    const ariaLabel = active?.getAttribute('aria-label') ?? (active instanceof HTMLAnchorElement ? active.textContent?.trim() : undefined);
+    const nodeId = originAreaId ?? nodeEl?.dataset?.id ?? nodeEl?.getAttribute?.('data-id');
+    const focus: BoardTrailFocus | null = active ? {
+      ...(nodeId ? { nodeId } : {}),
+      ...(ariaLabel ? { ariaLabel } : {}),
+      ...(testId ? { testId } : {}),
+      ...(active.id ? { id: active.id } : {}),
+      ...(navItem ? { navItem } : {}),
+      ...(countKind ? { countKind } : {}),
+    } : null;
+
+    const currStepped = steppedRef.current;
+    const narrowWasOpen = Boolean(navDock.overlays && narrowNavOpen);
+    if (currStepped?.phase === 'open') {
+      const area = areas.find((a) => a.id === currStepped.areaId);
+      const title = area?.data?.title ?? currStepped.areaId;
+      setBoardTrail((curr) => pushBoardTrail(curr, {
+        level: currStepped.areaId,
+        title,
+        openRow: openRef.current.rowId,
+        tab: tabState && tabState.areaId === currStepped.areaId ? tabState.tab : undefined,
+        page: openRef.current.page,
+        fold: false,
+        focus,
+        narrowNavOpen: narrowWasOpen,
+      }));
+    } else {
+      setBoardTrail((curr) => pushBoardTrail(curr, {
+        level: 'overview',
+        title: 'Overview',
+        openRow: null,
+        tab: null,
+        page: 0,
+        fold: foldOpen,
+        focus,
+        narrowNavOpen: narrowWasOpen,
+      }));
+    }
+  }, [areas, tabState, foldOpen, navDock.overlays, narrowNavOpen]);
+
   // Pending jump to item or area
   const [pendingJump, setPendingJump] = useState<{
     areaId: string;
@@ -458,6 +549,76 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     jumpFrames.current = 0;
     setPendingJump(null);
   }, []);
+
+  const goBackOnBoard = useCallback(() => {
+    const target = backBoardTarget(boardTrailRef.current);
+    if (!target) return;
+
+    setBoardTrail((curr) => backBoardTrail(curr));
+    boardBackFocus.current = target.focus ?? null;
+    focusTarget.current = null;
+    if (target.narrowNavOpen) {
+      setNarrowNavOpen(true);
+    }
+
+    if (target.level === 'overview') {
+      if (steppedRef.current) {
+        setAreaAddStepOpen(false);
+        setAreaAddStepText('');
+        setAreaAddStepError(null);
+        clearJump();
+        setThreadSelectedId(null);
+        setReader(null);
+        if (closeTimer.current) {
+          clearTimeout(closeTimer.current);
+          closeTimer.current = null;
+        }
+        if (target.fold !== undefined) {
+          setFoldOpen(target.fold);
+        }
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          setStepped(null);
+        } else {
+          setStepped((curr) => (curr ? { ...curr, phase: 'closing' } : null));
+          closeTimer.current = setTimeout(() => {
+            closeTimer.current = null;
+            setStepped(null);
+          }, 210);
+        }
+      } else {
+        if (target.fold !== undefined) {
+          setFoldOpen(target.fold);
+        }
+      }
+    } else {
+      clearJump();
+      setThreadSelectedId(null);
+      setReader(null);
+      if (closeTimer.current) {
+        clearTimeout(closeTimer.current);
+        closeTimer.current = null;
+      }
+      if (target.tab) {
+        chooseTab(target.level, target.tab as LooseTab);
+      }
+      const page = target.page ?? 0;
+      if (target.openRow) {
+        openRef.current = { rowId: target.openRow, page };
+        setOpenState({ areaId: target.level, rowId: target.openRow, page });
+      } else {
+        openRef.current = { rowId: null, page: 0 };
+        setOpenState(null);
+      }
+      setStepped((curr) =>
+        curr?.areaId === target.level && curr.phase === 'open'
+          ? curr
+          : { areaId: target.level, origin: '50% 50%', phase: 'open' },
+      );
+    }
+  }, [clearJump, setReader, setThreadSelectedId, chooseTab, setFoldOpen]);
+
+  const boardBackTarget = backBoardTarget(boardTrail);
+  const boardBackLabel = boardBackTarget ? backBoardLabel(boardBackTarget) : null;
 
   const jumpToArea = useCallback((areaId: string) => {
     clearJump();
@@ -548,18 +709,26 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const goToNow = useCallback(() => {
     const target = nowLineTarget(areas, focus);
     if (!target) return;
+    const originBtn = root.current?.querySelector<HTMLElement>('[data-testid="board-now-main"]');
+    recordBoardJump(originBtn);
     if (target.nodeId) jumpToItem({ areaId: target.areaId, nodeId: target.nodeId }, false, true);
     else jumpToArea(target.areaId);
-  }, [areas, focus, jumpToItem, jumpToArea]);
+  }, [areas, focus, jumpToItem, jumpToArea, recordBoardJump]);
   const goToQuestion = useCallback(() => {
     const waiting = firstWaiting(areas);
-    if (waiting) jumpToItem(waiting, false);
-  }, [areas, jumpToItem]);
+    if (waiting) {
+      const originBtn = root.current?.querySelector<HTMLElement>('[data-testid="board-now-question"]');
+      recordBoardJump(originBtn);
+      jumpToItem(waiting, false);
+    }
+  }, [areas, jumpToItem, recordBoardJump]);
   const goToNews = useCallback((line: NewsLine) => {
     if (!line.jump) return;
+    const originBtn = root.current?.querySelector<HTMLElement>('[data-testid="board-now-news"]');
+    recordBoardJump(originBtn);
     if (line.jump.nodeId) jumpToItem({ areaId: line.jump.areaId, nodeId: line.jump.nodeId, readerTarget: line.jump.readerTarget }, false);
     else jumpToArea(line.jump.areaId);
-  }, [jumpToItem, jumpToArea]);
+  }, [jumpToItem, jumpToArea, recordBoardJump]);
   // The search is the Board index's own: opening it (it may be folded to its rail, or a drawer) and putting the keyboard in its box
   const [searchRequest, setSearchRequest] = useState(0);
   const openSearch = useCallback(() => {
@@ -694,7 +863,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   // Restore keyboard focus to Area button when stepping out
   const tryFocusArea = useCallback((id: string): boolean => {
-    if (steppedRef.current?.phase === 'open') return false;
+    if (steppedRef.current?.phase === 'open' || boardBackFocus.current !== null) return false;
     const nodeEl = Array.from(stageContainer?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])
       .find((el) => el.dataset.id === id);
     const btn = nodeEl?.querySelector<HTMLElement>('button.board-area');
@@ -750,7 +919,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // Focus Back button when stepped into an area (skipping when a jump to an item is pending in this area)
   useLayoutEffect(() => {
     if (stepped?.phase === 'open') {
-      if (pendingJumpRef.current?.areaId === stepped.areaId) return;
+      if (pendingJumpRef.current?.areaId === stepped.areaId || boardBackFocus.current !== null) return;
       backButtonRef.current?.focus({ preventScroll: true });
     }
   }, [stepped?.phase, stepped?.areaId]);
@@ -770,12 +939,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, [overviewViewport, overviewInstance, formNow]);
 
   // Plane 1 (Inside Area) elements
-  const activeArea = areas.find((a) => a.id === stepped?.areaId);
   const areaHeadingId = useId();
-
-  const [areaAddStepOpen, setAreaAddStepOpen] = useState(false);
-  const [areaAddStepText, setAreaAddStepText] = useState('');
-  const [areaAddStepError, setAreaAddStepError] = useState<string | null>(null);
   const areaSubmittingRef = useRef(false);
   const changePlanMutation = useChangePlanFile(workspaceId);
 
@@ -789,26 +953,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   useEffect(() => {
     if (!stepped) setAreaInstance(null);
   }, [stepped]);
-
-  // Which row of the Area is open, and its page, if any (not saved). One at a time; it belongs to the Area it was opened in.
-  const [openState, setOpenState] = useState<{ areaId: string; rowId: string; page: number } | null>(null);
-  const steppedAreaId = stepped?.areaId;
-  const openRow = openState && openState.areaId === steppedAreaId ? openState.rowId : null;
-  const openPage = openState && openState.areaId === steppedAreaId ? openState.page : 0;
-  const openRef = useRef<{ rowId: string | null; page: number }>({ rowId: null, page: 0 });
-  useLayoutEffect(() => { openRef.current = { rowId: openRow, page: openPage }; }, [openRow, openPage]);
-  useEffect(() => {
-    if (!stepped) setOpenState(null);
-  }, [stepped]);
-  // Which tab of the row that is not tied to a step shows, if one was chosen (not saved); it belongs to the Area it was chosen in
-  const [tabState, setTabState] = useState<{ areaId: string; tab: LooseTab } | null>(null);
-  const looseTab = tabState && tabState.areaId === steppedAreaId ? tabState.tab : undefined;
-  useEffect(() => {
-    if (!stepped) setTabState(null);
-  }, [stepped]);
-  const chooseTab = useCallback((areaId: string, tab: LooseTab) => {
-    setTabState((curr) => (curr && curr.areaId === areaId && curr.tab === tab ? curr : { areaId, tab }));
-  }, []);
   // The tab that shows when none was chosen is decided once, when the row first shows with tabs, and held: a picture arriving later does not turn it
   const looseDefault = useMemo(
     () => (stepped && activeArea ? areaRows(activeArea, { news: boardNewsView }).find((row) => row.tabs)?.tabs?.first : undefined),
@@ -865,10 +1009,166 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const leave = () => {
       openerRetry.current = null;
       focusTarget.current = null;
+      boardBackFocus.current = null;
     };
     document.addEventListener('pointerdown', leave, true);
     return () => document.removeEventListener('pointerdown', leave, true);
   }, []);
+
+  // Focus restoration when returning along the board trail
+  const restoreBoardFocus = useCallback((focus: BoardTrailFocus, container: HTMLElement | null): boolean => {
+    if (!container) return false;
+    if (steppedRef.current?.phase === 'closing') return false;
+
+    let target: HTMLElement | null = null;
+
+    if (focus.countKind && focus.nodeId) {
+      const nodeEl = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${focus.nodeId}"]`)
+        ?? document.querySelector<HTMLElement>(`.react-flow__node[data-id="${focus.nodeId}"]`);
+      if (nodeEl) {
+        target = nodeEl.querySelector<HTMLElement>(`button[data-count-kind="${focus.countKind}"]`);
+      }
+    }
+
+    if (!target && focus.countKind) {
+      target = container.querySelector<HTMLElement>(`button[data-count-kind="${focus.countKind}"]`)
+        ?? document.querySelector<HTMLElement>(`button[data-count-kind="${focus.countKind}"]`);
+    }
+
+    if (!target && focus.navItem) {
+      target = container.querySelector<HTMLElement>(`button[data-nav-item="${focus.navItem}"]`)
+        ?? document.querySelector<HTMLElement>(`button[data-nav-item="${focus.navItem}"]`);
+    }
+
+    if (!target && focus.testId) {
+      target = container.querySelector<HTMLElement>(`[data-testid="${focus.testId}"]`) ?? document.querySelector<HTMLElement>(`[data-testid="${focus.testId}"]`);
+    }
+
+    if (!target && focus.nodeId) {
+      const nodeEl = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${focus.nodeId}"]`)
+        ?? document.querySelector<HTMLElement>(`.react-flow__node[data-id="${focus.nodeId}"]`);
+      if (nodeEl) {
+        if (focus.ariaLabel) {
+          target = nodeEl.querySelector<HTMLElement>(`[aria-label="${focus.ariaLabel.replace(/["\\]/g, '\\$&')}"]`)
+            ?? Array.from(nodeEl.querySelectorAll<HTMLButtonElement | HTMLAnchorElement>('button, a')).find((el) => el.textContent?.trim() === focus.ariaLabel)
+            ?? null;
+        }
+        if (!target && !focus.ariaLabel) {
+          target = firstControl(nodeEl, 'button') ?? firstControl(nodeEl) ?? nodeEl;
+        }
+      }
+    }
+
+    if (!target && focus.ariaLabel) {
+      target = container.querySelector<HTMLElement>(`[aria-label="${focus.ariaLabel.replace(/["\\]/g, '\\$&')}"]`)
+        ?? Array.from(container.querySelectorAll<HTMLButtonElement | HTMLAnchorElement>('button, a')).find((el) => el.textContent?.trim() === focus.ariaLabel)
+        ?? document.querySelector<HTMLElement>(`[aria-label="${focus.ariaLabel.replace(/["\\]/g, '\\$&')}"]`);
+    }
+
+    if (!target && focus.id) {
+      target = document.getElementById(focus.id);
+    }
+
+    if (target && target.isConnected) {
+      if (!target.matches('button, a, input, select, textarea, [tabindex]')) {
+        target = firstControl(target, 'button') ?? firstControl(target) ?? target;
+      }
+
+      if (focus.nodeId && overviewFlow.current) {
+        const overviewNode = overviewNodes.find((n) => n.id === focus.nodeId);
+        if (overviewNode) {
+          revealOverviewNode(overviewFlow.current, overviewNode, stageSize, takeOverview, overviewTaken.current ? undefined : overview.viewport ?? undefined);
+        }
+      }
+
+      focusing.current = true;
+      target.focus({ preventScroll: true });
+      focusing.current = false;
+
+      return document.activeElement === target;
+    }
+    return false;
+  }, [overviewNodes, stageSize, takeOverview, overview.viewport]);
+
+  useLayoutEffect(() => {
+    const focus = boardBackFocus.current;
+    if (!focus) return;
+    if (stepped?.phase === 'closing') return;
+    const container = stepped?.phase === 'open' ? areaCanvasContainer : root.current;
+    if (restoreBoardFocus(focus, container) && document.activeElement !== document.body) {
+      boardBackFocus.current = null;
+    }
+  }, [boardTrail, stepped, areaCanvasContainer, restoreBoardFocus]);
+
+  useEffect(() => {
+    const focus = boardBackFocus.current;
+    if (!focus) return;
+    let frame: number;
+    let cancelled = false;
+    const deadline = Date.now() + 2000;
+
+    const check = () => {
+      if (cancelled) return;
+      const currentFocus = boardBackFocus.current;
+      if (!currentFocus) return;
+      if (steppedRef.current?.phase === 'closing') {
+        frame = requestAnimationFrame(check);
+        return;
+      }
+      const container = steppedRef.current?.phase === 'open' ? areaCanvasContainer : root.current;
+      if (restoreBoardFocus(currentFocus, container)) {
+        if (document.activeElement === document.body) {
+          frame = requestAnimationFrame(check);
+          return;
+        }
+        boardBackFocus.current = null;
+        return;
+      }
+      if (Date.now() < deadline) {
+        frame = requestAnimationFrame(check);
+      } else {
+        if (currentFocus.nodeId) {
+          const nodeEl = container?.querySelector<HTMLElement>(`.react-flow__node[data-id="${currentFocus.nodeId}"]`)
+            ?? document.querySelector<HTMLElement>(`.react-flow__node[data-id="${currentFocus.nodeId}"]`);
+          if (nodeEl) {
+            const fallback = firstControl(nodeEl, 'button') ?? firstControl(nodeEl);
+            if (fallback) fallback.focus({ preventScroll: true });
+          }
+        }
+        boardBackFocus.current = null;
+      }
+    };
+
+    frame = requestAnimationFrame(check);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [boardTrail, stepped, areaCanvasContainer, restoreBoardFocus, foldOpen]);
+
+  // Alt+Left goes back on the board trail when focus is on the board and not in a field, reader or code window
+  useEffect(() => {
+    if (!active) return undefined;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'ArrowLeft' || !event.altKey || event.defaultPrevented) return;
+      if (isCodeWindowOpen()) return;
+      if (isTypingTarget(event.target)) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (reader) return;
+      if (event.target instanceof Element && event.target.closest('[data-board-reader]')) return;
+      if (!canGoBackBoard(boardTrailRef.current)) return;
+
+      const target = event.target;
+      const inside = target instanceof Node && Boolean(root.current?.contains(target));
+      if (!inside && target !== document.body && target !== document.documentElement) return;
+
+      event.preventDefault();
+      goBackOnBoard();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [active, reader, goBackOnBoard]);
 
   const areaSizeKey = `${areaCanvasSize.width}x${areaCanvasSize.height}`;
   useEffect(() => {
@@ -1208,7 +1508,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   ]);
 
   // Narrow sidebar Escape handling
-  const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!navDock.overlays || !narrowNavOpen || !active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -1595,7 +1894,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     workspacePath,
     readOnly,
     openArea: stepInto,
-    openStep: (areaId: string, stepKey: string) => {
+    openStep: (areaId: string, stepKey: string, buttonEl?: HTMLElement | null) => {
+      recordBoardJump(buttonEl ?? (document.activeElement as HTMLElement), areaId);
       const area = areas.find((a) => a.id === areaId);
       const rows = area ? areaRows(area, { news: newsView, size: stageSize }) : [];
       let targetNodeId = `row:step:${stepKey}`;
@@ -1612,6 +1912,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       jumpToItem({ areaId, nodeId: targetNodeId }, false, true);
     },
     openCount: (areaId: string, kind: AreaCountKind, buttonEl?: HTMLElement | null) => {
+      recordBoardJump(buttonEl ?? (document.activeElement as HTMLElement), areaId);
       const area = areas.find((a) => a.id === areaId);
       if (!area) return;
       const target = resolveCountTarget(area, kind);
@@ -1680,7 +1981,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, clearJump, openInReader, chooseTab, setOpenState, stageContainer, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize]);
+  }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, clearJump, openInReader, chooseTab, setOpenState, stageContainer, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize, recordBoardJump]);
 
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
@@ -1819,8 +2120,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           sections={navSections}
           waitingCount={navWaitingCount}
           steppedAreaId={stepped?.areaId ?? null}
-          onJumpToArea={jumpToArea}
-          onJumpToItem={jumpToItem}
+          onJumpToArea={(areaId) => {
+            recordBoardJump(document.activeElement as HTMLElement);
+            jumpToArea(areaId);
+          }}
+          onJumpToItem={(item, openReaderTarget) => {
+            recordBoardJump(document.activeElement as HTMLElement);
+            jumpToItem(item, openReaderTarget);
+          }}
           toggleButtonRef={navToggleRef}
           focusSearch={searchRequest}
         />
@@ -1977,19 +2284,39 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
               <header className="@container shrink-0 border-b border-border/60">
               {/* One 48 px line from 22rem up; narrower than that (a phone) the title keeps 7rem and the buttons wrap under it, so that nothing is pushed out */}
               <div className="flex min-h-12 flex-wrap items-center gap-x-1 gap-y-1 px-3 py-1.5 @[22rem]:flex-nowrap @[22rem]:gap-x-1.5 @[22rem]:py-0">
+                {boardBackTarget && boardBackTarget.level !== 'overview' && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    className="max-w-40 shrink min-w-0 gap-1 font-medium"
+                    data-testid="board-back-button"
+                    aria-label={`Back to ${boardBackLabel}`}
+                    title={`Back to ${boardBackLabel} (Alt+←)`}
+                    onClick={goBackOnBoard}
+                  >
+                    <ChevronLeft aria-hidden="true" className="size-3.5 shrink-0" />
+                    <span className="truncate">{boardBackLabel}</span>
+                  </Button>
+                )}
                 <Button
                   ref={backButtonRef}
                   type="button"
                   size="xs"
                   variant="outline"
                   className="shrink-0"
-                  onClick={stepOut}
+                  onClick={boardBackTarget?.level === 'overview' ? goBackOnBoard : stepOut}
                 >
                   Board ›
                 </Button>
                 <h2
                   id={areaHeadingId}
-                  className="min-w-[7rem] max-w-full truncate text-sm font-semibold text-foreground @[22rem]:min-w-[2rem]"
+                  className={cn(
+                    'max-w-full truncate text-sm font-semibold text-foreground',
+                    boardBackTarget && boardBackTarget.level !== 'overview'
+                      ? 'min-w-[7.5rem] @[22rem]:min-w-[7.5rem]'
+                      : 'min-w-[7rem] @[22rem]:min-w-[2rem]',
+                  )}
                   title={activeArea.data.title}
                 >
                   {activeArea.data.title}
@@ -2262,6 +2589,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           newsLines={newsLines}
           readOnly={readOnly}
           gotIt={{ pending: markSeen.isPending, error: markSeen.error instanceof Error ? markSeen.error.message : undefined, onGotIt: () => { if (newsView) markSeen.mutate(newsView.at); } }}
+          back={!stepped && boardBackTarget && boardBackTarget.level !== 'overview' ? { label: boardBackLabel!, onBack: goBackOnBoard } : undefined}
           onNow={goToNow}
           onQuestion={goToQuestion}
           onNewsLine={goToNews}

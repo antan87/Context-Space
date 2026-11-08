@@ -366,13 +366,18 @@ test.describe('Board overview in Split mode: small cards', () => {
     await page.getByRole('button', { name: /^Board index/ }).click();
     const nav = page.getByRole('navigation', { name: 'Board index' });
     await expect(nav).toBeVisible();
-    await nav.getByRole('button', { name: new RegExp(TITLES[6]!) }).first().click();
+    const indexOrigin = nav.getByRole('button', { name: new RegExp(TITLES[6]!) }).first();
+    await indexOrigin.click();
     await expect(board.getByRole('button', { name: 'Board ›' })).toBeVisible();
     await board.getByRole('button', { name: 'Board ›' }).click();
     await expect(board.locator('#board-area')).toHaveCount(0);
     await atRest(page);
     expect(await overviewTransform(page), 'after an index jump and back').toBe(before);
     expect(await cardBoxes(page)).toHaveLength(7);
+
+    await expect(indexOrigin).toBeFocused();
+    await nav.getByRole('button', { name: 'Board index', exact: true }).click();
+    await expect(nav).toHaveCount(0);
 
     // Tab across the cards: each one gets focus and the view stays
     await cards.first().focus();

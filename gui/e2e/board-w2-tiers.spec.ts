@@ -374,7 +374,7 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
     await expect(step3InArea.getByRole('button', { name: /Third step/ })).toBeFocused();
   });
 
-  test('stepping out of an Area in the fold opens the fold and lands focus on that Area, never on Show fewer', async ({ page }) => {
+  test('Escape out of an Area in the fold opens the fold and lands focus on that Area, never on Show fewer', async ({ page }) => {
     await page.route('**/api/workspace/*/plan', (route) => route.fulfill({
       json: planFile({
         title: 'Fold Focus Return Test',
@@ -404,7 +404,7 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
 
     await expect(page.locator('#board-area')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Board ›' }).click();
+    await page.keyboard.press('Escape');
     await atRest(page);
 
     await expect(fold).toHaveText('Show fewer');
@@ -413,6 +413,47 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
     await expect(targetAreaBtn).toBeVisible();
     await expect(targetAreaBtn).toBeFocused();
     expect(await fold.evaluate((el) => el === document.activeElement)).toBe(false);
+  });
+
+  test('Board breadcrumb after an index jump restores the closed done fold and index focus', async ({ page }) => {
+    await page.route('**/api/workspace/*/plan', (route) => route.fulfill({
+      json: planFile({
+        title: 'Fold Focus Return Test',
+        now: { key: 's0', by: 'claude', at: minutesAgo(1) },
+        checkpoints: TITLES.map((title, i) => checkpoint(title, {
+          done: i >= 12,
+          steps: [step(`Step of ${title}`, i >= 12, `s${i}`)],
+        })),
+      }),
+    }));
+    await page.route('**/api/workspace/*/news', (route) => route.fulfill({ json: whatsNew() }));
+    await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [] }) }));
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/#/workspaces/demo/board');
+    await atRest(page);
+
+    const overview = page.locator('#board-overview');
+    const fold = overview.locator('button.board-area-fold');
+    await expect(fold).toHaveText('2 done');
+
+    await page.getByRole('button', { name: /^Board index/ }).click();
+    const nav = page.getByRole('navigation', { name: 'Board index' });
+    await expect(nav).toBeVisible();
+    const indexOrigin = nav.getByRole('button', { name: new RegExp(TITLES[13]!) }).first();
+    await indexOrigin.click();
+    await atRest(page);
+
+    await expect(page.locator('#board-area')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Board ›' }).click();
+    await expect(page.locator('#board-area')).toHaveCount(0);
+    await atRest(page);
+
+    await expect(fold).toHaveText('2 done');
+    await expect(overview.locator('button.board-area').filter({ hasText: TITLES[13]! })).toHaveCount(0);
+    await expect(nav).toBeVisible();
+    await expect(indexOrigin).toBeFocused();
   });
 
   test('focus card step buttons use plain-text helper to strip markdown formatting', async ({ page }) => {

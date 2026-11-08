@@ -51,7 +51,7 @@ export interface BoardActions {
   /** Steps into an area from Level 0 (Overview) into Level 1 (Area). */
   openArea?: (id: string, button: HTMLElement) => void;
   /** Steps into an area directly targeting a specific step row. */
-  openStep?: (areaId: string, stepKey: string) => void;
+  openStep?: (areaId: string, stepKey: string, button?: HTMLElement | null) => void;
   /** Steps into an area targeting a specific count kind (e.g. 'pictures', 'notes', 'files', 'commits', 'updates'). */
   openCount?: (areaId: string, kind: AreaCountKind, button?: HTMLElement | null) => void;
   /** Selects a card to follow its thread (lights up connected chain and dims the rest), or null to clear. */
