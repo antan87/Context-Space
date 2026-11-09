@@ -1,0 +1,58 @@
+import { useEffect, useRef, useState } from 'react';
+import { apiFetch } from '../../lib/api/client.js';
+import { toWorkspaceRelative } from '../../components/markdownLinks.js';
+
+export interface IndexFile { path: string; repo?: { name: string; path: string }; document: boolean }
+type Listing = { changes: Array<{ repoName: string; repoPath: string; files: Array<{ file: string; type: string }>; error?: string }> };
+type Documents = { documents: Array<{ name: string }> };
+const DOCUMENT = /\.(?:md|markdown|mdx|txt|rst|adoc|csv|tsv|log|svg|mmd|html?|png|jpe?g|gif|webp|pdf|docx?|odt|rtf|xlsx?|ods|pptx?|odp)$/i;
+const LIMIT = 200;
+
+/** A snapshot requested only while Files is visible, never a background poll. */
+export function BoardFiles({ workspaceId, workspacePath, enabled, query, onOpen }: { workspaceId: string; workspacePath?: string; enabled: boolean; query: string; onOpen: (file: IndexFile, button: HTMLElement) => void }) {
+  const [version, setVersion] = useState(0);
+  const [state, setState] = useState<{ files: IndexFile[]; errors: string[]; loading: boolean }>({ files: [], errors: [], loading: true });
+  const loaded = useRef('');
+  useEffect(() => {
+    const key = JSON.stringify([workspaceId, workspacePath, version]);
+    if (!enabled || loaded.current === key) return;
+    const controller = new AbortController();
+    setState({ files: [], errors: [], loading: true });
+    const base = `/api/workspace/${encodeURIComponent(workspaceId)}`;
+    void Promise.allSettled([
+      apiFetch<Documents>(`${base}/documents?recursive=1`, { signal: controller.signal }),
+      apiFetch<Listing>(`${base}/changes?include=all`, { signal: controller.signal }),
+    ]).then(([docs, repos]) => {
+      if (controller.signal.aborted) return;
+      const errors: string[] = [];
+      const listings = repos.status === 'fulfilled' ? repos.value.changes : [];
+      if (repos.status === 'rejected') errors.push('Repository files could not be loaded. Workspace documents are hidden until repository origins can be checked.');
+      if (docs.status === 'rejected') errors.push('Workspace documents could not be loaded.');
+      const roots = listings.map((repo) => toWorkspaceRelative(repo.repoPath, workspacePath)).filter((root): root is string => root !== null);
+      const files: IndexFile[] = docs.status === 'fulfilled' && repos.status === 'fulfilled' ? docs.value.documents.filter(({ name }) => !roots.some((root) => root === '' || name === root || name.startsWith(`${root}/`))).map(({ name }) => ({ path: name, document: true })) : [];
+      for (const repo of listings) {
+        if (repo.error) errors.push(`${repo.repoName}: ${repo.error}`);
+        for (const file of repo.files) if (file.type !== 'deleted') files.push({ path: file.file, repo: { name: repo.repoName, path: repo.repoPath }, document: DOCUMENT.test(file.file) });
+      }
+      loaded.current = key;
+      setState({ files, errors, loading: false });
+    });
+    return () => controller.abort();
+  }, [workspaceId, workspacePath, version, enabled]);
+  const needle = query.trim().toLowerCase();
+  const tokens = needle.split(/\s+/).filter(Boolean);
+  const matches = state.files.filter((file) => {
+    const text = `${file.path} ${file.repo?.name ?? 'Workspace'}`.toLowerCase();
+    return tokens.every((token) => text.includes(token));
+  });
+  return <div className="space-y-2 p-2 text-xs">
+    <p className="text-muted-foreground">Workspace documents and repository files. Workspace listing excludes ignored folders and has a depth limit.</p>
+    <button type="button" className="rounded border px-2 py-1" onClick={() => setVersion((n) => n + 1)}>{state.errors.length ? 'Retry' : 'Refresh'}</button>
+    {state.loading && <p role="status">Loading files…</p>}
+    {state.errors.map((error) => <p role="alert" key={error} className="text-destructive">{error}</p>)}
+    {!state.loading && state.errors.length > 0 && state.files.length > 0 && <p>Partial results</p>}
+    {!state.loading && matches.length === 0 && <p>{needle ? 'No matches found' : 'No files found'}</p>}
+    {matches.length > LIMIT && <p>Showing {LIMIT} of {matches.length} matches. Refine your search.</p>}
+    <ul>{matches.slice(0, LIMIT).map((file) => <li key={`${file.repo?.name ?? ''}:${file.path}`}><button type="button" className="w-full rounded p-1.5 text-left hover:bg-muted" onClick={(event) => onOpen(file, event.currentTarget)}><span className="block break-all font-medium">{file.path}</span><span className="text-muted-foreground">{file.repo ? `Repository · ${file.repo.name}` : 'Workspace'}</span></button></li>)}</ul>
+  </div>;
+}

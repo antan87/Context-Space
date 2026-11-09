@@ -8,6 +8,7 @@ export interface ReaderPageProps {
   workspaceId: string;
   path: string;
   raw: boolean;
+  repo?: string;
   onViewUrlReady?: (url: string) => void;
 }
 
@@ -16,10 +17,10 @@ export interface ReaderPageProps {
  * In rendered mode, the page loads in a sandboxed iframe with relative assets, scripts, and Escape relay enabled.
  * In raw mode, the unrendered HTML source is loaded and displayed in a code block without the 1 MB preview limit.
  */
-export function ReaderPage({ workspaceId, path, raw, onViewUrlReady }: ReaderPageProps) {
+export function ReaderPage({ workspaceId, path, raw, repo, onViewUrlReady }: ReaderPageProps) {
   const viewLinkQuery = useQuery<DocumentViewLinkResult, Error>({
-    queryKey: ['document-view-link', workspaceId, path],
-    queryFn: ({ signal }) => requestDocumentViewLink(workspaceId, path, signal),
+    queryKey: ['document-view-link', workspaceId, repo, path],
+    queryFn: ({ signal }) => requestDocumentViewLink(workspaceId, path, signal, repo),
     retry: 1,
     staleTime: Infinity,
     gcTime: 5 * 60_000,

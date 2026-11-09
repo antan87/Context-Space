@@ -52,6 +52,7 @@ export function isSameReaderTarget(a: ReaderTarget, b: ReaderTarget): boolean {
   if (a.commit || b.commit) {
     return false;
   }
+  if (a.repo?.name !== b.repo?.name) return false;
   if (Boolean(a.source) !== Boolean(b.source)) {
     return false;
   }

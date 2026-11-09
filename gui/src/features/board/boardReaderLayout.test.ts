@@ -85,6 +85,16 @@ describe('isSameReaderTarget', () => {
     expect(isSameReaderTarget(doc, commit)).toBe(false);
   });
 
+  it('distinguishes the same file path across workspace, repositories and sources', () => {
+    const local = { path: 'docs/guide.md', title: 'Guide' };
+    const api = { ...local, repo: { name: 'api', path: '/repos/api' } };
+    const web = { ...local, repo: { name: 'web', path: '/repos/web' } };
+    expect(isSameReaderTarget(local, api)).toBe(false);
+    expect(isSameReaderTarget(api, web)).toBe(false);
+    expect(isSameReaderTarget(api, { ...api })).toBe(true);
+    expect(isSameReaderTarget(local, { ...local, source: 'source-1' })).toBe(false);
+  });
+
   it('identifies source documents by source ID', () => {
     const a = { path: 'PLAN.md', title: 'Plan', source: 'src-1' };
     const b = { path: 'different.md', title: 'Plan', source: 'src-1' };

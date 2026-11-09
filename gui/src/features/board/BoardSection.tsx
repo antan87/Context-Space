@@ -317,7 +317,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     openerWas.current = node && label ? { node, label } : null;
     requests.current += 1;
     const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
-    const matching = allTargets.find((t) => isSameReaderTarget(t, target) || t.path === target.path);
+    const matching = allTargets.find((t) => isSameReaderTarget(t, target) || (!t.source && !target.source && !t.repo && !target.repo && !t.commit && !target.commit && t.path === target.path));
     const resolved: ReaderTarget = matching
       ? { ...matching, ...target, ...(matching.card ? { card: matching.card } : {}), ...(matching.text ? { text: matching.text } : {}), ...(matching.byline ? { byline: matching.byline } : {}) }
       : target;
@@ -335,11 +335,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // (The card the trail started from keeps the keyboard and the light; the opener is not touched.)
   const openLinked = useCallback((path: string) => {
     const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
-    const target = allTargets.find((t) => t.path === path) ?? { path, title: fileTitle(path) };
     requests.current += 1;
     const request = requests.current;
     setReader((current) => {
       if (!current) return current;
+      const repo = current.target.repo;
+      const target = (!repo ? allTargets.find((t) => !t.source && !t.repo && !t.commit && t.path === path) : undefined) ?? { path, title: fileTitle(path), ...(repo ? { repo } : {}) };
       const trail = pushTrail(current.trail, target);
       return trail === current.trail ? { ...current, request } : { target, request, trail };
     });
@@ -417,6 +418,19 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     writeNavMode(next);
   }, []);
   const [navQuery, setNavQuery] = useState('');
+  const fileReturnPending = useRef<{ kind: 'reader' | 'code'; seen: boolean } | null>(null);
+  const [fileReturn, setFileReturn] = useState(0);
+  useEffect(() => {
+    const pending = fileReturnPending.current;
+    if (!pending) return;
+    const busy = pending.kind === 'reader' ? Boolean(reader) : codeOpen;
+    if (busy) { pending.seen = true; return; }
+    if (!pending.seen) return;
+    fileReturnPending.current = null;
+    if (!active) return;
+    if (navDock.overlays) setNarrowNavOpen(true);
+    setFileReturn((value) => value + 1);
+  }, [reader, codeOpen, active, navDock.overlays]);
   const navSections = useMemo(
     () => buildBoardNav(areas, { mode: navMode, query: navQuery }),
     [areas, navMode, navQuery],
@@ -1203,7 +1217,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (!lit) return null;
     if (lit.card) return lit.card;
     if (activeArea) {
-      if (lit.path) {
+      if (lit.path && !lit.repo && !lit.source && !lit.commit) {
         const match = activeArea.cards.find((c) => 'path' in c && c.path === lit.path);
         if (match) return match.id;
       }
@@ -1687,7 +1701,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const readerArea = useMemo(() => {
     if (activeArea) return activeArea;
     if (!reader) return null;
-    return areas.find((a) => collectAreaReaderTargets(a).some((t) => isSameReaderTarget(t, reader.target) || t.path === reader.target.path)) ?? null;
+    return areas.find((a) => collectAreaReaderTargets(a).some((t) => isSameReaderTarget(t, reader.target) || (!t.source && !reader.target.source && !t.repo && !reader.target.repo && !t.commit && !reader.target.commit && t.path === reader.target.path))) ?? null;
   }, [activeArea, reader, areas]);
 
   const areaReaderTargets = useMemo(() => (readerArea ? collectAreaReaderTargets(readerArea) : []), [readerArea]);
@@ -2127,7 +2141,17 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // Keep the overview reader mounted as loading/empty content gains its first Area.
   const body = (
       <div ref={setBoardRow} className={cn('relative flex min-h-0 flex-1 overflow-hidden', areas.length > 0 && navSettling && 'pointer-events-none opacity-0')} inert={areas.length > 0 && navSettling ? true : undefined}>
-        {areas.length > 0 && <BoardSidebar
+        {<BoardSidebar
+          workspaceId={workspaceId}
+          workspacePath={workspacePath}
+          active={active}
+          fileReturn={fileReturn}
+          onOpenFile={(file, button) => {
+            fileReturnPending.current = { kind: file.repo && !file.document ? 'code' : 'reader', seen: false };
+            if (navDock.overlays) setNarrowNavOpen(false);
+            if (file.repo && !file.document) openCodeWindow(workspaceId, { opener: button, file: { repoName: file.repo.name, repoPath: file.repo.path, file: file.path } });
+            else show({ path: file.path, title: fileTitle(file.path), repo: file.repo }, button);
+          }}
           dock={navDock}
           open={navOpen}
           onToggleOpen={onToggleNavOpen}

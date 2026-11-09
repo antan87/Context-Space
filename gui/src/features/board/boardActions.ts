@@ -15,6 +15,7 @@ export interface ReaderTarget {
   card?: string;
   /** The id of a source document: it is read by the work route, through the storage port, and not from the workspace folder by `path`. */
   source?: string;
+  repo?: { name: string; path: string };
   /** The text of the card the file belongs to, and its whole byline: the reader shows them under the file, where the card shows only the start of the text. */
   text?: string;
   byline?: string;
@@ -98,8 +99,8 @@ export const BoardActionsContext = createContext<BoardActions | null>(null);
 export const BoardReadingContext = createContext<string | null>(null);
 
 /** Where the app serves a file of the workspace from, as the documents panel reads it. */
-export const documentFileUrl = (workspaceId: string, path: string) =>
-  `${API_BASE}/api/workspace/${encodeURIComponent(workspaceId)}/documents/file?name=${encodeURIComponent(path)}`;
+export const documentFileUrl = (workspaceId: string, path: string, repo?: string) =>
+  `${API_BASE}/api/workspace/${encodeURIComponent(workspaceId)}/documents/file?name=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ''}`;
 
 export interface DocumentViewLinkResult {
   token: string;
@@ -112,12 +113,13 @@ export async function requestDocumentViewLink(
   workspaceId: string,
   name: string,
   signal?: AbortSignal,
+  repo?: string,
 ): Promise<DocumentViewLinkResult> {
   return apiFetch<DocumentViewLinkResult>(
     `/api/workspace/${encodeURIComponent(workspaceId)}/documents/view-link`,
     {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, ...(repo ? { repo } : {}) }),
       signal,
     },
   );

@@ -201,6 +201,12 @@
 @utility animate-fade-in {
   animation: fade-in 0.16s ease-out both;
 }
+/* A finished opacity animation keeps its stacking context with forwards fill. A fullscreen
+   Board reader must paint above the global rail and the separately portaled chat. */
+.animate-fade-in:has([data-board-pane] [data-board-reader-fullscreen]) {
+  animation-fill-mode: none;
+}
+
 @utility animate-rise {
   animation: rise 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
 }

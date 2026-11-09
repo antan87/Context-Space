@@ -36,6 +36,8 @@ import { forgeDisplayName, safeForgeUrl, type CommitDetail } from './commitConte
 import { CommitReaderView } from './CommitReaderView.js';
 import { ReaderPage } from './ReaderPage.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
+import { useCodeWindowOpen } from '../workspace-shell/openRequests.js';
+import { useDockRect } from '../chat/dockPlacement.js';
 
 /** How many frames the reader keeps trying to take the keyboard: something that is closing (a dialog) may hold it back for a moment. */
 const FOCUS_FRAMES = 30;
@@ -102,15 +104,19 @@ export function BoardReader({
   indexInfo?: { current: number; total: number };
   onAskInCLI?: (context: string) => void;
 }) {
+  const codeOpen = useCodeWindowOpen(workspaceId);
   const title = useRef<HTMLHeadingElement>(null);
   /** What the reader is drawn in, directly in the section's row: the dimmed board behind the window, or nothing when docked. */
   const panel = useRef<HTMLDivElement>(null);
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null);
+  const rect = useDockRect(slot);
+  const portalHost = slot?.closest<HTMLElement>('[data-board-pane]') ?? null;
   const large = layout === 'large';
   // The canvas is out of reach, under the reader: in the window, and where the dock covers it.
   const covering = large || covers;
-  const { path, source, commit } = target;
+  const { path, source, commit, repo } = target;
   // What is open: a commit, a source document, or a file.
-  const open = commit ? `commit:${commit.repo}:${commit.sha}` : source ? `source:${source}` : path;
+  const open = commit ? `commit:${commit.repo}:${commit.sha}` : source ? `source:${source}` : `file:${repo?.name ?? ''}:${path}`;
   const isHtml = !commit && !source && (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm'));
   const [viewLink, setViewLink] = useState<{ open: string; url: string } | null>(null);
   const activeViewUrl = viewLink?.open === open ? viewLink.url : null;
@@ -122,7 +128,7 @@ export function BoardReader({
     queryKey: ['board-reader', workspaceId, open],
     queryFn: async ({ signal }): Promise<DocumentPreviewData> => {
       const base = `/api/workspace/${encodeURIComponent(workspaceId)}`;
-      if (!source) return apiFetch<DocumentPreviewData>(`${base}/documents/preview?name=${encodeURIComponent(path)}`, { signal });
+      if (!source) return apiFetch<DocumentPreviewData>(`${base}/documents/preview?name=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo.name)}` : ''}`, { signal });
       const read = await apiFetch<{ content?: string }>(`${base}/work/documents/${encodeURIComponent(source)}`, { signal });
       if (read.content === undefined) throw new Error('This source document is a link, not text.');
       return { name: path, kind: 'markdown', content: read.content };
@@ -246,11 +252,11 @@ export function BoardReader({
     const watch = new ResizeObserver(measure);
     watch.observe(node);
     return () => watch.disconnect();
-  }, [noteKey, noteOpen]);
+  }, [noteKey, noteOpen, portalHost]);
   const raw = place?.raw ?? false;
   // A file can be downloaded and shown by the server; a source document is read through the storage port and has neither.
-  const fileUrl = source ? '' : documentFileUrl(workspaceId, path);
-  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, documentPath: path, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile }), [workspaceId, workspacePath, path, onOpenFile]);
+  const fileUrl = source ? '' : documentFileUrl(workspaceId, path, repo?.name);
+  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: repo?.path ?? workspacePath, documentPath: path, fileUrl: (name) => documentFileUrl(workspaceId, name, repo?.name), onOpenFile }), [workspaceId, workspacePath, path, repo, onOpenFile]);
 
   // The words of the card the file belongs to: their links open files in this reader, by their path from the workspace folder
   const noteLinks = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile }), [workspaceId, workspacePath, onOpenFile]);
@@ -350,14 +356,14 @@ export function BoardReader({
     if (!active) return undefined;
     take();
     return () => cancelAnimationFrame(frame.current);
-  }, [active, request, take]);
+  }, [active, request, take, portalHost]);
   // Covering the canvas makes it inert, and the keyboard drops to the page if it was on a card: it goes to the reader. Only then:
   // the keyboard may be somewhere else (the chat, a field), and stays there.
   useEffect(() => {
     const held = document.activeElement;
-    const lost = !held || held === document.body || (held.closest('[inert]') !== null && Boolean(panel.current?.parentElement?.contains(held)));
+    const lost = !held || held === document.body || (held.closest('[inert]') !== null && Boolean(slot?.parentElement?.contains(held)));
     if (active && covering && lost) take();
-  }, [active, covering, take]);
+  }, [active, covering, take, slot]);
 
   const kind = data?.kind;
   const canViewSource = isHtml || kind === 'markdown' || kind === 'html';
@@ -467,7 +473,7 @@ export function BoardReader({
               )}
             </div>
           ) : (
-            <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{path}</p>
+            <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{repo ? `${repo.name} · ${path}` : path}</p>
           )}
         </div>
         <div className="order-3 flex items-center gap-1">
@@ -651,6 +657,7 @@ export function BoardReader({
             key={open}
             workspaceId={workspaceId}
             path={path}
+            repo={repo?.name}
             raw={raw}
             onViewUrlReady={handleViewUrlReady}
           />
@@ -696,28 +703,35 @@ export function BoardReader({
     </section>
   );
 
-  if (maximized && typeof document !== 'undefined') {
-    return createPortal(
+  // Static rendering has no layout host; keep the reader content available to server consumers.
+  if (typeof document === 'undefined') return sectionNode;
+
+  // The portal never changes its container: resizing a live HTML page must not recreate its browsing context.
+  // Its empty slot reserves the ordinary dock and measures the Board pane, outside the scaled canvas planes.
+  return <>
+    <div
+      ref={setSlot}
+      aria-hidden="true"
+      className={large || covers ? 'pointer-events-none absolute inset-0' : 'pointer-events-none relative shrink-0'}
+      style={!large && !covers ? { width } : undefined}
+    />
+    {portalHost && createPortal(
       <div
         ref={panel}
-        data-board-reader-fullscreen=""
-        role="region"
-        aria-label="Fullscreen Reader"
-        className="fixed inset-0 z-[100] flex flex-col bg-background animate-fade-in"
+        data-board-reader-fullscreen={maximized ? '' : undefined}
+        role={maximized ? 'region' : undefined}
+        aria-label={maximized ? 'Fullscreen Reader' : undefined}
+        inert={!active ? true : undefined}
+        className={maximized ? 'fixed inset-0 z-[100] flex flex-col bg-background' : cn('fixed z-20 flex', large && 'items-center justify-center bg-background/50')}
+        style={{
+          display: active && (maximized || rect && rect.width > 0 && rect.height > 0) ? 'flex' : 'none',
+          zIndex: maximized && codeOpen ? 20 : undefined,
+          ...(!maximized && rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : {}),
+        }}
       >
         {sectionNode}
       </div>,
-      document.body,
-    );
-  }
-
-  return (
-    <div
-      ref={panel}
-      // The press outside the window that closes it is BoardSection's: it reaches the sidebar and the Area header too.
-      className={large ? 'absolute inset-0 z-20 flex animate-fade-in items-center justify-center bg-background/50' : 'contents'}
-    >
-      {sectionNode}
-    </div>
-  );
+      portalHost,
+    )}
+  </>;
 }

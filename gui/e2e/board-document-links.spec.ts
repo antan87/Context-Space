@@ -202,3 +202,78 @@ for (const fullScreen of [false, true]) {
     }
   });
 }
+for (const viewport of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }]) test(`preserves HTML draft and iframe identity through full screen and back at ${viewport.width}`, async ({ page }) => {
+  await page.setViewportSize(viewport);
+  terminalDocument = 'docs/form.html';
+  await page.route('**/api/workspace/*/documents/preview?*', route => route.fulfill({ json: { name: 'docs/form.html', kind: 'html', content: '' } }));
+  await page.route('**/api/workspace/*/documents/view-link', route => route.fulfill({ json: { token: 'draft-fullscreen', url: '/view/draft-fullscreen/docs/form.html', scope: 'docs' } }));
+  await page.route('**/view/draft-fullscreen/docs/form.html?frame=1', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><label>Your notes <input name="notes"></label>' }));
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('view-mode-split').click();
+  await clickDocument(page);
+  const frame = page.frameLocator('iframe[title="Preview of docs/form.html"]');
+  const notes = frame.getByRole('textbox', { name: 'Your notes' });
+  await notes.fill('keep draft across full screen');
+  await notes.evaluate(el => { el.dataset.liveFrame = 'original'; });
+  await page.getByRole('button', { name: 'Full screen', exact: true }).click();
+  await expect(notes).toHaveValue('keep draft across full screen');
+  await expect(notes).toHaveAttribute('data-live-frame', 'original');
+  const fullscreen = page.locator('[data-board-reader-fullscreen]');
+
+  await expect(fullscreen).toHaveCSS('width', `${viewport.width}px`);
+  await expect(fullscreen).toHaveCSS('height', `${viewport.height}px`);
+  const layering = await fullscreen.evaluate((panel) => {
+    const ancestors = [];
+    for (let element = panel.parentElement; element; element = element.parentElement) {
+      const css = getComputedStyle(element);
+      ancestors.push({ tag: element.tagName, class: element.className, animation: css.animationName, fill: css.animationFillMode, opacity: css.opacity, isolation: css.isolation, z: css.zIndex, transform: css.transform });
+    }
+    const points = [[8, innerHeight / 2], [innerWidth - 8, innerHeight / 2]];
+    return { ancestors, paint: points.map(([x, y]) => panel.contains(document.elementFromPoint(x, y))) };
+  });
+  await test.info().attach('fullscreen-layering', { body: JSON.stringify(layering, null, 2), contentType: 'application/json' });
+  await page.screenshot({ path: test.info().outputPath('fullscreen-paint.png') });
+  expect(layering.paint, 'fullscreen paints above the navigation rail and Split chat').toEqual([true, true]);
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
+  await expect(page.getByRole('menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(fullscreen).toBeVisible();
+  // Another feature can request Code while the reader is fullscreen; the real window owns paint and Escape.
+  await page.getByTestId('board-code-button').evaluate((button: HTMLElement) => button.click());
+  const code = page.getByRole('region', { name: 'Code window', exact: true });
+  await expect(code).toBeVisible();
+  await expect.poll(() => code.evaluate((panel) => {
+    const box = panel.getBoundingClientRect();
+    return panel.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await code.getByRole('button', { name: 'Close', exact: true }).focus();
+  await page.keyboard.press('Escape');
+  await expect(code).toBeHidden();
+  await expect(fullscreen).toBeVisible();
+  await expect.poll(() => fullscreen.evaluate((panel) =>
+    [8, innerWidth - 8].every((x) => panel.contains(document.elementFromPoint(x, innerHeight / 2))),
+  )).toBe(true);
+  await expect(notes).toHaveValue('keep draft across full screen');
+  await expect(notes).toHaveAttribute('data-live-frame', 'original');
+  await page.getByRole('button', { name: 'Exit full screen', exact: true }).click();
+  await expect(notes).toHaveValue('keep draft across full screen');
+  await expect(notes).toHaveAttribute('data-live-frame', 'original');
+  // Docking is offered only with enough space for both canvas and reader.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByTestId('view-mode-board').click();
+  await page.getByRole('button', { name: 'More actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Show beside the board', exact: true }).click();
+  await expect(notes).toHaveValue('keep draft across full screen');
+  const reader = page.getByRole('region', { name: 'Reader', exact: true });
+  expect((await reader.boundingBox())!.width).toBeLessThan(viewport.width);
+  const nav = page.getByRole('navigation', { name: 'Workspace' });
+  await nav.getByRole('link', { name: 'Overview', exact: true }).click();
+  await expect(page.locator('iframe[title="Preview of docs/form.html"]')).toBeHidden();
+  await page.keyboard.press('[');
+  await page.keyboard.press(']');
+  await page.keyboard.press('Escape');
+  await nav.getByRole('link', { name: 'Board', exact: true }).click();
+  await expect(notes).toHaveValue('keep draft across full screen');
+  await expect(notes).toHaveAttribute('data-live-frame', 'original');
+});

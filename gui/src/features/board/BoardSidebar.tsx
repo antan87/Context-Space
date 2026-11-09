@@ -27,9 +27,15 @@ import {
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
+import { BoardFiles, type IndexFile } from './BoardFiles.js';
 import { SIDEBAR, type NavItem, type NavMode, type NavSection, type SidebarDock } from './boardNav.js';
 
 export interface BoardSidebarProps {
+  workspaceId: string;
+  workspacePath?: string;
+  active: boolean;
+  fileReturn: number;
+  onOpenFile: (file: IndexFile, button: HTMLElement) => void;
   dock: SidebarDock;
   open: boolean;
   onToggleOpen: () => void;
@@ -74,6 +80,7 @@ function ItemIcon({ item }: { item: NavItem }) {
 }
 
 export function BoardSidebar({
+  workspaceId, workspacePath, active, fileReturn, onOpenFile,
   dock,
   open,
   onToggleOpen,
@@ -92,6 +99,13 @@ export function BoardSidebar({
   toggleButtonRef,
   focusSearch = 0,
 }: BoardSidebarProps) {
+  const [filesMode, setFilesMode] = useState(false);
+  const selectedFile = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!fileReturn) return;
+    const frame = requestAnimationFrame(() => selectedFile.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [fileReturn]);
   const searchId = useId();
   const panelPrefix = useId();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -135,8 +149,7 @@ export function BoardSidebar({
   };
 
   // 1. Collapsed rail (width 40px)
-  if (!expanded) {
-    return (
+  const rail = (
       <div
         style={{ width: SIDEBAR.railWidth }}
         className="flex shrink-0 flex-col items-center gap-2 border-r border-border/60 bg-card py-2.5"
@@ -160,7 +173,6 @@ export function BoardSidebar({
         )}
       </div>
     );
-  }
 
   // 2. Expanded sidebar navigation
   const sidebarNav = (
@@ -186,7 +198,7 @@ export function BoardSidebar({
             )}
           </div>
           <Button
-            ref={toggleButtonRef}
+            ref={expanded ? toggleButtonRef : undefined}
             type="button"
             variant="ghost"
             size="icon-sm"
@@ -203,30 +215,31 @@ export function BoardSidebar({
         <div className="flex items-center rounded-lg bg-muted p-0.5 text-xs">
           <button
             type="button"
-            aria-pressed={mode === 'category'}
+            aria-pressed={!filesMode && mode === 'category'}
             className={cn(
               'min-h-6 flex-1 rounded-md px-2 py-0.5 font-medium transition-colors',
-              mode === 'category'
+              !filesMode && mode === 'category'
                 ? 'bg-background text-foreground shadow-xs'
                 : 'text-muted-foreground hover:text-foreground',
             )}
-            onClick={() => onModeChange('category')}
+            onClick={() => { setFilesMode(false); onModeChange('category'); }}
           >
             Category
           </button>
           <button
             type="button"
-            aria-pressed={mode === 'area'}
+            aria-pressed={!filesMode && mode === 'area'}
             className={cn(
               'min-h-6 flex-1 rounded-md px-2 py-0.5 font-medium transition-colors',
-              mode === 'area'
+              !filesMode && mode === 'area'
                 ? 'bg-background text-foreground shadow-xs'
                 : 'text-muted-foreground hover:text-foreground',
             )}
-            onClick={() => onModeChange('area')}
+            onClick={() => { setFilesMode(false); onModeChange('area'); }}
           >
             Area
           </button>
+          <button type="button" aria-pressed={filesMode} className={cn('min-h-6 flex-1 rounded-md px-2 py-0.5 font-medium', filesMode ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')} onClick={() => setFilesMode(true)}>Files</button>
         </div>
 
         {/* Search input with Escape clearing */}
@@ -240,7 +253,7 @@ export function BoardSidebar({
             id={searchId}
             type="search"
             value={query}
-            placeholder="Search the board…"
+            placeholder={filesMode ? "Search files…" : "Search the board…"}
             className="h-7 w-full rounded-md border border-input bg-background pl-7 pr-7 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
             onChange={(e) => onQueryChange(e.target.value)}
             onKeyDown={(e) => {
@@ -263,19 +276,20 @@ export function BoardSidebar({
           )}
         </div>
         <div aria-live="polite" aria-atomic="true" className="sr-only">
-          {isSearching ? (matchCount === 0 ? 'No matches' : `${matchCount} ${matchCount === 1 ? 'match' : 'matches'}`) : ''}
+          {!filesMode && isSearching ? (matchCount === 0 ? 'No matches' : `${matchCount} ${matchCount === 1 ? 'match' : 'matches'}`) : ''}
         </div>
       </div>
 
       {/* Sections list */}
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
-        {sections.length === 0 && (
+        {filesMode && <BoardFiles enabled={active && expanded} key={workspaceId} workspaceId={workspaceId} workspacePath={workspacePath} query={query} onOpen={(file, button) => { selectedFile.current = button; onOpenFile(file, button); }} />}
+        {!filesMode && sections.length === 0 && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
             No matches found
           </div>
         )}
 
-        {sections.map((section, index) => {
+        {!filesMode && sections.map((section, index) => {
           const panelId = `${panelPrefix}-panel-${index}`;
           const isOpen = isSearching || !collapsedSections.has(section.id);
 
@@ -383,24 +397,15 @@ export function BoardSidebar({
     </nav>
   );
 
-  // If dock.overlays is true (narrow screen overlay)
-  if (dock.overlays) {
-    return (
-      <>
-        {/* Spacer to keep canvas width stable */}
+  // A stable wrapper keeps file buttons and their snapshot alive while a viewer covers the board.
+  return <>
+    {!expanded && rail}
+    <div hidden={!expanded} style={expanded ? { display: 'contents' } : undefined}>
+      {dock.overlays && <>
         <div aria-hidden="true" style={{ width: SIDEBAR.railWidth }} className="shrink-0 border-r border-border/60 bg-card" />
-        {/* Backdrop */}
-        <div
-          aria-hidden="true"
-          data-sidebar-backdrop="true"
-          className="absolute inset-0 z-30 bg-background/60 backdrop-blur-xs"
-          onClick={onCloseNarrow}
-        />
-        {sidebarNav}
-      </>
-    );
-  }
-
-  // Wide desktop docked sidebar
-  return sidebarNav;
+        <div aria-hidden="true" data-sidebar-backdrop="true" className="absolute inset-0 z-30 bg-background/60 backdrop-blur-xs" onClick={onCloseNarrow} />
+      </>}
+      {sidebarNav}
+    </div>
+  </>;
 }
