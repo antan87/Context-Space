@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../../lib/api/client.js';
 import { parseFileReference } from '../../lib/fileReference.js';
+import { chatLayout } from '../chat/chatLayout.js';
 import { browserPath, goToWorkspace, parseWorkspacePath } from '../chat/chatRoute.js';
 import { isUnreadableDocument, workspaceDocumentName } from '../terminal/documentReference.js';
 import { isWebOrDomain, normalizeWebUrl } from '../terminal/webLinks.js';
@@ -31,7 +32,7 @@ export function codeRequestFor(path: string, line: number | undefined, resolutio
 
 /**
  * Opens a clicked path where it belongs: a web address in the browser, a workspace document in
- * Docs, anything else in the Code window. Every click ends somewhere visible:
+ * the Board reader, anything else in the Code window. Every click ends somewhere visible:
  * Code first says it is locating the path, then shows the file, the files the path could mean,
  * or why there is none, instead of the click silently doing nothing.
  */
@@ -40,6 +41,7 @@ export function useOpenFileReference(workspace: string, workspacePath: string, r
   const latest = useRef(0);
 
   return useCallback(async (click: FileReferenceClick) => {
+    const held = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     const parsed = parseFileReference(click.path);
     if (!parsed) return;
     if (isWebOrDomain(parsed.path)) {
@@ -59,13 +61,14 @@ export function useOpenFileReference(workspace: string, workspacePath: string, r
           ? await apiFetch(`${base}/documents/preview?name=${encodeURIComponent(name)}`).then(() => true)
           : (await apiFetch<{ documents: { name: string }[] }>(`${base}/documents`)).documents.some((document) => document.name === name);
       } catch (error) {
-        // A nested file the server found but cannot preview still opens in Docs, which says why.
+        // A nested file the server found but cannot preview still opens in the reader, which says why.
         isDocument = name.includes('/') && isUnreadableDocument(error);
       }
       if (request !== latest.current) return;
       if (isDocument) {
-        documentRequests.open(workspace, { name });
-        goToWorkspace(navigate, workspace, 'documents');
+        chatLayout.setHidden(false);
+        documentRequests.open(workspace, { name, opener: held });
+        goToWorkspace(navigate, workspace, 'board');
         return;
       }
     }

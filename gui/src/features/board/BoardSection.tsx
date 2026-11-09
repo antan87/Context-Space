@@ -1,7 +1,6 @@
 import '@xyflow/react/dist/style.css';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { Archive, ChevronLeft, Code2, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
 
@@ -15,13 +14,12 @@ import { useWorkGuidance } from '../../lib/api/queries.js';
 import { cn } from '../../lib/utils.js';
 import { usePageVisible } from '../../lib/usePageVisible.js';
 import { useClockTick } from '../../lib/useClockTick.js';
-import { goToWorkspace } from '../chat/chatRoute.js';
 import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useSetPlanNow, useTickPlanStep } from '../plan/planFile.js';
 import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.js';
 import { boardNews, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
-import { documentRequests, openCodeWindow, useCodeWindowOpen } from '../workspace-shell/openRequests.js';
+import { documentRequests, openCodeWindow, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
 import { filesChangedText } from '../changes/changeSummary.js';
 import { useRepoChanges } from '../changes/useRepoChanges.js';
 import { BoardActionsContext, BoardReadingContext, firstControl, type BoardActions, type ReaderTarget } from './boardActions.js';
@@ -226,7 +224,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const listening = active && visible;
   const connected = useFeedConnected(workspaceId, listening);
   const boardQuery = useBoard(workspaceId, { poll: listening && !connected });
-  const navigateTo = useNavigate();
   const root = useRef<HTMLDivElement>(null);
 
   const planView = plan.data;
@@ -355,10 +352,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return current && target ? { target, request, trail: backTrail(current.trail) } : current;
     });
   }, []);
-  const openInDocs = useCallback((name: string) => {
-    documentRequests.open(workspaceId, { name });
-    goToWorkspace(navigateTo, workspaceId, 'documents');
-  }, [workspaceId, navigateTo]);
+  const documentRequest = useDocumentRequest(workspaceId);
+  useEffect(() => {
+    if (!active || !documentRequest) return;
+    const { name, opener: from } = documentRequest.request;
+    pressedLink.current = null;
+    show({ path: name, title: fileTitle(name) }, from ?? null);
+    documentRequests.acknowledge(workspaceId, documentRequest.id);
+  }, [active, documentRequest, show, workspaceId]);
 
   // Board index sidebar state
   const [boardRow, setBoardRow] = useState<HTMLDivElement | null>(null);
@@ -847,9 +848,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     opener.current = null;
     openerWas.current = null;
     if (skipFocusReturn.current) { skipFocusReturn.current = false; return; }
-    const target = (stepped && card) ? findCardControl(card) : from?.isConnected ? from : was ? findOpener(was) : null;
+    const target = (stepped && card) ? findCardControl(card) : from?.isConnected && from.getClientRects().length > 0 ? from : was ? findOpener(was) : null;
     focusing.current = true;
-    (target ?? (stepped ? areaCanvasContainer : stageContainer)?.querySelector<HTMLElement>('.react-flow'))?.focus({ preventScroll: true });
+    (target ?? (stepped ? areaCanvasContainer : stageContainer)?.querySelector<HTMLElement>('.react-flow') ?? root.current?.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true });
     focusing.current = false;
     if (was) {
       openerRetry.current = { was, card, until: Date.now() + 1500, placedFor: null };
@@ -2102,11 +2103,31 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     </div>
   );
 
-  let body;
-  if (areas.length > 0) {
-    body = (
-      <div ref={setBoardRow} className={cn('relative flex min-h-0 flex-1 overflow-hidden', navSettling && 'pointer-events-none opacity-0')} inert={navSettling ? true : undefined}>
-        <BoardSidebar
+  let emptyBody;
+  if (loading) {
+    emptyBody = (
+      <div role="status" className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board
+      </div>
+    );
+  } else if (problems.length === 0) {
+    emptyBody = (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon"><Kanban aria-hidden="true" /></EmptyMedia>
+          <EmptyDescription>Nothing on the board yet. The plan, documents and commits of this workspace appear here, and so do the notes and files you and the AI add.</EmptyDescription>
+        </EmptyHeader>
+        <div className="mt-2">
+          {noteButton()}
+        </div>
+      </Empty>
+    );
+  }
+
+  // Keep the overview reader mounted as loading/empty content gains its first Area.
+  const body = (
+      <div ref={setBoardRow} className={cn('relative flex min-h-0 flex-1 overflow-hidden', areas.length > 0 && navSettling && 'pointer-events-none opacity-0')} inert={areas.length > 0 && navSettling ? true : undefined}>
+        {areas.length > 0 && <BoardSidebar
           dock={navDock}
           open={navOpen}
           onToggleOpen={onToggleNavOpen}
@@ -2130,7 +2151,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           }}
           toggleButtonRef={navToggleRef}
           focusSearch={searchRequest}
-        />
+        />}
         <div
           className="relative flex min-h-0 min-w-0 flex-1"
           inert={navDock.overlays && narrowNavOpen ? true : undefined}
@@ -2140,9 +2161,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
             id="board-overview"
             className="board-overview-plane absolute inset-0 flex"
             data-receded={stepped?.phase === 'open'}
-            inert={stepped?.phase === 'open' || (!stepped && Boolean(reader) && (layout === 'large' || stageDock.covers)) ? true : undefined}
+            inert={stepped?.phase === 'open' ? true : undefined}
           >
-            <div className="relative min-w-0 flex-1">
+            <div className="relative min-w-0 flex-1" inert={!stepped && Boolean(reader) && (areas.length === 0 || layout === 'large' || stageDock.covers) ? true : undefined}>
               <div
                 ref={setStageContainer}
                 className="absolute inset-0"
@@ -2161,7 +2182,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 }}
               >
                 {stepped?.phase !== 'open' && paneCorner}
-                {totalArchived > 0 && (
+                {areas.length > 0 && totalArchived > 0 && (
                   <div className="absolute left-3 top-2 z-10">
                     <Button
                       size="xs"
@@ -2174,7 +2195,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     </Button>
                   </div>
                 )}
-                <BoardActionsContext value={overviewActions}>
+                {areas.length > 0 ? <BoardActionsContext value={overviewActions}>
                     <ReactFlow
                       id="board-overview-flow"
                       className="board-flow"
@@ -2219,7 +2240,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     >
                       <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
                     </ReactFlow>
-                </BoardActionsContext>
+                </BoardActionsContext> : <div className="flex h-full flex-col">{emptyBody}</div>}
               </div>
             </div>
             {!stepped && reader && (
@@ -2230,10 +2251,9 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 request={reader.request}
                 layout={layout}
                 onLayout={changeLayout}
-                covers={stageDock.covers}
+                covers={areas.length === 0 || stageDock.covers}
                 width={stageDock.width}
                 onClose={closeReader}
-                onOpenInDocs={openInDocs}
                 onOpenFile={openLinked}
                 active={active}
                 back={readerBack ? { label: readerBack, onBack: goBack } : undefined}
@@ -2532,7 +2552,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     covers={areaDock.covers}
                     width={areaDock.width}
                     onClose={closeReader}
-                    onOpenInDocs={openInDocs}
                     onOpenFile={openLinked}
                     active={active}
                     back={readerBack ? { label: readerBack, onBack: goBack } : undefined}
@@ -2552,25 +2571,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         </div>
       </div>
     );
-  } else if (loading) {
-    body = (
-      <div role="status" className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Spinner role="presentation" aria-hidden="true" className="size-4" />Loading the board
-      </div>
-    );
-  } else if (problems.length === 0) {
-    body = (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon"><Kanban aria-hidden="true" /></EmptyMedia>
-          <EmptyDescription>Nothing on the board yet. The plan, documents and commits of this workspace appear here, and so do the notes and files you and the AI add.</EmptyDescription>
-        </EmptyHeader>
-        <div className="mt-2">
-          {noteButton()}
-        </div>
-      </Empty>
-    );
-  }
 
   return (
     <div
@@ -2597,7 +2597,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         />
       )}
       {body}
-      {areas.length === 0 && paneCorner}
       <NoteDialog
         open={createNoteOpen}
         onOpenChange={setCreateNoteOpen}

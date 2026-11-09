@@ -441,12 +441,16 @@ test.describe('Board, reader', () => {
     await expect(board(page).locator('.board-overview-plane button.board-area').filter({ hasText: 'Reports export to CSV' })).toBeVisible();
   });
 
-  test('goes to the Docs tab with "Open in Docs", with the file open there, from the large window', async ({ page }) => {
+  test('keeps the document in the Board reader without the obsolete Docs action', async ({ page }) => {
     const asked = await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
     await opener(page, 'Overview page').click();
     await expect(readerTitle(page, 'Overview page')).toBeVisible();
-    await chooseFromMenu(page, 'Open in Docs');
-    await expect(page).toHaveURL(/#\/workspaces\/demo\/documents$/);
+    await openMenu(page);
+    await expect(menuItem(page, 'Open in Docs')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(readerTitle(page, 'Overview page')).toBeVisible();
+    await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
     await expect(page.getByTitle('Preview of overview.html').first()).toBeVisible();
     expect(asked).toContain('overview.html');
   });
@@ -978,7 +982,7 @@ test.describe('Board, reader', () => {
       await page.keyboard.press('Enter');
       await expect(page.getByRole('menu')).toBeVisible();
       const names = async () => (await page.getByRole('menuitem').allTextContents()).map((name) => name.trim());
-      expect(await names()).toEqual(['Show beside the board', 'Open in Docs', 'Open in browser', 'View source', 'Copy path', 'Download']);
+      expect(await names()).toEqual(['Show beside the board', 'Open in browser', 'View source', 'Copy path', 'Download']);
       await expect(menuItem(page, 'Open in browser')).toHaveAttribute('href', /\/view\//);
       await expect(menuItem(page, 'Open in browser')).toHaveAttribute('target', '_blank');
       await expect(menuItem(page, 'Open in browser')).toHaveAttribute('rel', 'noopener noreferrer');
@@ -986,10 +990,10 @@ test.describe('Board, reader', () => {
       // The arrows move through it, and Escape closes the menu only: the reader stays, and the keyboard is back on the menu button.
       await expect(menuItem(page, 'Show beside the board')).toBeFocused();
       await page.keyboard.press('ArrowDown');
-      await expect(menuItem(page, 'Open in Docs')).toBeFocused();
+      await expect(menuItem(page, 'Open in browser')).toBeFocused();
       await page.keyboard.press('ArrowDown');
       await page.keyboard.press('ArrowUp');
-      await expect(menuItem(page, 'Open in Docs')).toBeFocused();
+      await expect(menuItem(page, 'Open in browser')).toBeFocused();
       await page.keyboard.press('Escape');
       await expect(page.getByRole('menu')).toHaveCount(0);
       await expect(reader(page)).toBeVisible();

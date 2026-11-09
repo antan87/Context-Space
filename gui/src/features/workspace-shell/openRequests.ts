@@ -44,6 +44,11 @@ function createRequestStore<T>() {
     get(workspace: string): OpenRequest<T> | null {
       return latest.get(workspace) ?? null;
     },
+    acknowledge(workspace: string, id: number): void {
+      if (latest.get(workspace)?.id !== id) return;
+      latest.delete(workspace);
+      for (const listener of listeners) listener();
+    },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -52,7 +57,7 @@ function createRequestStore<T>() {
 }
 
 export const codeRequests = createRequestStore<CodeRequest>();
-export const documentRequests = createRequestStore<{ name: string }>();
+export const documentRequests = createRequestStore<{ name: string; opener?: HTMLElement | null }>();
 
 /** Asks for the Code window of a workspace to open. `opener` is where the keyboard returns when it closes. */
 export interface CodeWindowRequest { opener: HTMLElement | null; /** When it was asked, so a window that mounts a moment later (another workspace) still opens for it. */ at: number; /** Made together with a move to this workspace, so the window that mounts there is the one asked for. */ navigated: boolean }
@@ -88,6 +93,6 @@ export function useCodeRequest(workspace: string): OpenRequest<CodeRequest> | nu
   return useSyncExternalStore(codeRequests.subscribe, () => codeRequests.get(workspace), () => null);
 }
 
-export function useDocumentRequest(workspace: string): OpenRequest<{ name: string }> | null {
+export function useDocumentRequest(workspace: string): OpenRequest<{ name: string; opener?: HTMLElement | null }> | null {
   return useSyncExternalStore(documentRequests.subscribe, () => documentRequests.get(workspace), () => null);
 }

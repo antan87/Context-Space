@@ -10,7 +10,6 @@ import {
   Copy,
   Download,
   Eye,
-  FileText,
   Maximize2,
   Minimize2,
   MoreHorizontal,
@@ -48,7 +47,7 @@ const FOCUS_FRAMES = 30;
  * it; "Side by side" docks it beside the canvas instead (the viewer's choice, kept by boardReaderLayout), and "Large" brings the
  * window back. A file is read by the request the documents panel makes; a source document by the work route that reads it
  * through the storage port, as the rest of the app does, and not from the folder. Its one quiet header line has the title of what
- * was opened, its path under it, a "More actions" menu (the layout, Open in Docs, a new window, the source of a page, copy and download)
+ * was opened, its path under it, a "More actions" menu (the layout, a new window, the source of a page, copy and download)
  * and Close. It takes the keyboard when it opens, shows something else, or comes to cover the canvas (which then cannot keep it);
  * closing it, with those, with a press outside it (BoardSection) or with Escape (BoardSection; and from the page of an HTML
  * document, whose frame says so), gives the keyboard back to what opened it. An HTML page or a PDF takes all the height of
@@ -67,7 +66,6 @@ export function BoardReader({
   covers,
   width,
   onClose,
-  onOpenInDocs,
   onOpenFile,
   back,
   trailId = 0,
@@ -91,7 +89,6 @@ export function BoardReader({
   covers: boolean;
   width: number;
   onClose: () => void;
-  onOpenInDocs: (path: string) => void;
   /** A link in the document to another file of the workspace. */
   onOpenFile: (path: string) => void;
   /** Where Back returns to (its name), when the reader followed something from inside itself. */
@@ -350,16 +347,17 @@ export function BoardReader({
     step();
   }, []);
   useEffect(() => {
+    if (!active) return undefined;
     take();
     return () => cancelAnimationFrame(frame.current);
-  }, [request, take]);
+  }, [active, request, take]);
   // Covering the canvas makes it inert, and the keyboard drops to the page if it was on a card: it goes to the reader. Only then:
   // the keyboard may be somewhere else (the chat, a field), and stays there.
   useEffect(() => {
     const held = document.activeElement;
     const lost = !held || held === document.body || (held.closest('[inert]') !== null && Boolean(panel.current?.parentElement?.contains(held)));
-    if (covering && lost) take();
-  }, [covering, take]);
+    if (active && covering && lost) take();
+  }, [active, covering, take]);
 
   const kind = data?.kind;
   const canViewSource = isHtml || kind === 'markdown' || kind === 'html';
@@ -532,7 +530,6 @@ export function BoardReader({
                 </>
               ) : (
                 <>
-                  <MenuItem onClick={() => onOpenInDocs(path)}><FileText aria-hidden="true" />Open in Docs</MenuItem>
                   {!source && isHtml && (
                     <MenuItem render={<a href={activeViewUrl ?? `${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
                       <SquareArrowOutUpRight aria-hidden="true" />Open in browser

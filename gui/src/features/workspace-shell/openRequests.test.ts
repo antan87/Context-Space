@@ -16,6 +16,18 @@ describe('open requests', () => {
     expect(codeRequests.get('missing')).toBeNull();
   });
 
+  it('acknowledges only the matching workspace and request, including repeated paths', () => {
+    const first = documentRequests.open('ack-a', { name: 'docs/guide.md' });
+    const second = documentRequests.open('ack-a', { name: 'docs/guide.md' });
+    const other = documentRequests.open('ack-b', { name: 'docs/guide.md' });
+    documentRequests.acknowledge('ack-a', first);
+    expect(documentRequests.get('ack-a')?.id).toBe(second);
+    documentRequests.acknowledge('ack-a', second);
+    expect(documentRequests.get('ack-a')).toBeNull();
+    expect(documentRequests.get('ack-b')?.id).toBe(other);
+    documentRequests.acknowledge('ack-b', other);
+  });
+
   it('keeps document and code requests apart', () => {
     documentRequests.open('ws-c', { name: 'docs/guide.md' });
     expect(documentRequests.get('ws-c')?.request).toEqual({ name: 'docs/guide.md' });
