@@ -623,3 +623,104 @@ describe('view-routes', () => {
     });
   });
 });
+
+describe('repository-scoped view links', () => {
+  let temp: string;
+  let workspace: string;
+  let api: string;
+  let web: string;
+  let app: Hono;
+  let store: ViewTokenStore;
+  beforeEach(async () => {
+    temp = await fs.mkdtemp(path.join(os.tmpdir(), 'repo-view-'));
+    workspace = path.join(temp, 'workspace');
+    api = path.join(workspace, 'api');
+    web = path.join(temp, 'reference/web');
+    const source = path.join(temp, 'source/api');
+    for (const [dir, content] of [[workspace, 'workspace'], [api, 'isolated'], [web, 'reference'], [source, 'source']]) {
+      await fs.mkdir(path.join(dir, 'docs'), { recursive: true });
+      await fs.writeFile(path.join(dir, 'docs/page.html'), `<img src="asset.png">${content}`);
+      await fs.writeFile(path.join(dir, 'docs/asset.png'), content);
+      await fs.writeFile(path.join(dir, 'outside.html'), `${content} outside`);
+    }
+    await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify({ mode: 'in-place', repos: [source, web], isolatedRepos: { api: { worktreePath: api } } }));
+    store = new ViewTokenStore();
+    app = new Hono();
+    registerViewRoutes(app, async () => workspace, { store });
+  });
+  afterEach(async () => { await fs.rm(temp, { recursive: true, force: true }); });
+  const post = (app: Hono, body: object, headers: Record<string, string> = {}) => app.request('/api/workspace/test/documents/view-link', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+  });
+
+  it('captures workspace, isolated and external roots for real page and relative asset responses', async () => {
+    for (const [repo, content, dir] of [[undefined, 'workspace', workspace], ['api', 'isolated', api], ['web', 'reference', web]]) {
+      const link = await post(app, { name: 'docs/page.html', ...(repo ? { repo } : {}) });
+      expect(link.status).toBe(200);
+      const { url, token } = await link.json();
+      expect(store.get(token)?.workspaceRoot).toBe(dir);
+      expect(await (await app.request(url)).text()).toBe(`<img src="asset.png">${content}`);
+      const asset = await app.request(url.replace('page.html', 'asset.png'));
+      expect(asset.status).toBe(200);
+      expect(await asset.text()).toBe(content);
+      expect((await app.request(url.replace('docs/page.html', 'outside.html'))).status).toBe(404);
+      expect((await app.request(url.replace('docs/page.html', 'api/docs/page.html'))).status).toBe(404);
+    }
+  });
+
+  it('serves ordinary worktree folders whose names match another configured repository', async () => {
+    const selected = path.join(workspace, 'web');
+    await fs.mkdir(path.join(selected, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(selected, 'docs/page.html'), '<img src="asset.png">selected page');
+    await fs.writeFile(path.join(selected, 'docs/asset.png'), 'selected asset');
+    await fs.writeFile(path.join(selected, 'index.html'), '<img src="docs/asset.png">selected root');
+    await fs.mkdir(path.join(workspace, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(workspace, 'docs/page.html'), 'other repository');
+    await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify({ mode: 'worktree', repos: ['/source/web', '/source/docs'] }));
+    for (const name of ['docs/page.html', 'index.html']) {
+      const link = await post(app, { name, repo: 'web' });
+      expect(link.status).toBe(200);
+      const { token, url } = await link.json();
+      expect(store.get(token)?.workspaceRoot).toBe(selected);
+      expect(await (await app.request(url)).text()).toContain('selected');
+      const assetUrl = name === 'index.html' ? url.replace('index.html', 'docs/asset.png') : url.replace('page.html', 'asset.png');
+      const asset = await app.request(assetUrl);
+      expect(asset.status).toBe(200);
+      expect(await asset.text()).toBe('selected asset');
+    }
+    // Default workspace issuance must still exclude its configured checkouts.
+    expect((await post(app, { name: 'web/index.html' })).status).toBe(400);
+    expect((await post(app, { name: 'docs/page.html' })).status).toBe(400);
+  });
+
+  it('rejects bad selectors and arbitrary roots before any token is issued and retains origin checks', async () => {
+    const issue = vi.spyOn(store, 'issue');
+    for (const body of [{ name: 'docs/page.html', repo: '' }, { name: 'docs/page.html', repo: 'unknown' }, { name: 'docs/page.html', repo: '../api' }, { name: 'docs/page.html', root: web }, { name: 'docs/page.html', repo: 'web', path: web }]) {
+      expect((await post(app, body)).status).toBe(400);
+    }
+    expect((await post(app, { name: 'docs/page.html', repo: 'api' }, { Host: 'evil.test' })).status).toBe(403);
+    expect((await post(app, { name: 'docs/page.html', repo: 'api' }, { Origin: 'https://evil.test' })).status).toBe(403);
+    expect((await post(app, { name: 'docs/page.html', repo: 'api' }, { 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
+    await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify({ repos: ['/one/api', '/two/api'], mode: 'worktree' }));
+    expect((await post(app, { name: 'docs/page.html', repo: 'api' })).status).toBe(400);
+    await fs.rm(path.join(workspace, 'contextspace.json'));
+    expect((await post(app, { name: 'docs/page.html', repo: 'web' })).status).toBe(400);
+    expect(issue).not.toHaveBeenCalled();
+    expect((await post(app, { name: 'docs/page.html' })).status).toBe(200);
+  });
+
+  it('keeps hidden paths, traversal, drive syntax and final/intermediate symlinks closed', async () => {
+    await fs.mkdir(path.join(web, '.git'));
+    await fs.writeFile(path.join(web, '.git/secret.html'), 'secret');
+    await fs.symlink(path.join(workspace, 'docs/page.html'), path.join(web, 'docs/link.html'));
+    await fs.symlink(path.join(workspace, 'docs'), path.join(web, 'linked-dir'));
+    for (const name of ['../outside.html', 'C:/outside.html', '.git/secret.html', 'docs/link.html', 'linked-dir/page.html']) {
+      const res = await post(app, { name, repo: 'web' });
+      expect([400, 404]).toContain(res.status);
+    }
+    const { url } = await (await post(app, { name: 'docs/page.html', repo: 'web' })).json();
+    for (const target of ['docs/link.html', 'docs/.secret.html', 'linked-dir/page.html', 'docs/%2e%2e/outside.html']) {
+      expect((await app.request(url.replace('docs/page.html', target))).status).toBe(404);
+    }
+  });
+});

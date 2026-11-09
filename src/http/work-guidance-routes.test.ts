@@ -235,3 +235,70 @@ it('previews binary and metaOnly documents without reading file bytes, and strea
   readSpy.mockRestore();
 });
 
+
+it('selects the configured repository worktree instead of workspace sentinel content', async () => {
+  await fs.mkdir(path.join(root, 'api'));
+  await fs.writeFile(path.join(root, 'guide.md'), 'workspace sentinel');
+  await fs.writeFile(path.join(root, 'api', 'guide.md'), 'isolated api sentinel');
+  await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ repos: ['/unused/source/api'], mode: 'worktree' }));
+  const response = await app.request('/api/workspace/test/documents/preview?name=guide.md&repo=api');
+  expect(response.status).toBe(200);
+  expect((await response.json()).content).toBe('isolated api sentinel');
+});
+
+it('serves the same relative text and image from workspace, isolated worktree and external reference', async () => {
+  const workspace = path.join(root, 'workspace');
+  const api = path.join(root, 'isolated-api');
+  const source = path.join(root, 'source/api');
+  const web = path.join(root, 'reference/web');
+  for (const [dir, content] of [[workspace, 'workspace'], [api, 'isolated'], [source, 'source'], [web, 'reference']]) {
+    await fs.mkdir(path.join(dir, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'docs/guide.md'), content);
+    await fs.writeFile(path.join(dir, 'docs/image.png'), Buffer.from(content));
+  }
+  await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify({ mode: 'in-place', repos: [source, web], isolatedRepos: { api: { worktreePath: api } } }));
+  const scoped = new Hono();
+  registerWorkGuidanceRoutes(scoped, async () => workspace);
+  for (const [query, content] of [['', 'workspace'], ['&repo=api', 'isolated'], ['&repo=web', 'reference']]) {
+    const preview = await scoped.request(`/api/workspace/test/documents/preview?name=docs/guide.md${query}`);
+    expect(preview.status).toBe(200);
+    expect((await preview.json()).content).toBe(content);
+    const text = await scoped.request(`/api/workspace/test/documents/file?name=docs/guide.md${query}&download=1`);
+    expect(text.headers.get('content-disposition')).toContain('attachment;');
+    expect(await text.text()).toBe(content);
+    const image = await scoped.request(`/api/workspace/test/documents/file?name=docs/image.png${query}`);
+    expect(image.headers.get('content-type')).toBe('image/png');
+    expect(image.headers.get('content-disposition')).toContain('inline;');
+    expect(Buffer.from(await image.arrayBuffer())).toEqual(Buffer.from(content));
+  }
+  for (const repo of ['', 'missing', '../api', 'C:api']) {
+    for (const route of ['preview', 'file']) {
+      expect((await scoped.request(`/api/workspace/test/documents/${route}?name=docs/guide.md&repo=${encodeURIComponent(repo)}`)).status).toBe(400);
+    }
+  }
+  await fs.writeFile(path.join(workspace, 'contextspace.json'), JSON.stringify({ repos: [source, path.join(root, 'other/api')] }));
+  expect((await scoped.request('/api/workspace/test/documents/preview?name=docs/guide.md&repo=api')).status).toBe(400);
+  await fs.rm(path.join(workspace, 'contextspace.json'));
+  expect((await (await scoped.request('/api/workspace/test/documents/preview?name=docs/guide.md')).json()).content).toBe('workspace');
+  expect((await scoped.request('/api/workspace/test/documents/file?name=docs/guide.md&repo=api')).status).toBe(400);
+});
+
+it('retains document path and symlink protections on a selected repository and keeps writes workspace scoped', async () => {
+  const api = path.join(root, 'api');
+  await fs.mkdir(path.join(api, '.git'), { recursive: true });
+  await fs.writeFile(path.join(api, '.git/secret.md'), 'closed');
+  await fs.writeFile(path.join(root, 'outside.md'), 'outside');
+  await fs.symlink(path.join(root, 'outside.md'), path.join(api, 'linked.md'));
+  await fs.symlink(root, path.join(api, 'linked-dir'));
+  await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ mode: 'worktree', repos: ['/source/api'] }));
+  for (const name of ['../outside.md', 'C:/outside.md', '.git/secret.md', 'linked.md', 'linked-dir/outside.md']) {
+    for (const route of ['preview', 'file']) {
+      const res = await app.request(`/api/workspace/test/documents/${route}?repo=api&name=${encodeURIComponent(name)}`);
+      expect(res.status).toBe(400);
+    }
+  }
+  const write = await app.request('/api/workspace/test/documents?repo=api', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'written.md', content: 'workspace only' }) });
+  expect(write.status).toBe(200);
+  expect(await fs.readFile(path.join(root, 'written.md'), 'utf8')).toBe('workspace only');
+  await expect(fs.access(path.join(api, 'written.md'))).rejects.toThrow();
+});

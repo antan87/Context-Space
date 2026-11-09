@@ -10,6 +10,7 @@ import { createRootFolder, listRootDocuments, moveRootDocument, openRootDocument
 import { refreshPlanningContext } from '../core/planning-refresh.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
+import { resolveDocumentRoot } from '../core/document-scope.js';
 import { createFileByteStream } from '../services/workspace-file-stream.js';
 
 /** The workspace-relative folders that hold a repository's checkout. A repository outside the workspace folder has none. */
@@ -47,7 +48,7 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
     return listRootDocuments(root, folder, recursive, { repoFolders: await repositoryFolders(root) });
   }));
   app.get('/api/workspace/:id/documents/preview', handle(async (root, c) => {
-    return previewRootDocument(root, c.req.query('name') ?? '', { metaOnly: c.req.query('meta') === '1' });
+    return previewRootDocument(await resolveDocumentRoot(root, c.req.query('repo')), c.req.query('name') ?? '', { metaOnly: c.req.query('meta') === '1' });
   }));
   const documentBodyLimit = bodyLimit({ maxSize: 2_000_000 });
   app.put('/api/workspace/:id/documents', documentBodyLimit, handle(async (root, c) => {
@@ -77,7 +78,7 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
       if (!root) return c.json({ error: 'Workspace not found.' }, 404);
       const download = c.req.query('download') === '1';
       const open = c.req.query('open') === '1';
-      const doc = await openRootDocumentForStream(root, c.req.query('name') ?? '');
+      const doc = await openRootDocumentForStream(await resolveDocumentRoot(root, c.req.query('repo')), c.req.query('name') ?? '');
       docHandle = doc.handle;
       c.header('Content-Type', doc.mime);
       c.header('X-Content-Type-Options', 'nosniff');

@@ -1,6 +1,7 @@
 import type { Hono, Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
+import { DocumentScopeInputError, resolveDocumentRoot } from '../core/document-scope.js';
 import {
   computeFileEtag,
   createFileByteStream,
@@ -244,6 +245,7 @@ export function registerViewRoutes(
   const viewLinkBodySchema = z
     .object({
       name: z.string().trim().min(1).max(1024),
+      repo: z.string().optional(),
     })
     .strict();
 
@@ -278,12 +280,13 @@ export function registerViewRoutes(
       const result = await issueWorkspaceViewLink({
         workspaceId: id,
         workspaceRoot: root,
+        documentRoot: await resolveDocumentRoot(root, parsedBody.repo),
         name: parsedBody.name,
         store,
       });
       return c.json(result, 200);
     } catch (err) {
-      if (err instanceof z.ZodError || err instanceof ViewLinkInputError) {
+      if (err instanceof z.ZodError || err instanceof ViewLinkInputError || err instanceof DocumentScopeInputError) {
         return c.json({ error: err.message }, 400);
       }
       if (err instanceof ViewNotFoundError) {

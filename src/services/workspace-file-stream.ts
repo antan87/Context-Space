@@ -138,6 +138,8 @@ export class ViewNotFoundError extends Error {
 export interface IssueWorkspaceViewLinkOptions {
   workspaceId: string;
   workspaceRoot: string;
+  /** Trusted serving root resolved from workspace configuration; never a caller-supplied path. */
+  documentRoot?: string;
   name: string;
   store?: ViewTokenStore;
 }
@@ -180,12 +182,13 @@ export async function issueWorkspaceViewLink(options: IssueWorkspaceViewLinkOpti
     throw new ViewLinkInputError('Files with this extension cannot be viewed.');
   }
 
-  const resolvedRoot = path.resolve(options.workspaceRoot);
-  const feature = await loadFeatureConfig(resolvedRoot);
+  const workspaceRoot = path.resolve(options.workspaceRoot);
+  const resolvedRoot = path.resolve(options.documentRoot ?? workspaceRoot);
+  const feature = await loadFeatureConfig(workspaceRoot);
   const excludedFolders: string[] = [];
   if (feature?.repos) {
     for (const repoPath of feature.repos) {
-      const resolved = resolveFeatureRepoPath(feature, resolvedRoot, repoPath);
+      const resolved = resolveFeatureRepoPath(feature, workspaceRoot, repoPath);
       const relative = path.relative(resolvedRoot, resolved);
       if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
         const normalized = relative.split(path.sep).join('/').replace(/^\/+|\/+$/g, '');

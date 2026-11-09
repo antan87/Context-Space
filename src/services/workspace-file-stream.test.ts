@@ -222,6 +222,32 @@ describe('workspace-file-stream', () => {
         .rejects.toThrow(ViewNotFoundError);
     });
 
+    it('resolves checkout exclusions from the workspace rather than a selected worktree', async () => {
+      const selected = path.join(tmpDir, 'web');
+      await fs.mkdir(path.join(selected, 'docs'), { recursive: true });
+      await fs.writeFile(path.join(selected, 'docs/page.html'), 'selected document');
+      await fs.writeFile(path.join(tmpDir, 'contextspace.json'), JSON.stringify({ mode: 'worktree', repos: ['/source/web', '/source/docs'] }));
+      const store = new ViewTokenStore();
+      const result = await issueWorkspaceViewLink({ workspaceId: 'ws', workspaceRoot: tmpDir, documentRoot: selected, name: 'docs/page.html', store });
+      expect(store.get(result.token)).toMatchObject({ workspaceRoot: selected, excludedFolders: [], scopeFolder: 'docs' });
+      expect(isSegmentsAllowedInScope(['docs', 'asset.png'], store.get(result.token)!)).toBe(true);
+    });
+
+    it('retains exclusions for another configured repository actually nested inside the selected root', async () => {
+      const selected = path.join(tmpDir, 'web');
+      const nested = path.join(selected, 'nested');
+      await fs.mkdir(nested, { recursive: true });
+      await fs.writeFile(path.join(selected, 'index.html'), 'selected page');
+      await fs.writeFile(path.join(nested, 'page.html'), 'nested checkout');
+      await fs.writeFile(path.join(tmpDir, 'contextspace.json'), JSON.stringify({ mode: 'in-place', repos: [selected, nested] }));
+      const store = new ViewTokenStore();
+      const result = await issueWorkspaceViewLink({ workspaceId: 'ws', workspaceRoot: tmpDir, documentRoot: selected, name: 'index.html', store });
+      const entry = store.get(result.token)!;
+      expect(entry.excludedFolders).toEqual(['nested']);
+      expect(isSegmentsAllowedInScope(['nested', 'page.html'], entry)).toBe(false);
+      await expect(issueWorkspaceViewLink({ workspaceId: 'ws', workspaceRoot: tmpDir, documentRoot: selected, name: 'nested/page.html', store })).rejects.toThrow(ViewLinkInputError);
+    });
+
     it('excludes configured repo checkouts when issuing a root-scoped token', async () => {
       await fs.writeFile(path.join(tmpDir, 'contextspace.json'), JSON.stringify({
         id: 'ws-test',
