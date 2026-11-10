@@ -38,7 +38,7 @@ export function CodeWindowSlot({ ws, cover, sectionProps, showToast, askAI }: Pi
   if (!shown.everOpened || !request) return null;
   return (
     <Suspense fallback={null}>
-      <CodeWindow ws={ws} open={shown.open} opener={request.request.opener} cover={cover} sectionProps={sectionProps} showToast={showToast} askAI={askAI} onClose={close} />
+      <CodeWindow workspaceFile={request.request.workspaceFile} fileRequestId={request.id} ws={ws} open={shown.open} opener={request.request.opener} cover={cover} sectionProps={sectionProps} showToast={showToast} askAI={askAI} onClose={close} />
     </Suspense>
   );
 }

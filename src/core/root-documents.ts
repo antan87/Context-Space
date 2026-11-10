@@ -21,7 +21,7 @@ const MAX_TEXT_BYTES = 1024 * 1024;
  */
 const OPEN_HIDDEN_FOLDERS = new Set(['.claude', '.agents', '.github']);
 const HIDDEN_REASON = "Hidden files and folders can't be opened here, except the folders .claude, .agents and .github.";
-const isClosedSegment = (segment: string) => segment.startsWith('.') && !OPEN_HIDDEN_FOLDERS.has(segment);
+export const isClosedSegment = (segment: string) => segment.startsWith('.') && !OPEN_HIDDEN_FOLDERS.has(segment);
 
 function format(name: string) {
   const extension = path.extname(name).toLowerCase();
@@ -64,7 +64,7 @@ export function openableDocumentName(name: string): string {
   return checkedDocumentName(name, 'open').normalized;
 }
 
-const IGNORED_DIRECTORIES = new Set([
+export const IGNORED_DIRECTORIES = new Set([
   'node_modules',
   'dist',
   'build',

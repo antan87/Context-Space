@@ -4,13 +4,16 @@ import { Maximize2, Minimize2, X } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { useDockRect } from '../chat/dockPlacement.js';
 import { LARGE_WINDOW } from '../board/boardReaderLayout.js';
-import { setCodeWindowOpen } from '../workspace-shell/openRequests.js';
+import { WorkspaceFileView } from './WorkspaceFileView.js';
+import { setCodeWindowOpen, type WorkspaceFile } from '../workspace-shell/openRequests.js';
 import type { Feature } from '../../types.js';
 import { CodeSection } from './CodeSection.js';
 
 type SectionProps = Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast' | 'panelActions' | 'autoSelect' | 'onAskAI' | 'onToggleFullScreen'>;
 
 export interface CodeWindowProps {
+  workspaceFile?: WorkspaceFile;
+  fileRequestId: number;
   ws: Feature;
   open: boolean;
   /** Where the keyboard returns on close; when it is gone, the Board's Code button. */
@@ -38,7 +41,7 @@ const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-m
  * The Code section in a large window over the whole workspace content, the way the Board's reader is a large window over the
  * board. It stays mounted once opened (hidden and inert while closed), so the chosen file and its scroll survive a close.
  */
-export default function CodeWindow({ ws, open, opener, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
+export default function CodeWindow({ workspaceFile, fileRequestId, ws, open, opener, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
   const rect = useDockRect(cover);
   const panel = useRef<HTMLDivElement>(null);
   const skipFocusReturn = useRef(false);
@@ -134,6 +137,13 @@ export default function CodeWindow({ ws, open, opener, cover, sectionProps, show
     return sent;
   }, [askAI, handleClose]);
 
+  const actions = <div className="flex items-center gap-1">
+    <button ref={fullscreenToggleRef} type="button" className={quiet} aria-label={maximized ? 'Exit full screen' : 'Full screen'} title={maximized ? 'Exit full screen (Esc)' : 'Full screen'} aria-pressed={maximized} onClick={toggleMaximized}>
+      {maximized ? <Minimize2 aria-hidden="true" className="size-4" /> : <Maximize2 aria-hidden="true" className="size-4" />}
+    </button>
+    <button type="button" className={quiet} aria-label="Close" title="Close" onClick={handleClose}><X aria-hidden="true" className="size-4" /></button>
+  </div>;
+
   if (typeof document === 'undefined') return null;
   return createPortal(
     <div
@@ -172,43 +182,19 @@ export default function CodeWindow({ ws, open, opener, cover, sectionProps, show
         )}
         style={maximized ? undefined : { width: `${LARGE_WINDOW.width * 100}%`, height: `${LARGE_WINDOW.height * 100}%` }}
       >
+        {workspaceFile && open && <WorkspaceFileView file={workspaceFile} requestId={fileRequestId} actions={actions} />}
+        <div style={{ display: workspaceFile ? 'none' : 'contents' }} hidden={!!workspaceFile} inert={workspaceFile ? true : undefined}>
         <CodeSection
           {...sectionProps}
           ws={ws}
-          active={open}
+          active={open && !workspaceFile}
           autoSelect
           showToast={showToast}
           onAskAI={ask}
           onToggleFullScreen={toggleMaximized}
-          panelActions={
-            <div className="flex items-center gap-1">
-              <button
-                ref={fullscreenToggleRef}
-                type="button"
-                className={quiet}
-                aria-label={maximized ? 'Exit full screen' : 'Full screen'}
-                title={maximized ? 'Exit full screen (Esc)' : 'Full screen'}
-                aria-pressed={maximized}
-                onClick={toggleMaximized}
-              >
-                {maximized ? (
-                  <Minimize2 aria-hidden="true" className="size-4" />
-                ) : (
-                  <Maximize2 aria-hidden="true" className="size-4" />
-                )}
-              </button>
-              <button
-                type="button"
-                className={quiet}
-                aria-label="Close"
-                title="Close"
-                onClick={handleClose}
-              >
-                <X aria-hidden="true" className="size-4" />
-              </button>
-            </div>
-          }
+          panelActions={workspaceFile ? undefined : actions}
         />
+        </div>
       </div>
     </div>,
     document.body,

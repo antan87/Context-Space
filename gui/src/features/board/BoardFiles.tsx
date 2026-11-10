@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../lib/api/client.js';
-import { toWorkspaceRelative } from '../../components/markdownLinks.js';
 
 export interface IndexFile { path: string; repo?: { name: string; path: string }; document: boolean }
 type Listing = { changes: Array<{ repoName: string; repoPath: string; files: Array<{ file: string; type: string }>; error?: string }> };
-type Documents = { documents: Array<{ name: string }> };
+type WorkspaceFiles = { files: Array<{ path: string }>; truncated: boolean; errors: string[] };
 const DOCUMENT = /\.(?:md|markdown|mdx|txt|rst|adoc|csv|tsv|log|svg|mmd|html?|png|jpe?g|gif|webp|pdf|docx?|odt|rtf|xlsx?|ods|pptx?|odp)$/i;
 const LIMIT = 200;
 
@@ -20,16 +19,22 @@ export function BoardFiles({ workspaceId, workspacePath, enabled, query, onOpen 
     setState({ files: [], errors: [], loading: true });
     const base = `/api/workspace/${encodeURIComponent(workspaceId)}`;
     void Promise.allSettled([
-      apiFetch<Documents>(`${base}/documents?recursive=1`, { signal: controller.signal }),
       apiFetch<Listing>(`${base}/changes?include=all`, { signal: controller.signal }),
-    ]).then(([docs, repos]) => {
+      apiFetch<WorkspaceFiles>(`${base}/files`, { signal: controller.signal }),
+    ]).then(([repos, workspace]) => {
       if (controller.signal.aborted) return;
       const errors: string[] = [];
       const listings = repos.status === 'fulfilled' ? repos.value.changes : [];
-      if (repos.status === 'rejected') errors.push('Repository files could not be loaded. Workspace documents are hidden until repository origins can be checked.');
-      if (docs.status === 'rejected') errors.push('Workspace documents could not be loaded.');
-      const roots = listings.map((repo) => toWorkspaceRelative(repo.repoPath, workspacePath)).filter((root): root is string => root !== null);
-      const files: IndexFile[] = docs.status === 'fulfilled' && repos.status === 'fulfilled' ? docs.value.documents.filter(({ name }) => !roots.some((root) => root === '' || name === root || name.startsWith(`${root}/`))).map(({ name }) => ({ path: name, document: true })) : [];
+      if (repos.status === 'rejected') errors.push('Repository files could not be loaded.');
+      if (workspace.status === 'rejected') errors.push('Workspace files could not be loaded.');
+      else {
+        errors.push(...workspace.value.errors);
+        if (workspace.value.truncated) errors.push('Workspace listing is limited by scan depth or entry count. Refine the folder contents to find more files.');
+      }
+      const files: IndexFile[] = [];
+      if (workspace.status === 'fulfilled') for (const file of workspace.value.files) {
+        files.push({ path: file.path, document: DOCUMENT.test(file.path) });
+      }
       for (const repo of listings) {
         if (repo.error) errors.push(`${repo.repoName}: ${repo.error}`);
         for (const file of repo.files) if (file.type !== 'deleted') files.push({ path: file.file, repo: { name: repo.repoName, path: repo.repoPath }, document: DOCUMENT.test(file.file) });
@@ -46,7 +51,7 @@ export function BoardFiles({ workspaceId, workspacePath, enabled, query, onOpen 
     return tokens.every((token) => text.includes(token));
   });
   return <div className="space-y-2 p-2 text-xs">
-    <p className="text-muted-foreground">Workspace documents and repository files. Workspace listing excludes ignored folders and has a depth limit.</p>
+    <p className="text-muted-foreground">Workspace documents and repository files. Workspace code and configuration are included. Hidden and ignored folders are excluded; scans are limited to 5 folder levels and 10,000 entries.</p>
     <button type="button" className="rounded border px-2 py-1" onClick={() => setVersion((n) => n + 1)}>{state.errors.length ? 'Retry' : 'Refresh'}</button>
     {state.loading && <p role="status">Loading files…</p>}
     {state.errors.map((error) => <p role="alert" key={error} className="text-destructive">{error}</p>)}

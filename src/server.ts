@@ -1,3 +1,4 @@
+import { registerWorkspaceFileRoutes } from './http/workspace-file-routes.js';
 import { listRepositoryChangesWithFingerprint, parseGitStatus } from './core/repository-changes.js';
 import { resolveFileReference } from './core/file-reference-resolve.js';
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
@@ -2650,6 +2651,10 @@ registerCommitRoutes(app, async (id) => {
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
 registerViewRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerWorkspaceFileRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

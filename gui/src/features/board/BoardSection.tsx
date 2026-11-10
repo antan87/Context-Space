@@ -2147,9 +2147,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           active={active}
           fileReturn={fileReturn}
           onOpenFile={(file, button) => {
-            fileReturnPending.current = { kind: file.repo && !file.document ? 'code' : 'reader', seen: false };
+            fileReturnPending.current = { kind: !file.document ? 'code' : 'reader', seen: false };
             if (navDock.overlays) setNarrowNavOpen(false);
             if (file.repo && !file.document) openCodeWindow(workspaceId, { opener: button, file: { repoName: file.repo.name, repoPath: file.repo.path, file: file.path } });
+            else if (!file.document) openCodeWindow(workspaceId, { opener: button, workspaceFile: { workspaceId, file: file.path } });
             else show({ path: file.path, title: fileTitle(file.path), repo: file.repo }, button);
           }}
           dock={navDock}

@@ -60,17 +60,18 @@ export const codeRequests = createRequestStore<CodeRequest>();
 export const documentRequests = createRequestStore<{ name: string; opener?: HTMLElement | null }>();
 
 /** Asks for the Code window of a workspace to open. `opener` is where the keyboard returns when it closes. */
-export interface CodeWindowRequest { opener: HTMLElement | null; /** When it was asked, so a window that mounts a moment later (another workspace) still opens for it. */ at: number; /** Made together with a move to this workspace, so the window that mounts there is the one asked for. */ navigated: boolean }
+export interface WorkspaceFile { workspaceId: string; file: string }
+export interface CodeWindowRequest { workspaceFile?: WorkspaceFile; opener: HTMLElement | null; /** When it was asked, so a window that mounts a moment later (another workspace) still opens for it. */ at: number; /** Made together with a move to this workspace, so the window that mounts there is the one asked for. */ navigated: boolean }
 export const codeWindowRequests = createRequestStore<CodeWindowRequest>();
 
 /**
  * Opens the Code window. With a file, it opens on that file (the Code section answers the same request a clicked path makes);
  * without one, on whatever it showed last, or the first change.
  */
-export function openCodeWindow(workspace: string, options: { opener?: HTMLElement | null; file?: RepoFile & { line?: number }; navigated?: boolean } = {}): number {
+export function openCodeWindow(workspace: string, options: { opener?: HTMLElement | null; file?: RepoFile & { line?: number }; workspaceFile?: WorkspaceFile; navigated?: boolean } = {}): number {
   if (options.file) codeRequests.open(workspace, { kind: 'file', ...options.file });
   const held = typeof document !== 'undefined' ? document.activeElement : null;
-  return codeWindowRequests.open(workspace, { opener: options.opener ?? (held instanceof HTMLElement && held !== document.body ? held : null), at: Date.now(), navigated: options.navigated === true });
+  return codeWindowRequests.open(workspace, { workspaceFile: options.workspaceFile, opener: options.opener ?? (held instanceof HTMLElement && held !== document.body ? held : null), at: Date.now(), navigated: options.navigated === true });
 }
 
 const openWindows = new Set<string>();

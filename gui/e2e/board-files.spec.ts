@@ -14,9 +14,9 @@ test('Files loads on demand, searches origins, and opens scoped documents', asyn
   await routeBoard(page);
   await routePictures(page);
   await routeCards(page, boardFile({ cards: [] }));
-  await page.route('**/api/workspace/demo/documents?recursive=1', async (route) => {
+  await page.route('**/api/workspace/demo/files', async (route) => {
     listings++;
-    await route.fulfill({ json: { documents: [{ name: 'docs/guide.md' }] } });
+    await route.fulfill({ json: { files: [{ path: 'docs/guide.md' }], truncated: false, errors: [] } });
   });
   await page.route('**/api/workspace/demo/changes?include=all', async (route) => {
     listings++;
@@ -54,7 +54,7 @@ test('Files loads on demand, searches origins, and opens scoped documents', asyn
 
 async function filesSetup(page: import('@playwright/test').Page, docs: string[], changes: unknown[]) {
   await routeCards(page, boardFile({ cards: [] }));
-  await page.route('**/api/workspace/demo/documents?recursive=1', (route) => route.fulfill({ json: { documents: docs.map((name) => ({ name })) } }));
+  await page.route('**/api/workspace/demo/files', (route) => route.fulfill({ json: { files: docs.filter((name) => !name.startsWith('isolated-api/')).map((path) => ({ path })), truncated: false, errors: [] } }));
   await page.route('**/api/workspace/demo/changes?include=all', (route) => route.fulfill({ json: { changes } }));
   await page.goto('/#/workspaces/demo/board');
   await page.getByRole('button', { name: 'Board index', exact: true }).click();
@@ -109,14 +109,14 @@ test('listing failure never labels repo documents Workspace; retry and capped re
   let failed = true;
   await page.route('**/api/workspace/demo/changes?include=all', (route) => failed ? route.fulfill({ status: 500, json: { error: 'offline' } }) : route.fulfill({ json: { changes: repos } }));
   await routeCards(page, boardFile({ cards: [] }));
-  await page.route('**/api/workspace/demo/documents?recursive=1', (route) => route.fulfill({ json: { documents: [{ name: 'isolated-api/docs/guide.md' }, ...Array.from({ length: 205 }, (_, i) => ({ name: `notes/${i}.md` }))] } }));
+  await page.route('**/api/workspace/demo/files', (route) => route.fulfill({ json: { files: Array.from({ length: 205 }, (_, i) => ({ path: `notes/${i}.md` })), truncated: false, errors: [] } }));
   await page.goto('/#/workspaces/demo/board');
   await page.getByRole('button', { name: 'Board index', exact: true }).click();
   const nav = page.getByRole('navigation', { name: 'Board index' });
   await nav.getByRole('button', { name: 'Files', exact: true }).click();
   await expect(nav.getByRole('alert')).toContainText('Repository files could not be loaded');
   await expect(nav.getByRole('button', { name: /isolated-api/ })).toHaveCount(0);
-  await expect(nav.getByRole('alert')).toContainText('Workspace documents are hidden');
+  await expect(nav.getByRole('button', { name: 'notes/0.md Workspace', exact: true })).toBeVisible();
   failed = false;
   await nav.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(nav.getByText('Showing 200 of 208 matches. Refine your search.')).toBeVisible();
@@ -195,7 +195,7 @@ test('loading, partial repository failure, workspace failure, retry and empty st
     await held;
     return route.fulfill({ json: { changes: fail ? [{ ...repos[0], error: 'Cannot read api', files: [] }, repos[1]] : [] } });
   });
-  await page.route('**/api/workspace/demo/documents?recursive=1', (route) => fail ? route.fulfill({ status: 500, json: { error: 'offline' } }) : route.fulfill({ json: { documents: [] } }));
+  await page.route('**/api/workspace/demo/files', (route) => fail ? route.fulfill({ status: 500, json: { error: 'offline' } }) : route.fulfill({ json: { files: [], truncated: false, errors: [] } }));
   await routeCards(page, boardFile({ cards: [] }));
   await page.goto('/#/workspaces/demo/board');
   await page.getByRole('button', { name: 'Board index', exact: true }).click();
@@ -216,9 +216,9 @@ test('switching workspaces while Files loads cannot show the old results', async
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   await page.route('**/api/workspace/demo/changes?include=all', async (route) => { await held; await route.fulfill({ json: { changes: repos } }).catch(() => {}); });
-  await page.route('**/api/workspace/demo/documents?recursive=1', (route) => route.fulfill({ json: { documents: [{ name: 'old-workspace.md' }] } }));
+  await page.route('**/api/workspace/demo/files', (route) => route.fulfill({ json: { files: [{ path: 'old-workspace.md' }], truncated: false, errors: [] } }));
   await page.route('**/api/workspace/other/changes?include=all', (route) => route.fulfill({ json: { changes: [] } }));
-  await page.route('**/api/workspace/other/documents?recursive=1', (route) => route.fulfill({ json: { documents: [{ name: 'new-workspace.md' }] } }));
+  await page.route('**/api/workspace/other/files', (route) => route.fulfill({ json: { files: [{ path: 'new-workspace.md' }], truncated: false, errors: [] } }));
   await page.goto('/#/workspaces/demo/board');
   await page.getByRole('button', { name: 'Board index', exact: true }).click();
   await page.getByRole('navigation', { name: 'Board index' }).getByRole('button', { name: 'Files', exact: true }).click();
@@ -245,4 +245,112 @@ test('missing repo document reports its scoped error and returns to Files', asyn
   expect(asked?.searchParams.get('name')).toBe('docs/guide.md');
   await page.keyboard.press('Escape');
   await expect(nav.getByRole('button', { name: /docs\/guide.md Repository · api/ })).toBeFocused();
+});
+
+test('workspace code/config/extensionless files use read-only Code and return to narrow Files, repeatedly', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  const reads: string[] = [];
+  let diffs = 0;
+  await page.route('**/api/workspace/demo/changes/diff?*', (route) => { diffs++; return route.fulfill({ json: { diff: '', fileContent: '' } }); });
+  await page.route('**/api/workspace/demo/files/read?*', (route) => {
+    const name = new URL(route.request().url()).searchParams.get('file')!;
+    reads.push(name);
+    return route.fulfill({ json: { content: name === 'src/shared.ts' ? 'export const origin = "workspace";' : 'workspace configuration' } });
+  });
+  const nav = await filesSetup(page, ['src/local.ts', 'src/shared.ts', 'config.yaml', 'Makefile'], []);
+  const win = page.getByRole('region', { name: 'Code window' });
+  for (const name of ['src/shared.ts', 'config.yaml', 'Makefile', 'src/shared.ts']) {
+    await nav.getByPlaceholder('Search files…').fill(name);
+    const result = nav.getByRole('button', { name: `${name} Workspace`, exact: true });
+    await result.click();
+    await expect(nav).toBeHidden();
+    await expect(win.getByText('Workspace · demo · Read only', { exact: true })).toBeVisible();
+    await expect(win.getByTestId('code-file-viewer')).toBeVisible();
+    await expect(win.getByTestId('code-file-viewer').locator('textarea')).toHaveJSProperty('readOnly', true);
+    await expect(win.getByRole('button', { name: /Commit|Sync|Finish|terminal/i })).toHaveCount(0);
+    await expect.poll(() => reads.at(-1)).toBe(name);
+    await win.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(result).toBeFocused();
+    await expect(nav.getByPlaceholder('Search files…')).toHaveValue(name);
+  }
+  // StrictMode remounts effects, so compare the requested sequence rather than transport count.
+  expect(reads.filter((name, index) => index === 0 || name !== reads[index - 1])).toEqual(['src/shared.ts', 'config.yaml', 'Makefile', 'src/shared.ts']);
+  expect(diffs).toBe(0);
+});
+
+test('same code path opens workspace, api and web with isolated identities', async ({ page }) => {
+  const requested: string[] = [];
+  await page.route('**/api/workspace/demo/files/read?*', (route) => { requested.push('workspace'); return route.fulfill({ json: { content: 'export const workspaceOrigin = true;' } }); });
+  await page.route('**/api/workspace/demo/changes/diff?*', (route) => {
+    const repo = new URL(route.request().url()).searchParams.get('repo')!;
+    requested.push(repo);
+    return route.fulfill({ json: { diff: '', fileContent: `export const ${repo}Origin = true;` } });
+  });
+  const nav = await filesSetup(page, ['src/shared.ts'], ['api', 'web'].map((repoName) => ({ repoName, repoPath: `/repos/${repoName}`, files: [{ file: 'src/shared.ts', type: 'unchanged' }] })));
+  const win = page.getByRole('region', { name: 'Code window' });
+  for (const origin of ['Workspace', 'Repository · api', 'Workspace', 'Repository · web']) {
+    await nav.getByRole('button', { name: `src/shared.ts ${origin}`, exact: true }).click();
+    await expect(win).toBeVisible();
+    const expected = origin === 'Workspace' ? 'workspace' : origin.split(' · ')[1];
+    await expect.poll(() => requested.at(-1)).toBe(expected);
+    if (origin === 'Workspace') await expect(win.getByText('Workspace · demo · Read only', { exact: true })).toBeVisible();
+    else await expect(win.getByTestId('workspace-code-view')).toHaveCount(0);
+    await expect(win.getByTestId('code-file-viewer').filter({ visible: true })).toBeVisible();
+    await win.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(nav).toBeVisible();
+  }
+});
+
+test('workspace scan coverage, read error Retry, binary and size omissions are explicit', async ({ page }) => {
+  let fail = true;
+  await page.route('**/api/workspace/demo/files/read?*', (route) => {
+    const name = new URL(route.request().url()).searchParams.get('file');
+    if (name === 'src/local.ts') return fail ? route.fulfill({ status: 400, json: { error: 'File no longer exists.' } }) : route.fulfill({ json: { content: 'const restored = true;' } });
+    return route.fulfill({ json: { content: '', omitted: name === 'binary.dat' ? 'binary' : 'too-large' } });
+  });
+  await page.route('**/api/workspace/demo/files', (route) => route.fulfill({ json: { files: ['src/local.ts', 'binary.dat', 'large.ts'].map((path) => ({ path })), truncated: true, errors: ['Could not scan unreadable.'] } }));
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/changes?include=all', (route) => route.fulfill({ json: { changes: [] } }));
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByRole('button', { name: 'Board index', exact: true }).click();
+  const nav = page.getByRole('navigation', { name: 'Board index' });
+  await nav.getByRole('button', { name: 'Files', exact: true }).click();
+  await expect(nav.getByText('Partial results')).toBeVisible();
+  await expect(nav.getByText(/Workspace listing is limited/)).toBeVisible();
+  await expect(nav.getByText('Could not scan unreadable.')).toBeVisible();
+  await nav.getByRole('button', { name: 'src/local.ts Workspace', exact: true }).click();
+  const win = page.getByRole('region', { name: 'Code window' });
+  await expect(win.getByRole('alert')).toHaveText('File no longer exists.');
+  fail = false;
+  await win.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(win.getByTestId('code-file-viewer')).toBeVisible();
+  await win.getByRole('button', { name: 'Close', exact: true }).click();
+  for (const [name, message] of [['binary.dat', 'Binary file: text preview omitted.'], ['large.ts', 'File exceeds the 1 MiB preview limit.']]) {
+    await nav.getByRole('button', { name: `${name} Workspace`, exact: true }).click();
+    await expect(win.getByRole('status')).toHaveText(message);
+    await expect(win.getByTestId('code-file-viewer')).toHaveCount(0);
+    await win.getByRole('button', { name: 'Close', exact: true }).click();
+  }
+});
+
+test('switching workspace while a Code read is pending cannot show old file text', async ({ page }) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/api/workspace/demo/files/read?*', async (route) => { await held; await route.fulfill({ json: { content: 'const OLD_WORKSPACE = true;' } }).catch(() => {}); });
+  await page.route('**/api/workspace/other/files', (route) => route.fulfill({ json: { files: [{ path: 'src/shared.ts' }], truncated: false, errors: [] } }));
+  await page.route('**/api/workspace/other/changes?include=all', (route) => route.fulfill({ json: { changes: [] } }));
+  await page.route('**/api/workspace/other/files/read?*', (route) => route.fulfill({ json: { content: 'const NEW_WORKSPACE = true;' } }));
+  const oldNav = await filesSetup(page, ['src/shared.ts'], []);
+  await oldNav.getByRole('button', { name: 'src/shared.ts Workspace', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Loading workspace file' })).toBeVisible();
+  await page.goto('/#/workspaces/other/board');
+  release();
+  const nav = page.getByRole('navigation', { name: 'Board index' });
+  if (!await nav.isVisible()) await page.getByRole('button', { name: 'Board index', exact: true }).click();
+  await nav.getByRole('button', { name: 'Files', exact: true }).click();
+  await nav.getByRole('button', { name: 'src/shared.ts Workspace', exact: true }).click();
+  const win = page.getByRole('region', { name: 'Code window' });
+  await expect(win.getByText('Workspace · other · Read only', { exact: true })).toBeVisible();
+  await expect(win.getByTestId('code-file-viewer').getByText('NEW_WORKSPACE', { exact: true })).toBeVisible();
+  await expect(win.getByText('OLD_WORKSPACE', { exact: true })).toHaveCount(0);
 });
