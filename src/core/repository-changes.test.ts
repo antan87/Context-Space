@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs/promises';
 import { appendFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -105,5 +106,59 @@ describe('line counts of untracked files', () => {
     const files = await listRepositoryChanges(repo);
     expect(files.find((file) => file.file === 'new.txt')?.additions).toBe(3);
     expect(files.find((file) => file.file === 'blob.bin')?.additions).toBe(0);
+  });
+});
+
+describe('safe legacy listing filesystem access', () => {
+  const limit = 256 * 1024;
+  async function fixture() {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ctx-listing-safe-')); roots.push(root);
+    const repo = path.join(root, 'repo'); await mkdir(repo);
+    const git = (...args: string[]) => execa('git', args, { cwd: repo });
+    await git('init', '-q');
+    expect((await git('rev-parse', '--git-dir')).stdout).toBe('.git');
+    await mkdir(path.join(repo, 'nested'));
+    await writeFile(path.join(repo, 'nested', 'tracked.txt'), 'old\n');
+    await git('add', '.');
+    await git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
+    return { root, repo, git };
+  }
+
+  it.skipIf(process.platform === 'win32')('never follows an unrelated untracked symlink for metadata or contents', async () => {
+    const { root, repo } = await fixture();
+    const outside = path.join(root, 'sentinel.txt'); await writeFile(outside, 'secret\nsecret\n');
+    const linked = path.join(repo, 'unrelated.txt'); await fs.symlink(outside, linked);
+    const row = (await listRepositoryChanges(repo)).find(f => f.file === 'unrelated.txt');
+    expect(row).toMatchObject({ rawStatus: '??', additions: 0 });
+    expect(row?.size).toBeUndefined(); expect(row?.mtimeMs).toBeUndefined();
+  });
+
+  it('rejects metadata through a linked parent of a deleted tracked file', async () => {
+    const { root, repo } = await fixture();
+    const outside = path.join(root, 'external'); await mkdir(outside);
+    await writeFile(path.join(outside, 'tracked.txt'), 'external sentinel\n');
+    await rm(path.join(repo, 'nested'), { recursive: true });
+    await fs.symlink(outside, path.join(repo, 'nested'), process.platform === 'win32' ? 'junction' : 'dir');
+    const row = (await listRepositoryChanges(repo)).find(f => f.file === 'nested/tracked.txt');
+    expect(row).toMatchObject({ type: 'deleted', deletions: 1 });
+    expect(row?.size).toBeUndefined();
+  });
+
+  it('keeps full-buffer NUL detection and the exact size boundary', async () => {
+    const { repo } = await fixture();
+    await writeFile(path.join(repo, 'boundary.txt'), Buffer.alloc(limit, 10));
+    await writeFile(path.join(repo, 'large.txt'), Buffer.alloc(limit + 1, 10));
+    const binary = Buffer.alloc(limit, 10); binary[limit - 1] = 0;
+    await writeFile(path.join(repo, 'late-nul.bin'), binary);
+    await writeFile(path.join(repo, 'empty.txt'), '');
+    const rows = await listRepositoryChanges(repo);
+    expect(rows.find(f => f.file === 'boundary.txt')?.additions).toBe(limit);
+    for (const name of ['large.txt', 'late-nul.bin', 'empty.txt']) expect(rows.find(f => f.file === name)?.additions).toBe(0);
+  });
+
+  it('does not let callers mutate cached rows', async () => {
+    const { repo } = await fixture(); await writeFile(path.join(repo, 'new.txt'), 'one\ntwo');
+    const first = await listRepositoryChanges(repo); first[0]!.additions = 999;
+    expect((await listRepositoryChanges(repo))[0]?.additions).toBe(2);
   });
 });

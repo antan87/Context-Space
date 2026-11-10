@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
-import type { BigIntStats } from 'node:fs';
+import { constants, type BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 
 export function assertPathWithin(rootDir: string, targetPath: string): string {
@@ -35,7 +35,11 @@ export async function readFileHandleAtMost(handle: FileHandle, maximumBytes: num
 
 /** Confirms an open descriptor still names the same regular, non-linked path. */
 export async function assertFileHandleMatchesPath(handle: FileHandle, filePath: string): Promise<BigIntStats> {
-  const parentHandle = await fs.open(path.dirname(filePath), 'r');
+  // The parent can itself be replaced after the file was opened. Never wait
+  // on a FIFO here, and require a directory where supported. The trusted
+  // root may itself be linked; component containment is checked by callers.
+  const parentHandle = await fs.open(path.dirname(filePath), constants.O_RDONLY
+    | (constants.O_NONBLOCK || 0) | (constants.O_DIRECTORY || 0));
   try {
     const [handleStats, pathStats, parentStats] = await Promise.all([
       handle.stat({ bigint: true }),

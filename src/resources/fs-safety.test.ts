@@ -1,14 +1,19 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { constants } from 'node:fs';
+import { execa } from 'execa';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { assertFileHandleMatchesPath, assertNoLinkedPathComponents, assertPathWithin, atomicWriteFile, readFileHandleAtMost } from './fs-safety.js';
+
+vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>() }));
 
 const cleanupPaths: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const target of cleanupPaths.splice(0)) {
     const resolved = path.resolve(target);
     if (resolved.startsWith(path.resolve(os.tmpdir()) + path.sep)) {
@@ -33,6 +38,23 @@ describe('filesystem safety', () => {
     const handle = await fs.open(filePath, 'r');
     try {
       await expect(assertFileHandleMatchesPath(handle, filePath)).resolves.toMatchObject({ size: 8n });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('allows a trusted root that is itself a symlink or junction', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-linked-root-'));
+    cleanupPaths.push(root);
+    const real = path.join(root, 'real'); await fs.mkdir(real);
+    await fs.writeFile(path.join(real, 'resource.txt'), 'resource');
+    const alias = path.join(root, 'alias');
+    await fs.symlink(real, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const target = path.join(alias, 'resource.txt');
+    await assertNoLinkedPathComponents(alias, target);
+    const handle = await fs.open(target, 'r');
+    try {
+      await expect(assertFileHandleMatchesPath(handle, target)).resolves.toMatchObject({ size: 8n });
     } finally {
       await handle.close();
     }
@@ -78,6 +100,34 @@ describe('filesystem safety', () => {
       await fs.rename(filePath, movedPath);
       await fs.writeFile(filePath, 'replacement', 'utf8');
       await expect(assertFileHandleMatchesPath(handle, filePath)).rejects.toThrow(/no longer matches/i);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('never blocks opening a parent directory replaced by a FIFO', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-parent-fifo-'));
+    cleanupPaths.push(root);
+    const parent = path.join(root, 'parent'); await fs.mkdir(parent);
+    const target = path.join(parent, 'resource.txt'); await fs.writeFile(target, 'original');
+    const handle = await fs.open(target, 'r');
+    await fs.rename(parent, path.join(root, 'moved'));
+    await execa('mkfifo', [parent]);
+    const open = fs.open; const blocking: string[] = [];
+    let attempts = 0;
+    vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (args[0] === parent) {
+        attempts += 1;
+        if (typeof args[1] !== 'number' || !(args[1] & constants.O_NONBLOCK)) {
+          blocking.push('blocking FIFO parent open'); throw new Error('Prevent a hanging test');
+        }
+      }
+      return open(...args);
+    });
+    try {
+      await expect(assertFileHandleMatchesPath(handle, target)).rejects.toThrow();
+      expect(attempts).toBe(1);
+      expect(blocking).toEqual([]);
     } finally {
       await handle.close();
     }
