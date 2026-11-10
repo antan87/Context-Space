@@ -15,7 +15,7 @@ const within = (root: string, target: string) => {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 };
 
-async function scope(root: string) {
+export async function workspaceFileScope(root: string) {
   const feature = await loadWorkspaceManifest(root);
   if (!feature || !Array.isArray(feature.repos) || feature.repos.some((repo) => typeof repo !== 'string' || !path.isAbsolute(repo))
     || (feature.originalRepos !== undefined && (!Array.isArray(feature.originalRepos) || feature.originalRepos.some((repo) => typeof repo !== 'string' || !path.isAbsolute(repo))))
@@ -27,10 +27,10 @@ async function scope(root: string) {
     ...feature.repos.flatMap((repo) => [path.resolve(repo), path.resolve(resolveFeatureRepoPath(feature, root, repo))]),
     ...(feature.originalRepos ?? []).map((repo) => path.resolve(repo)),
   ];
-  return (target: string) => roots.some((repo) => within(repo, target));
+  return { feature, excluded: (target: string) => roots.some((repo) => within(repo, target)) };
 }
 
-function checkedPath(root: string, name: string) {
+export function checkedWorkspaceFilePath(root: string, name: string) {
   const parts = name.split('/');
   if (!name || /[\\:\x00-\x1f\x7f]/.test(name) || path.isAbsolute(name) || parts.some((part) => !part || part === '.' || part === '..' || isClosedSegment(part) || IGNORED_DIRECTORIES.has(part))) {
     throw new Error('Choose a visible file inside this workspace.');
@@ -39,7 +39,7 @@ function checkedPath(root: string, name: string) {
 }
 
 export async function listWorkspaceFiles(root: string) {
-  const excluded = await scope(root);
+  const { excluded } = await workspaceFileScope(root);
   const files: Array<{ path: string }> = [];
   const errors: string[] = [];
   let entries = 0;
@@ -53,7 +53,7 @@ export async function listWorkspaceFiles(root: string) {
         if (++entries > MAX_ENTRIES) { truncated = true; break; }
         const name = prefix ? `${prefix}/${entry.name}` : entry.name;
         let target: string;
-        try { target = checkedPath(root, name); } catch { continue; }
+        try { target = checkedWorkspaceFilePath(root, name); } catch { continue; }
         if (excluded(target) || entry.isSymbolicLink()) continue;
         try {
           await assertNoLinkedPathComponents(root, target);
@@ -77,8 +77,8 @@ export async function listWorkspaceFiles(root: string) {
 }
 
 export async function readWorkspaceFile(root: string, name: string) {
-  const excluded = await scope(root);
-  const target = checkedPath(root, name);
+  const { excluded } = await workspaceFileScope(root);
+  const target = checkedWorkspaceFilePath(root, name);
   if (excluded(target)) throw new Error('This file belongs to a repository.');
   await assertNoLinkedPathComponents(root, target);
   await assertRegularFile(target); // Before open: FIFOs and other special files must never block.
