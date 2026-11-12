@@ -14,7 +14,7 @@ const keepUrl = (url: string) => url;
 
 /** Lets links in a document open workspace files in the surrounding viewer. */
 export interface MarkdownDocumentLinks extends MarkdownLinkContext {
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   fileUrl: (path: string) => string;
 }
 
@@ -135,7 +135,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCa
         if (target.kind === 'workspace-file' && links) {
           return <a {...props} className={linkClass} tabIndex={tabIndex} href={links.fileUrl(target.path)} onClick={(event) => {
             event.preventDefault();
-            links.onOpenFile(target.path);
+            links.onOpenFile(target.path, target.line);
           }}>{children}</a>;
         }
         return <LocalPath label={target.kind === 'inert' ? target.label : target.path}>{children}</LocalPath>;
@@ -143,7 +143,7 @@ export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCa
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       img: ({ node: _node, src, alt, ...props }) => {
         if (onCard) return <>{`[image${alt ? `: ${alt}` : ''}]`}</>;
-        const target = classifyMarkdownLink(typeof src === 'string' ? src : undefined, links);
+        const target = classifyMarkdownLink(typeof src === 'string' ? src : undefined, links && { ...links, resolveReferences: false });
         if (target.kind === 'external' && !target.href.startsWith('mailto:')) return <img {...props} src={target.href} alt={alt ?? ''} />;
         if (target.kind === 'workspace-file' && links) return <img {...props} src={links.fileUrl(target.path)} alt={alt ?? ''} />;
         return <LocalPath label={target.kind === 'inert' ? target.label : ''}>{`[image${alt ? `: ${alt}` : ''}]`}</LocalPath>;

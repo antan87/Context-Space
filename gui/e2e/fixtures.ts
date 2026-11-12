@@ -105,6 +105,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     // Most specs drive the full sidebar, which the app only docks once pinned. Seeded on the first load of a tab only, so a
     // spec that pins or collapses it keeps that choice through a reload.
     await page.addInitScript((docked) => {
+      if (window !== window.top) return;
       try {
         if (docked && !sessionStorage.getItem('e2e-sidebar-seeded')) localStorage.setItem('ctxspace_sidebar_docked_v1', 'true');
         sessionStorage.setItem('e2e-sidebar-seeded', '1');
@@ -112,7 +113,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     }, sidebarDocked);
 
     // How the plan works opens by itself on a first visit; a spec about it clears this.
-    await page.addInitScript(() => { try { window.localStorage.setItem('contextspace.plan.how-it-works-seen', '1'); } catch { /* no storage */ } });
+    await page.addInitScript(() => { if (window !== window.top) return; try { window.localStorage.setItem('contextspace.plan.how-it-works-seen', '1'); } catch { /* no storage */ } });
 
     await page.route('**/api/config', json(configData));
     await page.route('**/api/adapters', json(adaptersData));
@@ -203,6 +204,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     // The chat sits beside Plan, Changes and the other parts when there is room. Specs about those parts are about
     // the parts, so they start with the chat hidden there; a spec about the layout sets its own.
     await page.addInitScript(() => {
+      if (window !== window.top) return;
       try {
         if (!localStorage.getItem('contextspace_chat_layout_v1')) localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: true, percent: 62 }));
       } catch { /* Storage can be unavailable. */ }

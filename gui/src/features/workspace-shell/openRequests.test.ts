@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { codeRequests, documentRequests } from './openRequests.js';
-import { codeRequestFor } from './useOpenFileReference.js';
+import { codeRequests, documentRequests, codeWindowRequests, invalidateReferenceIntent, referenceIntentIsCurrent } from './openRequests.js';
+import { openReferenceTarget } from './useOpenFileReference.js';
 
 describe('open requests', () => {
   it('keeps the latest request per workspace, numbered so a repeat still counts as new', () => {
@@ -35,21 +35,37 @@ describe('open requests', () => {
   });
 });
 
-describe('codeRequestFor', () => {
-  const file = { repoName: 'api', repoPath: '/w/api', file: 'src/app.ts' };
-
-  it('opens a found file at the clicked line', () => {
-    expect(codeRequestFor('src/app.ts', 12, { status: 'found', ...file })).toEqual({ kind: 'file', ...file, line: 12 });
+describe('reference routing', () => {
+  it('keeps workspace code identity and line, including repeated requests', () => {
+    const target = { origin: { kind: 'workspace' as const, workspacePath: '/w' }, file: 'notes.md', viewer: 'reader' as const };
+    openReferenceTarget('route-w', target, 7, null);
+    const first = codeWindowRequests.get('route-w')!;
+    expect(first.request.workspaceFile).toEqual({ workspaceId: 'route-w', file: 'notes.md', line: 7 });
+    openReferenceTarget('route-w', target, 7, null);
+    expect(codeWindowRequests.get('route-w')!.id).toBeGreaterThan(first.id);
   });
-
-  it('offers every candidate when the path is ambiguous', () => {
-    const other = { repoName: 'web', repoPath: '/w/web', file: 'src/app.ts' };
-    expect(codeRequestFor('src/app.ts', undefined, { status: 'ambiguous', candidates: [file, other] }))
-      .toEqual({ kind: 'ambiguous', path: 'src/app.ts', line: undefined, candidates: [file, other] });
+  it('keeps repository identity for reader targets', () => {
+    openReferenceTarget('route-r', { origin: { kind: 'repository', repoName: 'api', repoPath: '/w/api' }, file: 'docs/a.html', viewer: 'reader' }, undefined, null);
+    expect(documentRequests.get('route-r')?.request).toEqual({ name: 'docs/a.html', repo: { name: 'api', path: '/w/api' }, opener: null, intent: expect.any(Number) });
   });
+  it('invalidates an earlier asynchronous lookup', () => {
+    const first = invalidateReferenceIntent();
+    expect(referenceIntentIsCurrent(first)).toBe(true);
+    invalidateReferenceIntent();
+    expect(referenceIntentIsCurrent(first)).toBe(false);
+  });
+});
 
-  it('says why nothing was found, keeping an absolute path to open elsewhere', () => {
-    expect(codeRequestFor('/etc/hosts', 3, { status: 'not-found', reason: 'outside-repositories', absolutePath: '/etc/hosts' }))
-      .toEqual({ kind: 'not-found', path: '/etc/hosts', line: 3, reason: 'outside-repositories', absolutePath: '/etc/hosts' });
+describe('queued reference delivery', () => {
+  it('rejects code and window results already queued when newer form work begins', async () => {
+    const { referenceRequestIsCurrent } = await import('./openRequests.js');
+    openReferenceTarget('queued-form', { origin: { kind: 'repository', repoName: 'api', repoPath: '/w/api' }, file: 'src/late.ts', viewer: 'code' }, 35, null);
+    const code = codeRequests.get('queued-form')!.request;
+    const window = codeWindowRequests.get('queued-form')!.request;
+    expect(referenceRequestIsCurrent(code)).toBe(true);
+    expect(referenceRequestIsCurrent(window)).toBe(true);
+    invalidateReferenceIntent();
+    expect(referenceRequestIsCurrent(code)).toBe(false);
+    expect(referenceRequestIsCurrent(window)).toBe(false);
   });
 });

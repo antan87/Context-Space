@@ -15,16 +15,17 @@ type Listing = { repoName: string; repoPath: string; files: { file: string; type
 
 /** Code and the chat side by side, the way a user with a wide window works. The fixtures start with the chat hidden beside panels. */
 const chatBesidePanels = (page: Page, percent = 50) =>
-  page.addInitScript((share) => localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: share })), percent);
+  page.addInitScript((share) => { if (window === window.top) localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: share })); }, percent);
 
 /** The server's reference resolver, answered from a listing: exact, then repository-qualified, then a unique suffix. */
-const resolveFrom = (page: Page, listing: Listing) => page.route('**/api/workspace/feature-x/files/resolve?*', (route) => {
+const resolveFrom = (page: Page, listing: Listing) => page.route('**/api/workspace/feature-x/files/reference?*', (route) => {
   const wanted = (new URL(route.request().url()).searchParams.get('path') ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
   const all = listing.flatMap((repo) => repo.files.map((file) => ({ repoName: repo.repoName, repoPath: repo.repoPath, file: file.file })));
   const exact = all.filter((entry) => entry.file === wanted || `${entry.repoName}/${entry.file}` === wanted);
   const found = exact.length ? exact : all.filter((entry) => entry.file.endsWith(`/${wanted}`));
-  if (found.length === 1) return route.fulfill({ json: { status: 'found', ...found[0] } });
-  if (found.length > 1) return route.fulfill({ json: { status: 'ambiguous', candidates: found } });
+  const targets = found.map(({ repoName, repoPath, file }) => ({ origin: { kind: 'repository', repoName, repoPath }, file, viewer: 'code' }));
+  if (found.length === 1) return route.fulfill({ json: { status: 'found', target: targets[0] } });
+  if (found.length > 1) return route.fulfill({ json: { status: 'ambiguous', candidates: targets, truncated: false } });
   return route.fulfill({ json: { status: 'not-found', reason: 'missing' } });
 });
 
@@ -235,11 +236,11 @@ test('opens paths printed in the terminal in Code, says when one is not there, a
   await page.route('**/api/workspace/feature-x/changes?include=all', route => route.fulfill({ json: { changes: listing } }));
   await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'export const clean = true;\n' } }));
   const resolved: { path: string | null; cwd: string | null }[] = [];
-  await page.route('**/api/workspace/feature-x/files/resolve?*', route => {
+  await page.route('**/api/workspace/feature-x/files/reference?*', route => {
     const query = new URL(route.request().url()).searchParams;
     resolved.push({ path: query.get('path'), cwd: query.get('cwd') });
     return query.get('path') === 'src/nested/clean.ts'
-      ? route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file: 'src/nested/clean.ts' } })
+      ? route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'repo', repoPath: 'C:/repo' }, file: 'src/nested/clean.ts', viewer: 'code' } } })
       : route.fulfill({ json: { status: 'not-found', reason: 'missing' } });
   });
   await page.routeWebSocket('**/ws/terminal', socket => {
@@ -276,13 +277,13 @@ test('opens paths printed in the terminal in Code, says when one is not there, a
   const code = codeSection(page);
   await expect(openFileName(page)).toHaveText('src/nested/clean.ts:12');
   await expect(code.getByTestId('code-file-viewer')).toContainText('export const clean = true;');
-  // The session's working directory travels with the path, so a relative path resolves the way the CLI meant it.
-  expect(resolved[0]).toEqual({ path: 'src/nested/clean.ts', cwd: terminal.cwd });
+  // The launch directory is not evidence of the current shell directory after cd.
+  expect(resolved[0]).toEqual({ path: 'src/nested/clean.ts', cwd: null });
 
   // A path that is not there says so, with a way to look for it, instead of doing nothing.
   await clickOutputRow(1);
   const notice = code.getByTestId('code-reference-notice');
-  await expect(notice).toContainText("src/missing.ts:9 is not a file in this workspace's repositories.");
+  await expect(notice).toContainText("src/missing.ts:9 is not a file in this workspace or its repositories.");
   await expect(notice.getByRole('button', { name: /Find “missing\.ts” in Files/ })).toBeVisible();
 
   await clickOutputRow(0);
@@ -296,11 +297,11 @@ test('a path printed in a tool-call line, in bold or in a diff header opens that
   await page.route('**/api/workspace/feature-x/changes?include=all', route => route.fulfill({ json: { changes: listing } }));
   await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'export const clean = true;\n' } }));
   const resolved: (string | null)[] = [];
-  await page.route('**/api/workspace/feature-x/files/resolve?*', route => {
+  await page.route('**/api/workspace/feature-x/files/reference?*', route => {
     const path = new URL(route.request().url()).searchParams.get('path');
     resolved.push(path);
     return path === 'src/nested/clean.ts'
-      ? route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file: 'src/nested/clean.ts' } })
+      ? route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'repo', repoPath: 'C:/repo' }, file: 'src/nested/clean.ts', viewer: 'code' } } })
       : route.fulfill({ json: { status: 'not-found', reason: 'missing' } });
   });
   await page.routeWebSocket('**/ws/terminal', socket => {
@@ -362,9 +363,9 @@ test('a file made moments ago is looked for among the changes before Code moves 
   await page.route('**/api/workspace/feature-x/changes', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: made_it ? [old, made] : [old] }] } }));
   await page.route('**/api/workspace/feature-x/changes?include=all', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: [old, made] }] } }));
   await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'export const made = true;\n' } }));
-  await page.route('**/api/workspace/feature-x/files/resolve?*', route => {
+  await page.route('**/api/workspace/feature-x/files/reference?*', route => {
     made_it = true;
-    return route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file: 'src/new.ts' } });
+    return route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'repo', repoPath: 'C:/repo' }, file: 'src/new.ts', viewer: 'code' } } });
   });
   await page.routeWebSocket('**/ws/terminal', socket => {
     socket.onMessage(message => {
@@ -784,7 +785,7 @@ test('a file git ignores that the AI names gets a row in the Files tree, only wh
   await page.route('**/api/workspace/feature-x/changes', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: [old] }] } }));
   await page.route('**/api/workspace/feature-x/changes?include=all', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: 'C:/repo', files: [{ ...old, type: 'modified' }, other] }] } }));
   await page.route('**/api/workspace/feature-x/changes/diff?*', route => route.fulfill({ json: { diff: '', fileContent: 'export const out = 1;\n' } }));
-  await page.route('**/api/workspace/feature-x/files/resolve?*', route => route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file: 'dist/out.js' } }));
+  await page.route('**/api/workspace/feature-x/files/reference?*', route => route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'repo', repoPath: 'C:/repo' }, file: 'dist/out.js', viewer: 'code' } } }));
   await page.routeWebSocket('**/ws/terminal', socket => {
     socket.onMessage(message => {
       if (JSON.parse(String(message)).type !== 'attach') return;

@@ -80,6 +80,13 @@ test('empty Board narrow Files gives way to reader and returns to chosen result 
 });
 
 test('same paths keep workspace and repository cache identities and links', async ({ page }) => {
+  await page.route('**/api/workspace/demo/files/reference?*', (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    const repo = repos.find((entry) => entry.repoPath === query.get('cwd'));
+    return route.fulfill({ json: query.get('path') === 'docs/next.md' && repo
+      ? { status: 'found', target: { origin: { kind: 'repository', repoName: repo.repoName, repoPath: repo.repoPath }, file: 'docs/next.md', viewer: 'reader' } }
+      : { status: 'not-found', reason: 'missing' } });
+  });
   await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
     const url = new URL(route.request().url());
     const origin = url.searchParams.get('repo') ?? 'workspace';

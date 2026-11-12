@@ -14,6 +14,7 @@ const hardWrap = (text: string, cols: number) => [text.slice(0, cols), `  ${text
 
 test('a pull request link opens the browser and never the Code tree, also when the CLI wrapped it', async ({ page }) => {
   await page.addInitScript(() => {
+    if (window !== window.top) return;
     (window as unknown as { __opened: string[] }).__opened = [];
     window.open = ((url: string) => { (window as unknown as { __opened: string[] }).__opened.push(String(url)); return null; }) as typeof window.open;
     localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 }));
@@ -22,7 +23,7 @@ test('a pull request link opens the browser and never the Code tree, also when t
   await page.route('**/api/terminals/feature-x/status', route => route.fulfill({ json: { available: true, sessions: [terminal], targets: [{ id: 'shell', name: 'Shell', available: true, reason: null }] } }));
   await page.route('**/api/workspace/feature-x/changes**', route => route.fulfill({ json: { changes: [{ repoName: 'repo', repoPath: workspace.repos[0], files: [] }] } }));
   const resolved: (string | null)[] = [];
-  await page.route('**/api/workspace/feature-x/files/resolve?*', route => {
+  await page.route('**/api/workspace/feature-x/files/reference?*', route => {
     resolved.push(new URL(route.request().url()).searchParams.get('path'));
     return route.fulfill({ json: { status: 'not-found', reason: 'missing' } });
   });

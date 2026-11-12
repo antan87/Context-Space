@@ -1,3 +1,4 @@
+import { useOpenFileReference } from '../workspace-shell/useOpenFileReference.js';
 import '@xyflow/react/dist/style.css';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
@@ -19,7 +20,7 @@ import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.
 import { boardNews, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
-import { documentRequests, openCodeWindow, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
+import { documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
 import { filesChangedText } from '../changes/changeSummary.js';
 import { useRepoChanges } from '../changes/useRepoChanges.js';
 import { BoardActionsContext, BoardReadingContext, firstControl, type BoardActions, type ReaderTarget } from './boardActions.js';
@@ -310,7 +311,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const openerWas = useRef<{ node: string; label: string } | null>(null);
   const pressedLink = useRef<HTMLElement | null>(null);
 
-  const show = useCallback((target: ReaderTarget, from: HTMLElement | null) => {
+  const show = useCallback((target: ReaderTarget, from: HTMLElement | null, preserveIntent = false) => {
+    if (!preserveIntent) invalidateReferenceIntent();
     opener.current = from ?? pressedLink.current;
     const node = opener.current?.closest('.react-flow__node')?.getAttribute('data-id');
     const label = opener.current?.getAttribute('aria-label') ?? (opener.current instanceof HTMLAnchorElement ? opener.current.textContent?.trim() : null);
@@ -326,6 +328,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from), [show]);
   const closeReader = useCallback(() => {
+    invalidateReferenceIntent();
     setReader(null);
     setThreadSelectedId(null);
   }, [setReader]);
@@ -333,19 +336,24 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   // Following something from inside the reader is a step deeper: the place left stays on the trail, and Back, Alt+Left and Escape return to it.
   // (The card the trail started from keeps the keyboard and the light; the opener is not touched.)
-  const openLinked = useCallback((path: string) => {
-    const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
-    requests.current += 1;
-    const request = requests.current;
-    setReader((current) => {
-      if (!current) return current;
-      const repo = current.target.repo;
-      const target = (!repo ? allTargets.find((t) => !t.source && !t.repo && !t.commit && t.path === path) : undefined) ?? { path, title: fileTitle(path), ...(repo ? { repo } : {}) };
-      const trail = pushTrail(current.trail, target);
-      return trail === current.trail ? { ...current, request } : { target, request, trail };
-    });
-  }, [areas]);
+  const openFileReference = useOpenFileReference(workspaceId, workspacePath ?? '');
+  const openLinked = useCallback((path: string, line?: number, root = workspacePath) => {
+    void openFileReference({ path, line, cwd: root, onReader: (resolved, intent) => {
+      const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
+      requests.current += 1;
+      const request = requests.current;
+      setReader((current) => {
+        if (!current || !referenceIntentIsCurrent(intent)) return current;
+        const repo = resolved.origin.kind === 'repository' ? { name: resolved.origin.repoName, path: resolved.origin.repoPath } : undefined;
+        const target = (!repo ? allTargets.find((t) => !t.source && !t.repo && !t.commit && t.path === resolved.file) : undefined)
+          ?? { path: resolved.file, title: fileTitle(resolved.file), ...(repo ? { repo } : {}) };
+        const trail = pushTrail(current.trail, target);
+        return trail === current.trail ? { ...current, request } : { target, request, trail };
+      });
+    } });
+  }, [areas, openFileReference, workspacePath]);
   const goBack = useCallback(() => {
+    invalidateReferenceIntent();
     requests.current += 1;
     const request = requests.current;
     setReader((current) => {
@@ -356,9 +364,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const documentRequest = useDocumentRequest(workspaceId);
   useEffect(() => {
     if (!active || !documentRequest) return;
-    const { name, opener: from } = documentRequest.request;
-    pressedLink.current = null;
-    show({ path: name, title: fileTitle(name) }, from ?? null);
+    const { name, repo, opener: from, intent } = documentRequest.request;
+    if (intent === undefined || referenceIntentIsCurrent(intent)) {
+      pressedLink.current = null;
+      show({ path: name, title: fileTitle(name), repo }, from ?? null, intent !== undefined);
+    }
     documentRequests.acknowledge(workspaceId, documentRequest.id);
   }, [active, documentRequest, show, workspaceId]);
 
@@ -582,6 +592,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         setAreaAddStepText('');
         setAreaAddStepError(null);
         clearJump();
+        invalidateReferenceIntent();
         setThreadSelectedId(null);
         setReader(null);
         if (closeTimer.current) {
@@ -607,6 +618,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       }
     } else {
       clearJump();
+      invalidateReferenceIntent();
       setThreadSelectedId(null);
       setReader(null);
       if (closeTimer.current) {
@@ -637,6 +649,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const jumpToArea = useCallback((areaId: string) => {
     clearJump();
+    invalidateReferenceIntent();
     setNarrowNavOpen(false);
     if (reader) setReader(null);
     setThreadSelectedId(null);
@@ -675,6 +688,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return;
     }
     setNarrowNavOpen(false);
+    invalidateReferenceIntent();
     // A jump that does not open the reader closes it, or the card would be behind it; one into another Area closes the old Area's reader too
     const opensReader = Boolean(openReader && item.readerTarget);
     if (!opensReader || stepped?.areaId !== item.areaId) setReader(null);
@@ -787,6 +801,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const stepInto = useCallback((areaId: string, buttonEl: HTMLElement) => {
     clearJump();
+    invalidateReferenceIntent();
     setThreadSelectedId(null);
     setReader(null);
     if (closeTimer.current) {
@@ -808,6 +823,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     setAreaAddStepError(null);
     focusTarget.current = curr.areaId;
     clearJump();
+    invalidateReferenceIntent();
     setThreadSelectedId(null);
     setReader(null);
     if (closeTimer.current) {
@@ -1725,6 +1741,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const navigateToReaderTarget = useCallback(
     (target: ReaderTarget) => {
+      invalidateReferenceIntent();
       requests.current += 1;
       const targetArea = readerArea ?? activeArea;
       const resolvedCard = target.card ?? (targetArea ? collectAreaReaderTargets(targetArea).find((t) => isSameReaderTarget(t, target))?.card : undefined);

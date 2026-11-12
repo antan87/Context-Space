@@ -1,3 +1,4 @@
+import { routeWorkspaceDocumentReferences } from './boardHelpers';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import {
@@ -184,6 +185,7 @@ async function setupCommitBoard(
   extraCommits: CommitDetail[] = [],
   diffOverrides?: (file: string, commit: CommitDetail) => CommitFileDiff | undefined,
 ) {
+  await routeWorkspaceDocumentReferences(page, () => ['PLAN.md', 'board-pictures/export.png'], workspace.workspacePath);
   const allCommits = [commitDetail, ...extraCommits];
   await page.addInitScript(() => {
     window.localStorage.setItem('contextspace_board_nav_open_v1', 'closed');

@@ -84,3 +84,18 @@ describe('headingSlug', () => {
     expect(headingSlug('F08 — Complete first-run setup')).toBe('f08--complete-first-run-setup');
   });
 });
+
+describe('local reference locations', () => {
+  it('parses locations before stripping URL fragments and resolving document scope', () => {
+    const scoped = { ...context, documentPath: 'docs/guide.md' };
+    expect(classifyMarkdownLink('../src/shared.ts#L35', scoped)).toEqual({ kind: 'workspace-file', path: 'src/shared.ts', line: 35 });
+    expect(classifyMarkdownLink('../src/shared.ts:35:2', scoped)).toEqual({ kind: 'workspace-file', path: 'src/shared.ts', line: 35 });
+    expect(classifyMarkdownLink('file:///home/me/workspaces/audit/src/shared.ts#L35', scoped)).toEqual({ kind: 'workspace-file', path: 'src/shared.ts', line: 35 });
+  });
+
+  it('sends authoritative source-alias and home references to the Board resolver unchanged', () => {
+    const scoped = { ...context, documentPath: 'docs/guide.md', resolveReferences: true };
+    expect(classifyMarkdownLink('/source/api/src/shared.ts#L35', scoped)).toEqual({ kind: 'workspace-file', path: '/source/api/src/shared.ts', line: 35 });
+    expect(classifyMarkdownLink('~/api/src/shared.ts:35', scoped)).toEqual({ kind: 'workspace-file', path: '~/api/src/shared.ts', line: 35 });
+  });
+});

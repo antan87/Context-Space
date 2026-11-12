@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import {
   ArrowDownUp, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ExternalLink, FileCode, GitCommitHorizontal, ListTree,
   Flag, FolderTree, Loader2, MoreHorizontal, RefreshCw, Search, X, ZoomIn, ZoomOut,
@@ -14,7 +14,9 @@ import type { Feature } from '../../types.js';
 import { Button } from '../../components/ui/button.js';
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '../../components/ui/menu.js';
 import { usePaneHotkey } from '../terminal/usePaneHotkey.js';
-import { useCodeRequest, type CodeRequest, type RepoFile } from '../workspace-shell/openRequests.js';
+import { codeRequests, invalidateReferenceIntent, referenceRequestIsCurrent, useCodeRequest, type CodeRequest, type ReferenceTarget, type RepoFile } from '../workspace-shell/openRequests.js';
+import { openReferenceTarget } from '../workspace-shell/useOpenFileReference.js';
+import { useNavigate } from 'react-router-dom';
 import { CommitReviewPanel } from './CommitReviewPanel.js';
 import { FinishPanel } from './FinishPanel.js';
 import { ChangesetSymbolNavigator } from './ChangesetSymbolNavigator.js';
@@ -111,6 +113,7 @@ function readTreeWidth(): number {
 export function CodeSection(props: CodeSectionProps) {
   const { ws, active, showToast } = props;
   const workspace = ws.branchName;
+  const navigate = useNavigate();
   const base = `/api/workspace/${encodeURIComponent(workspace)}`;
   const config = useConfig().data?.config;
   const defaultEditor = config?.defaultEditor;
@@ -289,7 +292,8 @@ export function CodeSection(props: CodeSectionProps) {
     });
   };
 
-  const openFile = (target: RepoFile, options: { line?: number; pinned?: boolean } = {}) => {
+  const openFile = (target: RepoFile, options: { line?: number; pinned?: boolean; preserveIntent?: boolean } = {}) => {
+    if (!options.preserveIntent) invalidateReferenceIntent();
     jumpCounter.current += 1;
     setNotice(null);
     setDrawerOpen(false);
@@ -298,6 +302,23 @@ export function CodeSection(props: CodeSectionProps) {
     if (!sameFile(target, selection)) setDiffError('');
     setSelection({ repoName: target.repoName, repoPath: target.repoPath, file: target.file, line: options.line, jump: jumpCounter.current, pinned: options.pinned ?? false });
     revealInTree(target);
+  };
+
+  const supersedeReference = () => { invalidateReferenceIntent(); setNotice(null); };
+  // Only an activation of a form button supersedes a pending reference; Tab, arrows, Escape and mere focus must leave the notice's choices alone.
+  const activation = {
+    onPointerDownCapture: supersedeReference,
+    onKeyDownCapture: (event: ReactKeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') supersedeReference(); },
+  };
+  const toggleForm = (form: 'commit' | 'finish') => {
+    supersedeReference();
+    if (form === 'commit') {
+      setFinishOpen(false);
+      patchCommit({ open: !commit.open });
+    } else {
+      patchCommit({ open: false });
+      setFinishOpen((value) => !value);
+    }
   };
 
   const step = (delta: 1 | -1) => {
@@ -316,9 +337,13 @@ export function CodeSection(props: CodeSectionProps) {
     if (!request || request.id === handledRequest.current) return;
     handledRequest.current = request.id;
     const asked = request.request;
-    if (asked.kind === 'file') openFileRef.current(asked, { line: asked.line, pinned: true });
-    else setNotice(asked);
-  }, [request]);
+    if (referenceRequestIsCurrent(asked)) {
+      if (asked.kind === 'file') openFileRef.current(asked, { line: asked.line, pinned: true, preserveIntent: true });
+      else setNotice(asked);
+    }
+    codeRequests.acknowledge(workspace, request.id);
+  }, [request, workspace]);
+  useEffect(() => { if (!active) setNotice(null); }, [active]);
 
   // A file opened by name that is not a change can only be shown in the tree under Files. The listing can be up to
   // REFRESH_MS old, and a file made moments ago may be a change it does not have yet, so it is listed again once
@@ -649,13 +674,13 @@ export function CodeSection(props: CodeSectionProps) {
         {loading && <Loader2 className="size-3 animate-spin text-muted-foreground" aria-label="Refreshing" />}
         <div role="group" aria-label="Actions" className="ml-auto flex shrink-0 items-center gap-1">
           <Button size="xs" variant={mainView === 'commit' ? 'secondary' : 'outline'} disabled={changedFiles === 0} aria-pressed={mainView === 'commit'}
-            aria-label="Review & commit" title="Review the changes and commit them"
-            onClick={() => { setFinishOpen(false); patchCommit({ open: !commit.open }); }}>
+            aria-label="Review & commit" title="Review the changes and commit them" {...activation}
+            onClick={() => toggleForm('commit')}>
             <GitCommitHorizontal className="size-3.5" />{compactToolbar ? 'Commit' : 'Review & commit'}
           </Button>
           {!compactToolbar && (
-            <Button size="xs" variant={mainView === 'finish' ? 'secondary' : 'ghost'} aria-pressed={mainView === 'finish'}
-              onClick={() => { patchCommit({ open: false }); setFinishOpen((value) => !value); }}>
+            <Button size="xs" variant={mainView === 'finish' ? 'secondary' : 'ghost'} aria-pressed={mainView === 'finish'} {...activation}
+              onClick={() => toggleForm('finish')}>
               Finish…
             </Button>
           )}
@@ -665,7 +690,7 @@ export function CodeSection(props: CodeSectionProps) {
             </MenuTrigger>
             <MenuPopup align="end" className="w-60">
               {compactToolbar && (
-                <MenuItem onClick={() => { patchCommit({ open: false }); setFinishOpen((value) => !value); }}><Flag />Finish…</MenuItem>
+                <MenuItem onClick={() => toggleForm('finish')}><Flag />Finish…</MenuItem>
               )}
               <MenuItem onClick={() => setRevision((value) => value + 1)}><RefreshCw />Refresh now</MenuItem>
               <MenuItem disabled={allSymbols.length === 0} onClick={() => setSymbolsOpen((value) => !value)}>
@@ -725,10 +750,10 @@ export function CodeSection(props: CodeSectionProps) {
         {!(narrow && !treeAsDrawer) && (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {notice && <ReferenceNotice notice={notice} editorLabel={editorLabel}
-            onChoose={(candidate) => openFile(candidate, { line: notice.line, pinned: true })}
+            onChoose={(candidate) => { if (notice.kind === 'ambiguous') { setNotice(null); openReferenceTarget(workspace, candidate, notice.line, notice.opener, navigate); } }}
             onSearch={(text) => { setMode('files'); if (narrow) setDrawerOpen(true); else setTreeHidden(false); changeQuery(text); }}
             onOpenInEditor={(path) => openInVsCodeAtLine('', path, notice.line ?? 1, 1, defaultEditor)}
-            onDismiss={() => setNotice(null)} />}
+            onDismiss={() => { invalidateReferenceIntent(); setNotice(null); }} />}
           {props.syncResults && ws.mode !== 'in-place' && (
             <ResultBanner title="Sync results" onDismiss={() => props.setSyncResults(null)}
               rows={props.syncResults.map((result) => ({ key: result.repoName, ok: result.success, text: result.success ? `Synced (${result.message})` : `Conflict: ${result.message}` }))} />
@@ -759,7 +784,7 @@ export function CodeSection(props: CodeSectionProps) {
           )}
 
           {mainView === 'commit' ? (
-            <div className="min-h-0 flex-1 overflow-auto p-3">
+            <div className="min-h-0 flex-1 overflow-auto p-3" onPointerDownCapture={supersedeReference} onKeyDownCapture={supersedeReference} onInputCapture={supersedeReference}>
               <CommitReviewPanel ws={ws} message={commit.message} setMessage={(message) => patchCommit({ message })}
                 onClose={() => patchCommit({ open: false })}
                 onCompleted={(results) => patchCommit({ results, open: false, excluded: new Set(), message: '' })}
@@ -767,7 +792,7 @@ export function CodeSection(props: CodeSectionProps) {
                 onGitChanged={gitChanged} />
             </div>
           ) : mainView === 'finish' ? (
-            <div className="min-h-0 flex-1 overflow-auto p-3">
+            <div className="min-h-0 flex-1 overflow-auto p-3" onPointerDownCapture={supersedeReference} onKeyDownCapture={supersedeReference} onInputCapture={supersedeReference}>
               <FinishPanel ws={ws} onClose={() => setFinishOpen(false)} onGitChanged={gitChanged} />
             </div>
           ) : !selection ? (
@@ -908,7 +933,7 @@ function ResultBanner({ title, rows, onDismiss }: { title: string; rows: { key: 
 function ReferenceNotice({ notice, editorLabel, onChoose, onSearch, onOpenInEditor, onDismiss }: {
   notice: Notice;
   editorLabel: string;
-  onChoose: (candidate: RepoFile) => void;
+  onChoose: (candidate: ReferenceTarget) => void;
   onSearch: (text: string) => void;
   onOpenInEditor: (absolutePath: string) => void;
   onDismiss: () => void;
@@ -924,12 +949,12 @@ function ReferenceNotice({ notice, editorLabel, onChoose, onSearch, onOpenInEdit
           )}
           {notice.kind === 'ambiguous' && (
             <>
-              <p><code className="font-mono">{shown}</code> matches {notice.candidates.length} files. Choose one:</p>
+              <p><code className="font-mono">{shown}</code> matches {notice.candidates.length}{notice.truncated ? ' or more' : ''} files. Choose one:</p>
               <ul className="space-y-0.5">
                 {notice.candidates.map((candidate) => (
-                  <li key={`${candidate.repoName}/${candidate.file}`}>
+                  <li key={`${candidate.origin.kind}/${candidate.origin.kind === 'repository' ? candidate.origin.repoPath : candidate.origin.workspacePath}/${candidate.file}`}>
                     <button type="button" className="w-full truncate rounded px-1.5 py-0.5 text-left font-mono hover:bg-accent" onClick={() => onChoose(candidate)}>
-                      <span className="text-muted-foreground">{candidate.repoName}/</span>{candidate.file}
+                      <span className="text-muted-foreground">{candidate.origin.kind === 'workspace' ? 'Workspace' : candidate.origin.repoName}/</span>{candidate.file}
                     </button>
                   </li>
                 ))}
@@ -941,12 +966,12 @@ function ReferenceNotice({ notice, editorLabel, onChoose, onSearch, onOpenInEdit
               <p>
                 <code className="font-mono">{shown}</code>{' '}
                 {notice.reason === 'directory' ? 'is a folder, not a file.'
-                  : notice.reason === 'outside-repositories' ? "is outside this workspace's repositories."
+                  : notice.reason === 'outside-roots' ? "is outside this workspace and its repositories."
                     : notice.reason === 'error' ? `could not be looked up: ${notice.message ?? 'unknown error'}.`
-                      : "is not a file in this workspace's repositories."}
+                      : "is not a file in this workspace or its repositories."}
               </p>
               <div className="flex flex-wrap gap-1.5">
-                {notice.reason === 'outside-repositories' && notice.absolutePath
+                {notice.reason === 'outside-roots' && notice.absolutePath
                   ? <Button size="xs" variant="outline" onClick={() => onOpenInEditor(notice.absolutePath!)}><ExternalLink className="size-3" />Open in {editorLabel}</Button>
                   : <Button size="xs" variant="outline" onClick={() => onSearch(notice.reason === 'directory' ? notice.path : name)}><Search className="size-3" />Find &ldquo;{notice.reason === 'directory' ? notice.path : name}&rdquo; in Files</Button>}
               </div>

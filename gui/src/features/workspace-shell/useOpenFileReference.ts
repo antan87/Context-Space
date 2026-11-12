@@ -1,96 +1,106 @@
-import { useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useRef } from 'react';
+import { useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
 import { apiFetch } from '../../lib/api/client.js';
 import { parseFileReference } from '../../lib/fileReference.js';
 import { chatLayout } from '../chat/chatLayout.js';
 import { browserPath, goToWorkspace, parseWorkspacePath } from '../chat/chatRoute.js';
-import { isUnreadableDocument, workspaceDocumentName } from '../terminal/documentReference.js';
 import { isWebOrDomain, normalizeWebUrl } from '../terminal/webLinks.js';
-import { codeRequests, documentRequests, openCodeWindow, type CodeRequest, type RepoFile } from './openRequests.js';
+import { closeCodeWindow, codeRequests, documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, type ReferenceTarget } from './openRequests.js';
 
-/** A path someone clicked: in terminal output, a progress card or a document. */
 export interface FileReferenceClick {
   path: string;
   line?: number;
-  /** The directory the terminal session runs in, so a relative path resolves the way the CLI meant it. */
+  /** Only use when the current directory is known, not merely the launch directory. */
   cwd?: string;
+  /** A document keeps its reader/trail while resolving, then follows reader targets in place. */
+  onReader?: (target: ReferenceTarget, intent: number) => void;
 }
-
 type Resolution =
-  | ({ status: 'found' } & RepoFile)
-  | { status: 'ambiguous'; candidates: RepoFile[] }
-  | { status: 'not-found'; reason: 'missing' | 'directory' | 'outside-repositories'; absolutePath?: string };
+  | { status: 'found'; target: ReferenceTarget }
+  | { status: 'ambiguous'; candidates: ReferenceTarget[]; truncated: boolean }
+  | { status: 'not-found'; reason: 'missing' | 'directory' | 'outside-roots' };
 
-/** The Code section's answer to what the server found for a path. */
-export function codeRequestFor(path: string, line: number | undefined, resolution: Resolution): CodeRequest {
-  if (resolution.status === 'found') {
-    return { kind: 'file', repoName: resolution.repoName, repoPath: resolution.repoPath, file: resolution.file, line };
+/** Route the server's explicit identity without guessing its origin from a path. */
+export function openReferenceTarget(workspace: string, target: ReferenceTarget, line: number | undefined, opener: HTMLElement | null, navigate?: NavigateFunction, navigated = false): number {
+  const intent = invalidateReferenceIntent();
+  if (!line && target.viewer === 'reader') {
+    closeCodeWindow(workspace, opener);
+    chatLayout.setHidden(false);
+    documentRequests.open(workspace, { name: target.file, opener, intent, ...(target.origin.kind === 'repository' ? { repo: { name: target.origin.repoName, path: target.origin.repoPath } } : {}) });
+    if (navigate) goToWorkspace(navigate, workspace, 'board');
+  } else if (target.origin.kind === 'workspace') {
+    openCodeWindow(workspace, { opener, workspaceFile: { workspaceId: workspace, file: target.file, line }, navigated, preserveIntent: true });
+  } else {
+    openCodeWindow(workspace, { opener, file: { repoName: target.origin.repoName, repoPath: target.origin.repoPath, file: target.file, line }, navigated, preserveIntent: true });
   }
-  if (resolution.status === 'ambiguous') return { kind: 'ambiguous', path, line, candidates: resolution.candidates };
-  return { kind: 'not-found', path, line, reason: resolution.reason, absolutePath: resolution.absolutePath };
+  return intent;
 }
 
-/**
- * Opens a clicked path where it belongs: a web address in the browser, a workspace document in
- * the Board reader, anything else in the Code window. Every click ends somewhere visible:
- * Code first says it is locating the path, then shows the file, the files the path could mean,
- * or why there is none, instead of the click silently doing nothing.
- */
-export function useOpenFileReference(workspace: string, workspacePath: string, repoPaths: readonly string[] = []) {
+// Kept for callers; the server now resolves the origin, so these are no longer needed here.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function useOpenFileReference(workspace: string, _workspacePath: string, _repoPaths: readonly string[] = []) {
   const navigate = useNavigate();
-  const latest = useRef(0);
-
+  const { pathname, key: routeKey } = useLocation();
+  // Only the initial move belongs to this click. Once landed, any later route is a new intent.
+  const navigation = useRef<{ from: string; pending: boolean } | null>(null);
+  const owned = useRef<number | null>(null);
+  useEffect(() => () => {
+    const initialLanding = navigation.current?.pending && parseWorkspacePath(browserPath())?.workspace === workspace;
+    if (!initialLanding && owned.current !== null && referenceIntentIsCurrent(owned.current)) invalidateReferenceIntent();
+  }, [workspace]);
+  useEffect(() => {
+    if (owned.current === null || !referenceIntentIsCurrent(owned.current)) return;
+    const here = parseWorkspacePath(pathname)?.workspace;
+    if (here === workspace) {
+      if (navigation.current) navigation.current.pending = false;
+    } else if (!(navigation.current?.pending && routeKey === navigation.current.from)) {
+      invalidateReferenceIntent();
+    }
+  }, [pathname, routeKey, workspace]);
   return useCallback(async (click: FileReferenceClick) => {
     const held = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     const parsed = parseFileReference(click.path);
     if (!parsed) return;
-    if (isWebOrDomain(parsed.path)) {
+    // A document link was already classified as a local file by the Markdown layer; only terminal text may be a web guess.
+    if (!click.onReader && isWebOrDomain(parsed.path)) {
+      invalidateReferenceIntent();
       window.open(normalizeWebUrl(parsed.path), '_blank', 'noopener,noreferrer');
       return;
     }
     const line = click.line ?? parsed.line;
-    const request = ++latest.current;
-    const base = `/api/workspace/${encodeURIComponent(workspace)}`;
-
-    const name = workspaceDocumentName({ path: parsed.path, line }, workspacePath, [...repoPaths], click.cwd);
-    if (name) {
-      let isDocument: boolean;
-      try {
-        // Documents in folders are not in the root listing, so the server is asked to open them.
-        isDocument = name.includes('/')
-          ? await apiFetch(`${base}/documents/preview?name=${encodeURIComponent(name)}`).then(() => true)
-          : (await apiFetch<{ documents: { name: string }[] }>(`${base}/documents`)).documents.some((document) => document.name === name);
-      } catch (error) {
-        // A nested file the server found but cannot preview still opens in the reader, which says why.
-        isDocument = name.includes('/') && isUnreadableDocument(error);
-      }
-      if (request !== latest.current) return;
-      if (isDocument) {
-        chatLayout.setHidden(false);
-        documentRequests.open(workspace, { name, opener: held });
-        goToWorkspace(navigate, workspace, 'board');
-        return;
-      }
-    }
-
-    codeRequests.open(workspace, { kind: 'locating', path: parsed.path, line });
-    // The Code window opens over whatever is on screen (Board, Split or Terminal): the path is not a place to navigate to.
-    // Except from the terminal of another workspace docked beside this one: its window is on its own page, so go there.
-    const here = parseWorkspacePath(browserPath())?.workspace;
+    const request = invalidateReferenceIntent();
+    owned.current = request;
+    const from = browserPath();
+    const here = parseWorkspacePath(from)?.workspace;
     const elsewhere = Boolean(here && here !== workspace);
+    navigation.current = { from: routeKey, pending: elsewhere };
+    const isCurrent = () => {
+      if (!referenceIntentIsCurrent(request)) return false;
+      // This hook can unmount on its initial navigation; also check the live destination.
+      if (here && parseWorkspacePath(browserPath())?.workspace !== workspace) { invalidateReferenceIntent(); return false; }
+      return true;
+    };
     if (elsewhere) goToWorkspace(navigate, workspace, 'board');
-    openCodeWindow(workspace, { navigated: elsewhere });
+    if (!click.onReader) {
+      codeRequests.open(workspace, { kind: 'locating', path: parsed.path, line, intent: request });
+      openCodeWindow(workspace, { opener: held, navigated: elsewhere, preserveIntent: true });
+    }
     try {
       const query = new URLSearchParams({ path: parsed.path, ...(click.cwd ? { cwd: click.cwd } : {}) });
-      const resolution = await apiFetch<Resolution>(`${base}/files/resolve?${query}`);
-      if (request !== latest.current) return;
-      codeRequests.open(workspace, codeRequestFor(parsed.path, line, resolution));
+      const resolution = await apiFetch<Resolution>(`/api/workspace/${encodeURIComponent(workspace)}/files/reference?${query}`);
+      if (!isCurrent()) return;
+      if (resolution.status === 'found') {
+        if (click.onReader && !line && resolution.target.viewer === 'reader') click.onReader(resolution.target, request);
+        else owned.current = openReferenceTarget(workspace, resolution.target, line, held, navigate, elsewhere);
+      } else {
+        if (click.onReader) openCodeWindow(workspace, { opener: held, navigated: elsewhere, preserveIntent: true });
+        if (resolution.status === 'ambiguous') codeRequests.open(workspace, { kind: 'ambiguous', path: parsed.path, line, candidates: resolution.candidates, truncated: resolution.truncated, opener: held, intent: request });
+        else codeRequests.open(workspace, { kind: 'not-found', path: parsed.path, line, reason: resolution.reason, intent: request });
+      }
     } catch (error) {
-      if (request !== latest.current) return;
-      codeRequests.open(workspace, {
-        kind: 'not-found', path: parsed.path, line, reason: 'error',
-        message: error instanceof Error ? error.message : 'The path could not be looked up.',
-      });
+      if (!isCurrent()) return;
+      if (click.onReader) openCodeWindow(workspace, { opener: held, navigated: elsewhere, preserveIntent: true });
+      codeRequests.open(workspace, { kind: 'not-found', path: parsed.path, line, intent: request, reason: 'error', message: error instanceof Error ? error.message : 'The path could not be looked up.' });
     }
-  }, [navigate, workspace, workspacePath, repoPaths]);
+  }, [navigate, workspace, routeKey]);
 }

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures';
-import { boardFile, boardNote, checkpoint, planFile, step, whatsNew } from './planData';
+import { boardFile, boardFileCard, boardNote, checkpoint, planFile, step, whatsNew } from './planData';
 
 /**
  * The Code window: one window over the whole workspace content (Board, Split and Terminal), opened by the Board's Code button,
@@ -94,24 +94,24 @@ test.beforeEach(async ({ page }) => {
       socket.send(JSON.stringify({ type: 'replayed' }));
     });
   });
-  await page.route('**/api/workspace/*/files/resolve?*', (route) => {
+  await page.route('**/api/workspace/*/files/reference?*', (route) => {
     const wanted = new URL(route.request().url()).searchParams.get('path');
     return wanted === 'src/server/routes.ts'
-      ? route.fulfill({ json: { status: 'found', repoName: 'api', repoPath: '/tmp/api', file: 'src/server/routes.ts' } })
-      : route.fulfill({ json: { status: 'not-found', reason: 'missing' } });
+      ? route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' }, file: 'src/server/routes.ts', viewer: 'code' } } })
+      : route.fulfill({ json: { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: wanted, viewer: 'reader' } } });
   });
 });
 test.afterEach(() => { expect(writes, 'no test here may write').toEqual([]); });
 
 
-async function clickDocument(page: Page) {
+async function clickDocument(page: Page, row = 0) {
   const pane = page.getByTestId('terminal-pane');
   await expect(pane.getByTestId('terminal-state')).toHaveText('Running');
-  const cell = await pane.locator('.xterm-screen').evaluate((element) => {
+  const cell = await pane.locator('.xterm-screen').evaluate((element, index) => {
     const bounds = element.getBoundingClientRect();
     const first = element.querySelector('.xterm-rows')?.firstElementChild?.getBoundingClientRect();
-    return { x: bounds.x + 80, y: (first?.y ?? bounds.y) + (first?.height ?? 17) * 0.5 };
-  });
+    return { x: bounds.x + 80, y: (first?.y ?? bounds.y) + (first?.height ?? 17) * (index + 0.5) };
+  }, row);
   await pane.locator('.xterm-helper-textarea').focus();
   await page.mouse.move(cell.x + 200, cell.y + 40);
   await page.mouse.move(cell.x, cell.y);
@@ -276,4 +276,391 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 1100, height: 700
   await nav.getByRole('link', { name: 'Board', exact: true }).click();
   await expect(notes).toHaveValue('keep draft across full screen');
   await expect(notes).toHaveAttribute('data-live-frame', 'original');
+});
+
+test('a mixed terminal reference offers workspace and repository identities and opens the chosen reader', async ({ page }) => {
+  await page.route('**/api/workspace/*/files/reference?*', route => route.fulfill({ json: { status: 'ambiguous', truncated: true, candidates: [
+    { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: 'docs/guide.md', viewer: 'reader' },
+    { origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' }, file: 'docs/guide.md', viewer: 'reader' },
+  ] } }));
+  let previewUrl = '';
+  await page.route('**/api/workspace/*/documents/preview?*', route => { previewUrl = route.request().url(); return route.fulfill({ json: { name: 'docs/guide.md', kind: 'markdown', content: '# Repository guide' } }); });
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('view-mode-split').click();
+  await clickDocument(page);
+  const notice = page.getByTestId('code-reference-notice');
+  await expect(notice).toContainText('2 or more');
+  await expect(notice.getByRole('button', { name: 'Workspace/docs/guide.md' })).toBeVisible();
+  await notice.getByRole('button', { name: 'api/docs/guide.md' }).click();
+  await expect(page.locator('[data-board-reader]')).toContainText('Repository guide');
+  expect(new URL(previewUrl).searchParams.get('repo')).toBe('api');
+});
+
+test('a workspace document line from terminal opens workspace Code and repeated clicks remain requests', async ({ page }) => {
+  terminalDocument = 'docs/guide.md:3';
+  await page.route('**/api/workspace/*/files/reference?*', route => route.fulfill({ json: { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: 'docs/guide.md', viewer: 'reader' } } }));
+  await page.route('**/api/workspace/*/files/read?*', route => route.fulfill({ json: { content: 'one\ntwo\nthree\nfour\n' } }));
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('view-mode-split').click();
+  await clickDocument(page);
+  const view = page.getByTestId('workspace-code-view');
+  await expect(view).toContainText('Workspace · demo · Read only');
+  await expect(view).toContainText('three');
+  await page.getByRole('region', { name: 'Code window' }).getByRole('button', { name: 'Close', exact: true }).click();
+  await clickDocument(page);
+  await expect(view).toContainText('three');
+});
+
+test('closing a locating window cancels its late terminal reference', async ({ page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/workspace/*/files/reference?*', async route => { await pending; await route.fulfill({ json: { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: 'docs/guide.md', viewer: 'reader' } } }); });
+  try {
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await clickDocument(page);
+    await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+    await page.getByRole('region', { name: 'Code window' }).getByRole('button', { name: 'Close', exact: true }).click();
+    const response = page.waitForResponse('**/files/reference?*');
+    release();
+    await response;
+    await expect(page.locator('[data-board-reader]')).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Code window' })).toBeHidden();
+  } finally { release(); }
+});
+
+test('manual Code selection wins over a deferred terminal reference', async ({ page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/workspace/*/files/reference?*', async route => { await pending; await route.fulfill({ json: { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: 'docs/guide.md', viewer: 'reader' } } }); });
+  try {
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await clickDocument(page);
+    await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+    const win = page.getByRole('region', { name: 'Code window' });
+    await win.getByRole('treeitem', { name: /handler\.ts/ }).click();
+    await expect(win.locator('p[title]').first()).toHaveText('src/server/handler.ts');
+    const response = page.waitForResponse('**/files/reference?*');
+    release();
+    await response;
+    await expect(win.locator('p[title]').first()).toHaveText('src/server/handler.ts');
+    await expect(page.locator('[data-board-reader]')).toHaveCount(0);
+  } finally { release(); }
+});
+
+test('switching workspace cancels a deferred terminal reference', async ({ page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/workspace/*/files/reference?*', async route => { await pending; await route.fulfill({ json: { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: 'docs/guide.md', viewer: 'reader' } } }); });
+  try {
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await clickDocument(page);
+    await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+    await page.goto('/#/workspaces/other/board');
+    const response = page.waitForResponse('**/files/reference?*');
+    release();
+    await response;
+    await page.goto('/#/workspaces/demo/board');
+    await expect(page.locator('[data-board-reader]')).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Code window' })).toBeHidden();
+  } finally { release(); }
+});
+
+test('correction workspace far line is visible in Monaco after terminal click', async ({page}) => {
+  terminalDocument='src/local.ts:140';
+  await page.route('**/api/workspace/*/files/reference?*', route => route.fulfill({json:{status:'found',target:{origin:{kind:'workspace',workspacePath:'/tmp/demo'},file:'src/local.ts',viewer:'code'}}}));
+  await page.route('**/api/workspace/*/files/read?*', route => route.fulfill({json:{content:Array.from({length:200},(_,i)=>`// workspace number ${i+1}`).join('\n')}}));
+  await page.goto('/#/workspaces/demo/board'); await page.getByTestId('view-mode-split').click(); await clickDocument(page);
+  const view=page.getByTestId('workspace-code-view');
+  await expect.poll(async()=> (await view.locator('.view-line').allTextContents()).join('\n').replace(/\u00a0/g,' ')).toContain('// workspace number 140');
+  console.log('WORKSPACE-LINE-PROOF', JSON.stringify(await view.locator('.view-line').allTextContents()));
+});
+
+for (const compact of [false, true]) {
+test(`correction typed Finish draft wins over deferred terminal file reference${compact ? ' compact toolbar' : ''}`, async ({page}) => {
+  let release!:()=>void; const pending=new Promise<void>(resolve=>{release=resolve;});
+  await page.route('**/api/workspace/*/files/reference?*',async route=>{await pending;await route.fulfill({json:{status:'found',target:{origin:{kind:'repository',repoName:'api',repoPath:'/tmp/api'},file:'src/server/routes.ts',viewer:'code'}}});});
+  try {
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto('/#/workspaces/demo/board'); await page.getByTestId('view-mode-split').click(); await clickDocument(page);
+    const win=page.getByRole('region',{name:'Code window'}); await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+    if (compact) {
+      await page.setViewportSize({ width: 600, height: 900 });
+      await expect(win.getByRole('button', { name: 'Finish…', exact: true })).toHaveCount(0);
+      await win.getByRole('button', { name: 'More code actions' }).click();
+      await page.getByRole('menuitem', { name: 'Finish…' }).click();
+    } else await win.getByRole('button', { name: 'Finish…', exact: true }).click();
+    await win.getByLabel('Commit message for remaining changes').fill('keep my finish message');
+    const response=page.waitForResponse('**/files/reference?*'); release(); await response;
+    await expect(win.getByLabel('Commit message for remaining changes')).toHaveValue('keep my finish message');
+    await expect(win.getByRole('heading', { name: 'Finish work' })).toBeVisible();
+  } finally {release();}
+});
+
+}
+
+test('correction leaving a docked second workspace cancels its deferred reader navigation',async ({page})=>{
+  let release!:()=>void; const pending=new Promise<void>(resolve=>{release=resolve;});
+  await page.route('**/api/workspace/*/files/reference?*',async route=>{await pending;await route.fulfill({json:{status:'found',target:{origin:{kind:'workspace',workspacePath:'/tmp/other'},file:'docs/guide.md',viewer:'reader'}}});});
+  await page.route('**/api/workspace/*/documents/preview?*',route=>route.fulfill({json:{name:'docs/guide.md',kind:'markdown',content:'# Other guide'}}));
+  await page.setViewportSize({width:1600,height:900});
+  await page.addInitScript(()=>{
+    if(window!==window.top)return;
+    localStorage.setItem('contextspace_chat_layout_v1',JSON.stringify({hidden:false,percent:50}));
+    localStorage.setItem('contextspace_floating_chat_state_v1',JSON.stringify({openTabs:['demo','other'],activeTab:'demo',splitTab:'other',splitRatio:50,modes:{demo:'cli',other:'cli'},harnesses:{},terminalLaunches:{},drafts:{}}));
+  });
+  try {
+    await page.goto('/#/workspaces/demo/chat');
+    const panes=page.getByTestId('terminal-pane');await expect(panes).toHaveCount(2,{timeout:20000});
+    const pane=panes.nth(1);await expect(pane.getByTestId('terminal-state')).toHaveText('Running');
+    const cellOf=()=>pane.locator('.xterm-screen').evaluate(element=>{const bounds=element.getBoundingClientRect();const first=element.querySelector('.xterm-rows')?.firstElementChild?.getBoundingClientRect();return{x:bounds.x+80,y:(first?.y??bounds.y)+(first?.height??17)*0.5};});
+    let cell=await cellOf();
+    await expect(async()=>{cell=await cellOf();await page.mouse.move(cell.x-3,cell.y);await page.mouse.move(cell.x,cell.y);await expect(pane.locator('.xterm-cursor-pointer')).toHaveCount(1,{timeout:1500});}).toPass({timeout:20000});
+    await page.mouse.click(cell.x,cell.y);
+    await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+    expect(new URL(page.url()).hash).toBe('#/workspaces/other/board');
+    await page.goto('/#/workspaces/demo/board');
+    const response=page.waitForResponse('**/files/reference?*');release();await response;
+    await expect(page.locator('[data-board-reader]')).toHaveCount(0);
+    expect(new URL(page.url()).hash,'A newer workspace selection must win').toBe('#/workspaces/demo/board');
+  }finally{release();}
+});
+
+for (const origin of ['repository', 'workspace'] as const) {
+  for (const line of [undefined, 35]) {
+    test(`correction ${origin} Markdown code link retains origin${line ? ' and line' : ''}`, async ({ page }) => {
+      const references: { path: string | null; cwd: string | null }[] = [];
+      const root = origin === 'repository' ? '/tmp/api' : '/tmp/demo';
+      await page.route('**/api/workspace/*/files/reference?*', (route) => {
+        const query = new URL(route.request().url()).searchParams;
+        const file = query.get('path')!;
+        references.push({ path: file, cwd: query.get('cwd') });
+        return route.fulfill({ json: { status: 'found', target: {
+          origin: origin === 'repository' ? { kind: 'repository', repoName: 'api', repoPath: root } : { kind: 'workspace', workspacePath: root },
+          file, viewer: file.endsWith('.md') ? 'reader' : 'code',
+        } } });
+      });
+      await page.route('**/api/workspace/*/documents/preview?*', (route) => {
+        const name = new URL(route.request().url()).searchParams.get('name');
+        return name === 'docs/guide.md'
+          ? route.fulfill({ json: { name, kind: 'markdown', content: `# Guide\n[Open code](../src/shared.ts${line ? '#L35' : ''})` } })
+          : route.fulfill({ status: 400, json: { error: ".ts files can't be opened here. Open it from the workspace folder instead." } });
+      });
+      const content = Array.from({ length: 200 }, (_, i) => `// shared number ${i + 1}`).join('\n');
+      await page.route('**/api/workspace/*/files/read?*', (route) => route.fulfill({ json: { content } }));
+      await page.route('**/api/workspace/*/changes/diff?*', (route) => route.fulfill({ json: { diff: '', fileContent: content } }));
+      await page.goto('/#/workspaces/demo/board');
+      await page.getByTestId('view-mode-split').click();
+      await clickDocument(page);
+      await expect(page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' })).toBeVisible();
+    await page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' }).click();
+      const win = page.getByRole('region', { name: 'Code window' });
+      await expect(win).toBeVisible();
+      await expect.poll(() => references).toEqual([{ path: 'docs/guide.md', cwd: null }, { path: 'src/shared.ts', cwd: root }]);
+      const view = origin === 'workspace' ? page.getByTestId('workspace-code-view') : win;
+      await expect.poll(async () => (await view.locator('.view-line').allTextContents()).join('\n').replace(/\u00a0/g, ' ')).toContain(`// shared number ${line ?? 1}`);
+      await win.getByRole('button', { name: 'Close', exact: true }).click();
+      await expect(page.locator('[data-board-reader]')).toContainText('Guide');
+      await expect(page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' })).toBeFocused();
+    });
+  }
+}
+
+for (const delivery of ['pending', 'queued-repository', 'queued-workspace'] as const) {
+  test(`correction newer Commit form supersedes ${delivery} reference results`, async ({ page }) => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    await page.route('**/api/workspace/*/files/reference?*', async (route) => {
+      await pending;
+      await route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' }, file: 'src/server/routes.ts', viewer: 'code' } } });
+    });
+    try {
+      await page.goto('/#/workspaces/demo/board');
+      await page.getByTestId('view-mode-split').click();
+      await clickDocument(page);
+      const win = page.getByRole('region', { name: 'Code window' });
+      await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+      if (delivery !== 'pending') {
+        // A capture listener queues the result immediately before React handles the newer form click.
+        // This covers deliveries that passed the async guard but have not reached their consumer effect yet.
+        await page.evaluate(async (workspaceOrigin) => {
+          // @ts-expect-error Vite serves the source module in this mounted test.
+          const { codeRequests, codeWindowRequests } = await import('/src/features/workspace-shell/openRequests.ts');
+          const previous = codeWindowRequests.get('demo')!.request;
+          document.querySelector('[aria-label="Review & commit"]')!.addEventListener('click', () => {
+            if (workspaceOrigin) codeWindowRequests.open('demo', { ...previous, workspaceFile: { workspaceId: 'demo', file: 'src/server/routes.ts' } });
+            else codeRequests.open('demo', { kind: 'file', repoName: 'api', repoPath: '/tmp/api', file: 'src/server/routes.ts', intent: previous.intent });
+          }, { capture: true, once: true });
+        }, delivery === 'queued-workspace');
+      }
+      await win.getByRole('button', { name: 'Review & commit', exact: true }).click();
+      await expect(win.getByLabel('Commit message', { exact: true })).toBeVisible();
+      await win.getByLabel('Commit message', { exact: true }).fill('keep my commit message');
+      const response = page.waitForResponse('**/files/reference?*');
+      release();
+      await response;
+      await expect(win.getByLabel('Commit message', { exact: true })).toHaveValue('keep my commit message');
+    } finally { release(); }
+  });
+}
+
+for (const reference of ['/source/api/src/shared.ts#L35', '~/api/src/shared.ts:35']) {
+  test(`correction scoped Markdown resolves ${reference.startsWith('~') ? 'home' : 'source alias'} paths`, async ({ page }) => {
+    const requests: { path: string | null; cwd: string | null }[] = [];
+    await page.route('**/api/workspace/*/files/reference?*', (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      const path = query.get('path');
+      requests.push({ path, cwd: query.get('cwd') });
+      return route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' }, file: path === 'docs/guide.md' ? path : 'src/shared.ts', viewer: path === 'docs/guide.md' ? 'reader' : 'code' } } });
+    });
+    await page.route('**/api/workspace/*/documents/preview?*', (route) => route.fulfill({ json: { name: 'docs/guide.md', kind: 'markdown', content: `# Guide\n[Open code](${reference})` } }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await clickDocument(page);
+    await expect(page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' })).toBeVisible();
+    await page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' }).click();
+    await expect(page.getByRole('region', { name: 'Code window' })).toBeVisible();
+    expect(requests.at(-1)).toEqual({ path: reference.startsWith('~') ? '~/api/src/shared.ts' : '/source/api/src/shared.ts', cwd: '/tmp/api' });
+  });
+}
+
+for (const origin of ['repository', 'workspace'] as const) {
+  test(`correction ${origin} document links keep scoped trail and Back`, async ({ page }) => {
+    const root = origin === 'repository' ? '/tmp/api' : '/tmp/demo';
+    const previews: string[] = [];
+    await page.route('**/api/workspace/*/files/reference?*', (route) => route.fulfill({ json: { status: 'found', target: {
+      origin: origin === 'repository' ? { kind: 'repository', repoName: 'api', repoPath: root } : { kind: 'workspace', workspacePath: root },
+      file: new URL(route.request().url()).searchParams.get('path'), viewer: 'reader',
+    } } }));
+    await page.route('**/api/workspace/*/documents/preview?*', (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      previews.push(`${query.get('repo') ?? 'workspace'}/${query.get('name')}`);
+      const name = query.get('name');
+      return route.fulfill({ json: { name, kind: 'markdown', content: name === 'docs/guide.md' ? '# Guide\n[Notes](./notes.md)\n[Web](https://example.com/guide#L35)\n[Heading](#guide)' : '# Notes' } });
+    });
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await clickDocument(page);
+    const reader = page.locator('[data-board-reader]');
+    await expect(reader.getByRole('link', { name: 'Web', exact: false })).toHaveAttribute('href', 'https://example.com/guide#L35');
+    await reader.getByRole('link', { name: 'Heading' }).click();
+    await expect(reader.getByRole('heading', { name: 'Guide', exact: true })).toBeVisible();
+    await reader.getByRole('link', { name: 'Notes', exact: true }).click();
+    await expect(reader.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
+    expect([...new Set(previews)]).toEqual([`${origin === 'repository' ? 'api' : 'workspace'}/docs/guide.md`, `${origin === 'repository' ? 'api' : 'workspace'}/docs/notes.md`]);
+    await reader.getByRole('button', { name: 'Back to guide.md', exact: true }).click();
+    await expect(reader.getByRole('heading', { name: 'Guide', exact: true })).toBeVisible();
+  });
+}
+
+for (const [label, file] of [['the Terraform entry', 'main.tf'], ['the notes', 'notes.org']] as const) {
+  test(`fix2 ${file} link in a root document stays a local file and never opens a web site`, async ({ page }) => {
+    terminalDocument = 'README.md';
+    const references: { path: string | null; cwd: string | null }[] = [];
+    await page.addInitScript(() => {
+      (window as unknown as { __opened: string[] }).__opened = [];
+      window.open = ((url?: string | URL) => { (window as unknown as { __opened: string[] }).__opened.push(String(url)); return null; }) as typeof window.open;
+    });
+    await page.route('**/api/workspace/*/files/reference?*', (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      const path = query.get('path')!;
+      references.push({ path, cwd: query.get('cwd') });
+      return route.fulfill({ json: { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: path, viewer: path.endsWith('.md') ? 'reader' : 'code' } } });
+    });
+    await page.route('**/api/workspace/*/documents/preview?*', (route) => route.fulfill({ json: { name: 'README.md', kind: 'markdown', content: '# Readme\n\nSee [the Terraform entry](main.tf) and [the notes](notes.org).' } }));
+    await page.route('**/api/workspace/*/files/read?*', (route) => route.fulfill({ json: { content: 'resource "x" "y" {}\n' } }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await clickDocument(page);
+    await expect(page.locator('[data-board-reader]')).toContainText('Readme');
+    const before = references.length;
+    await page.locator('[data-board-reader]').getByRole('link', { name: label }).click();
+    await expect.poll(() => references.slice(before)).toEqual([{ path: file, cwd: '/tmp/demo' }]);
+    expect(await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened), 'a local file link must not open a web site').toEqual([]);
+  });
+}
+
+test('fix2 keyboard Tab from the Code toolbar reaches the mixed choices', async ({ page }) => {
+  await page.route('**/api/workspace/*/files/reference?*', (route) => route.fulfill({ json: { status: 'ambiguous', truncated: false, candidates: [
+    { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file: 'README.md', viewer: 'reader' },
+    { origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' }, file: 'README.md', viewer: 'reader' },
+  ] } }));
+  terminalDocument = 'README.md';
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('view-mode-split').click();
+  await clickDocument(page);
+  const notice = page.getByTestId('code-reference-notice');
+  await expect(notice.getByRole('button', { name: 'Workspace/README.md' })).toBeVisible();
+  const win = page.getByRole('region', { name: 'Code window' });
+  await win.getByRole('button', { name: 'Finish…', exact: true }).focus();
+  let reached = false;
+  for (let i = 0; i < 25 && !reached; i++) {
+    await page.keyboard.press('Tab');
+    await expect(notice, 'Tab must not dismiss the choices').toBeVisible();
+    reached = await page.evaluate(() => Boolean(document.querySelector('[data-testid="code-reference-notice"]')?.contains(document.activeElement)));
+  }
+  expect(reached, 'Tab reaches a choice inside the notice').toBe(true);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-board-reader]')).toBeVisible();
+});
+
+test('fix2 a late document-link lookup does not replace the item chosen with ]', async ({ page }) => {
+  const SHA = 'a91f2e0c4d5b1234567890123456789012345678';
+  const SHA2 = 'b82e3f1d5e6c2345678901234567890123456789';
+  const COMMIT = { repo: 'billing', sha: SHA, shortSha: SHA.slice(0, 12), author: 'Anna', at: new Date(Date.now() - 30 * 60_000).toISOString(), subject: 'Write the CSV writer', body: 'Body', parents: [], files: [{ path: 'src/export.ts', status: 'modified', additions: 2, deletions: 1 }], moreFiles: 0, additions: 2, deletions: 1, pushed: false, forge: null, webUrl: null };
+  const DOCS: Record<string, string> = { 'PLAN.md': '# The plan\n\nSee [the notes](docs/notes.md).', 'docs/notes.md': '# The notes' };
+  let release: () => void = () => undefined;
+  let hold = false;
+  try {
+    await page.route('**/api/workspace/demo/files/reference?*', async (route) => {
+      const file = new URL(route.request().url()).searchParams.get('path') ?? '';
+      if (hold && file === 'docs/notes.md') await new Promise<void>((resolve) => { release = resolve; });
+      return route.fulfill({ json: DOCS[file] ? { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file, viewer: 'reader' } } : { status: 'not-found', reason: 'missing' } });
+    });
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ title: 'Reports CSV export', checkpoints: [checkpoint('Reports export to CSV', { steps: [
+      step(`Write the CSV writer (${COMMIT.shortSha})`, true), step(`Background job queue for large exports (${SHA2.slice(0, 12)})`),
+    ] })] }) }));
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [{ repo: 'billing', more: 0, commits: [
+      { sha: SHA, author: 'Anna', subject: COMMIT.subject, at: COMMIT.at }, { sha: SHA2, author: 'Anna', subject: 'Second commit', at: COMMIT.at },
+    ] }] }) }));
+    await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: boardFile({ cards: [boardFileCard(2, 'board-pictures/other.png', { title: 'Other picture' })] }) }));
+    await page.route('**/api/workspace/demo/commits/**', (route) => route.fulfill({ json: new URL(route.request().url()).pathname.includes(SHA2) ? { ...COMMIT, sha: SHA2, shortSha: SHA2.slice(0, 12), subject: 'Second commit' } : COMMIT }));
+    await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
+      const name = new URL(route.request().url()).searchParams.get('name') ?? '';
+      const content = DOCS[name];
+      return content ? route.fulfill({ json: { name, kind: 'markdown', content, size: content.length, modifiedAt: new Date().toISOString() } }) : route.fulfill({ status: 404, json: { error: 'Not found' } });
+    });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.addInitScript(() => {
+      localStorage.setItem('contextspace_board_nav_open_v1', 'closed');
+      localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 }));
+      localStorage.setItem('contextspace_board_reader_layout_v1', 'large');
+    });
+    const board = page.getByRole('region', { name: 'Board', exact: true });
+    const reader = board.getByRole('region', { name: 'Reader', exact: true });
+    const title = (name: string) => reader.getByRole('heading', { name, level: 2, exact: true });
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await page.locator('.board-overview-plane button.board-area').first().click();
+    const commitButton = board.locator('#board-area .react-flow__node-commit').filter({ hasText: 'Write the CSV writer' }).getByRole('button', { name: 'Open Write the CSV writer', exact: true });
+    await expect(commitButton).toBeVisible();
+    await commitButton.click();
+    await expect(title('Write the CSV writer')).toBeVisible();
+    await reader.getByRole('link', { name: /Reports export to CSV/ }).click();
+    await expect(title('PLAN.md')).toBeVisible();
+    hold = true;
+    const asked = page.waitForRequest((r) => r.url().includes('/files/reference?') && r.url().includes('notes.md'));
+    await reader.getByRole('link', { name: 'the notes', exact: true }).click();
+    await asked;
+    await page.keyboard.press(']');
+    await expect(title('Second commit')).toBeVisible();
+    const answered = page.waitForResponse((r) => r.url().includes('/files/reference?') && r.url().includes('notes.md'));
+    release();
+    await answered;
+    await page.waitForTimeout(500);
+    await expect(title('Second commit'), 'the newer ] choice must stay').toBeVisible();
+  } finally { release(); }
 });

@@ -92,7 +92,7 @@ export function BoardReader({
   width: number;
   onClose: () => void;
   /** A link in the document to another file of the workspace. */
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number, root?: string) => void;
   /** Where Back returns to (its name), when the reader followed something from inside itself. */
   back?: { label: string; onBack: () => void };
   /** A monotonic id for the trail: another trail starts clean with its own id. */
@@ -256,10 +256,10 @@ export function BoardReader({
   const raw = place?.raw ?? false;
   // A file can be downloaded and shown by the server; a source document is read through the storage port and has neither.
   const fileUrl = source ? '' : documentFileUrl(workspaceId, path, repo?.name);
-  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: repo?.path ?? workspacePath, documentPath: path, fileUrl: (name) => documentFileUrl(workspaceId, name, repo?.name), onOpenFile }), [workspaceId, workspacePath, path, repo, onOpenFile]);
+  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: repo?.path ?? workspacePath, documentPath: path, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name, repo?.name), onOpenFile: (name, line) => onOpenFile(name, line, repo?.path ?? workspacePath) }), [workspaceId, workspacePath, path, repo, onOpenFile]);
 
   // The words of the card the file belongs to: their links open files in this reader, by their path from the workspace folder
-  const noteLinks = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile }), [workspaceId, workspacePath, onOpenFile]);
+  const noteLinks = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile: (name, line) => onOpenFile(name, line, workspacePath) }), [workspaceId, workspacePath, onOpenFile]);
 
   // Escape pressed in the page of an HTML document, where the keyboard may be (a key in a frame never reaches this page): its script
   // says so with one fixed message. Only from a frame of this reader: its origin is "null", which says nothing, and a message from

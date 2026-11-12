@@ -322,3 +322,13 @@ export async function liveBoard(page: Page, state: { released: boolean }, events
   await expect(board(page).getByRole('article', { name: 'Already there' })).toBeVisible();
   return () => { state.released = true; isReleased = true; open(); };
 }
+
+/** Metadata-only reference responses for a spec's declared workspace documents. */
+export async function routeWorkspaceDocumentReferences(page: Page, names: () => readonly string[], workspaceRoot: string) {
+  await page.route('**/api/workspace/demo/files/reference?*', (route) => {
+    const file = new URL(route.request().url()).searchParams.get('path') ?? '';
+    return route.fulfill({ json: names().includes(file)
+      ? { status: 'found', target: { origin: { kind: 'workspace', workspacePath: workspaceRoot }, file, viewer: 'reader' } }
+      : { status: 'not-found', reason: 'missing' } });
+  });
+}

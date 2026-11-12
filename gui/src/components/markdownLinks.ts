@@ -1,3 +1,5 @@
+import { splitLocation } from '../lib/fileReference.js';
+
 /**
  * Decides what a link inside rendered markdown may do. A raw `<a href>` is
  * never emitted for local paths: the app is a single page served from `/`, so
@@ -7,10 +9,12 @@
 export type MarkdownLinkTarget =
   | { kind: 'anchor'; id: string }
   | { kind: 'external'; href: string }
-  | { kind: 'workspace-file'; path: string }
+  | { kind: 'workspace-file'; path: string; line?: number }
   | { kind: 'inert'; label: string };
 
 export interface MarkdownLinkContext {
+  /** Board reader can resolve authoritative absolute/source-alias and home paths on the server. */
+  resolveReferences?: boolean;
   /** Absolute workspace folder; absolute links inside it open in the app. */
   workspaceRoot?: string;
   /** Workspace-relative path (with `/`) of the document being rendered. */
@@ -80,8 +84,11 @@ export function classifyMarkdownLink(rawHref: string | undefined | null, context
   if (href.startsWith('#')) return { kind: 'anchor', id: decode(href.slice(1)) };
   if (href.startsWith('//')) return { kind: 'inert', label: href };
 
-  let localPath = href;
-  const scheme = WINDOWS_DRIVE.test(href) ? null : SCHEME.exec(href)?.[1]?.toLowerCase();
+  // Encoded schemes are literal filenames, including a trailing `(1)`; never reinterpret their spelling.
+  const encodedScheme = !SCHEME.test(href) && SCHEME.test(decode(href)) && !WINDOWS_DRIVE.test(decode(href));
+  const location = encodedScheme ? { path: href } : splitLocation(href);
+  let localPath = location.path;
+  const scheme = WINDOWS_DRIVE.test(localPath) ? null : SCHEME.exec(localPath)?.[1]?.toLowerCase();
   if (scheme) {
     if (scheme === 'http' || scheme === 'https' || scheme === 'mailto') {
       try {
@@ -92,7 +99,7 @@ export function classifyMarkdownLink(rawHref: string | undefined | null, context
     }
     if (scheme !== 'file') return { kind: 'inert', label: href };
     try {
-      localPath = decode(new URL(href).pathname).replace(/^\/([a-z]:\/)/i, '$1');
+      localPath = decode(new URL(localPath).pathname).replace(/^\/([a-z]:\/)/i, '$1');
     } catch {
       return { kind: 'inert', label: href };
     }
@@ -102,11 +109,15 @@ export function classifyMarkdownLink(rawHref: string | undefined | null, context
   if (!context) return { kind: 'inert', label };
   const target = toSlashes(label);
 
+  if (context.resolveReferences && (target.startsWith('~') || (isAbsolutePath(target) && !toWorkspaceRelative(target, context.workspaceRoot)))) {
+    return { kind: 'workspace-file', path: target, ...(location.line ? { line: location.line } : {}) };
+  }
+
   const documentDir = (context.documentPath ?? '').split('/').slice(0, -1);
   const relative = isAbsolutePath(target)
     ? toWorkspaceRelative(target, context.workspaceRoot)
     : normalizeRelative([...documentDir, ...target.split('/')]);
-  return relative ? { kind: 'workspace-file', path: relative } : { kind: 'inert', label };
+  return relative ? { kind: 'workspace-file', path: relative, ...(location.line ? { line: location.line } : {}) } : { kind: 'inert', label };
 }
 
 /** GitHub-style heading slug so in-document `#anchor` links have a target. */

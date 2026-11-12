@@ -169,10 +169,10 @@ test('types the AI\'s suggestion into the prompt but never presses Enter', async
 });
 
 /** The server's resolver: `repo/<path>` names a file in the repository `repo`. */
-const resolveCache = (page: import('@playwright/test').Page) => page.route('**/api/workspace/feature-x/files/resolve?*', (route) => {
+const resolveCache = (page: import('@playwright/test').Page) => page.route('**/api/workspace/feature-x/files/reference?*', (route) => {
   const path = new URL(route.request().url()).searchParams.get('path') ?? '';
   const file = path.replace(/^repo\//, '');
-  return route.fulfill({ json: { status: 'found', repoName: 'repo', repoPath: 'C:/repo', file } });
+  return route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'repo', repoPath: 'C:/repo' }, file, viewer: 'code' } } });
 });
 
 test('opens the file a suggestion points at', async ({ page }) => {
@@ -406,7 +406,7 @@ test.describe('the plan in the chat', () => {
 
   test('says what the AI closed while you were in the chat, and reopens it from there', async ({ page }) => {
     // Forget what was seen on the first load only: the reload below must keep it.
-    await page.addInitScript(() => { if (!sessionStorage.getItem('reloaded')) window.localStorage.removeItem('contextspace.strip.seen-closes.feature-x'); });
+    await page.addInitScript(() => { if (window !== window.top) return; if (!sessionStorage.getItem('reloaded')) window.localStorage.removeItem('contextspace.strip.seen-closes.feature-x'); });
     const changes = await routePlan(page, planFile({
       checkpoints: [checkpoint('Cache invoice lookups', { done: true })],
       changes: [{ at: minutesAgo(4), by: 'claude', action: 'ticked', kind: 'checkpoint', key: 'cache-invoice-lookups', text: 'Cache invoice lookups' }],

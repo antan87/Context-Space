@@ -34,6 +34,13 @@ describe('read-only workspace reference route', () => {
       expect(await (await request(`?path=${encodeURIComponent(name!)}`)).json()).toEqual({ status: 'not-found', reason });
     }
   });
+  it('expands the current user home prefix at the transport boundary', async () => {
+    const fromHome = path.relative(os.homedir(), path.join(root, 'local.ts'));
+    expect(await (await request(`?path=${encodeURIComponent(`~/${fromHome}`)}`)).json()).toEqual({ status: 'found', target: { origin: { kind: 'workspace', workspacePath: root }, file: 'local.ts', viewer: 'code' } });
+    await fs.mkdir(path.join(root, '~someone'));
+    await fs.writeFile(path.join(root, '~someone/local.ts'), 'must not match');
+    expect(await (await request('?path=~someone%2Flocal.ts')).json()).toEqual({ status: 'not-found', reason: 'missing' });
+  });
   it('fails closed for malformed and missing manifests', async () => {
     await fs.writeFile(path.join(root, 'contextspace.json'), '{');
     expect((await request()).status).toBe(400);
@@ -48,6 +55,19 @@ describe('read-only workspace reference route', () => {
     for (const query of ['?path=only.ts', `?path=only.ts&cwd=${encodeURIComponent(path.join(repo, 'nested'))}`]) {
       expect((await (await request(query)).json()).target.origin).toEqual({ kind: 'repository', repoName: 'api', repoPath: repo });
     }
+  });
+  it('honors authoritative cwd and source aliases without falling back on misses', async () => {
+    const repo = path.join(root, 'api');
+    const source = path.join(temp, 'source', 'api');
+    await fs.mkdir(path.join(repo, 'src'), { recursive: true });
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.writeFile(path.join(repo, 'src/shared.ts'), 'checkout');
+    await fs.writeFile(path.join(root, 'src/shared.ts'), 'workspace');
+    await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ repos: [repo], originalRepos: [source], mode: 'worktree' }));
+    const query = (name: string, cwd: string) => `?path=${encodeURIComponent(name)}&cwd=${encodeURIComponent(cwd)}`;
+    expect((await (await request(query('shared.ts', path.join(source, 'src')))).json()).target.origin).toEqual({ kind: 'repository', repoName: 'api', repoPath: repo });
+    await fs.rm(path.join(repo, 'src/shared.ts'));
+    expect(await (await request(query('shared.ts', path.join(source, 'src')))).json()).toEqual({ status: 'not-found', reason: 'missing' });
   });
   it('uses the production filename-only enumeration without reading unrelated external symlink content', async () => {
     const repo = path.join(root, 'api');

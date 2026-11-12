@@ -1,3 +1,4 @@
+import { routeWorkspaceDocumentReferences } from './boardHelpers';
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { boardFile, boardFileCard, checkpoint, planFile, step, whatsNew } from './planData';
@@ -29,6 +30,7 @@ const DOCS: Record<string, string> = {
 let writes: string[] = [];
 test.beforeEach(async ({ page }) => {
   writes = [];
+  await routeWorkspaceDocumentReferences(page, () => [...Object.keys(DOCS), 'board-pictures/export.png', 'board-pictures/other.png', 'docs/board-pictures/other.png'], workspace.workspacePath);
   await page.route('**/api/terminals/bootstrap', (route) => route.fulfill({ json: { token: 't', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/terminals/*/status', (route) => route.fulfill({ json: { available: true, sessions: [], targets: [] } }));
   await page.route('**/api/workspace/*/sessions', (route) => route.fulfill({ json: { sessions: [] } }));

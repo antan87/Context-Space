@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ComponentProps } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { goToWorkspace, parseWorkspacePath } from '../chat/chatRoute.js';
-import { openCodeWindow, useCodeWindowRequest } from '../workspace-shell/openRequests.js';
+import { invalidateReferenceIntent, referenceRequestIsCurrent, openCodeWindow, useCodeWindowRequest } from '../workspace-shell/openRequests.js';
 import type { Feature } from '../../types.js';
 
 const CodeWindow = lazy(() => import('./CodeWindow.js'));
@@ -30,15 +30,18 @@ export function CodeWindowSlot({ ws, cover, sectionProps, showToast, askAI }: Pi
 
   // A request from before this page mounted is not asked for again; one made a moment ago (a path pressed in another
   // workspace's terminal, which navigated here) is.
-  const [shown, setShown] = useState<{ id: number; open: boolean; everOpened: boolean }>(() => ({ id: request && !(request.request.navigated && Date.now() - request.request.at < 3000) ? request.id : 0, open: false, everOpened: false }));
-  if (request && request.id !== shown.id) setShown({ id: request.id, open: true, everOpened: true });
-  const close = useCallback(() => setShown((current) => ({ ...current, open: false })), []);
+  const [shown, setShown] = useState<{ id: number; open: boolean; everOpened: boolean; accepted: typeof request }>(() => ({ id: request && !(request.request.navigated && Date.now() - request.request.at < 3000) ? request.id : 0, open: false, everOpened: false, accepted: null }));
+  if (request && request.id !== shown.id) setShown(referenceRequestIsCurrent(request.request)
+    ? { id: request.id, open: !request.request.close, everOpened: shown.everOpened || !request.request.close, accepted: request }
+    : { ...shown, id: request.id });
+  const close = useCallback(() => { invalidateReferenceIntent(); setShown((current) => ({ ...current, open: false })); }, []);
 
   // Once opened it is never unmounted
-  if (!shown.everOpened || !request) return null;
+  const accepted = shown.accepted;
+  if (!shown.everOpened || !accepted) return null;
   return (
     <Suspense fallback={null}>
-      <CodeWindow workspaceFile={request.request.workspaceFile} fileRequestId={request.id} ws={ws} open={shown.open} opener={request.request.opener} cover={cover} sectionProps={sectionProps} showToast={showToast} askAI={askAI} onClose={close} />
+      <CodeWindow workspaceFile={accepted.request.workspaceFile} fileRequestId={accepted.id} ws={ws} open={shown.open} opener={accepted.request.opener} cover={cover} sectionProps={sectionProps} showToast={showToast} askAI={askAI} onClose={close} />
     </Suspense>
   );
 }

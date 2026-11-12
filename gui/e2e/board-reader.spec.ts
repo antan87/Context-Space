@@ -11,6 +11,7 @@ import {
   minutesAgo,
   document,
   routeWork,
+  routeWorkspaceDocumentReferences,
   routeBoard,
   routeCards,
   routeLateCommits,
@@ -86,6 +87,7 @@ test.describe('Board, reader', () => {
 
   /** The documents panel's preview request, answered from FILES; the names that were asked for are kept. */
   async function routeFiles(page: Page) {
+    await routeWorkspaceDocumentReferences(page, () => Object.keys(FILES), ROOT);
     const asked: string[] = [];
     await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
       const name = new URL(route.request().url()).searchParams.get('name') ?? '';
@@ -475,7 +477,7 @@ test.describe('Board, reader', () => {
     await reader(page).getByRole('link', { name: 'the design' }).click();
     await expect(readerTitle(page, 'design.md')).toBeVisible();
     // The source document came from the work route; the file it links to is a plain file of the workspace.
-    expect([...new Set(asked)]).toEqual(['docs/design.md']);
+    await expect.poll(() => [...new Set(asked)]).toEqual(['docs/design.md']);
     await expect(reader(page).getByRole('heading', { name: 'The queue design', level: 1 })).toBeVisible();
     // The file followed is not a card: the card the trail began from stays marked (and only it); Escape steps back to it, and a second one closes with the keyboard on it.
     await expect(board(page).locator('[aria-current="true"]')).toHaveCount(1);

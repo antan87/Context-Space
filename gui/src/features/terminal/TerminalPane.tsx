@@ -142,9 +142,6 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
   const backgroundOutputRef = useRef(onBackgroundOutput);
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { openFileRef.current = onOpenFileReference; }, [onOpenFileReference]);
-  // Where the session runs, so a relative path it prints resolves from there. Read by the link providers.
-  const cwdRef = useRef<string | undefined>(undefined);
-  useEffect(() => { cwdRef.current = terminal?.cwd; }, [terminal]);
   useEffect(() => { statusChangeRef.current = onStatusChange; backgroundOutputRef.current = onBackgroundOutput; }, [onStatusChange, onBackgroundOutput]);
   const replyRef = useRef(onReply);
   useEffect(() => { replyRef.current = onReply; }, [onReply]);
@@ -224,7 +221,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
         allowNonHttpProtocols: true,
         activate: (_event, uri) => {
           if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer');
-          else if (/^file:\/\//i.test(uri)) openFileRef.current?.({ path: uri, cwd: cwdRef.current });
+          else if (/^file:\/\//i.test(uri)) openFileRef.current?.({ path: uri });
         },
       },
     });
@@ -343,7 +340,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
       callback(findFileReferences(windowed.text).map(reference => ({
         text: reference.text,
         range: { start: windowed.positionAt(reference.start, false), end: windowed.positionAt(reference.end, true) },
-        activate: () => openFileRef.current?.({ path: reference.path, line: reference.line, cwd: cwdRef.current }),
+        activate: () => openFileRef.current?.({ path: reference.path, line: reference.line }),
       })));
     } });
     renderer.current = term; fit.current = sizing; search.current = searching;

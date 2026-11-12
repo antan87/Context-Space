@@ -93,10 +93,10 @@ test.beforeEach(async ({ page }) => {
       socket.send(JSON.stringify({ type: 'replayed' }));
     });
   });
-  await page.route('**/api/workspace/*/files/resolve?*', (route) => {
+  await page.route('**/api/workspace/*/files/reference?*', (route) => {
     const wanted = new URL(route.request().url()).searchParams.get('path');
     return wanted === 'src/server/routes.ts'
-      ? route.fulfill({ json: { status: 'found', repoName: 'api', repoPath: '/tmp/api', file: 'src/server/routes.ts' } })
+      ? route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' }, file: 'src/server/routes.ts', viewer: 'code' } } })
       : route.fulfill({ json: { status: 'not-found', reason: 'missing' } });
   });
 });
@@ -105,7 +105,7 @@ test.afterEach(() => { expect(writes, 'no test here may write').toEqual([]); });
 const windowOf = (page: Page) => page.getByRole('region', { name: 'Code window' });
 const openName = (page: Page) => windowOf(page).locator('p[title]').first();
 async function openBoard(page: Page, mode: 'board' | 'split') {
-  await page.addInitScript(() => localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 })));
+  await page.addInitScript(() => { if (window === window.top) localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 })); });
   await page.goto('/#/workspaces/demo/board');
   await page.getByTestId(mode === 'board' ? 'view-mode-board' : 'view-mode-split').click();
   await expect(page.getByTestId(mode === 'board' ? 'view-mode-board' : 'view-mode-split')).toHaveAttribute('aria-pressed', 'true');
@@ -503,7 +503,7 @@ test.describe('keys inside the window', () => {
   });
 
   test('[ does not collapse the sidebar while the window is open', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('ctxspace_sidebar_docked_v1', 'true'));
+    await page.addInitScript(() => { if (window === window.top) localStorage.setItem('ctxspace_sidebar_docked_v1', 'true'); });
     await openBoard(page, 'board');
     await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
     await expect(openName(page)).toHaveText('src/server/handler.ts');
@@ -691,7 +691,7 @@ test.describe('keys belong to the window while it is open', () => {
   });
 
   test('[ still works for the sidebar after the window has been opened and closed', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('ctxspace_sidebar_docked_v1', 'true'));
+    await page.addInitScript(() => { if (window === window.top) localStorage.setItem('ctxspace_sidebar_docked_v1', 'true'); });
     await openBoard(page, 'board');
     await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
     await expect(openName(page)).toHaveText('src/server/handler.ts');
@@ -755,9 +755,16 @@ test.describe('keys belong to the window while it is open', () => {
     await expect(reader).toBeVisible();
   });
 
-  test('a path pressed in a docked second workspace terminal opens the window for that workspace', async ({ page }) => {
+  for (const delayed of [false, true]) test(`a path pressed in a docked second workspace terminal opens the window for that workspace (${delayed ? 'delayed' : 'fast'})`, async ({ page }) => {
+    let release!: () => void;
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    if (delayed) await page.route('**/api/workspace/*/files/reference?*', async route => {
+      await ready;
+      await route.fulfill({ json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' }, file: 'src/server/routes.ts', viewer: 'code' } } });
+    });
     await page.setViewportSize({ width: 1600, height: 900 });
     await page.addInitScript(() => {
+      if (window !== window.top) return;
       localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 }));
       localStorage.setItem('contextspace_floating_chat_state_v1', JSON.stringify({ openTabs: ['demo', 'other'], activeTab: 'demo', splitTab: 'other', splitRatio: 50, modes: { demo: 'cli', other: 'cli' }, harnesses: {}, terminalLaunches: {}, drafts: {} }));
     });
@@ -782,6 +789,10 @@ test.describe('keys belong to the window while it is open', () => {
     await page.mouse.click(cell.x, cell.y);
     await expect(windowOf(page)).toBeVisible();
     expect(new URL(page.url()).hash).toBe('#/workspaces/other/board');
+    if (delayed) {
+      await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+      release();
+    }
     await expect(openName(page)).toHaveText('src/server/routes.ts:12');
   });
 });

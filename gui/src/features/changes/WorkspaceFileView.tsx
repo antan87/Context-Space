@@ -27,6 +27,6 @@ export function WorkspaceFileView({ file, requestId, actions }: { file: Workspac
     {!current && <p className="p-3 text-xs" role="status">Loading workspace file…</p>}
     {current?.error && <div className="p-3 text-xs"><p role="alert">{current.error}</p><button className="mt-2 rounded border px-2 py-1" onClick={() => setRetry((n) => n + 1)}>Retry</button></div>}
     {current?.result?.omitted && <p className="p-3 text-xs" role="status">{current.result.omitted === 'binary' ? 'Binary file: text preview omitted.' : 'File exceeds the 1 MiB preview limit.'}</p>}
-    {current?.result && !current.result.omitted && <div className="min-h-0 flex-1"><MonacoFileViewer workspaceId={file.workspaceId} filePath={file.file} content={current.result.content} /></div>}
+    {current?.result && !current.result.omitted && <div className="min-h-0 flex-1"><MonacoFileViewer workspaceId={file.workspaceId} filePath={file.file} content={current.result.content} targetLine={file.line} jumpKey={requestId} /></div>}
   </div>;
 }
