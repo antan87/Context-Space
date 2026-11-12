@@ -45,12 +45,12 @@ describe('workspace-owned file routes', () => {
     await put('source/src/shared.ts'); await put('isolated-api/src/shared.ts'); await put('src/shared.ts', 'workspace');
     await manifest({ mode: 'in-place', repos: [path.join(root, 'source')], isolatedRepos: { source: { worktreePath: path.join(root, 'isolated-api') } } });
     const files = (await (await get()).json()).files;
-    expect(files).toContainEqual({ path: 'src/shared.ts' });
+    expect(files).toContainEqual(expect.objectContaining({ path: 'src/shared.ts' }));
     expect(files.some((file: { path: string }) => /^(source|isolated-api)\//.test(file.path))).toBe(false);
     for (const name of ['source/src/shared.ts', 'isolated-api/src/shared.ts']) expect((await get(name)).status).toBe(400);
     await manifest({ repos: ['/external/api'] });
     await put('api/local.ts');
-    expect((await (await get()).json()).files).not.toContainEqual({ path: 'api/local.ts' });
+    expect((await (await get()).json()).files).not.toContainEqual(expect.objectContaining({ path: 'api/local.ts' }));
     await manifest({ mode: 'in-place', repos: [root] });
     expect((await (await get()).json()).files).toEqual([]);
     expect((await get('src/shared.ts')).status).toBe(400);
@@ -62,9 +62,9 @@ describe('workspace-owned file routes', () => {
     await put('src/shared.ts', 'workspace');
     await manifest({ repos: [path.join(root, 'api')], originalRepos: [path.join(root, 'source/api')] });
     const listing = await (await get()).json();
-    expect(listing.files).toContainEqual({ path: 'src/shared.ts' });
-    expect(listing.files).not.toContainEqual({ path: 'source/api/src/shared.ts' });
-    expect(listing.files).not.toContainEqual({ path: 'api/src/shared.ts' });
+    expect(listing.files).toContainEqual(expect.objectContaining({ path: 'src/shared.ts' }));
+    expect(listing.files).not.toContainEqual(expect.objectContaining({ path: 'source/api/src/shared.ts' }));
+    expect(listing.files).not.toContainEqual(expect.objectContaining({ path: 'api/src/shared.ts' }));
     expect((await get('source/api/src/shared.ts')).status).toBe(400);
     expect((await get('api/src/shared.ts')).status).toBe(400);
     expect(await (await get('src/shared.ts')).json()).toEqual({ content: 'workspace' });
@@ -102,13 +102,32 @@ describe('workspace-owned file routes', () => {
     await put('a/b/c/d/e/visible.ts');
     await put('a/b/c/d/e/f/hidden-by-depth.ts');
     let result = await listWorkspaceFiles(root);
-    expect(result.files).toContainEqual({ path: 'a/b/c/d/e/visible.ts' });
-    expect(result.files).not.toContainEqual({ path: 'a/b/c/d/e/f/hidden-by-depth.ts' });
+    expect(result.files).toContainEqual(expect.objectContaining({ path: 'a/b/c/d/e/visible.ts' }));
+    expect(result.files).not.toContainEqual(expect.objectContaining({ path: 'a/b/c/d/e/f/hidden-by-depth.ts' }));
     expect(result.truncated).toBe(true);
     // Hidden entries count too, so a directory of ignored names cannot evade the work cap.
     for (let batch = 0; batch < 101; batch++) await Promise.all(Array.from({ length: 100 }, (_, i) => put(`.ignored-${batch * 100 + i}`)));
     result = await listWorkspaceFiles(root);
     expect(result.truncated).toBe(true);
     expect(result.limits).toEqual({ depth: 5, entries: 10_000 });
+  });
+
+  it('includes modifiedAt ISO string and byte size for each file while keeping exclusions', async () => {
+    const sample = 'hello workspace files\n';
+    await put('PLAN.md', sample);
+    await put('.hidden/secret.md', 'no');
+    await put('node_modules/pkg/index.js', 'no');
+
+    const stat = await fs.lstat(path.join(root, 'PLAN.md'));
+    const res = await get();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const planEntry = body.files.find((f: { path: string }) => f.path === 'PLAN.md');
+    expect(planEntry).toEqual({
+      path: 'PLAN.md',
+      modifiedAt: stat.mtime.toISOString(),
+      size: Buffer.byteLength(sample, 'utf8'),
+    });
+    expect(body.files.some((f: { path: string }) => f.path.includes('secret.md') || f.path.includes('node_modules'))).toBe(false);
   });
 });

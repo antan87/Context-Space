@@ -190,7 +190,18 @@ export type CardData = {
   step?: string;
 };
 export type NoteData = CardData;
-export type FileCardData = CardData & { path: string; fileType: FileType };
+export type FileCardData = CardData & {
+  path: string;
+  fileType: FileType;
+  /** Generated items (e.g. from Workspace files) are read-only and never written to contextspace-board.json. */
+  readOnly?: boolean;
+  /** Workspace files group so compact rendering can tailor documents, pages, and picture thumbnails. */
+  group?: 'documents' | 'pages' | 'pictures';
+  /** Workspace-relative parent folder for display on generated file cards (empty string when at workspace root). */
+  folder?: string;
+  /** Human-readable modification age (e.g. "2 h ago") for read-only workspace file cards. */
+  age?: string;
+};
 
 export type LaneNode = Node<LaneData, 'lane'>;
 export type CheckpointNode = Node<CheckpointData, 'checkpoint'>;

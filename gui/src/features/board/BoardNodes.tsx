@@ -19,6 +19,7 @@ import { agoText } from '../plan/whatsNew.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { areaCountItems, areaCounts, foldLabel, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
 import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
@@ -1466,10 +1467,118 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   const [titleRef, titleCut] = useCut<HTMLElement>(data.title);
   const [textRef, textCut] = useCut<HTMLDivElement>(data.text);
   const picture = data.fileType === 'image' && actions && brokenPath !== data.path;
+  if (data.compact && (data.group === 'documents' || data.group === 'pages')) {
+    const Icon = FILE_ICON[data.fileType];
+    const folderLabel = data.folder || 'Workspace root';
+    const openItem = (event: MouseEvent<HTMLElement>) => actions?.openInReader(
+      { path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) },
+      event.currentTarget,
+    );
+    const content = (
+      <>
+        <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+        <span id={titleId} className="min-w-0 max-w-[52%] shrink-0 truncate text-[13.5px] font-medium leading-5 text-foreground" title={data.title}>
+          {data.title}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[13px] leading-4 text-muted-foreground" title={folderLabel}>
+          {folderLabel}
+        </span>
+        {data.age && (
+          <span id={markId} className="shrink-0 whitespace-nowrap text-[13px] leading-4 text-muted-foreground tabular-nums">
+            {data.age}
+          </span>
+        )}
+      </>
+    );
+    return (
+      <article
+        aria-labelledby={titleId}
+        aria-describedby={data.age ? markId : undefined}
+        aria-current={reading ? 'true' : undefined}
+        onClick={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}
+        className={cn(
+          'group relative flex h-full w-full items-center overflow-hidden rounded-lg border bg-card text-card-foreground shadow-xs transition-colors hover:bg-accent/35 hover:border-border/80 border-border',
+          CARD_FOCUS,
+          actions && BRICK,
+          reading && 'ring-2 ring-primary',
+        )}
+      >
+        <Anchors />
+        {actions ? (
+          <button
+            type="button"
+            data-card-main
+            aria-label={`Open ${data.title}`}
+            onClick={openItem}
+            className="nodrag nopan flex h-full w-full min-w-0 items-center gap-2.5 px-3 text-left outline-hidden hover:no-underline cursor-pointer"
+          >
+            {content}
+          </button>
+        ) : (
+          <div className="flex h-full w-full min-w-0 items-center gap-2.5 px-3">{content}</div>
+        )}
+      </article>
+    );
+  }
+  if (data.compact && data.group === 'pictures') {
+    const Icon = FILE_ICON[data.fileType];
+    const title = <span ref={titleRef} id={titleId} className="min-w-0 truncate" title={data.title}>{data.title}</span>;
+    return (
+      <article
+        aria-labelledby={titleId}
+        aria-describedby={data.age ? markId : undefined}
+        aria-current={reading ? 'true' : undefined}
+        onClick={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}
+        className={cn(
+          'group relative flex h-full w-full flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80',
+          CARD_FOCUS,
+          actions && BRICK,
+          reading && 'ring-2 ring-primary',
+        )}
+      >
+        <Anchors />
+        <div className="min-h-0 flex-1 w-full overflow-hidden border-b border-border/60 bg-black/40">
+          {picture
+            ? <img
+              src={documentFileUrl(actions.workspaceId, data.path)}
+              alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
+              loading="lazy"
+              decoding="async"
+              draggable={false}
+              onError={() => setBrokenPath(data.path)}
+              className="size-full object-cover transition-transform duration-200 group-hover:scale-105"
+            />
+            : <div className="flex size-full flex-col items-center justify-center gap-0.5 px-2 text-center">
+              <Icon aria-hidden="true" className="size-6 text-muted-foreground" />
+              <span className="text-[12.5px] font-medium leading-4">{FILE_LABEL[data.fileType]}</span>
+            </div>}
+        </div>
+        <div className="flex shrink-0 items-center justify-between gap-1.5 px-2.5 py-0.5">
+          <h2 className="flex min-h-7 min-w-0 flex-1 items-center text-[13.5px] font-medium leading-5 text-foreground">
+            {actions
+              ? <button
+                type="button"
+                data-card-main
+                className={cn(TITLE_BUTTON, 'flex min-h-7 items-center text-[13.5px] font-medium')}
+                aria-label={`Open ${data.title}`}
+                onClick={(event) => actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) }, event.currentTarget)}
+              >{title}</button>
+              : title}
+          </h2>
+          {data.age && (
+            <span id={markId} className="shrink-0 whitespace-nowrap text-[13px] leading-4 text-muted-foreground tabular-nums">
+              {data.age}
+            </span>
+          )}
+        </div>
+      </article>
+    );
+  }
   if (data.compact) {
     const Icon = FILE_ICON[data.fileType];
     const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
-    return <CardFrame data={data} labelledBy={titleId} describedBy={markId} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
+    const describedBy = !data.readOnly || data.age ? markId : undefined;
+    return <CardFrame data={data} labelledBy={titleId} describedBy={describedBy} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
       <div className="flex min-h-0 flex-1 gap-3">
         <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
           {picture
@@ -1487,10 +1596,12 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
           <div className="flex shrink-0 items-start gap-1.5">
           <h2 className={cn('flex min-h-7 min-w-0 flex-1 items-center text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')}>
             {actions
-              ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} onClick={(event) => actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}>{title}</button>
+              ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} onClick={(event) => actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)}>{title}</button>
               : title}
           </h2>
-          <CardMark data={data} markId={markId} />
+          {data.readOnly
+            ? (data.age ? <span id={markId} className="shrink-0 whitespace-nowrap pt-1 text-xs leading-4 text-muted-foreground tabular-nums">{data.age}</span> : null)
+            : <CardMark data={data} markId={markId} />}
           </div>
           <CardText ref={textRef} text={data.text} cut={textCut} className="board-text-compact line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
         </div>
@@ -1521,13 +1632,13 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
     {data.text && <CardText ref={textRef} text={data.text} cut={textCut} className="mt-1 line-clamp-2 shrink-0 text-xs leading-[16px]" />}
     <div className="mt-auto" />
     <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-border/40">
-      <span className="truncate text-[11px] text-muted-foreground" title={bylineText(data) || 'live visual snapshot'}>
-        {bylineText(data) || 'live visual snapshot'}
+      <span className="truncate text-xs text-muted-foreground" title={data.readOnly ? (data.age ?? '') : (bylineText(data) || 'live visual snapshot')}>
+        {data.readOnly ? (data.age ?? '') : (bylineText(data) || 'live visual snapshot')}
       </span>
       <div className="flex items-center gap-1 shrink-0">
-        <Button size="xs" variant="ghost" className="nodrag nopan h-6 px-1.5 text-[11px]" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" className="size-3" />Open</Button>
+        <Button size="xs" variant="ghost" className="nodrag nopan h-6 px-1.5 text-xs" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" className="size-3" />Open</Button>
         {(titleCut || textCut) && <ReadAll data={data} />}
-        {actions?.askInCLI && !actions.readOnly && (
+        {actions?.askInCLI && !actions.readOnly && !data.readOnly && (
           <button
             type="button"
             onClick={(e) => {
@@ -1558,7 +1669,7 @@ function areaLabel(data: AreaData): string {
   return summaryLabel([
     data.title,
     data.done ? 'done' : data.nowSet ? 'now' : data.current ? 'next up' : data.kind === 'checkpoint' ? 'not done' : undefined,
-    data.kind !== 'work' ? areaSteps(data).toLowerCase() : undefined,
+    data.kind !== 'work' && data.kind !== 'files' ? areaSteps(data).toLowerCase() : undefined,
     data.waitingCount > 0 ? (data.waitingCount === 1 ? 'waits for you' : `${data.waitingCount} wait for you`) : undefined,
     counts.length > 0 ? counts.join(', ') : undefined,
     data.warning?.toLowerCase(),
@@ -1624,7 +1735,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
             {data.title}
           </span>
 
-          {data.kind !== 'work' && (
+          {data.kind !== 'work' && data.kind !== 'files' && (
             <span className="mt-1 block shrink-0 w-full">
               <span className={cn('block truncate', AREA_TEXT)}>{stepsLabel}</span>
               <span aria-hidden="true" className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted">
@@ -1742,6 +1853,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
 function AreaMark({ data }: { data: AreaData }) {
   if (data.done) return <span className="inline-flex items-center"><CircleCheck aria-hidden="true" className="size-4 shrink-0 text-state-done" /><span className="sr-only">Done</span></span>;
   if (data.nowSet) return <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center"><span className="board-now-dot size-2 rounded-full bg-state-now" /></span>;
+  if (data.kind === 'files') return <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />;
   return <Circle aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/50" />;
 }
 
@@ -1749,7 +1861,9 @@ function AreaMark({ data }: { data: AreaData }) {
 export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
   const actions = useContext(BoardActionsContext);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
-  const isNotStarted = data.kind !== 'work' && data.stepsTotal > 0 && data.stepsDone === 0;
+  const isNotStarted = data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0 && data.stepsDone === 0;
+  const fileCounts = data.kind === 'files' ? formatWorkspaceFileCounts(data, { compact: true }).join(' · ') : '';
+  const fileFullCounts = data.kind === 'files' ? areaCounts(data).join(' · ') : '';
 
   return (
     <div
@@ -1768,10 +1882,13 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
         type="button"
         onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
         aria-label={areaLabel(data)}
-        className="board-area nodrag nopan flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded"
+        className={cn(
+          'board-area nodrag nopan flex items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded',
+          data.kind === 'files' ? 'shrink-0' : 'min-w-0 flex-1',
+        )}
       >
         <AreaMark data={data} />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5 text-foreground" title={data.title}>
+        <span className={cn('text-sm font-medium leading-5 text-foreground', data.kind === 'files' ? 'whitespace-nowrap' : 'min-w-0 flex-1 truncate')} title={data.title}>
           {data.fresh && !data.current && !data.done && (
             <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
           )}
@@ -1817,13 +1934,18 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
           {data.nextOpenStep}
         </span>
       )}
-      {!data.done && data.current && data.kind !== 'work' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
+      {!data.done && data.current && data.kind !== 'work' && data.kind !== 'files' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
       {data.waitingCount > 0 && data.tier !== 2 && (
         <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
           <span className="size-1.5 rounded-full bg-state-needs" />Waiting
         </span>
       )}
-      {data.kind !== 'work' && data.stepsTotal > 0 && (
+      {fileCounts && data.tier !== 2 && data.tier !== 3 && (
+        <span className="min-w-0 flex-1 text-right text-xs leading-4 text-muted-foreground break-words" title={fileFullCounts || fileCounts}>
+          {fileCounts}
+        </span>
+      )}
+      {data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0 && (
         <>
           <span className={cn('shrink-0 text-xs tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
             {data.stepsDone} of {data.stepsTotal}
@@ -1847,15 +1969,15 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const placeholderRef = useRef<HTMLSpanElement>(null);
   const [failedPics, setFailedPics] = useState<string[]>([]);
   const picture = data.pictures.find((pic) => !failedPics.includes(pic.path));
-  const hasStatus = (data.current && data.kind !== 'work') ||
+  const hasStatus = (data.current && data.kind !== 'work' && data.kind !== 'files') ||
     data.waitingCount > 0 ||
     Boolean(data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0)) ||
     Boolean(data.tier === 3 && (data.newsItems?.length || data.newsSummary));
   const showPicture = Boolean(picture && actions && miniShowsPicture(width ?? 0, height ?? 0, hasStatus));
   const statusLine = (height ?? 0) >= MINI_STATUS_LINE;
-  const hasSteps = data.kind !== 'work' && data.stepsTotal > 0;
+  const hasSteps = data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0;
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
-  const isNotStarted = data.kind !== 'work' && data.stepsTotal > 0 && data.stepsDone === 0;
+  const isNotStarted = data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0 && data.stepsDone === 0;
 
   const hasCountButtons = Boolean(data.tier === 3 && data.newsItems && data.newsItems.length > 0 && actions);
 
@@ -1877,6 +1999,80 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       }
     }
   }, [data.title, data.newsSummary, width, height, statusLine]);
+
+  if (data.kind === 'files') {
+    const pics = data.pictures.filter((pic) => !failedPics.includes(pic.path)).slice(0, 3);
+    const fullCounts = areaCounts(data).join(' · ');
+    const fileCounts = formatWorkspaceFileCounts(data, { compact: true }).join(' · ');
+    const thumbSize = (height ?? 0) >= 108 ? 'h-9 w-14' : (height ?? 0) >= 90 ? 'h-7 w-12' : 'h-6 w-10';
+    return (
+      <div
+        ref={cardRef}
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('button')) return;
+          actions?.openArea?.(id, event.currentTarget);
+        }}
+        className={cn(
+          'nodrag nopan relative flex h-full w-full flex-col justify-between overflow-hidden rounded-xl border border-border/60 bg-card px-3 text-left text-card-foreground shadow-xs cursor-pointer',
+          (height ?? 0) < 96 ? 'gap-0.5 py-1.5' : 'gap-1 py-2',
+          'transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md',
+          'motion-reduce:transition-none motion-reduce:hover:translate-y-0',
+        )}
+      >
+        <Anchors />
+        {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-xl" />}
+        <button
+          type="button"
+          onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+          aria-label={areaLabel(data)}
+          className="board-area nodrag nopan flex w-full min-w-0 items-center gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+        >
+          <AreaMark data={data} />
+          <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5 text-foreground" title={data.title}>
+            {data.title}
+          </span>
+        </button>
+        {pics.length > 0 && actions && (
+          <div className="flex shrink-0 items-center gap-1.5 overflow-hidden">
+            {pics.map((pic) => (
+              <button
+                key={pic.path}
+                type="button"
+                data-path={pic.path}
+                aria-label={pic.alt || pic.path}
+                title={pic.alt || pic.path}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  actions.openInReader({ path: pic.path, title: pic.alt || pic.path }, e.currentTarget);
+                }}
+                className={cn(
+                  'nodrag nopan relative shrink-0 overflow-hidden rounded border border-border/50 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:opacity-85 transition-opacity',
+                  thumbSize,
+                )}
+              >
+                <img
+                  src={documentFileUrl(actions.workspaceId, pic.path)}
+                  alt=""
+                  aria-hidden="true"
+                  loading="lazy"
+                  onError={() => setFailedPics((prev) => (prev.includes(pic.path) ? prev : [...prev, pic.path]))}
+                  className="h-full w-full object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        )}
+        {pics.length === 0 && data.preview && (
+          <span className="line-clamp-1 text-xs leading-4 text-muted-foreground">{data.preview}</span>
+        )}
+        {fileCounts && (
+          <span className="min-w-0 text-xs leading-4 text-muted-foreground break-words" title={fullCounts}>
+            {fileCounts}
+          </span>
+        )}
+      </div>
+    );
+  }
 
   const status = (
     <>
@@ -2452,7 +2648,7 @@ export function BoardMoreTile({ data }: NodeProps<MoreNode>) {
     <button
       type="button" data-row-control={data.rowId} aria-expanded="false" aria-label={`Show ${data.count} more for ${data.rowTitle}`} disabled={!actions}
       onClick={() => actions?.toggleRow?.(data.rowId)}
-      className="board-row-control nodrag nopan flex h-full w-full items-center justify-end rounded-lg px-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/30 hover:text-foreground"
+      className="board-row-control nodrag nopan flex h-full w-full items-center justify-end whitespace-nowrap rounded-lg px-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/30 hover:text-foreground"
     >{data.title}</button>
   </div>;
 }

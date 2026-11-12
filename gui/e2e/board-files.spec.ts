@@ -11,6 +11,7 @@ test.beforeEach(async ({ page }) => {
 
 test('Files loads on demand, searches origins, and opens scoped documents', async ({ page }) => {
   let listings = 0;
+  let repoListings = 0;
   await routeBoard(page);
   await routePictures(page);
   await routeCards(page, boardFile({ cards: [] }));
@@ -20,6 +21,7 @@ test('Files loads on demand, searches origins, and opens scoped documents', asyn
   });
   await page.route('**/api/workspace/demo/changes?include=all', async (route) => {
     listings++;
+    repoListings++;
     await route.fulfill({ json: { changes: [{ repoName: 'api', repoPath: '/repos/api', files: [{ file: 'docs/guide.md', type: 'unchanged' }] }, { repoName: 'web', repoPath: '/repos/web', files: [{ file: 'docs/guide.md', type: 'unchanged' }] }] } });
   });
   await page.route('**/api/workspace/demo/documents/preview?*', async (route) => {
@@ -28,12 +30,14 @@ test('Files loads on demand, searches origins, and opens scoped documents', asyn
   });
   await page.goto('/#/workspaces/demo/board');
   await expect(page.getByRole('button', { name: 'Board index' })).toBeVisible();
-  expect(listings).toBe(0);
+  // Repository change scanning remains on-demand until Files is opened; typing queries never refetches listings.
+  expect(repoListings).toBe(0);
   await page.getByRole('button', { name: 'Board index' }).click();
   const nav = page.getByRole('navigation', { name: 'Board index' });
   await nav.getByRole('button', { name: 'Files', exact: true }).click();
   await expect(nav.getByText('Workspace documents and repository files.', { exact: false })).toBeVisible();
   await expect(nav.getByText('Repository · api')).toBeVisible();
+  expect(repoListings).toBeGreaterThanOrEqual(1);
   const loadedRequests = listings;
   expect(loadedRequests).toBeGreaterThanOrEqual(2);
   await nav.getByPlaceholder('Search files…').fill('web');

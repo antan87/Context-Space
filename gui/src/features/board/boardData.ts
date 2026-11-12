@@ -4,6 +4,7 @@
  * nothing is trusted just for arriving: the reply is rebuilt field by field and anything unusable is dropped.
  */
 
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client.js';
 
@@ -185,6 +186,59 @@ export function useBoard(workspace: string | null, options: { poll?: boolean } =
     enabled: Boolean(workspace),
     staleTime: 5000,
     refetchInterval: options.poll ? 30_000 : false,
+  });
+}
+
+export const workspaceFilesKey = (workspace: string | null) => ['workspace-files', workspace] as const;
+
+/** Refresh interval for the workspace file listing: once every few minutes when active, never on every 30 s Board poll. */
+export const WORKSPACE_FILES_REFETCH_MS = 3 * 60_000;
+
+export interface WorkspaceFileEntry {
+  path: string;
+  modifiedAt?: string;
+  size?: number;
+}
+
+export interface WorkspaceFilesListing {
+  files: WorkspaceFileEntry[];
+  truncated: boolean;
+  errors: string[];
+}
+
+/**
+ * Lists workspace-owned files for the Workspace files Area. Refetches on Board open, on window focus,
+ * and otherwise at most every few minutes (or when news reports document changes).
+ */
+export function useWorkspaceFiles(workspace: string | null, options: { active?: boolean } = {}) {
+  const queryClient = useQueryClient();
+  const active = Boolean(workspace) && (options.active ?? true);
+
+  // TanStack Query v5 listens to visibilitychange only; also refetch when the browser window regains focus (e.g. from terminal/IDE).
+  useEffect(() => {
+    if (!active || typeof window === 'undefined') return;
+    const onFocus = () => {
+      void queryClient.invalidateQueries({ queryKey: workspaceFilesKey(workspace) });
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [active, queryClient, workspace]);
+
+  return useQuery({
+    queryKey: workspaceFilesKey(workspace),
+    queryFn: async ({ signal }): Promise<WorkspaceFilesListing> => {
+      const data = await apiFetch<Partial<WorkspaceFilesListing>>(`/api/workspace/${encodeURIComponent(workspace!)}/files`, { signal });
+      return {
+        files: Array.isArray(data?.files) ? data.files.filter((f): f is WorkspaceFileEntry => typeof f?.path === 'string') : [],
+        truncated: Boolean(data?.truncated),
+        errors: Array.isArray(data?.errors) ? data.errors.filter((e): e is string => typeof e === 'string') : [],
+      };
+    },
+    enabled: Boolean(workspace),
+    staleTime: WORKSPACE_FILES_REFETCH_MS,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    refetchInterval: options.active ? WORKSPACE_FILES_REFETCH_MS : false,
   });
 }
 

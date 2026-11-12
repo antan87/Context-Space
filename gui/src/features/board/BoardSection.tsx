@@ -2,6 +2,7 @@ import { useOpenFileReference } from '../workspace-shell/useOpenFileReference.js
 import '@xyflow/react/dist/style.css';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { Archive, ChevronLeft, Code2, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
 
@@ -42,7 +43,8 @@ import {
   type LooseTab,
   type OverviewNode,
 } from './boardAreas.js';
-import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard } from './boardData.js';
+import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard, useWorkspaceFiles, workspaceFilesKey } from './boardData.js';
+import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { NoteDialog } from './NoteDialog.js';
 import { fileTitle, readerDock } from './boardDock.js';
 import { boardEdges, oneLinePerPair, type BoardNode } from './boardLayout.js';
@@ -225,6 +227,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const listening = active && visible;
   const connected = useFeedConnected(workspaceId, listening);
   const boardQuery = useBoard(workspaceId, { poll: listening && !connected });
+  const queryClient = useQueryClient();
+  const workspaceFilesQuery = useWorkspaceFiles(workspaceId, { active: listening });
   const root = useRef<HTMLDivElement>(null);
 
   const planView = plan.data;
@@ -236,8 +240,27 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   if (built.signature !== focusNow) setBuilt(stableNow(built, focusNow, clock));
   const documents = guidance.data?.documents;
   const newsView = news.data;
+  const docsNewsSig = newsView
+    ? `${newsView.documents.more}:${newsView.documents.items.map((item) => `${item.name}:${item.change}`).join(',')}`
+    : '';
+  const prevDocsNewsRef = useRef<{ workspaceId: string; sig: string | null }>({ workspaceId, sig: null });
+  useEffect(() => {
+    if (!newsView) return;
+    const prev = prevDocsNewsRef.current;
+    if (prev.workspaceId !== workspaceId || prev.sig === null) {
+      prevDocsNewsRef.current = { workspaceId, sig: docsNewsSig };
+      return;
+    }
+    if (docsNewsSig !== prev.sig) {
+      prevDocsNewsRef.current = { workspaceId, sig: docsNewsSig };
+      if (newsView.documents.items.length > 0 || newsView.documents.more > 0) {
+        void queryClient.invalidateQueries({ queryKey: workspaceFilesKey(workspaceId) });
+      }
+    }
+  }, [workspaceId, newsView, docsNewsSig, queryClient]);
   const boardNewsView = useMemo(() => boardNews(newsView, recent.data), [newsView, recent.data]);
   const board = boardQuery.data;
+  const workspaceFiles = workspaceFilesQuery.data?.files;
   const [showArchived, setShowArchived] = useState(false);
 
   // Source loading & error indicators
@@ -256,8 +279,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const codeOpen = useCodeWindowOpen(workspaceId);
   const { summary: changes } = useRepoChanges(workspaceId, { enabled: listening && !readOnly, paused: codeOpen });
   const areas = useMemo(
-    () => buildBoardAreas({ plan: planView, documents, news: boardNewsView, board, showArchived, focusNow: built.at }).map((area) => (area.data.current && changes.repos.length > 0 ? { ...area, uncommitted: changes.repos } : area)),
-    [planView, documents, boardNewsView, board, showArchived, changes.repos, built.at],
+    () => buildBoardAreas({ plan: planView, documents, news: boardNewsView, board, workspaceFiles, showArchived, focusNow: built.at }).map((area) => (area.data.current && changes.repos.length > 0 ? { ...area, uncommitted: changes.repos } : area)),
+    [planView, documents, boardNewsView, board, workspaceFiles, showArchived, changes.repos, built.at],
   );
 
   // Plane 0 (Overview) elements
@@ -2391,10 +2414,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="warning">{waitingText(activeArea.data.waitingCount)}</Badge></span>
                 )}
                 {activeArea.data.kind !== 'work' && (
-                  <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">{stepsText(activeArea.data)}</span>
+                  <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">
+                    {activeArea.data.kind === 'files'
+                      ? formatWorkspaceFileCounts(activeArea.data).join(' · ')
+                      : stepsText(activeArea.data)}
+                  </span>
                 )}
                 <div className="ml-auto flex shrink-0 items-center gap-0.5 @[34rem]:gap-1">
-                  {activeArea.data.kind !== 'work' && !readOnly && (
+                  {activeArea.data.kind !== 'work' && activeArea.data.kind !== 'files' && !readOnly && (
                     <>
                       <IconButton
                         label="Add a step"
@@ -2427,7 +2454,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     </>
                   )}
                   {codeButton(true)}
-                  {noteButton(activeArea.id, true)}
+                  {activeArea.data.kind !== 'files' && noteButton(activeArea.id, true)}
                   {activeArea.archivedCount > 0 && (
                     <Button
                       size="xs"

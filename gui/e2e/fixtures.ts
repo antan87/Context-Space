@@ -172,6 +172,8 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/workspace/*/recent-commits', (route) => route.fulfill({ json: { at: new Date().toISOString(), from: new Date(Date.now() - 3 * 86_400_000).toISOString(), commits: [] } }));
     // Nothing has been put on the board; a spec about the board routes its own.
     await page.route('**/api/workspace/*/board', json(boardFile()));
+    // No workspace files by default; specs about Workspace files register their own listing route.
+    await page.route('**/api/workspace/*/files', json({ files: [], truncated: false, errors: [] }));
     // Nothing is moved on the board either: a place that is sent anyway is refused. A spec about moving things routes its own.
     await page.route('**/api/workspace/*/board/changes', (route) => route.fulfill({ status: 409, json: { error: 'No board change was expected here.' } }));
     // Nothing needs the user in any workspace; a spec about the Overview routes its own.

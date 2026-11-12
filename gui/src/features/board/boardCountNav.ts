@@ -2,7 +2,7 @@ import type { LooseTab } from './boardRows.js';
 import type { AreaData, BoardArea, BoardAreaRepo } from './boardAreas.js';
 import { fileTypeOf, type BoardCard } from './boardLayout.js';
 
-export type AreaCountKind = 'notes' | 'pictures' | 'files' | 'documents' | 'commits' | 'updates';
+export type AreaCountKind = 'notes' | 'pictures' | 'files' | 'documents' | 'pages' | 'commits' | 'updates';
 
 export interface AreaCountTarget {
   rowId: string | null;
@@ -43,6 +43,21 @@ export type ResolvableArea = BoardArea | CountNavArea;
 export function areaCountItems(data: AreaData): AreaCountItem[] {
   const items: AreaCountItem[] = [];
   const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  if (data.kind === 'files') {
+    if (data.documentCount > 0) {
+      const label = plural(data.documentCount, 'document', 'documents');
+      items.push({ kind: 'documents', count: data.documentCount, label, actionLabel: `Show the ${label}` });
+    }
+    if ((data.pageCount ?? 0) > 0) {
+      const label = plural(data.pageCount!, 'page', 'pages');
+      items.push({ kind: 'pages', count: data.pageCount!, label, actionLabel: `Show the ${label}` });
+    }
+    if (data.pictureCount > 0) {
+      const label = plural(data.pictureCount, 'picture', 'pictures');
+      items.push({ kind: 'pictures', count: data.pictureCount, label, actionLabel: `Show the ${label}` });
+    }
+    return items;
+  }
   if (data.noteCount > 0) {
     const label = plural(data.noteCount, 'note', 'notes');
     items.push({ kind: 'notes', count: data.noteCount, label, actionLabel: `Show the ${label}` });
@@ -91,6 +106,13 @@ export function resolveCountTarget(
   area: ResolvableArea,
   kind: AreaCountKind
 ): AreaCountTarget {
+  const isFilesArea = area.data?.kind === 'files' || ('kind' in area && area.kind === 'files');
+  if (isFilesArea) {
+    if (kind === 'documents') return { rowId: 'row:ws:documents' };
+    if (kind === 'pages') return { rowId: 'row:ws:pages' };
+    if (kind === 'pictures') return { rowId: 'row:ws:pictures' };
+    return { rowId: null };
+  }
   switch (kind) {
     case 'pictures': {
       const picCard = newestCard(area.cards, (c) => !c.archived && c.kind === 'file' && fileTypeOf(c.path) === 'image');
@@ -121,6 +143,8 @@ export function resolveCountTarget(
     }
     case 'documents':
       return { rowId: 'lane:documents' };
+    case 'pages':
+      return { rowId: null };
     case 'commits': {
       const repoWithCommits =
         area.repos?.find((r) => ((r.commits as unknown[])?.length ?? 0) > 0) ??

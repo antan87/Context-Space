@@ -3,7 +3,7 @@ import { apiFetch } from '../../lib/api/client.js';
 
 export interface IndexFile { path: string; repo?: { name: string; path: string }; document: boolean }
 type Listing = { changes: Array<{ repoName: string; repoPath: string; files: Array<{ file: string; type: string }>; error?: string }> };
-type WorkspaceFiles = { files: Array<{ path: string }>; truncated: boolean; errors: string[] };
+type WorkspaceFiles = { files: Array<{ path: string; modifiedAt?: string; size?: number }>; truncated: boolean; errors: string[] };
 const DOCUMENT = /\.(?:md|markdown|mdx|txt|rst|adoc|csv|tsv|log|svg|mmd|html?|png|jpe?g|gif|webp|pdf|docx?|odt|rtf|xlsx?|ods|pptx?|odp)$/i;
 const LIMIT = 200;
 

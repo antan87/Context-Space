@@ -16,7 +16,8 @@ import type { WorkDocument } from '../../types.js';
 import { focusOf, headingKeysOf } from '../plan/focus.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
-import type { BoardCard, BoardLink, BoardView } from './boardData.js';
+import type { BoardCard, BoardLink, BoardView, WorkspaceFileEntry } from './boardData.js';
+import { buildWorkspaceFilesArea, type GroupedWorkspaceFiles } from './workspaceFilesArea.js';
 import { resolveCommitContext } from './commitContext.js';
 import {
   areaCountItems,
@@ -75,7 +76,7 @@ export type AreaPicture = { path: string; alt: string };
 export type AreaOpenStep = { key: string; text: string; done: boolean };
 
 export type AreaData = {
-  kind: 'checkpoint' | 'plan' | 'work';
+  kind: 'checkpoint' | 'plan' | 'work' | 'files';
   title: string;
   done: boolean;
   /** The focus Area: the one the work is on (the step someone said they work on, else the plan's first open checkpoint). It is Now only when `nowSet`. */
@@ -107,6 +108,7 @@ export type AreaData = {
   noteCount: number;
   fileCount: number;
   pictureCount: number;
+  pageCount?: number;
   documentCount: number;
   commitCount: number;
   archivedCount: number;
@@ -184,7 +186,7 @@ export interface BoardArea {
   /** The work not committed yet, per repository, with the files it touches. Added by the Board from the change listing; only the current Area draws it. */
   uncommitted?: RepoChangeSummary[];
   id: string;
-  kind: 'checkpoint' | 'plan' | 'work';
+  kind: 'checkpoint' | 'plan' | 'work' | 'files';
   checkpointKey?: string;
   check?: string | null;
   proof?: PlanProof;
@@ -195,6 +197,7 @@ export interface BoardArea {
   cards: BoardCard[];
   archivedCount: number;
   allMemberNodeIds: string[];
+  workspaceFiles?: GroupedWorkspaceFiles;
 }
 
 export type Size = { width: number; height: number };
@@ -205,6 +208,9 @@ export interface BuildBoardAreasSources {
   documents?: WorkDocument[];
   news?: WhatsNewView;
   board?: BoardView;
+  workspaceFiles?: readonly WorkspaceFileEntry[];
+  /** Optional normalized workspace-relative paths to omit from the Workspace files Area (e.g. WF2 step files). */
+  excludeWorkspaceFilePaths?: Iterable<string>;
   showArchived?: boolean;
   /** When the Areas are built, for what changed within the last minute (`isFresh`). Default: the time of the call. */
   now?: number;
@@ -260,6 +266,8 @@ export function buildBoardAreas({
   documents,
   news,
   board,
+  workspaceFiles,
+  excludeWorkspaceFilePaths,
   showArchived = false,
   now = Date.now(),
   focusNow = now,
@@ -308,12 +316,18 @@ export function buildBoardAreas({
     });
   }
 
+  const filesArea = buildWorkspaceFilesArea(workspaceFiles, {
+    existingCards: board?.cards,
+    excludePaths: excludeWorkspaceFilePaths,
+    now,
+  });
+
   if (drafts.length === 0) {
     const hasCards = (board?.cards.length ?? 0) > 0;
     const hasDocs = (documents?.length ?? 0) > 0;
     const hasNews = Boolean(news?.commits.some((r) => r.commits.length > 0 || Boolean(r.problem) || r.more > 0));
     if (!hasCards && !hasDocs && !hasNews) {
-      return [];
+      return filesArea ? [filesArea] : [];
     }
     drafts.push({
       id: 'area:work',
@@ -810,6 +824,10 @@ export function buildBoardAreas({
     });
   }
 
+  if (filesArea) {
+    result.push(filesArea);
+  }
+
   return result;
 }
 
@@ -868,7 +886,8 @@ export function areaCardHeight(data: AreaData): number {
     ? CARD.pictures
     : data.preview ? CARD.more + cardTextLines(data.preview, 13.5, 0.93) * CARD.text : 0;
   const footer = cardFooterHeight(data, AREA_SIZE.width);
-  return 2 * CARD.pad + CARD.head + CARD.gap + title * CARD.line + (data.kind === 'work' ? 0 : CARD.steps) + middle + footer;
+  const hasSteps = data.kind !== 'work' && data.kind !== 'files';
+  return 2 * CARD.pad + CARD.head + CARD.gap + title * CARD.line + (hasSteps ? CARD.steps : 0) + middle + footer;
 }
 
 export interface HeroCardOptions {
@@ -889,7 +908,7 @@ export function heroCardHeight(data: AreaData, options: HeroCardOptions | number
   const stepLimit = opts.openStepLimit ?? 3;
   const openSteps = (data.openSteps ?? []).slice(0, stepLimit);
   const openStepsHeight = openSteps.length > 0 ? (openSteps.length * 28 + 8) : 0;
-  const progressHeight = data.kind !== 'work' ? CARD.steps : 0;
+  const progressHeight = data.kind !== 'work' && data.kind !== 'files' ? CARD.steps : 0;
   const stepsHeight = progressHeight + openStepsHeight;
 
   const showPics = opts.showPictures ?? true;
@@ -969,7 +988,10 @@ export function partitionOverviewTiers(areas: BoardArea[]): OverviewTiers {
   if (allDone) {
     return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [...areas] };
   }
-  const focusArea = areas.find((a) => a.data.current && !a.data.done) ?? areas.find((a) => !a.data.done);
+  const focusArea =
+    areas.find((a) => a.data.kind !== 'files' && a.data.current && !a.data.done) ??
+    areas.find((a) => a.data.kind !== 'files' && !a.data.done) ??
+    areas.find((a) => !a.data.done);
   if (!focusArea) {
     const tier2 = areas.filter((a) => (a.data.waitingCount ?? 0) > 0);
     const tier5 = areas.filter((a) => (a.data.waitingCount ?? 0) === 0);

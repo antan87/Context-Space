@@ -3,13 +3,13 @@ import { constants } from 'node:fs';
 import * as path from 'node:path';
 import { assertFileHandleMatchesPath, assertNoLinkedPathComponents, readFileHandleAtMost } from '../resources/fs-safety.js';
 
-const textExtensions = new Set(['.md', '.markdown', '.mdx', '.txt', '.rst', '.adoc', '.csv', '.tsv', '.log', '.svg', '.mmd']);
+const textExtensions = new Set(['.md', '.markdown', '.mdx', '.txt', '.rst', '.adoc', '.csv', '.tsv', '.log', '.mmd']);
 /**
  * Plain-text data an assistant writes next to its documents: a spec, a schema, a config. They open in the viewer like any
  * text, but a repository has many of them (package.json, tsconfig.json), so the listing leaves out the ones in a repository.
  */
 const dataExtensions = new Set(['.json', '.yaml', '.yml', '.toml', '.xml']);
-const images: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const images: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
 const officeExtensions = new Set(['.doc', '.docx', '.odt', '.rtf', '.xls', '.xlsx', '.ods', '.ppt', '.pptx', '.odp']);
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TEXT_BYTES = 1024 * 1024;

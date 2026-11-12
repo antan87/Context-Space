@@ -7,6 +7,7 @@
 
 import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
 import { stepsText, waitingText, type BoardArea, type Size } from './boardAreas.js';
+import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { cardOrder, fileTypeOf, uniqueId, type FileType } from './boardLayout.js';
 
 export type NavCategory = 'waiting' | 'areas' | 'pictures' | 'documents' | 'notes' | 'commits';
@@ -175,7 +176,9 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
         ? `Matched step: ${matchingStep.text}`
         : area.data.kind === 'work'
           ? 'Current work'
-          : stepsText(area.data);
+          : area.data.kind === 'files'
+            ? formatWorkspaceFileCounts(area.data).join(' · ') || 'Workspace files'
+            : stepsText(area.data);
 
     const bucket: AreaBucket = {
       area,
@@ -386,7 +389,12 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
           areaId: b.area.id,
           areaTitle: b.area.data.title,
           nodeId: null,
-          title: b.area.data.kind === 'work' ? 'Current work' : stepsText(b.area.data),
+          title:
+            b.area.data.kind === 'work'
+              ? 'Current work'
+              : b.area.data.kind === 'files'
+                ? formatWorkspaceFileCounts(b.area.data).join(' · ') || 'Workspace files'
+                : stepsText(b.area.data),
           subtitle: 'Step into area',
           searchText: b.areaEntry.searchText,
         },
@@ -399,7 +407,9 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
           ? matchedStep.text
           : b.area.data.kind === 'work'
             ? 'Current work'
-            : stepsText(b.area.data);
+            : b.area.data.kind === 'files'
+              ? formatWorkspaceFileCounts(b.area.data).join(' · ') || 'Workspace files'
+              : stepsText(b.area.data);
         const itemSubtitle = matchedStep
           ? 'Matched step · Step into area'
           : areaTitleMatches

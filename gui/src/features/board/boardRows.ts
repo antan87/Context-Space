@@ -14,8 +14,9 @@
 
 import { plainText } from '../../lib/plainText.js';
 import type { PlanFileStep, PlanProof } from '../plan/planFile.js';
-import type { WhatsNewView } from '../plan/whatsNew.js';
+import { agoText, type WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard } from './boardData.js';
+import { FILES_AREA_ID, WORKSPACE_FILE_ROW_IDS, workspaceFileNodeId, type GroupedWorkspaceFile, type WorkspaceFileGroup } from './workspaceFilesArea.js';
 import { filesChangedText, plusMinusText, type RepoChangeSummary } from '../changes/changeSummary.js';
 import { extractFreshSets, textEm, type BoardArea, type Size, type Viewport } from './boardAreas.js';
 import {
@@ -54,7 +55,7 @@ export const ROW_SIZE = {
   /** Between a header and its things. */
   stackGap: 4,
   /** The width of the "+N more" button, at the right of the line of a row's header. */
-  more: 96,
+  more: 108,
   /** The width of the page buttons ("‹ 1–4 of 12 ›"), at the right of the line of an opened row's header. */
   pager: 148,
   /** The least an opened row may have: its header and one line of the tallest things. */
@@ -83,6 +84,20 @@ const WAITING_BORDER = 2;
 
 /** How high each kind of thing is, whatever the room: a compact card is never drawn shorter, nor taller. */
 export const ITEM_HEIGHT = { note: 96, file: 96, document: 96, commit: 80, uncommitted: 80, placeholder: 56, step: 40 } as const;
+
+/** Sizing for items inside the Workspace files Area so Documents, Pages, and Pictures all fit on one screen. */
+export const WORKSPACE_FILE_SIZE = {
+  documentHeight: 36,
+  documentGap: 4,
+  pageHeight: 40,
+  pageMinWidth: 340,
+  pageMaxWidth: 540,
+  pageGap: 6,
+  pictureHeight: 120,
+  pictureMinWidth: 200,
+  pictureMaxWidth: 270,
+  pictureGap: 8,
+} as const;
 
 const CARD_W = ROW_SIZE.card;
 const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
@@ -129,7 +144,7 @@ export interface AreaBoardLayoutOptions {
 export type LooseTab = 'media' | 'notes';
 export interface LooseTabs { media: LaneCard[]; notes: LaneCard[]; /** The tab that holds the newest card. */ first: LooseTab }
 
-export type AreaRowKind = 'step' | 'loose' | 'documents' | 'commits' | 'more-steps' | 'done';
+export type AreaRowKind = 'step' | 'loose' | 'documents' | 'pages' | 'pictures' | 'commits' | 'more-steps' | 'done';
 
 export interface StepGroup { key: string; text: string; items: LaneCard[] }
 
@@ -149,6 +164,12 @@ export interface AreaRow {
   groups?: StepGroup[];
   summary: string;
   warning?: string;
+  /** Word shown in "+N <moreLabel>" overflow button (default "more"; workspace file rows use "earlier"). */
+  moreLabel?: string;
+  /** Optional per-row column/width/line-gap overrides (used by Workspace files rows). */
+  columns?: number;
+  cardWidth?: number;
+  lineGap?: number;
   /** Only the row of cards tied to no step, and only when it holds both kinds: `items` is then all of them, and the tabs say which is which. */
   tabs?: LooseTabs;
   /** In the row as it is drawn (`viewOf`): the tab that shows, and the ids of the things of the other tab, which are not drawn. */
@@ -270,6 +291,76 @@ export function headingKeys(steps: ReadonlyArray<PlanFileStep>): Set<string> {
 /** The rows of an Area and its waiting decisions, for `stage`: some open steps may be put in the line of "more open steps" when the canvas is small. */
 function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' | 'now'>, stage: AreaStage): Model {
   const now = options.now ?? Date.now();
+  if (area.kind === 'files' || area.id === FILES_AREA_ID) {
+    const groups = area.workspaceFiles;
+    if (!groups) return { waiting: null, rows: [] };
+    const nowDate = new Date(now);
+    const gridForGroup = (group: WorkspaceFileGroup): { columns: number; cardWidth: number; lineGap: number; height: number } => {
+      if (group === 'documents') {
+        return {
+          columns: 1,
+          cardWidth: stage.width,
+          lineGap: WORKSPACE_FILE_SIZE.documentGap,
+          height: WORKSPACE_FILE_SIZE.documentHeight,
+        };
+      }
+      if (group === 'pages') {
+        const columns = Math.max(1, Math.floor((stage.width + ROW_SIZE.gap) / (WORKSPACE_FILE_SIZE.pageMinWidth + ROW_SIZE.gap)));
+        const cardWidth = Math.min(WORKSPACE_FILE_SIZE.pageMaxWidth, Math.floor((stage.width - (columns - 1) * ROW_SIZE.gap) / columns));
+        return { columns, cardWidth, lineGap: WORKSPACE_FILE_SIZE.pageGap, height: WORKSPACE_FILE_SIZE.pageHeight };
+      }
+      const columns = Math.max(1, Math.floor((stage.width + ROW_SIZE.gap) / (WORKSPACE_FILE_SIZE.pictureMinWidth + ROW_SIZE.gap)));
+      const cardWidth = Math.min(WORKSPACE_FILE_SIZE.pictureMaxWidth, Math.floor((stage.width - (columns - 1) * ROW_SIZE.gap) / columns));
+      return { columns, cardWidth, lineGap: WORKSPACE_FILE_SIZE.pictureGap, height: WORKSPACE_FILE_SIZE.pictureHeight };
+    };
+    const meta: ReadonlyArray<{ group: WorkspaceFileGroup; title: string; singular: string; plural: string }> = [
+      { group: 'documents', title: 'Documents', singular: 'document', plural: 'documents' },
+      { group: 'pages', title: 'Pages', singular: 'page', plural: 'pages' },
+      { group: 'pictures', title: 'Pictures', singular: 'picture', plural: 'pictures' },
+    ];
+    const toLaneCard = (file: GroupedWorkspaceFile, height: number): LaneCard => ({
+      id: workspaceFileNodeId(file.path),
+      type: 'file',
+      height,
+      data: {
+        title: file.name,
+        path: file.path,
+        fileType: file.fileType,
+        group: file.group,
+        by: 'workspace',
+        at: file.modifiedAt,
+        updatedAt: file.modifiedAt,
+        text: file.folder || 'Workspace root',
+        folder: file.folder,
+        age: file.modifiedAt ? agoText(file.modifiedAt, nowDate) : '',
+        readOnly: true,
+        compact: true,
+        pinned: false,
+        archived: false,
+        updatedBy: 'workspace',
+        fresh: false,
+      },
+    });
+    const rows: AreaRow[] = [];
+    for (const entry of meta) {
+      const files = groups[entry.group];
+      if (!files.length) continue;
+      const grid = gridForGroup(entry.group);
+      rows.push({
+        id: WORKSPACE_FILE_ROW_IDS[entry.group],
+        kind: entry.group,
+        title: entry.title,
+        state: 'plain',
+        moreLabel: 'earlier',
+        columns: grid.columns,
+        cardWidth: grid.cardWidth,
+        lineGap: grid.lineGap,
+        items: files.map((file) => toLaneCard(file, grid.height)),
+        summary: `${files.length} ${files.length === 1 ? entry.singular : entry.plural}`,
+      });
+    }
+    return { waiting: null, rows };
+  }
   const taken = new Set<string>();
   const steps = area.kind === 'work' ? [] : (area.planItems?.steps ?? []);
   const stepKeys = new Set(steps.map((entry) => entry.key));
@@ -586,16 +677,26 @@ const chunk = <T,>(items: T[], size: number): T[][] => {
   return out;
 };
 
+/** Column count, card width, and inter-line gap for a row (falls back to stage defaults). */
+function rowGrid(row: AreaRow, stage: AreaStage): { columns: number; cardWidth: number; lineGap: number } {
+  return {
+    columns: row.columns ?? stage.columns,
+    cardWidth: row.cardWidth ?? stage.cardWidth,
+    lineGap: row.lineGap ?? ROW_SIZE.lineGap,
+  };
+}
+
 /** How many lines a row needs to show everything it holds. */
-const linesNeeded = (row: AreaRow, stage: AreaStage) => Math.ceil(row.items.length / stage.columns);
+const linesNeeded = (row: AreaRow, stage: AreaStage) => Math.ceil(row.items.length / rowGrid(row, stage).columns);
 
 /** A row as a header and `lines` lines of its things (as many as asked, the rest behind "+N more"). */
 function linesPiece(row: AreaRow, stage: AreaStage, lines: number): Piece {
-  const shown = row.items.slice(0, Math.max(0, lines) * stage.columns);
+  const grid = rowGrid(row, stage);
+  const shown = row.items.slice(0, Math.max(0, lines) * grid.columns);
   const hidden = row.items.length - shown.length;
-  const rows = chunk(shown, stage.columns);
+  const rows = chunk(shown, grid.columns);
   const head = headerHeight(row);
-  const body = rows.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? ROW_SIZE.lineGap : 0), 0);
+  const body = rows.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? grid.lineGap : 0), 0);
   const height = head + (rows.length > 0 ? ROW_SIZE.stackGap + body : 0);
   const headerW = hidden > 0 ? stage.width - ROW_SIZE.more - ROW_SIZE.gap : stage.width;
   return {
@@ -606,13 +707,13 @@ function linesPiece(row: AreaRow, stage: AreaStage, lines: number): Piece {
       if (hidden > 0) {
         out.push({
           id: `${row.id}:more`, type: 'more', position: { x: stage.width - ROW_SIZE.more, y: y + (head - ROW_SIZE.header) / 2 }, width: ROW_SIZE.more, height: ROW_SIZE.header,
-          data: { rowId: row.id, title: `+${hidden} more`, count: hidden, rowTitle: plainText(row.text ?? row.title), holds: [...row.items.slice(shown.length).map((item) => item.id), ...(row.elsewhere ?? [])] }, ...FIXED,
+          data: { rowId: row.id, title: `+${hidden} ${row.moreLabel ?? 'more'}`, count: hidden, rowTitle: plainText(row.text ?? row.title), holds: [...row.items.slice(shown.length).map((item) => item.id), ...(row.elsewhere ?? [])] }, ...FIXED,
         });
       }
       let lineY = y + head + ROW_SIZE.stackGap;
       for (const line of rows) {
-        line.forEach((item, index) => out.push(node(item, index * (stage.cardWidth + ROW_SIZE.gap), lineY, stage.cardWidth)));
-        lineY += lineHeight(line) + ROW_SIZE.lineGap;
+        line.forEach((item, index) => out.push(node(item, index * (grid.cardWidth + ROW_SIZE.gap), lineY, grid.cardWidth)));
+        lineY += lineHeight(line) + grid.lineGap;
       }
       return out;
     },
@@ -642,7 +743,7 @@ function linesOf(row: AreaRow, columns: number): Cell[][] {
 
 /** The least an opened row needs: its header and one line of the tallest things it holds (the page buttons are on the line of the header). */
 function openNeed(row: AreaRow, stage: AreaStage): number {
-  const lines = linesOf(row, stage.columns);
+  const lines = linesOf(row, rowGrid(row, stage).columns);
   const tallest = Math.max(0, ...lines.map(lineHeight));
   return headerHeight(row) + ROW_SIZE.stackGap + tallest;
 }
@@ -652,19 +753,20 @@ type OpenPiece = Piece & { info: OpenInfo };
 
 /** A row opened: its things in lines, one page of them when all do not fit in `room`, with the buttons for the other pages. */
 function openPiece(row: AreaRow, stage: AreaStage, room: number, requested: number): OpenPiece {
-  const lines = linesOf(row, stage.columns);
+  const grid = rowGrid(row, stage);
+  const lines = linesOf(row, grid.columns);
   const head = headerHeight(row);
   const top = head + ROW_SIZE.stackGap;
-  const natural = lines.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? ROW_SIZE.lineGap : 0), 0);
+  const natural = lines.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? grid.lineGap : 0), 0);
   const pager = top + natural > room;
   const avail = room - top;
   const pages: Cell[][][] = [];
   let current: Cell[][] = [];
   let used = 0;
   for (const line of lines) {
-    const next = used + (current.length ? ROW_SIZE.lineGap : 0) + lineHeight(line);
+    const next = used + (current.length ? grid.lineGap : 0) + lineHeight(line);
     if (current.length > 0 && next > avail) { pages.push(current); current = []; used = 0; }
-    used += (current.length ? ROW_SIZE.lineGap : 0) + lineHeight(line);
+    used += (current.length ? grid.lineGap : 0) + lineHeight(line);
     current.push(line);
   }
   if (current.length > 0 || pages.length === 0) pages.push(current);
@@ -675,7 +777,7 @@ function openPiece(row: AreaRow, stage: AreaStage, room: number, requested: numb
   const inPage = shown.reduce((sum, line) => sum + things(line), 0);
   const total = lines.reduce((sum, line) => sum + things(line), 0);
   const onPage = new Set(shown.flat().map((cell) => cell.id));
-  const gridH = shown.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? ROW_SIZE.lineGap : 0), 0);
+  const gridH = shown.reduce((sum, line, index) => sum + lineHeight(line) + (index > 0 ? grid.lineGap : 0), 0);
   const height = top + gridH;
   return {
     height,
@@ -690,8 +792,8 @@ function openPiece(row: AreaRow, stage: AreaStage, room: number, requested: numb
       }
       let lineY = y + top;
       for (const line of shown) {
-        line.forEach((cell, index) => out.push(node(cell, index * (stage.cardWidth + ROW_SIZE.gap), lineY, stage.cardWidth)));
-        lineY += lineHeight(line) + ROW_SIZE.lineGap;
+        line.forEach((cell, index) => out.push(node(cell, index * (grid.cardWidth + ROW_SIZE.gap), lineY, grid.cardWidth)));
+        lineY += lineHeight(line) + grid.lineGap;
       }
       return out;
     },
@@ -783,14 +885,48 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
     const last = sizing !== COMFY;
     /** Lines shown by each row; -1 is folded. */
     const modes = new Map<string, number>();
-    for (const row of rows) modes.set(row.id, row === head ? 1 : -1);
-    let waitingShown: number = sizing.waitingShown;
+    const isFilesArea = area.kind === 'files' || area.id === FILES_AREA_ID;
     const pieceOf = (row: AreaRow): Piece => {
       const mode = modes.get(row.id)!;
       return mode < 0 ? foldPiece(row, stage, sizing.fold) : linesPiece(row, stage, mode);
     };
     const pieces = (): Piece[] => [...(waiting ? [waitingShown === 0 ? waitingFold(waiting, stage, sizing.fold) : waitingPiece(waiting, stage, waitingShown, false)] : []), ...rows.map(pieceOf)];
     const fits = () => sum(pieces(), sizing.gap) <= H;
+    let waitingShown: number = sizing.waitingShown;
+
+    if (isFilesArea) {
+      // Guarantee every non-empty kind (Documents, Pages, Pictures) starts open with at least 1 line.
+      for (const row of rows) modes.set(row.id, 1);
+      if (!fits()) {
+        if (!last) return null;
+        for (let i = rows.length - 1; i >= 0 && !fits(); i -= 1) {
+          modes.set(rows[i]!.id, -1);
+        }
+      }
+      const growRow = (rowId: string, maxLines: number) => {
+        const row = rows.find((entry) => entry.id === rowId);
+        if (!row) return;
+        const wanted = Math.min(maxLines, linesNeeded(row, stage));
+        for (;;) {
+          const mode = modes.get(row.id)!;
+          if (mode < 0 || mode >= wanted) break;
+          modes.set(row.id, mode + 1);
+          if (!fits()) {
+            modes.set(row.id, mode);
+            break;
+          }
+        }
+      };
+      // Balanced budget: 4 compact doc lines first, up to 2 picture rows, up to 2 page rows, then up to 6 doc lines.
+      growRow(WORKSPACE_FILE_ROW_IDS.documents, 4);
+      growRow(WORKSPACE_FILE_ROW_IDS.pictures, 2);
+      growRow(WORKSPACE_FILE_ROW_IDS.pages, 2);
+      growRow(WORKSPACE_FILE_ROW_IDS.documents, 6);
+      const nodes = assemble(pieces(), sizing.gap);
+      return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'file').length };
+    }
+
+    for (const row of rows) modes.set(row.id, row === head ? 1 : -1);
     if (!fits()) {
       if (!last) return null;
       if (head) modes.set(head.id, 0);

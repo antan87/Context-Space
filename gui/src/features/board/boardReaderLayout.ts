@@ -8,6 +8,7 @@ import { useCallback, useState } from 'react';
 import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
 import type { BoardArea } from './boardAreas.js';
 import { cardOrder, uniqueId } from './boardLayout.js';
+import { workspaceFileNodeId } from './workspaceFilesArea.js';
 
 export type ReaderLayout = 'large' | 'side';
 
@@ -118,6 +119,22 @@ export function collectAreaReaderTargets(area: BoardArea): ReaderTarget[] {
         card: card.id,
         ...(card.description ? { text: card.description } : {}),
         byline: bylineText(card),
+      });
+    }
+  }
+
+  // 2b. Read-only workspace files inside the Workspace files Area
+  if (area.workspaceFiles) {
+    for (const file of [
+      ...area.workspaceFiles.documents,
+      ...area.workspaceFiles.pages,
+      ...area.workspaceFiles.pictures,
+    ]) {
+      add({
+        path: file.path,
+        title: file.name,
+        card: workspaceFileNodeId(file.path),
+        ...(file.folder ? { text: file.folder } : {}),
       });
     }
   }

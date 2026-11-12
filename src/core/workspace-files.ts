@@ -38,9 +38,15 @@ export function checkedWorkspaceFilePath(root: string, name: string) {
   return assertPathWithin(root, path.resolve(root, ...parts));
 }
 
+export interface WorkspaceFileEntry {
+  path: string;
+  modifiedAt: string;
+  size: number;
+}
+
 export async function listWorkspaceFiles(root: string) {
   const { excluded } = await workspaceFileScope(root);
-  const files: Array<{ path: string }> = [];
+  const files: WorkspaceFileEntry[] = [];
   const errors: string[] = [];
   let entries = 0;
   let truncated = false;
@@ -62,7 +68,7 @@ export async function listWorkspaceFiles(root: string) {
           if (stat.isDirectory()) {
             if (depth >= MAX_DEPTH) truncated = true;
             else await scan(target, name, depth + 1);
-          } else if (stat.isFile()) files.push({ path: name });
+          } else if (stat.isFile()) files.push({ path: name, modifiedAt: stat.mtime.toISOString(), size: stat.size });
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') errors.push(`Could not scan ${name}.`);
         }
