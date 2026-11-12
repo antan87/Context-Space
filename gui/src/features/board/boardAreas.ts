@@ -17,7 +17,15 @@ import { focusOf, headingKeysOf } from '../plan/focus.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView, WorkspaceFileEntry } from './boardData.js';
-import { buildWorkspaceFilesArea, type GroupedWorkspaceFiles } from './workspaceFilesArea.js';
+import {
+  buildQualifyingWorkspaceFileMap,
+  buildWorkspaceFilesArea,
+  extractStepFilePaths,
+  normalizeWorkspaceFilePath,
+  stepWorkspaceFileNodeId,
+  type GroupedWorkspaceFile,
+  type GroupedWorkspaceFiles,
+} from './workspaceFilesArea.js';
 import { resolveCommitContext } from './commitContext.js';
 import {
   areaCountItems,
@@ -198,6 +206,7 @@ export interface BoardArea {
   archivedCount: number;
   allMemberNodeIds: string[];
   workspaceFiles?: GroupedWorkspaceFiles;
+  stepFiles?: Record<string, GroupedWorkspaceFile[]>;
 }
 
 export type Size = { width: number; height: number };
@@ -316,9 +325,38 @@ export function buildBoardAreas({
     });
   }
 
+  const qualifyingFilesMap = buildQualifyingWorkspaceFileMap(workspaceFiles);
+  const rawStepFilesByDraft = new Map<string, Map<string, GroupedWorkspaceFile[]>>();
+  const stepNamedPaths = new Set<string>();
+  for (const draft of drafts) {
+    const stepMap = new Map<string, GroupedWorkspaceFile[]>();
+    for (const step of draft.planItems?.steps ?? []) {
+      const extracted = extractStepFilePaths(step.text, qualifyingFilesMap);
+      if (extracted.length > 0) {
+        stepMap.set(step.key, extracted);
+        for (const item of extracted) stepNamedPaths.add(item.path);
+      }
+    }
+    if (stepMap.size > 0) rawStepFilesByDraft.set(draft.id, stepMap);
+  }
+
+  const combinedExcludePaths = new Set<string>(stepNamedPaths);
+  if (excludeWorkspaceFilePaths) {
+    for (const rawPath of excludeWorkspaceFilePaths) {
+      const normalized = normalizeWorkspaceFilePath(rawPath);
+      if (normalized) combinedExcludePaths.add(normalized);
+    }
+  }
+  for (const doc of documents ?? []) {
+    if (doc.filename) {
+      const normalized = normalizeWorkspaceFilePath(doc.filename);
+      if (normalized) combinedExcludePaths.add(normalized);
+    }
+  }
+
   const filesArea = buildWorkspaceFilesArea(workspaceFiles, {
     existingCards: board?.cards,
-    excludePaths: excludeWorkspaceFilePaths,
+    excludePaths: combinedExcludePaths,
     now,
   });
 
@@ -665,13 +703,64 @@ export function buildBoardAreas({
 
     const noteCount = p.cards.filter((c) => c.kind === 'note').length;
     const fileCards = p.cards.filter((c) => c.kind === 'file');
-    const fileCount = fileCards.length;
     const pictureCards = fileCards.filter((c) => fileTypeOf(c.path) === 'image');
-    const pictureCount = pictureCards.length;
-    const pictures: AreaPicture[] = pictureCards.slice(0, 3).map((c) => ({
-      path: c.path,
-      alt: imageAlt({ title: c.title, description: (c as { description?: string }).description ?? '', path: c.path ?? '' }),
-    }));
+
+    const realFilePathsByStep = new Map<string, Set<string>>();
+    const realFilePaths = new Set<string>();
+    for (const c of fileCards) {
+      if (!c.path) continue;
+      const normalized = normalizeWorkspaceFilePath(c.path);
+      if (!normalized) continue;
+      realFilePaths.add(normalized);
+      if (c.step && !c.archived) {
+        let onStep = realFilePathsByStep.get(c.step);
+        if (!onStep) {
+          onStep = new Set<string>();
+          realFilePathsByStep.set(c.step, onStep);
+        }
+        onStep.add(normalized);
+      }
+    }
+
+    const rawDraftStepFiles = rawStepFilesByDraft.get(draft.id);
+    const stepFiles: Record<string, GroupedWorkspaceFile[]> = {};
+    const stepFileMemberIds: string[] = [];
+    const areaStepUniqueByPath = new Map<string, GroupedWorkspaceFile>();
+    if (rawDraftStepFiles) {
+      for (const [stepKey, items] of rawDraftStepFiles.entries()) {
+        const realOnStep = realFilePathsByStep.get(stepKey);
+        const filtered = realOnStep ? items.filter((f) => !realOnStep.has(f.path)) : items;
+        if (filtered.length > 0) {
+          stepFiles[stepKey] = filtered;
+          for (const item of filtered) {
+            stepFileMemberIds.push(stepWorkspaceFileNodeId(stepKey, item.path));
+            if (!areaStepUniqueByPath.has(item.path)) {
+              areaStepUniqueByPath.set(item.path, item);
+            }
+          }
+        }
+      }
+    }
+
+    const uniqueExtraStepFiles = [...areaStepUniqueByPath.values()].filter((f) => !realFilePaths.has(f.path));
+    const uniqueExtraStepPictures = uniqueExtraStepFiles.filter((f) => f.group === 'pictures');
+
+    const fileCount = fileCards.length + uniqueExtraStepFiles.length;
+    const pictureCount = pictureCards.length + uniqueExtraStepPictures.length;
+    const extraPictureThumbs: AreaPicture[] = [...uniqueExtraStepPictures]
+      .sort((a, b) => (b.modifiedAt || '').localeCompare(a.modifiedAt || ''))
+      .slice(0, Math.max(0, 3 - pictureCards.length))
+      .map((f) => ({
+        path: f.path,
+        alt: imageAlt({ title: f.name, description: f.folder, path: f.path }),
+      }));
+    const pictures: AreaPicture[] = [
+      ...pictureCards.slice(0, 3).map((c) => ({
+        path: c.path,
+        alt: imageAlt({ title: c.title, description: (c as { description?: string }).description ?? '', path: c.path ?? '' }),
+      })),
+      ...extraPictureThumbs,
+    ];
 
     const documentCount = p.documents.length;
     let commitCount = 0;
@@ -771,6 +860,7 @@ export function buildBoardAreas({
     const allMemberNodeIds = [
       draft.id,
       ...p.cards.map((c) => c.id),
+      ...stepFileMemberIds,
       ...p.docNodeIds,
       ...commitMemberIds,
     ];
@@ -821,6 +911,7 @@ export function buildBoardAreas({
       cards: p.cards,
       archivedCount: p.archivedCount,
       allMemberNodeIds,
+      ...(Object.keys(stepFiles).length > 0 ? { stepFiles } : {}),
     });
   }
 

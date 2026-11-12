@@ -1263,6 +1263,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       const allTargets = collectAreaReaderTargets(activeArea);
       const found = allTargets.find((t) => isSameReaderTarget(t, lit));
       if (found?.card) return found.card;
+      if (lit.path && !lit.repo && !lit.source && !lit.commit) {
+        const byPath = allTargets.find((t) => !t.repo && !t.source && !t.commit && t.path === lit.path);
+        if (byPath?.card) return byPath.card;
+      }
     }
     return null;
   }, [reader, activeArea]);

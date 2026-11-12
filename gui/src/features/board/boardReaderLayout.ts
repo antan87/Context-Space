@@ -8,7 +8,7 @@ import { useCallback, useState } from 'react';
 import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
 import type { BoardArea } from './boardAreas.js';
 import { cardOrder, uniqueId } from './boardLayout.js';
-import { workspaceFileNodeId } from './workspaceFilesArea.js';
+import { stepWorkspaceFileNodeId, workspaceFileNodeId } from './workspaceFilesArea.js';
 
 export type ReaderLayout = 'large' | 'side';
 
@@ -120,6 +120,28 @@ export function collectAreaReaderTargets(area: BoardArea): ReaderTarget[] {
         ...(card.description ? { text: card.description } : {}),
         byline: bylineText(card),
       });
+    }
+  }
+
+  // 2a. Step-named workspace files inside plan Areas
+  if (area.stepFiles) {
+    const visitedSteps = new Set<string>();
+    const addStepFiles = (stepKey: string) => {
+      visitedSteps.add(stepKey);
+      for (const file of area.stepFiles?.[stepKey] ?? []) {
+        add({
+          path: file.path,
+          title: file.name,
+          card: stepWorkspaceFileNodeId(stepKey, file.path),
+          ...(file.folder ? { text: file.folder } : {}),
+        });
+      }
+    };
+    for (const step of area.planItems?.steps ?? []) {
+      addStepFiles(step.key);
+    }
+    for (const stepKey of Object.keys(area.stepFiles)) {
+      if (!visitedSteps.has(stepKey)) addStepFiles(stepKey);
     }
   }
 

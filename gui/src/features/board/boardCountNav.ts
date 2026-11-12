@@ -1,6 +1,7 @@
 import type { LooseTab } from './boardRows.js';
 import type { AreaData, BoardArea, BoardAreaRepo } from './boardAreas.js';
 import { fileTypeOf, type BoardCard } from './boardLayout.js';
+import { stepWorkspaceFileNodeId, type GroupedWorkspaceFile } from './workspaceFilesArea.js';
 
 export type AreaCountKind = 'notes' | 'pictures' | 'files' | 'documents' | 'pages' | 'commits' | 'updates';
 
@@ -27,6 +28,7 @@ export type CountNavRepo = BoardAreaRepo | {
 
 export interface CountNavArea {
   cards?: BoardCard[];
+  stepFiles?: Record<string, GroupedWorkspaceFile[]>;
   documents?: unknown[];
   repos?: CountNavRepo[];
   planItems?: { steps?: Array<{ key: string; done: boolean }>; decisions?: Array<{ key: string }> };
@@ -93,6 +95,30 @@ function newestCard(cards: BoardCard[] | undefined, predicate: (c: BoardCard) =>
   return matching.slice().sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0))[0];
 }
 
+function newestStepFileTarget(
+  area: ResolvableArea,
+  predicate: (f: GroupedWorkspaceFile) => boolean,
+): AreaCountTarget | undefined {
+  const stepFiles = area.stepFiles;
+  if (!stepFiles) return undefined;
+  const candidates: Array<{ stepKey: string; file: GroupedWorkspaceFile }> = [];
+  for (const [stepKey, items] of Object.entries(stepFiles)) {
+    for (const file of items) {
+      if (predicate(file)) candidates.push({ stepKey, file });
+    }
+  }
+  if (candidates.length === 0) return undefined;
+  candidates.sort((a, b) => (Date.parse(b.file.modifiedAt) || 0) - (Date.parse(a.file.modifiedAt) || 0));
+  const best = candidates[0]!;
+  const steps = area.planItems?.steps ?? ('steps' in area ? area.steps : undefined) ?? [];
+  const isDone = steps.find((s) => s.key === best.stepKey)?.done;
+  return {
+    rowId: isDone ? 'row:done' : `row:step:${best.stepKey}`,
+    stepKey: best.stepKey,
+    cardId: stepWorkspaceFileNodeId(best.stepKey, best.file.path),
+  };
+}
+
 /**
  * Maps a count kind to the row, tab, and/or step to open when stepping into an Area.
  * - "pictures": steps into the Area with the row of loose cards open on its Media tab
@@ -119,6 +145,10 @@ export function resolveCountTarget(
       if (picCard?.step) {
         return { rowId: `row:step:${picCard.step}`, stepKey: picCard.step, ...(picCard.id ? { cardId: picCard.id } : {}) };
       }
+      if (!picCard) {
+        const stepPic = newestStepFileTarget(area, (f) => f.group === 'pictures');
+        if (stepPic) return stepPic;
+      }
       return { rowId: 'lane:board', tab: 'media', ...(picCard?.id ? { cardId: picCard.id } : {}) };
     }
     case 'notes': {
@@ -136,6 +166,8 @@ export function resolveCountTarget(
       if (fileCard) {
         return { rowId: 'lane:board', tab: 'media', cardId: fileCard.id };
       }
+      const stepFile = newestStepFileTarget(area, (f) => f.group !== 'pictures');
+      if (stepFile) return stepFile;
       if (area.documents && area.documents.length > 0) {
         return { rowId: 'lane:documents' };
       }

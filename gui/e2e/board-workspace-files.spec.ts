@@ -2,6 +2,7 @@ import { test, expect } from './fixtures';
 import {
   board,
   boardEvent,
+  document as boardDocument,
   frame,
   minutesAgo,
   node,
@@ -9,6 +10,7 @@ import {
   PICTURE,
   routeBoard,
   routeCards,
+  routeWork,
   stepIntoArea,
   viewAtRest,
   workspace,
@@ -401,4 +403,280 @@ test('shows compact docs (PLAN.md first), open pages & real picture thumbnails o
   await expect(docsMore).toContainText(/earlier/);
   await docsMore.click();
   await expect(board(page).locator('#board-area .react-flow__node-pager')).toBeVisible();
+});
+
+test('places step-named files on open and done step rows, removes them and assigned documents from Workspace files, deduplicates real cards, and opens in reader', async ({ page }) => {
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(2) },
+        checkpoints: [
+          checkpoint('Step files checkpoint', {
+            line: 4,
+            steps: [
+              {
+                key: 's1',
+                line: 5,
+                text: 'Inspect PLAN.md, `design/packets/spec.md`, pages/step-page.html, and `./board-pictures/step-shot.png`.',
+                done: false,
+                kind: 'step',
+                indent: 0,
+                current: true,
+              },
+              {
+                key: 's2',
+                line: 6,
+                text: 'Compare `board-pictures/step-shot.png` with docs/notes.txt.',
+                done: false,
+                kind: 'step',
+                indent: 0,
+              },
+              {
+                key: 's3',
+                line: 7,
+                text: 'Read docs/only-named.md',
+                done: false,
+                kind: 'step',
+                indent: 0,
+              },
+              {
+                key: 's5',
+                line: 8,
+                text: 'Review (PLAN.md, `./PLAN.md`) without creating a step row.',
+                done: false,
+                kind: 'step',
+                indent: 0,
+              },
+              {
+                key: 's4',
+                line: 9,
+                text: 'Done artifact `board-pictures/done-shot.png` and `pages/done-page.html`.',
+                done: true,
+                kind: 'step',
+                indent: 0,
+              },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, [
+    boardDocument('Assigned Brief', {
+      id: '11111111-1111-4111-8111-111111111111',
+      role: 'design',
+      status: 'approved',
+      scope: { milestoneId: 'step-files-checkpoint' },
+      summary: 'Assigned brief document',
+      filename: 'docs/brief.md',
+      createdAt: isoHoursAgo(5),
+      updatedAt: isoHoursAgo(3),
+    }),
+  ]);
+  await routeCards(page, boardFile({
+    cards: [
+      boardFileCard(1, 'docs/notes.txt', {
+        area: 'checkpoint:step-files-checkpoint',
+        step: 's2',
+        title: 'Real notes card',
+        description: 'Already placed by user',
+      }),
+    ],
+  }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'PLAN.md', modifiedAt: isoHoursAgo(10), size: 300 },
+          { path: 'design/packets/spec.md', modifiedAt: isoHoursAgo(2), size: 200 },
+          { path: 'docs/notes.txt', modifiedAt: isoHoursAgo(3), size: 120 },
+          { path: 'docs/only-named.md', modifiedAt: isoHoursAgo(1.5), size: 140 },
+          { path: 'docs/brief.md', modifiedAt: isoHoursAgo(4), size: 240 },
+          { path: 'pages/step-page.html', modifiedAt: isoHoursAgo(1), size: 320 },
+          { path: 'pages/done-page.html', modifiedAt: isoHoursAgo(5), size: 320 },
+          { path: 'board-pictures/step-shot.png', modifiedAt: isoHoursAgo(0.5), size: 250 },
+          { path: 'board-pictures/done-shot.png', modifiedAt: isoHoursAgo(4), size: 250 },
+          { path: 'board-pictures/unmentioned.png', modifiedAt: isoHoursAgo(6), size: 250 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {
+    'pages/step-page.html': '<!doctype html><html><body><h1>Step Page</h1></body></html>',
+    'pages/done-page.html': '<!doctype html><html><body><h1>Done Page</h1></body></html>',
+  });
+
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+
+  // Overview: checkpoint Area counts & miniatures include step-named files; Workspace files only has unmentioned files.
+  const cpArea = node(page, 'checkpoint:step-files-checkpoint');
+  await expect(cpArea).toBeVisible();
+  await expect(cpArea.locator('button[data-path="board-pictures/step-shot.png"]')).toBeVisible();
+  await expect(cpArea.getByRole('button', { name: 'Show the 2 pictures', exact: true })).toBeVisible();
+
+  const wsArea = node(page, 'files:workspace');
+  await expect(wsArea).toBeVisible();
+  await expect(wsArea.getByText('1 doc · 1 picture')).toBeVisible();
+  await expect(wsArea.locator('button[data-path]')).toHaveCount(1);
+  await expect(wsArea.locator('button[data-path="board-pictures/unmentioned.png"]')).toBeVisible();
+
+  // Step into Workspace files: step-named files and assigned docs/brief.md must NOT be listed.
+  await stepIntoArea(page, /Workspace files/);
+  await expect(board(page).locator('#board-area')).not.toContainText('spec.md');
+  await expect(board(page).locator('#board-area')).not.toContainText('brief.md');
+  await expect(board(page).locator('#board-area')).not.toContainText('step-page.html');
+  await expect(board(page).locator('#board-area')).not.toContainText('step-shot.png');
+  await expect(node(page, 'wsfile:PLAN.md')).toBeVisible();
+  await expect(node(page, 'wsfile:board-pictures/unmentioned.png')).toBeVisible();
+
+  // Step back and enter the checkpoint Area.
+  await page.keyboard.press('Escape');
+  await viewAtRest(page);
+  await stepIntoArea(page, /Step files checkpoint/);
+
+  // s1 shows its 3 step-named files; s2 shows step-shot.png + real card for notes.txt (no duplicate wsfile); s3 is a visible step row; row:done stays folded.
+  await expect(node(page, 'wsfile:step:s1:design/packets/spec.md')).toBeVisible();
+  await expect(node(page, 'wsfile:step:s1:pages/step-page.html')).toBeVisible();
+  await expect(node(page, 'wsfile:step:s1:board-pictures/step-shot.png')).toBeVisible();
+
+  await expect(node(page, 'wsfile:step:s2:board-pictures/step-shot.png')).toBeVisible();
+  await expect(board(page).locator('#board-area [data-id="wsfile:step:s2:docs/notes.txt"]')).toHaveCount(0);
+  await expect(board(page).locator('#board-area').getByText('Real notes card')).toBeVisible();
+
+  await expect(node(page, 'row:step:s3')).toBeVisible();
+  await expect(node(page, 'wsfile:step:s3:docs/only-named.md')).toBeVisible();
+
+  // Mentioning PLAN.md never places PLAN.md on a step row and does not give s5 its own step row.
+  await expect(board(page).locator('#board-area [data-id^="wsfile:step:"][data-id$=":PLAN.md"]')).toHaveCount(0);
+  await expect(board(page).locator('#board-area [data-id="row:step:s5"]')).toHaveCount(0);
+
+  // Done step stays folded in row:done; opening row:done shows its step-named files.
+  const doneRow = node(page, 'row:done');
+  await expect(doneRow).toBeVisible();
+  await expect(board(page).locator('#board-area [data-id="wsfile:step:s4:board-pictures/done-shot.png"]')).toHaveCount(0);
+  await doneRow.locator('button[data-row-control="row:done"]').click();
+  await expect(node(page, 'wsfile:step:s4:board-pictures/done-shot.png')).toBeVisible();
+  await expect(node(page, 'wsfile:step:s4:pages/done-page.html')).toBeVisible();
+
+  // Generated step-named items are read-only (not draggable, no Edit/Archive/Pin).
+  const s1Pic = node(page, 'wsfile:step:s1:board-pictures/step-shot.png');
+  await expect(s1Pic).not.toHaveClass(/react-flow__node-draggable/);
+  await expect(s1Pic.getByRole('button', { name: /Actions|Edit|Archive|Pin/i })).toHaveCount(0);
+
+  // Open picture from s1 in reader and navigate with ] / [ / Escape.
+  await s1Pic.getByRole('button', { name: 'Open step-shot.png' }).click();
+  await expect(page.locator('img[alt="board-pictures/step-shot.png"]')).toBeVisible();
+  await page.keyboard.press('[');
+  await expect(page.frameLocator('iframe[title="Preview of pages/step-page.html"]').getByRole('heading', { name: 'Step Page' })).toBeVisible();
+  await page.keyboard.press('[');
+  await expect(page.getByRole('heading', { name: 'File design/packets/spec.md' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('heading', { name: 'File design/packets/spec.md' })).toHaveCount(0);
+});
+
+test('excludes assigned document when no step names it, opens step picture from overview count, and preserves open reader on plan refresh', async ({ page }) => {
+  await routeBoard(page);
+  let planData = planFile({
+    now: { key: 's1', by: 'claude', at: minutesAgo(2) },
+    checkpoints: [
+      checkpoint('Brief checkpoint', {
+        line: 4,
+        steps: [
+          {
+            key: 's1',
+            line: 5,
+            text: 'Check `board-pictures/overview-pic.png`',
+            done: false,
+            kind: 'step',
+            indent: 0,
+            current: true,
+          },
+        ],
+      }),
+    ],
+  });
+  await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planData }));
+  await routeWork(page, [
+    boardDocument('Project Brief', {
+      id: '22222222-2222-4222-8222-222222222222',
+      role: 'design',
+      status: 'approved',
+      scope: { milestoneId: 'brief-checkpoint' },
+      summary: 'Assigned brief',
+      filename: 'docs/brief.md',
+      createdAt: isoHoursAgo(4),
+      updatedAt: isoHoursAgo(2),
+    }),
+  ]);
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'docs/brief.md', modifiedAt: isoHoursAgo(2), size: 120 },
+          { path: 'board-pictures/overview-pic.png', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'PLAN.md', modifiedAt: isoHoursAgo(3), size: 300 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {});
+
+  let nextEvent: 'ping' | 'plan' = 'ping';
+  await page.route('**/api/workspace/demo/screen-events**', (route) => {
+    const kind = nextEvent;
+    nextEvent = 'ping';
+    const body = kind === 'plan'
+      ? `retry: 150\n\n${frame('plan', { timestamp: new Date().toISOString() }, 'p-refresh')}`
+      : `retry: 150\n\n${PING}`;
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+  });
+
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+
+  // Assigned docs/brief.md is excluded from Workspace files Area, leaving only PLAN.md.
+  const wsArea = node(page, 'files:workspace');
+  await expect(wsArea).toBeVisible();
+  await expect(wsArea.getByText('1 doc')).toBeVisible();
+  await expect(wsArea).not.toContainText('picture');
+
+  // Clicking "Show the 1 picture" on the checkpoint card steps in and highlights the step picture.
+  const cpArea = node(page, 'checkpoint:brief-checkpoint');
+  await cpArea.getByRole('button', { name: 'Show the 1 picture', exact: true }).click();
+  const picNode = node(page, 'wsfile:step:s1:board-pictures/overview-pic.png');
+  await expect(picNode).toBeVisible();
+
+  // Open picture in reader; a plan refresh keeps the reader open.
+  await picNode.getByRole('button', { name: 'Open overview-pic.png' }).click();
+  await expect(page.locator('img[alt="board-pictures/overview-pic.png"]')).toBeVisible();
+
+  planData = planFile({
+    now: { key: 's1', by: 'claude', at: minutesAgo(2) },
+    checkpoints: [
+      checkpoint('Brief checkpoint', {
+        line: 4,
+        steps: [
+          {
+            key: 's1',
+            line: 5,
+            text: 'Check `board-pictures/overview-pic.png` (refreshed)',
+            done: false,
+            kind: 'step',
+            indent: 0,
+            current: true,
+          },
+        ],
+      }),
+    ],
+  });
+  nextEvent = 'plan';
+  await expect(board(page).locator('#board-area .react-flow__node[data-id="row:step:s1"]')).toContainText('(refreshed)');
+  await expect(page.locator('img[alt="board-pictures/overview-pic.png"]')).toBeVisible();
 });

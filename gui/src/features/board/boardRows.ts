@@ -14,9 +14,16 @@
 
 import { plainText } from '../../lib/plainText.js';
 import type { PlanFileStep, PlanProof } from '../plan/planFile.js';
-import { agoText, type WhatsNewView } from '../plan/whatsNew.js';
+import { type WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard } from './boardData.js';
-import { FILES_AREA_ID, WORKSPACE_FILE_ROW_IDS, workspaceFileNodeId, type GroupedWorkspaceFile, type WorkspaceFileGroup } from './workspaceFilesArea.js';
+import {
+  FILES_AREA_ID,
+  WORKSPACE_FILE_ROW_IDS,
+  stepWorkspaceFileNodeId,
+  workspaceFileNodeId,
+  workspaceFileToLaneCard,
+  type WorkspaceFileGroup,
+} from './workspaceFilesArea.js';
 import { filesChangedText, plusMinusText, type RepoChangeSummary } from '../changes/changeSummary.js';
 import { extractFreshSets, textEm, type BoardArea, type Size, type Viewport } from './boardAreas.js';
 import {
@@ -98,6 +105,12 @@ export const WORKSPACE_FILE_SIZE = {
   pictureMaxWidth: 270,
   pictureGap: 8,
 } as const;
+
+function workspaceFileHeight(group: WorkspaceFileGroup): number {
+  if (group === 'documents') return WORKSPACE_FILE_SIZE.documentHeight;
+  if (group === 'pages') return WORKSPACE_FILE_SIZE.pageHeight;
+  return WORKSPACE_FILE_SIZE.pictureHeight;
+}
 
 const CARD_W = ROW_SIZE.card;
 const FIXED = { draggable: false, selectable: false, connectable: false, deletable: false } as const;
@@ -318,29 +331,6 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
       { group: 'pages', title: 'Pages', singular: 'page', plural: 'pages' },
       { group: 'pictures', title: 'Pictures', singular: 'picture', plural: 'pictures' },
     ];
-    const toLaneCard = (file: GroupedWorkspaceFile, height: number): LaneCard => ({
-      id: workspaceFileNodeId(file.path),
-      type: 'file',
-      height,
-      data: {
-        title: file.name,
-        path: file.path,
-        fileType: file.fileType,
-        group: file.group,
-        by: 'workspace',
-        at: file.modifiedAt,
-        updatedAt: file.modifiedAt,
-        text: file.folder || 'Workspace root',
-        folder: file.folder,
-        age: file.modifiedAt ? agoText(file.modifiedAt, nowDate) : '',
-        readOnly: true,
-        compact: true,
-        pinned: false,
-        archived: false,
-        updatedBy: 'workspace',
-        fresh: false,
-      },
-    });
     const rows: AreaRow[] = [];
     for (const entry of meta) {
       const files = groups[entry.group];
@@ -355,7 +345,7 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
         columns: grid.columns,
         cardWidth: grid.cardWidth,
         lineGap: grid.lineGap,
-        items: files.map((file) => toLaneCard(file, grid.height)),
+        items: files.map((file) => workspaceFileToLaneCard(file, { id: workspaceFileNodeId(file.path), height: grid.height, nowDate })),
         summary: `${files.length} ${files.length === 1 ? entry.singular : entry.plural}`,
       });
     }
@@ -372,6 +362,17 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
     else loose.push(card);
   }
   const plans = (cards: BoardCard[]): LaneCard[] => cards.map((card) => compact(cardPlan(card, now)));
+  const stepNowDate = new Date(now);
+  const stepItems = (stepKey: string): LaneCard[] => [
+    ...plans(byStep.get(stepKey) ?? []),
+    ...(area.stepFiles?.[stepKey] ?? []).map((file) =>
+      workspaceFileToLaneCard(file, {
+        id: stepWorkspaceFileNodeId(stepKey, file.path),
+        height: workspaceFileHeight(file.group),
+        nowDate: stepNowDate,
+      }),
+    ),
+  ];
 
   const open = steps.filter((entry) => !entry.done);
   const finished = steps.filter((entry) => entry.done);
@@ -382,14 +383,14 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   const head = (area.data.current && area.data.focusStep ? leaves.find((entry) => entry.key === area.data.focusStep) : undefined) ?? leaves[0];
   const rows: AreaRow[] = [];
   if (head) {
-    const items = plans(byStep.get(head.key) ?? []);
+    const items = stepItems(head.key);
     const above = head.parent ? steps.find((entry) => entry.key === head!.parent)?.text : undefined;
     rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.nowSet ? 'Now' : area.data.current ? 'Next up' : 'Next', text: head.text, ...(above ? { heading: above } : {}), state: area.data.nowSet ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : '' });
   }
   const others = open.filter((entry) => entry !== head);
-  let withCards = others.filter((entry) => (byStep.get(entry.key)?.length ?? 0) > 0);
+  let withCards = others.filter((entry) => (byStep.get(entry.key)?.length ?? 0) > 0 || (area.stepFiles?.[entry.key]?.length ?? 0) > 0);
   const stepRow = (entry: PlanStep): AreaRow => {
-    const items = plans(byStep.get(entry.key) ?? []);
+    const items = stepItems(entry.key);
     return { id: `row:step:${entry.key}`, kind: 'step', title: 'Step', text: entry.text, state: 'open', items, summary: cardsText(items.length) };
   };
 
@@ -495,11 +496,11 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
 
   const aggregated = [...others.filter((entry) => noCards.includes(entry) || demoted.includes(entry))];
   if (aggregated.length > 0) {
-    const groups = aggregated.map((entry): StepGroup => ({ key: entry.key, text: entry.text, items: plans(byStep.get(entry.key) ?? []) }));
+    const groups = aggregated.map((entry): StepGroup => ({ key: entry.key, text: entry.text, items: stepItems(entry.key) }));
     rows.push(groupsRow('row:more-steps', 'more-steps', `${aggregated.length} more open ${aggregated.length === 1 ? 'step' : 'steps'}`, groups, 'open'));
   }
   if (finished.length > 0) {
-    const groups = finished.map((entry): StepGroup => ({ key: entry.key, text: entry.text, items: plans(byStep.get(entry.key) ?? []) }));
+    const groups = finished.map((entry): StepGroup => ({ key: entry.key, text: entry.text, items: stepItems(entry.key) }));
     rows.push(groupsRow('row:done', 'done', `✓ ${finished.length} done ${finished.length === 1 ? 'step' : 'steps'}`, groups, 'done'));
   }
   return { waiting, rows };
@@ -533,7 +534,8 @@ export function areaRowOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions,
     row.groups?.some((group) =>
       `${row.id}:step:${group.key}` === nodeId ||
       `row:step:${group.key}` === nodeId ||
-      group.key === nodeId
+      group.key === nodeId ||
+      group.items.some((item) => item.id === nodeId)
     )
   );
   if (groupRow) return groupRow.id;

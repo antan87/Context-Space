@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildQualifyingWorkspaceFileMap,
   buildWorkspaceFilesArea,
   classifyWorkspaceFile,
+  extractStepFilePaths,
   FILES_AREA_ID,
   formatWorkspaceFileCounts,
   groupWorkspaceFiles,
   isOwnGeneratedFile,
+  isWorkspaceFileNodeId,
+  stepWorkspaceFileNodeId,
   WORKSPACE_FILE_ROW_IDS,
 } from './workspaceFilesArea.js';
 import { buildBoardAreas, partitionOverviewTiers } from './boardAreas.js';
 import { areaCountItems, resolveCountTarget } from './boardCountNav.js';
-import { areaBoardLayout, areaLayout, areaRows, areaStage } from './boardRows.js';
+import { areaBoardLayout, areaLayout, areaPlace, areaRows, areaStage } from './boardRows.js';
 import { buildBoardNav } from './boardNav.js';
 import { collectAreaReaderTargets } from './boardReaderLayout.js';
 import { isCardId, type BoardCard, type BoardFile } from './boardData.js';
@@ -332,5 +336,356 @@ describe('buildBoardAreas and layout integration for Workspace files', () => {
     });
     expect(opened.open?.rowId).toBe(WORKSPACE_FILE_ROW_IDS.documents);
     expect(opened.nodes.filter((n) => n.type === 'file').length).toBeGreaterThan(6);
+  });
+});
+
+describe('WF2 step-named files on step rows, Area counts/miniatures, and exclusions', () => {
+  it('places step-named files on steps, excludes them and assigned documents from Workspace files, deduplicates per step, and updates Area counts and miniatures', () => {
+    const now = Date.parse('2026-11-12T12:00:00.000Z');
+    const plan: PlanFileView = {
+      file: 'PLAN.md',
+      source: 'file',
+      title: 'Plan',
+      intro: '',
+      sections: [],
+      decisions: [],
+      waiting: [],
+      changes: [],
+      now: { key: 's1', by: 'claude', at: new Date(now - 60_000).toISOString() },
+      steps: [],
+      checkpoints: [
+        {
+          key: 'cp1',
+          title: 'Checkpoint 1',
+          done: false,
+          steps: [
+            {
+              key: 's1',
+              text: 'Packet: `design/packets/spec.md`, Page: ./pages/demo.html, Pic: `board-pictures/a.png` and `board-pictures/a.png`.',
+              done: false,
+            },
+            {
+              key: 's2',
+              text: 'Also uses board-pictures/a.png and docs/real-on-s2.md and docs/real-on-s3.md.',
+              done: false,
+            },
+            {
+              key: 's3',
+              text: 'Only named file docs/only-named.md',
+              done: false,
+            },
+            {
+              key: 's4',
+              text: 'Done step with `board-pictures/done.png`',
+              done: true,
+            },
+          ],
+          decisions: [],
+        },
+      ],
+    };
+
+    const areas = buildBoardAreas({
+      plan,
+      documents: [
+        {
+          id: 'doc-assigned',
+          title: 'Brief',
+          role: 'design',
+          status: 'approved',
+          scope: { milestoneId: 'cp1' },
+          summary: 'Assigned brief',
+          filename: 'docs/brief.md',
+          createdAt: new Date(now - 3_600_000).toISOString(),
+          updatedAt: new Date(now - 3_600_000).toISOString(),
+        },
+      ],
+      board: {
+        revision: 1,
+        positions: {},
+        links: [],
+        cards: [
+          realFileCard('11111111-1111-4111-8111-111111111111', 'docs/real-on-s2.md', {
+            area: 'checkpoint:cp1',
+            step: 's2',
+          }),
+          // Real card on s3 for real-on-s3.md must NOT suppress real-on-s3.md on s2.
+          realFileCard('22222222-2222-4222-8222-222222222222', 'docs/real-on-s3.md', {
+            area: 'checkpoint:cp1',
+            step: 's3',
+          }),
+        ],
+      },
+      workspaceFiles: [
+        { path: 'PLAN.md', modifiedAt: new Date(now - 60_000).toISOString(), size: 100 },
+        { path: 'design/packets/spec.md', modifiedAt: new Date(now - 120_000).toISOString(), size: 100 },
+        { path: 'pages/demo.html', modifiedAt: new Date(now - 180_000).toISOString(), size: 100 },
+        { path: 'board-pictures/a.png', modifiedAt: new Date(now - 240_000).toISOString(), size: 100 },
+        { path: 'board-pictures/done.png', modifiedAt: new Date(now - 300_000).toISOString(), size: 100 },
+        { path: 'board-pictures/leftover.png', modifiedAt: new Date(now - 360_000).toISOString(), size: 100 },
+        { path: 'docs/real-on-s2.md', modifiedAt: new Date(now - 420_000).toISOString(), size: 100 },
+        { path: 'docs/real-on-s3.md', modifiedAt: new Date(now - 480_000).toISOString(), size: 100 },
+        { path: 'docs/only-named.md', modifiedAt: new Date(now - 540_000).toISOString(), size: 100 },
+        { path: 'docs/brief.md', modifiedAt: new Date(now - 600_000).toISOString(), size: 100 },
+      ],
+      now,
+    });
+
+    const cp1 = areas.find((a) => a.id === 'checkpoint:cp1')!;
+    const ws = areas.find((a) => a.id === FILES_AREA_ID)!;
+
+    // Workspace files Area keeps only PLAN.md and board-pictures/leftover.png.
+    expect(ws.workspaceFiles!.documents.map((f) => f.path)).toEqual(['PLAN.md']);
+    expect(ws.workspaceFiles!.pages).toEqual([]);
+    expect(ws.workspaceFiles!.pictures.map((f) => f.path)).toEqual(['board-pictures/leftover.png']);
+
+    // cp1 counts & miniatures include unique step-named files + real cards.
+    // Unique pictures in cp1: a.png, done.png -> 2 pictures.
+    // Unique non-picture files in cp1: spec.md, demo.html, real-on-s2.md (real), real-on-s3.md (real), only-named.md -> 5 files.
+    expect(cp1.data.pictureCount).toBe(2);
+    expect(cp1.data.fileCount).toBe(7);
+    expect(cp1.data.pictures.map((p) => p.path)).toEqual(['board-pictures/a.png', 'board-pictures/done.png']);
+    expect(areaCountItems(cp1.data).map((c) => c.label)).toEqual(['2 pictures', '5 files', '1 document']);
+    expect(resolveCountTarget(cp1, 'pictures').stepKey).toBe('s1');
+
+    // Step rows: s1, s2, and s3 (only named file, no real card) are all visible step rows; s4 is in row:done.
+    const rows = areaRows(cp1, { now, size: { width: 1200, height: 900 } });
+    expect(rows.map((r) => r.id)).toEqual(['row:step:s1', 'row:step:s2', 'row:step:s3', 'lane:documents', 'row:done']);
+
+    const s1Items = rows[0]!.items;
+    expect(s1Items.map((i) => (i.data as { path?: string }).path)).toEqual([
+      'design/packets/spec.md',
+      'pages/demo.html',
+      'board-pictures/a.png',
+    ]);
+    for (const item of s1Items) {
+      expect(item.data).toMatchObject({ readOnly: true });
+      expect(isCardId(item.id)).toBe(false);
+    }
+
+    // s2 has real-on-s2.md once (real card wins), plus step-named a.png and real-on-s3.md.
+    const s2Items = rows[1]!.items;
+    expect(s2Items.map((i) => (i.data as { path?: string }).path)).toEqual([
+      'docs/real-on-s2.md',
+      'board-pictures/a.png',
+      'docs/real-on-s3.md',
+    ]);
+    expect(s2Items[0]!.id).toBe('11111111-1111-4111-8111-111111111111');
+    expect(isCardId(s2Items[0]!.id)).toBe(true);
+
+    // Done step stays folded in row:done; opening row:done shows done.png.
+    const closedNodes = areaBoardLayout(cp1, { now, size: { width: 1200, height: 900 } });
+    expect(closedNodes.find((n) => n.id === 'row:done')?.type).toBe('fold');
+    const openedDone = areaLayout(cp1, { now, size: { width: 1200, height: 900 }, openRow: 'row:done' });
+    expect(openedDone.nodes.some((n) => n.type === 'file' && (n.data as { path?: string }).path === 'board-pictures/done.png')).toBe(true);
+
+    // Reader targets include step-named files for [ / ] navigation.
+    const targets = collectAreaReaderTargets(cp1);
+    expect(targets.map((t) => t.path)).toContain('design/packets/spec.md');
+    expect(targets.map((t) => t.path)).toContain('pages/demo.html');
+    expect(targets.map((t) => t.path)).toContain('board-pictures/done.png');
+  });
+
+  it('keeps the Now step on the first screen when many steps name files', () => {
+    const now = Date.parse('2026-11-12T12:00:00.000Z');
+    const steps = Array.from({ length: 12 }, (_, idx) => ({
+      key: `s${idx + 1}`,
+      text: `Step ${idx + 1} produces \`board-pictures/shot-${idx + 1}.png\``,
+      done: false,
+    }));
+    const files = Array.from({ length: 12 }, (_, idx) => ({
+      path: `board-pictures/shot-${idx + 1}.png`,
+      modifiedAt: new Date(now - (idx + 1) * 60_000).toISOString(),
+      size: 100,
+    }));
+    const plan: PlanFileView = {
+      file: 'PLAN.md',
+      source: 'file',
+      title: 'Plan',
+      intro: '',
+      sections: [],
+      decisions: [],
+      waiting: [],
+      changes: [],
+      now: { key: 's1', by: 'claude', at: new Date(now - 30_000).toISOString() },
+      steps: [],
+      checkpoints: [{ key: 'cp1', title: 'Many steps', done: false, steps, decisions: [] }],
+    };
+    const [cp1] = buildBoardAreas({
+      plan,
+      board: { revision: 1, positions: {}, links: [], cards: [] },
+      workspaceFiles: files,
+      now,
+    });
+    const stage = areaStage({ width: 500, height: 616 });
+    const nodes = areaBoardLayout(cp1!, { now, size: { width: 500, height: 616 } });
+    const nowNode = nodes.find((n) => n.id === 'row:step:s1');
+    expect(nowNode).toBeDefined();
+    expect(nowNode!.position.y).toBe(0);
+    for (const n of nodes) {
+      expect(n.position.y + (n.height ?? 0)).toBeLessThanOrEqual(stage.height);
+    }
+  });
+
+  it('extracts backticked, plain, and markdown-linked relative paths while ignoring URLs, case mismatches, and unknown files', () => {
+    const map = buildQualifyingWorkspaceFileMap([
+      { path: 'design/packets/spec.md', modifiedAt: '2026-11-12T10:00:00.000Z', size: 10 },
+      { path: 'Docs/UpperCase.md', modifiedAt: '2026-11-12T10:01:00.000Z', size: 10 },
+      { path: 'board-pictures/a.png', modifiedAt: '2026-11-12T10:02:00.000Z', size: 10 },
+      { path: 'pages/demo.html', modifiedAt: '2026-11-12T10:03:00.000Z', size: 10 },
+      { path: 'README.md', modifiedAt: '2026-11-12T10:04:00.000Z', size: 10 },
+      { path: 'AGENTS.md', modifiedAt: '2026-11-12T10:05:00.000Z', size: 10 },
+    ]);
+
+    const stepText = [
+      'Start with `design/packets/spec.md`, then inspect ./board-pictures/a.png.',
+      'Also read [Demo](pages/demo.html), check Docs/UpperCase.md; ignore docs/uppercase.md,',
+      'ignore https://example.com/design/packets/spec.md, ignore spec.md (basename only),',
+      'ignore docs/missing.md and AGENTS.md, mention README.md and `design/packets/spec.md` again.',
+    ].join(' ');
+
+    const extracted = extractStepFilePaths(stepText, map);
+    expect(extracted.map((f) => f.path)).toEqual([
+      'design/packets/spec.md',
+      'board-pictures/a.png',
+      'pages/demo.html',
+      'Docs/UpperCase.md',
+      'README.md',
+    ]);
+  });
+
+  it('resolves overview count targets and areaPlace for open and done step-named files with non-card IDs', () => {
+    const now = Date.parse('2026-11-12T12:00:00.000Z');
+    const plan: PlanFileView = {
+      file: 'PLAN.md',
+      source: 'file',
+      title: 'Plan',
+      intro: '',
+      sections: [],
+      decisions: [],
+      waiting: [],
+      changes: [],
+      steps: [],
+      checkpoints: [
+        {
+          key: 'cp1',
+          title: 'Step targets',
+          done: false,
+          steps: [
+            { key: 's-open', text: 'Inspect `design/spec.md` and `design/spec.md`', done: false },
+            { key: 's-dup', text: 'Also reuse `design/spec.md`', done: false },
+            { key: 's-done', text: 'Shipped `board-pictures/done.png`', done: true },
+          ],
+          decisions: [],
+        },
+      ],
+    };
+
+    const [cp1] = buildBoardAreas({
+      plan,
+      board: { revision: 1, positions: {}, links: [], cards: [] },
+      workspaceFiles: [
+        { path: 'design/spec.md', modifiedAt: '2026-11-12T11:00:00.000Z', size: 20 },
+        { path: 'board-pictures/done.png', modifiedAt: '2026-11-12T11:30:00.000Z', size: 30 },
+      ],
+      now,
+    });
+    expect(cp1).toBeDefined();
+
+    // Distinct IDs when two steps share a path; never recognized as persisted card IDs.
+    const openId = stepWorkspaceFileNodeId('s-open', 'design/spec.md');
+    const dupId = stepWorkspaceFileNodeId('s-dup', 'design/spec.md');
+    expect(openId).not.toBe(dupId);
+    expect(isWorkspaceFileNodeId(openId)).toBe(true);
+    expect(isCardId(openId)).toBe(false);
+
+    // Unique step-named file counts once at Area level even when named on two steps.
+    expect(cp1!.data.fileCount).toBe(2);
+    expect(cp1!.data.pictureCount).toBe(1);
+
+    const picTarget = resolveCountTarget(cp1!, 'pictures');
+    expect(picTarget).toEqual({
+      rowId: 'row:done',
+      stepKey: 's-done',
+      cardId: stepWorkspaceFileNodeId('s-done', 'board-pictures/done.png'),
+    });
+    const docTarget = resolveCountTarget(cp1!, 'files');
+    expect(docTarget).toEqual({
+      rowId: 'row:step:s-open',
+      stepKey: 's-open',
+      cardId: openId,
+    });
+
+    // areaPlace locates the done step-named file inside row:done so opening/navigation expands row:done.
+    expect(areaPlace(cp1!, { now, size: { width: 1200, height: 900 } }, picTarget.cardId!)).toEqual({
+      row: 'row:done',
+      page: 0,
+    });
+  });
+
+  it('never treats root PLAN.md as step-named, keeping it first in Workspace files and out of step rows', () => {
+    const now = Date.parse('2026-11-12T12:00:00.000Z');
+    const map = buildQualifyingWorkspaceFileMap([
+      { path: 'PLAN.md', modifiedAt: new Date(now - 600_000).toISOString(), size: 100 },
+      { path: 'docs/PLAN.md', modifiedAt: new Date(now - 120_000).toISOString(), size: 80 },
+      { path: 'board-pictures/a.png', modifiedAt: new Date(now - 60_000).toISOString(), size: 90 },
+    ]);
+
+    expect(
+      extractStepFilePaths(
+        'Check PLAN.md, `./PLAN.md`, (PLAN.md, and [plan](/PLAN.md)); also docs/PLAN.md and board-pictures/a.png.',
+        map,
+      ).map((f) => f.path),
+    ).toEqual(['docs/PLAN.md', 'board-pictures/a.png']);
+
+    const plan: PlanFileView = {
+      file: 'PLAN.md',
+      source: 'file',
+      title: 'Plan',
+      intro: '',
+      sections: [],
+      decisions: [],
+      waiting: [],
+      changes: [],
+      now: { key: 's1', by: 'claude', at: new Date(now - 30_000).toISOString() },
+      steps: [],
+      checkpoints: [
+        {
+          key: 'cp1',
+          title: 'Plan mentions',
+          done: false,
+          steps: [
+            { key: 's1', text: 'Build board from PLAN.md and `board-pictures/a.png`.', done: false },
+            { key: 's2', text: 'Only mentions (PLAN.md, `./PLAN.md`) in text.', done: false },
+            { key: 's3', text: 'Done step updating PLAN.md.', done: true },
+          ],
+          decisions: [],
+        },
+      ],
+    };
+
+    const areas = buildBoardAreas({
+      plan,
+      board: { revision: 1, positions: {}, links: [], cards: [] },
+      workspaceFiles: [
+        { path: 'PLAN.md', modifiedAt: new Date(now - 600_000).toISOString(), size: 100 },
+        { path: 'docs/other.md', modifiedAt: new Date(now - 30_000).toISOString(), size: 50 },
+        { path: 'board-pictures/a.png', modifiedAt: new Date(now - 60_000).toISOString(), size: 90 },
+      ],
+      now,
+    });
+
+    const cp1 = areas.find((a) => a.id === 'checkpoint:cp1')!;
+    const ws = areas.find((a) => a.id === FILES_AREA_ID)!;
+
+    expect(ws.workspaceFiles!.documents.map((f) => f.path)).toEqual(['PLAN.md', 'docs/other.md']);
+    expect(cp1.stepFiles?.s1?.map((f) => f.path)).toEqual(['board-pictures/a.png']);
+    expect(cp1.stepFiles?.s2).toBeUndefined();
+    expect(cp1.stepFiles?.s3).toBeUndefined();
+
+    // s2 only mentions PLAN.md, so it stays folded in row:more-steps instead of creating row:step:s2.
+    const rows = areaRows(cp1, { now, size: { width: 1200, height: 900 } });
+    expect(rows.map((r) => r.id)).toEqual(['row:step:s1', 'row:more-steps', 'row:done']);
+    expect(cp1.allMemberNodeIds.some((id) => id.endsWith(':PLAN.md'))).toBe(false);
   });
 });
