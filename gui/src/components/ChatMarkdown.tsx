@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy, ExternalLink } from 'lucide-react';
@@ -101,62 +101,102 @@ function LocalPath({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+interface MarkdownRenderConfig {
+  links?: MarkdownDocumentLinks;
+  onCard: boolean;
+  cut: boolean;
+  scrollToAnchor: (id: string) => void;
+}
+
+const MarkdownRenderContext = createContext<MarkdownRenderConfig>({
+  onCard: false,
+  cut: false,
+  scrollToAnchor: () => {},
+});
+
+function makeHeading(Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  return function MarkdownHeading({ node: _node, children, ...props }: React.ComponentProps<typeof Tag> & { node?: unknown }) {
+    const { onCard } = useContext(MarkdownRenderContext);
+    // On a card a heading is only a bold line: the card has its own title, and its ids would repeat from card to card.
+    return onCard ? <p className="font-semibold">{children}</p> : <Tag id={headingSlug(nodeText(children)) || undefined} {...props}>{children}</Tag>;
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function MarkdownAnchor({ node: _node, href, children, className, ...props }: React.ComponentProps<'a'> & { node?: unknown }) {
+  const { links, onCard, cut, scrollToAnchor } = useContext(MarkdownRenderContext);
+  const target = classifyMarkdownLink(href, links);
+  // On a card only the web and the workspace's files are links: the rest is the text it says.
+  if (onCard && !(target.kind === 'external' && !target.href.startsWith('mailto:')) && !(target.kind === 'workspace-file' && links)) return <>{children}</>;
+  const linkClass = onCard ? cn(className, 'nodrag nopan') : className;
+  const tabIndex = onCard && cut ? -1 : undefined;
+  if (target.kind === 'anchor') {
+    return <a {...props} className={linkClass} tabIndex={tabIndex} href={`#${target.id}`} onClick={(event) => {
+      // The app routes on the hash, so letting this through would leave the page.
+      event.preventDefault();
+      scrollToAnchor(target.id);
+    }}>{children}</a>;
+  }
+  if (target.kind === 'external') {
+    return <a {...props} className={linkClass} tabIndex={tabIndex} href={target.href} target="_blank" rel="noopener noreferrer">
+      {children}<ExternalLink aria-hidden="true" className="ml-0.5 inline size-3 align-baseline" /><span className="sr-only"> (opens outside the app)</span>
+    </a>;
+  }
+  if (target.kind === 'workspace-file' && links) {
+    return <a {...props} className={linkClass} tabIndex={tabIndex} href={links.fileUrl(target.path)} onClick={(event) => {
+      event.preventDefault();
+      links.onOpenFile(target.path, target.line);
+    }}>{children}</a>;
+  }
+  return <LocalPath label={target.kind === 'inert' ? target.label : target.path}>{children}</LocalPath>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function MarkdownImage({ node: _node, src, alt, ...props }: React.ComponentProps<'img'> & { node?: unknown }) {
+  const { links, onCard } = useContext(MarkdownRenderContext);
+  if (onCard) return <>{`[image${alt ? `: ${alt}` : ''}]`}</>;
+  const target = classifyMarkdownLink(typeof src === 'string' ? src : undefined, links && { ...links, resolveReferences: false });
+  if (target.kind === 'external' && !target.href.startsWith('mailto:')) return <img {...props} src={target.href} alt={alt ?? ''} />;
+  if (target.kind === 'workspace-file' && links) return <img {...props} src={links.fileUrl(target.path)} alt={alt ?? ''} />;
+  return <LocalPath label={target.kind === 'inert' ? target.label : ''}>{`[image${alt ? `: ${alt}` : ''}]`}</LocalPath>;
+}
+
+function MarkdownPre(props: React.ComponentProps<'pre'> & { node?: unknown }) {
+  const { onCard, cut } = useContext(MarkdownRenderContext);
+  return <CodeBlock {...props} onCard={onCard} cut={cut} />;
+}
+
+// Keep components identity constant across prop/link updates so live links are not unmounted while focused or returning focus.
+const MARKDOWN_COMPONENTS: Components = {
+  h1: makeHeading('h1'),
+  h2: makeHeading('h2'),
+  h3: makeHeading('h3'),
+  h4: makeHeading('h4'),
+  h5: makeHeading('h5'),
+  h6: makeHeading('h6'),
+  a: MarkdownAnchor,
+  img: MarkdownImage,
+  pre: MarkdownPre,
+};
+
 export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCard = false, cut = false }) => {
   const container = useRef<HTMLDivElement>(null);
-
-  const components = useMemo<Components>(() => {
-    const heading = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      ({ node: _node, children, ...props }: React.ComponentProps<typeof Tag> & { node?: unknown }) =>
-        // On a card a heading is only a bold line: the card has its own title, and its ids would repeat from card to card.
-        onCard ? <p className="font-semibold">{children}</p> : <Tag id={headingSlug(nodeText(children)) || undefined} {...props}>{children}</Tag>;
-
-    return {
-      h1: heading('h1'), h2: heading('h2'), h3: heading('h3'), h4: heading('h4'), h5: heading('h5'), h6: heading('h6'),
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      a: ({ node: _node, href, children, className, ...props }) => {
-        const target = classifyMarkdownLink(href, links);
-        // On a card only the web and the workspace's files are links: the rest is the text it says.
-        if (onCard && !(target.kind === 'external' && !target.href.startsWith('mailto:')) && !(target.kind === 'workspace-file' && links)) return <>{children}</>;
-        const linkClass = onCard ? cn(className, 'nodrag nopan') : className;
-        const tabIndex = onCard && cut ? -1 : undefined;
-        if (target.kind === 'anchor') {
-          return <a {...props} className={linkClass} tabIndex={tabIndex} href={`#${target.id}`} onClick={(event) => {
-            // The app routes on the hash, so letting this through would leave the page.
-            event.preventDefault();
-            container.current?.querySelector(`[id="${CSS.escape(target.id)}"]`)?.scrollIntoView({ block: 'start' });
-          }}>{children}</a>;
-        }
-        if (target.kind === 'external') {
-          return <a {...props} className={linkClass} tabIndex={tabIndex} href={target.href} target="_blank" rel="noopener noreferrer">
-            {children}<ExternalLink aria-hidden="true" className="ml-0.5 inline size-3 align-baseline" /><span className="sr-only"> (opens outside the app)</span>
-          </a>;
-        }
-        if (target.kind === 'workspace-file' && links) {
-          return <a {...props} className={linkClass} tabIndex={tabIndex} href={links.fileUrl(target.path)} onClick={(event) => {
-            event.preventDefault();
-            links.onOpenFile(target.path, target.line);
-          }}>{children}</a>;
-        }
-        return <LocalPath label={target.kind === 'inert' ? target.label : target.path}>{children}</LocalPath>;
-      },
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      img: ({ node: _node, src, alt, ...props }) => {
-        if (onCard) return <>{`[image${alt ? `: ${alt}` : ''}]`}</>;
-        const target = classifyMarkdownLink(typeof src === 'string' ? src : undefined, links && { ...links, resolveReferences: false });
-        if (target.kind === 'external' && !target.href.startsWith('mailto:')) return <img {...props} src={target.href} alt={alt ?? ''} />;
-        if (target.kind === 'workspace-file' && links) return <img {...props} src={links.fileUrl(target.path)} alt={alt ?? ''} />;
-        return <LocalPath label={target.kind === 'inert' ? target.label : ''}>{`[image${alt ? `: ${alt}` : ''}]`}</LocalPath>;
-      },
-      pre: (props) => <CodeBlock {...props} onCard={onCard} cut={cut} />,
-    };
-  }, [links, onCard, cut]);
+  const scrollToAnchor = useCallback((id: string) => {
+    container.current?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'start' });
+  }, []);
+  const renderConfig = useMemo<MarkdownRenderConfig>(
+    () => ({ links, onCard, cut, scrollToAnchor }),
+    [links, onCard, cut, scrollToAnchor],
+  );
 
   return (
     <div ref={container} className="prose prose-sm max-w-none text-foreground prose-a:text-primary prose-code:text-foreground prose-headings:text-foreground prose-pre:border prose-pre:border-border prose-pre:bg-muted/50 prose-strong:text-foreground prose-li:marker:text-muted-foreground">
-      <ReactMarkdown remarkPlugins={remarkPlugins} urlTransform={keepUrl} components={components}>
-        {content}
-      </ReactMarkdown>
+      <MarkdownRenderContext.Provider value={renderConfig}>
+        <ReactMarkdown remarkPlugins={remarkPlugins} urlTransform={keepUrl} components={MARKDOWN_COMPONENTS}>
+          {content}
+        </ReactMarkdown>
+      </MarkdownRenderContext.Provider>
     </div>
   );
 };

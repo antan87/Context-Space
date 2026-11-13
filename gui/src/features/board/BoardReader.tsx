@@ -256,7 +256,9 @@ export function BoardReader({
   const raw = place?.raw ?? false;
   // A file can be downloaded and shown by the server; a source document is read through the storage port and has neither.
   const fileUrl = source ? '' : documentFileUrl(workspaceId, path, repo?.name);
-  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: repo?.path ?? workspacePath, documentPath: path, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name, repo?.name), onOpenFile: (name, line) => onOpenFile(name, line, repo?.path ?? workspacePath) }), [workspaceId, workspacePath, path, repo, onOpenFile]);
+  const repoName = repo?.name;
+  const repoPath = repo?.path;
+  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: repoPath ?? workspacePath, documentPath: path, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name, repoName), onOpenFile: (name, line) => onOpenFile(name, line, repoPath ?? workspacePath) }), [workspaceId, workspacePath, path, repoName, repoPath, onOpenFile]);
 
   // The words of the card the file belongs to: their links open files in this reader, by their path from the workspace folder
   const noteLinks = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile: (name, line) => onOpenFile(name, line, workspacePath) }), [workspaceId, workspacePath, onOpenFile]);
@@ -399,6 +401,7 @@ export function BoardReader({
     <section
       aria-label="Reader"
       data-board-reader=""
+      data-reader-doc={open}
       className={cn(
         '@container flex min-h-0 flex-col bg-background',
         maximized

@@ -360,9 +360,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // Following something from inside the reader is a step deeper: the place left stays on the trail, and Back, Alt+Left and Escape return to it.
   // (The card the trail started from keeps the keyboard and the light; the opener is not touched.)
   const openFileReference = useOpenFileReference(workspaceId, workspacePath ?? '');
+  const areasRef = useRef(areas);
+  useLayoutEffect(() => {
+    areasRef.current = areas;
+  }, [areas]);
   const openLinked = useCallback((path: string, line?: number, root = workspacePath) => {
     void openFileReference({ path, line, cwd: root, onReader: (resolved, intent) => {
-      const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
+      const allTargets = areasRef.current.flatMap((a) => collectAreaReaderTargets(a));
       requests.current += 1;
       const request = requests.current;
       setReader((current) => {
@@ -374,7 +378,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         return trail === current.trail ? { ...current, request } : { target, request, trail };
       });
     } });
-  }, [areas, openFileReference, workspacePath]);
+  }, [openFileReference, workspacePath]);
   const goBack = useCallback(() => {
     invalidateReferenceIntent();
     requests.current += 1;

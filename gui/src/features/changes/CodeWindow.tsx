@@ -5,7 +5,7 @@ import { cn } from '../../lib/utils.js';
 import { useDockRect } from '../chat/dockPlacement.js';
 import { LARGE_WINDOW } from '../board/boardReaderLayout.js';
 import { WorkspaceFileView } from './WorkspaceFileView.js';
-import { setCodeWindowOpen, type WorkspaceFile } from '../workspace-shell/openRequests.js';
+import { resolveCodeWindowOpener, setCodeWindowOpen, type OpenerTarget, type WorkspaceFile } from '../workspace-shell/openRequests.js';
 import type { Feature } from '../../types.js';
 import { CodeSection } from './CodeSection.js';
 
@@ -18,6 +18,7 @@ export interface CodeWindowProps {
   open: boolean;
   /** Where the keyboard returns on close; when it is gone, the Board's Code button. */
   opener: HTMLElement | null;
+  openerTarget?: OpenerTarget | null;
   /** The workspace content the window covers: both panes in Split. */
   cover: HTMLElement | null;
   sectionProps: SectionProps;
@@ -41,7 +42,7 @@ const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-m
  * The Code section in a large window over the whole workspace content, the way the Board's reader is a large window over the
  * board. It stays mounted once opened (hidden and inert while closed), so the chosen file and its scroll survive a close.
  */
-export default function CodeWindow({ workspaceFile, fileRequestId, ws, open, opener, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
+export default function CodeWindow({ workspaceFile, fileRequestId, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
   const rect = useDockRect(cover);
   const panel = useRef<HTMLDivElement>(null);
   const skipFocusReturn = useRef(false);
@@ -89,10 +90,10 @@ export default function CodeWindow({ workspaceFile, fileRequestId, ws, open, ope
     if (!wasOpen.current) return undefined;
     wasOpen.current = false;
     if (skipFocusReturn.current) return undefined;
-    const target = opener?.isConnected ? opener : document.querySelector<HTMLElement>('[data-testid="board-code-button"]');
+    const target = resolveCodeWindowOpener(opener, openerTarget);
     target?.focus({ preventScroll: true });
     return undefined;
-  }, [open, opener]);
+  }, [open, opener, openerTarget]);
 
   // Escape when maximized steps back to the normal window first; otherwise it closes the window, unless something in the window has a use for it first.
   // What was open is looked at before the key does its work: a menu or the find box is already closing by the time this runs.

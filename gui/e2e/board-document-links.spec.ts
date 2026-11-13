@@ -664,3 +664,127 @@ test('fix2 a late document-link lookup does not replace the item chosen with ]',
     await expect(title('Second commit'), 'the newer ] choice must stay').toBeVisible();
   } finally { release(); }
 });
+
+test('correction Markdown code link keeps focus across background updates while opening and closing Code', async ({ page }) => {
+  let filesVersion = 1;
+  let changesVersion = 1;
+  let releaseRef!: () => void;
+  const pendingRef = new Promise<void>((resolve) => { releaseRef = resolve; });
+  try {
+    await page.route('**/api/workspace/*/files', (route) => route.fulfill({
+      json: {
+        files: filesVersion === 1
+          ? [{ path: 'docs/guide.md' }]
+          : [{ path: 'docs/guide.md' }, { path: 'docs/extra.md' }],
+        truncated: false,
+        errors: [],
+      },
+    }));
+    await page.route('**/api/workspace/*/changes', (route) => route.fulfill({
+      json: {
+        changes: changesVersion === 1
+          ? LISTING
+          : [{ repoName: 'api', repoPath: '/tmp/api', files: [...FILES, { file: 'src/server/extra.ts', type: 'modified', additions: 1, deletions: 0 }] }],
+      },
+    }));
+    await page.route('**/api/workspace/*/files/reference?*', async (route) => {
+      const file = new URL(route.request().url()).searchParams.get('path')!;
+      if (file === 'src/shared.ts') await pendingRef;
+      return route.fulfill({
+        json: {
+          status: 'found',
+          target: {
+            origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' },
+            file,
+            viewer: file.endsWith('.md') ? 'reader' : 'code',
+          },
+        },
+      });
+    });
+    await page.route('**/api/workspace/*/documents/preview?*', (route) => {
+      const name = new URL(route.request().url()).searchParams.get('name');
+      return route.fulfill({ json: { name, kind: 'markdown', content: '# Guide\n[Open code](../src/shared.ts#L35)' } });
+    });
+    const content = Array.from({ length: 200 }, (_, i) => `// shared number ${i + 1}`).join('\n');
+    await page.route('**/api/workspace/*/files/read?*', (route) => route.fulfill({ json: { content } }));
+    await page.route('**/api/workspace/*/changes/diff?*', (route) => route.fulfill({ json: { diff: '', fileContent: content } }));
+
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await clickDocument(page);
+    const readerLink = page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' });
+    await expect(readerLink).toBeVisible();
+
+    const refAsked = page.waitForRequest((r) => r.url().includes('/files/reference?') && r.url().includes('shared.ts'));
+    await readerLink.click();
+    await refAsked;
+
+    filesVersion = 2;
+    const filesRefetched = page.waitForResponse((r) => r.url().endsWith('/api/workspace/demo/files') && r.request().method() === 'GET');
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await filesRefetched;
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    releaseRef();
+    const win = page.getByRole('region', { name: 'Code window' });
+    await expect(win).toBeVisible();
+    await expect.poll(async () => (await win.locator('.view-line').allTextContents()).join('\n').replace(/\u00a0/g, ' ')).toContain('// shared number 35');
+
+    changesVersion = 2;
+    const changesRefetched = page.waitForResponse((r) => r.url().endsWith('/api/workspace/demo/changes') && r.request().method() === 'GET');
+    await win.getByRole('button', { name: 'Close', exact: true }).click();
+    await changesRefetched;
+
+    await expect(page.locator('[data-board-reader]')).toContainText('Guide');
+    await expect(readerLink).toBeFocused();
+  } finally {
+    releaseRef?.();
+  }
+});
+
+test('correction Markdown code link returns focus to equivalent link after reader content re-renders', async ({ page }) => {
+  let previewVersion = 1;
+  await page.route('**/api/workspace/*/files/reference?*', (route) => {
+    const file = new URL(route.request().url()).searchParams.get('path')!;
+    return route.fulfill({
+      json: {
+        status: 'found',
+        target: {
+          origin: { kind: 'repository', repoName: 'api', repoPath: '/tmp/api' },
+          file,
+          viewer: file.endsWith('.md') ? 'reader' : 'code',
+        },
+      },
+    });
+  });
+  await page.route('**/api/workspace/*/documents/preview?*', (route) => {
+    const name = new URL(route.request().url()).searchParams.get('name');
+    const content = previewVersion === 1
+      ? '# Guide\n\n[Keep](../other.md)\n\n[Open code](../src/shared.ts#L35)'
+      : '# Guide\n\nUpdated section inserted above the link.\n\n[Keep](../other.md)\n\n[Open code](../src/shared.ts#L35)';
+    return route.fulfill({ json: { name, kind: 'markdown', content } });
+  });
+  const content = Array.from({ length: 200 }, (_, i) => `// shared number ${i + 1}`).join('\n');
+  await page.route('**/api/workspace/*/files/read?*', (route) => route.fulfill({ json: { content } }));
+  await page.route('**/api/workspace/*/changes/diff?*', (route) => route.fulfill({ json: { diff: '', fileContent: content } }));
+
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('view-mode-split').click();
+  await clickDocument(page);
+  const reader = page.locator('[data-board-reader]');
+  await expect(reader.getByRole('link', { name: 'Open code' })).toBeVisible();
+  await reader.getByRole('link', { name: 'Open code' }).click();
+
+  const win = page.getByRole('region', { name: 'Code window' });
+  await expect(win).toBeVisible();
+  await expect.poll(async () => (await win.locator('.view-line').allTextContents()).join('\n').replace(/\u00a0/g, ' ')).toContain('// shared number 35');
+
+  previewVersion = 2;
+  const previewRefetched = page.waitForResponse((r) => r.url().includes('/documents/preview?') && r.url().includes('guide.md'));
+  await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+  await previewRefetched;
+  await expect(reader).toContainText('Updated section inserted above the link.');
+
+  await win.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(reader.getByRole('link', { name: 'Open code' })).toBeFocused();
+});
