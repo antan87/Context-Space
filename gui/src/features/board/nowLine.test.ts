@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { PlanFileView } from '../plan/planFile.js';
 import { focusOf } from '../plan/focus.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
+import { parseKnowledge } from '../knowledge/knowledgeEntries.js';
+import { entryKey } from '../knowledge/knowledgeIndex.js';
 import { buildBoardAreas } from './boardAreas.js';
 import type { BoardView } from './boardData.js';
 import { firstWaiting, newsLines, nowLineParts, nowLineTarget } from './nowLine.js';
@@ -79,6 +81,17 @@ describe('where the parts go', () => {
     expect(lines[1]!.jump).toBeUndefined();
     expect(lines[2]!.jump).toEqual({ areaId: 'checkpoint:one', nodeId: 'row:step:a' });
     expect(lines[3]!.jump).toBeUndefined();
+  });
+
+  it('knowledge lines open Knowledge on the entry they name, and at the top when they cannot name one', () => {
+    const view = news({ knowledge: { items: [{ id: '2026-11-13-a-lesson', title: 'A lesson', date: '2026-11-13', type: 'decision' }, { id: 'x', title: 'Gone', date: null, type: 'gotcha' }], more: 2 } });
+    const entries = parseKnowledge('## Decisions\n\n### 2026-11-13 — a-lesson\n**Decision:** Yes.\n').entries;
+    const lines = newsLines(view, buildBoardAreas({ plan: plan(null), board, news: view }), undefined, entries);
+    const knowledge = lines.filter((line) => line.knowledge);
+    expect(knowledge.map((line) => line.knowledge!.entry)).toEqual([entryKey(entries[0]!), null, null]);
+    expect(knowledge.every((line) => line.jump === undefined)).toBe(true);
+    // Before the file is read the lines still open Knowledge, at the top
+    expect(newsLines(view, buildBoardAreas({ plan: plan(null), board, news: view })).filter((line) => line.knowledge).map((line) => line.knowledge!.entry)).toEqual([null, null, null]);
   });
 
   it('shows eight and says how many more there are', () => {

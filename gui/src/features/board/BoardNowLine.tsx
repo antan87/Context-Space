@@ -105,7 +105,7 @@ export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, 
               <ul className="max-h-[min(50vh,20rem)] space-y-0.5 overflow-y-auto">
                 {newsLines.map((line, index) => (
                   <li key={`${index}-${line.text}`}>
-                    {line.jump ? (
+                    {line.jump || line.knowledge ? (
                       <button type="button" onClick={() => { setNewsOpen(false); onNewsLine(line); }} className="block min-h-6 w-full cursor-pointer rounded-md px-2 py-1 text-left text-[13px] leading-[18px] text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring">{line.text}</button>
                     ) : (
                       <span className="block min-h-6 px-2 py-1 text-[13px] leading-[18px] text-muted-foreground">{line.text}</span>

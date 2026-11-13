@@ -94,8 +94,9 @@ export const FOLDER_SPECS = [
       'e2e/board-reader-back.spec.ts',
       'e2e/board-reader-nav.spec.ts',
       'e2e/board-browsing.spec.ts',
+      'e2e/board-knowledge.spec.ts',
     ],
-    safety: 'Independent reader drawer and controls; verified by reader navigation and browsing specs.',
+    safety: 'Independent reader drawer and controls; verified by reader navigation and browsing specs, and board-knowledge.spec.ts for Knowledge.',
   },
   {
     folder: 'src/features/board/ReaderPage',
@@ -188,15 +189,15 @@ export const FOLDER_SPECS = [
     folder: 'src/features/board/BoardNowLine',
     path: 'gui/src/features/board/BoardNowLine.tsx',
     bareNames: ['BoardNowLine', 'BoardNowLine.tsx'],
-    specs: ['e2e/board-now-line.spec.ts'],
-    safety: 'Board current-time indicator line overlay; verified by board-now-line.spec.ts.',
+    specs: ['e2e/board-now-line.spec.ts', 'e2e/board-knowledge.spec.ts'],
+    safety: 'Board current-time indicator line overlay and its news list; verified by board-now-line.spec.ts, and board-knowledge.spec.ts for knowledge lines.',
   },
   {
     folder: 'src/features/board/nowLine',
     path: 'gui/src/features/board/nowLine.ts',
     bareNames: ['nowLine', 'nowLine.ts'],
-    specs: ['e2e/board-now-line.spec.ts'],
-    safety: 'Now line positioning math; verified by board-now-line.spec.ts.',
+    specs: ['e2e/board-now-line.spec.ts', 'e2e/board-knowledge.spec.ts'],
+    safety: 'Now line positioning math and the news lines; verified by board-now-line.spec.ts, and board-knowledge.spec.ts for knowledge lines.',
   },
 
   // Assignment card (description and specs at the top of the overview)
@@ -268,8 +269,38 @@ export const FOLDER_SPECS = [
     folder: 'src/features/board/BoardSidebar',
     path: 'gui/src/features/board/BoardSidebar.tsx',
     bareNames: ['BoardSidebar', 'BoardSidebar.tsx'],
-    specs: ['e2e/board-index.spec.ts'],
-    safety: 'Index sidebar navigation drawer; verified by board-index.spec.ts.',
+    specs: ['e2e/board-index.spec.ts', 'e2e/board-knowledge.spec.ts'],
+    safety: 'Index sidebar navigation drawer; verified by board-index.spec.ts, and board-knowledge.spec.ts for its Knowledge entry.',
+  },
+
+  // Knowledge on the Board (its index entry, search, news lines and the reader)
+  {
+    folder: 'src/features/board/BoardKnowledge',
+    path: 'gui/src/features/board/BoardKnowledge.tsx',
+    bareNames: ['BoardKnowledge', 'BoardKnowledge.tsx'],
+    specs: ['e2e/board-knowledge.spec.ts'],
+    safety: 'Knowledge as the Board reader draws it (loading, empty, error, entries); verified by board-knowledge.spec.ts.',
+  },
+  {
+    folder: 'src/features/knowledge/KnowledgeView',
+    path: 'gui/src/features/knowledge/KnowledgeView.tsx',
+    bareNames: ['KnowledgeView', 'KnowledgeView.tsx'],
+    specs: ['e2e/board-knowledge.spec.ts'],
+    safety: 'Entries, search, filter and coming to an entry; verified by board-knowledge.spec.ts.',
+  },
+  {
+    folder: 'src/features/knowledge/knowledgeIndex',
+    path: 'gui/src/features/knowledge/knowledgeIndex.ts',
+    bareNames: ['knowledgeIndex', 'knowledgeIndex.ts'],
+    specs: ['e2e/board-knowledge.spec.ts'],
+    safety: 'Pure words and matching for the index entry, search and news lines; unit tested and verified by board-knowledge.spec.ts.',
+  },
+  {
+    folder: 'src/features/knowledge/useKnowledge',
+    path: 'gui/src/features/knowledge/useKnowledge.ts',
+    bareNames: ['useKnowledge', 'useKnowledge.ts'],
+    specs: ['e2e/board-knowledge.spec.ts'],
+    safety: 'Reads the knowledge file for the Board; verified by board-knowledge.spec.ts.',
   },
 ];
 

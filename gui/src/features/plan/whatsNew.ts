@@ -167,7 +167,9 @@ export interface NewsGroup { title: string; lines: string[] }
 export type NewsRef =
   | { kind: 'plan'; item: PlanFileChange['kind']; key: string; removed: boolean }
   | { kind: 'document'; name: string }
-  | { kind: 'commit'; repo: string; sha: string };
+  | { kind: 'commit'; repo: string; sha: string }
+  /** A knowledge entry by its day and title, or the knowledge in general (the line "and 3 more"). */
+  | { kind: 'knowledge'; title?: string; date?: string | null };
 
 /** One line of the list, the group it is under, when it happened (the newest first when sorted) and what it is about, if anything. */
 export interface NewsEntry { group: string; text: string; at?: string; ref?: NewsRef }
@@ -186,8 +188,8 @@ export function newsEntries(news: WhatsNewView, now: Date = new Date()): NewsEnt
     ...news.plan.items.map((change): NewsEntry => ({ group: 'Plan', text: withTime(changeLine(change), change.at, now), at: change.at, ref: { kind: 'plan', item: change.kind, key: change.key, removed: change.action === 'removed' } })),
     ...news.documents.items.map((document): NewsEntry => ({ group: 'Documents', text: withTime(`${document.name} ${document.change}`, document.at, now), at: document.at, ref: { kind: 'document', name: document.name } })),
     ...more('Documents', news.documents.more),
-    ...news.knowledge.items.map((entry): NewsEntry => ({ group: 'Knowledge', text: `${entry.type ?? 'note'} “${entry.title}”${entry.date ? ` · ${entry.date}` : ''}` })),
-    ...more('Knowledge', news.knowledge.more),
+    ...news.knowledge.items.map((entry): NewsEntry => ({ group: 'Knowledge', text: `${entry.type ?? 'note'} “${entry.title}”${entry.date ? ` · ${entry.date}` : ''}`, ref: { kind: 'knowledge', title: entry.title, date: entry.date } })),
+    ...more('Knowledge', news.knowledge.more).map((line): NewsEntry => ({ ...line, ref: { kind: 'knowledge' } })),
     ...news.commits.flatMap((repo): NewsEntry[] => [
       ...repo.commits.map((commit): NewsEntry => ({ group: 'Commits', text: withTime(`${repo.repo}: ${commit.sha} ${commit.subject} (${commit.author})`, commit.at, now), at: commit.at, ref: { kind: 'commit', repo: repo.repo, sha: commit.sha } })),
       ...(repo.more ? [{ group: 'Commits', text: `and ${repo.more}${repo.moreAtLeast ? '+' : ''} more in ${repo.repo}` }] : []),

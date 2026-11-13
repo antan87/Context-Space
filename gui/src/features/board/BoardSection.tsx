@@ -24,7 +24,9 @@ import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
 import { filesChangedText } from '../changes/changeSummary.js';
 import { useRepoChanges } from '../changes/useRepoChanges.js';
-import { BoardActionsContext, BoardReadingContext, firstControl, type BoardActions, type ReaderTarget } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, firstControl, knowledgeTarget, type BoardActions, type ReaderTarget } from './boardActions.js';
+import { parseKnowledge } from '../knowledge/knowledgeEntries.js';
+import { knowledgeFileKey, useKnowledge } from '../knowledge/useKnowledge.js';
 import {
   areaLayout,
   areaPlace,
@@ -262,6 +264,20 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     }
   }, [workspaceId, newsView, docsNewsSig, queryClient]);
   const boardNewsView = useMemo(() => boardNews(newsView, recent.data), [newsView, recent.data]);
+  // Knowledge: the index says how many entries there are and which are new, and a search or a news line reaches one. The text is
+  // read again when the news says something was added, and the reader that shows it keeps its place.
+  const knowledgeQuery = useKnowledge(workspaceId, { enabled: active });
+  const knowledgeText = knowledgeQuery.data;
+  const knowledgeEntries = useMemo(() => (knowledgeText === undefined ? null : parseKnowledge(knowledgeText).entries), [knowledgeText]);
+  const knowledgeNews = newsView && !newsView.empty ? newsView.knowledge.items.length + newsView.knowledge.more : 0;
+  const knowledgeNewsSig = newsView ? newsView.knowledge.items.map((item) => item.id).join(',') + `:${newsView.knowledge.more}` : '';
+  const prevKnowledgeSig = useRef<{ workspaceId: string; sig: string | null }>({ workspaceId, sig: null });
+  useEffect(() => {
+    if (!newsView) return;
+    const prev = prevKnowledgeSig.current;
+    prevKnowledgeSig.current = { workspaceId, sig: knowledgeNewsSig };
+    if (prev.workspaceId === workspaceId && prev.sig !== null && prev.sig !== knowledgeNewsSig) void queryClient.invalidateQueries({ queryKey: knowledgeFileKey(workspaceId) });
+  }, [workspaceId, newsView, knowledgeNewsSig, queryClient]);
   const board = boardQuery.data;
   const workspaceFiles = workspaceFilesQuery.data?.files;
   const [showArchived, setShowArchived] = useState(false);
@@ -477,6 +493,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (navDock.overlays) setNarrowNavOpen(true);
     setFileReturn((value) => value + 1);
   }, [reader, codeOpen, active, navDock.overlays]);
+  // Knowledge opens in the reader from the index (its entry or a found entry): the keyboard returns to the button that was pressed
+  const openKnowledge = useCallback((button: HTMLElement, entry?: string) => {
+    fileReturnPending.current = { kind: 'reader', seen: false };
+    if (navDock.overlays) setNarrowNavOpen(false);
+    show(knowledgeTarget(entry), button);
+  }, [navDock.overlays, show]);
   const navSections = useMemo(
     () => buildBoardNav(areas, { mode: navMode, query: navQuery }),
     [areas, navMode, navQuery],
@@ -769,7 +791,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // The Now line: what is happening, what waits, what is new, and the way to search
   const focus = useMemo(() => focusOf(planView, undefined, clock), [planView, clock]);
   const nowParts = useMemo(() => nowLineParts({ focus, areas, news: newsView, now: new Date(clock) }), [focus, areas, newsView, clock]);
-  const newsLines = useMemo(() => (newsView && !newsView.empty ? buildNewsLines(newsView, areas, new Date(clock)) : []), [newsView, areas, clock]);
+  const newsLines = useMemo(() => (newsView && !newsView.empty ? buildNewsLines(newsView, areas, new Date(clock), knowledgeEntries ?? []) : []), [newsView, areas, clock, knowledgeEntries]);
   const markSeen = useMarkNewsSeen(workspaceId);
   const goToNow = useCallback(() => {
     const target = nowLineTarget(areas, focus);
@@ -788,12 +810,18 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     }
   }, [areas, jumpToItem, recordBoardJump]);
   const goToNews = useCallback((line: NewsLine) => {
-    if (!line.jump) return;
     const originBtn = root.current?.querySelector<HTMLElement>('[data-testid="board-now-news"]');
+    // A knowledge line opens Knowledge in the reader, on its entry or at the top
+    if (line.knowledge) {
+      invalidateReferenceIntent();
+      show(knowledgeTarget(line.knowledge.entry), originBtn ?? null);
+      return;
+    }
+    if (!line.jump) return;
     recordBoardJump(originBtn);
     if (line.jump.nodeId) jumpToItem({ areaId: line.jump.areaId, nodeId: line.jump.nodeId, readerTarget: line.jump.readerTarget }, false);
     else jumpToArea(line.jump.areaId);
-  }, [jumpToItem, jumpToArea, recordBoardJump]);
+  }, [jumpToItem, jumpToArea, recordBoardJump, show]);
   // The search is the Board index's own: opening it (it may be folded to its rail, or a drawer) and putting the keyboard in its box
   const [searchRequest, setSearchRequest] = useState(0);
   const openSearch = useCallback(() => {
@@ -2231,6 +2259,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
             recordBoardJump(document.activeElement as HTMLElement);
             jumpToItem(item, openReaderTarget);
           }}
+          knowledge={{ entries: knowledgeEntries, fresh: knowledgeNews }}
+          onOpenKnowledge={openKnowledge}
           toggleButtonRef={navToggleRef}
           focusSearch={searchRequest}
         />}

@@ -2,6 +2,7 @@ import { createContext } from 'react';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { API_BASE } from '../../lib/apiBase.js';
+import { KNOWLEDGE_FILE } from '../../brand.js';
 import { agoText } from '../plan/whatsNew.js';
 import { fileTitle } from './boardDock.js';
 import { authorName } from './boardLayout.js';
@@ -21,7 +22,12 @@ export interface ReaderTarget {
   byline?: string;
   /** When set, this is a repository commit: it opens in the Code window's Commits mode (GET /api/workspace/:id/commits/:repo/:sha), not in the reader. */
   commit?: { repo: string; sha: string };
+  /** The workspace's knowledge, read as entries (KnowledgeView) and not as a document. `entry` is the one to open it on (its `entryKey`); none opens it at the top. */
+  knowledge?: { entry?: string };
 }
+
+/** Knowledge in the reader: its file under the title, opened on an entry when one is named. */
+export const knowledgeTarget = (entry?: string | null): ReaderTarget => ({ path: KNOWLEDGE_FILE, title: 'Knowledge', knowledge: entry ? { entry } : {} });
 
 /** "by claude · 5 min ago", and who changed it since when someone did. */
 export function bylineText(data: { by: string; at: string; updatedBy: string; updatedAt: string }): string {

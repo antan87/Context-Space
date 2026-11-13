@@ -16,6 +16,7 @@ import {
   FileImage,
   FileText,
   GitCommitHorizontal,
+  Lightbulb,
   Kanban,
   PanelLeftClose,
   PanelLeftOpen,
@@ -27,6 +28,8 @@ import {
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
+import { knowledgeCountText, knowledgeNavItems, knowledgeNewText } from '../knowledge/knowledgeIndex.js';
+import type { KnowledgeEntry } from '../knowledge/knowledgeEntries.js';
 import { BoardFiles, type IndexFile } from './BoardFiles.js';
 import { SIDEBAR, type NavItem, type NavMode, type NavSection, type SidebarDock } from './boardNav.js';
 
@@ -51,6 +54,10 @@ export interface BoardSidebarProps {
   steppedAreaId: string | null;
   onJumpToArea: (areaId: string) => void;
   onJumpToItem: (item: NavItem, openReader?: boolean) => void;
+  /** The workspace's knowledge: its entries once read (null before, or when it could not be read) and how many are new since the person looked. */
+  knowledge?: { entries: readonly KnowledgeEntry[] | null; fresh: number };
+  /** Opens Knowledge in the reader, on an entry (its key) or at the top. `button` is what the keyboard returns to. */
+  onOpenKnowledge?: (button: HTMLElement, entry?: string) => void;
   toggleButtonRef?: Ref<HTMLButtonElement>;
   /** A number that goes up each time something asks for the search box (the Now line, the `/` key): the index opens if it is folded, and the box takes the keyboard. */
   focusSearch?: number;
@@ -96,6 +103,8 @@ export function BoardSidebar({
   steppedAreaId,
   onJumpToArea,
   onJumpToItem,
+  knowledge,
+  onOpenKnowledge,
   toggleButtonRef,
   focusSearch = 0,
 }: BoardSidebarProps) {
@@ -114,7 +123,10 @@ export function BoardSidebar({
   const expanded = dock.overlays ? narrowOpen : open;
   const isSearching = query.trim().length > 0;
 
-  const matchCount = sections.reduce((sum, section) => sum + section.items.length, 0);
+  // A search finds knowledge entries by their title too, under a group of their own
+  const knowledgeMatches = !filesMode && knowledge?.entries && onOpenKnowledge ? knowledgeNavItems(knowledge.entries, query) : [];
+  const matchCount = sections.reduce((sum, section) => sum + section.items.length, 0) + knowledgeMatches.length;
+  const knowledgeNew = knowledgeNewText(knowledge?.fresh ?? 0);
 
   // The narrow drawer opens on its search box
   useEffect(() => {
@@ -280,10 +292,53 @@ export function BoardSidebar({
         </div>
       </div>
 
+      {/* Knowledge: always one press away, whatever the mode and however long the sections are */}
+      {onOpenKnowledge && (
+        <div className="shrink-0 border-b border-border/60 px-1.5 py-1">
+          <button
+            type="button"
+            data-testid="board-index-knowledge"
+            className="flex min-h-7 w-full items-center gap-2 rounded-md px-1.5 text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring"
+            onClick={(event) => { selectedFile.current = event.currentTarget; onOpenKnowledge(event.currentTarget); }}
+          >
+            <Lightbulb className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="shrink-0 text-xs font-semibold text-foreground">Knowledge</span>
+            {knowledge?.entries && <span className="min-w-0 truncate text-xs text-muted-foreground">· {knowledgeCountText(knowledge.entries.length)}</span>}
+            {knowledgeNew && <span className="ml-auto shrink-0 rounded-md bg-info/10 px-1.5 text-xs font-medium text-info-foreground">{knowledgeNew}</span>}
+          </button>
+        </div>
+      )}
+
       {/* Sections list */}
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
         {filesMode && <BoardFiles enabled={active && expanded} key={workspaceId} workspaceId={workspaceId} workspacePath={workspacePath} query={query} onOpen={(file, button) => { selectedFile.current = button; onOpenFile(file, button); }} />}
-        {!filesMode && sections.length === 0 && (
+        {/* Found by title, right under the Knowledge entry: a long list of matches in the Areas does not push them out of sight */}
+        {knowledgeMatches.length > 0 && (
+          <div className="rounded-lg">
+            <h3 className="px-1.5 py-1 text-xs font-semibold text-muted-foreground">
+              Knowledge <span className="text-xs font-normal">({knowledgeMatches.length})</span>
+            </h3>
+            <ul className="mt-0.5 space-y-0.5 pl-2">
+              {knowledgeMatches.map((match) => (
+                <li key={match.key} className="rounded-md hover:bg-muted/40">
+                  <button
+                    type="button"
+                    data-nav-knowledge={match.key}
+                    className="flex w-full min-w-0 items-start gap-2 rounded-md p-1.5 text-left focus-visible:outline-2 focus-visible:outline-ring"
+                    onClick={(event) => { selectedFile.current = event.currentTarget; onOpenKnowledge?.(event.currentTarget, match.key); }}
+                  >
+                    <Lightbulb className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium text-foreground">{match.title}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{match.subtitle}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {!filesMode && sections.length === 0 && knowledgeMatches.length === 0 && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
             No matches found
           </div>

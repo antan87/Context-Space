@@ -7,6 +7,8 @@ import { focusText, focusWord, type Focus } from '../plan/focus.js';
 import { agoText, newsEntries, newsTotal, type NewsEntry, type WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardArea } from './boardAreas.js';
 import { authorName } from './boardLayout.js';
+import { newsEntryKey } from '../knowledge/knowledgeIndex.js';
+import type { KnowledgeEntry } from '../knowledge/knowledgeEntries.js';
 import { buildBoardNav, type NavItem } from './boardNav.js';
 
 export interface NowLineParts {
@@ -64,13 +66,15 @@ export interface NewsLine {
   text: string;
   /** Where the line goes: an Area (node null) or a card, commit or step in it. None: the line only shows its text. */
   jump?: { areaId: string; nodeId: string | null; readerTarget?: NavItem['readerTarget'] };
+  /** A knowledge line: it opens Knowledge in the reader, on the entry (its key) or, when the line cannot name one, at the top. */
+  knowledge?: { entry: string | null };
 }
 
 /** How many of the newest things the list shows. */
 export const NEWS_SHOWN = 8;
 
 /** The newest things of the news list, newest first, each with where it can be found on the board. */
-export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date): NewsLine[] {
+export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, knowledge: readonly KnowledgeEntry[] = []): NewsLine[] {
   const items = buildBoardNav(areas, { mode: 'category' }).flatMap((section) => section.items);
   const areaOfStep = (key: string) => areas.find((area) => area.planItems?.steps.some((step) => step.key === key));
   const jumpOf = (entry: NewsEntry): NewsLine['jump'] => {
@@ -84,6 +88,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date): N
       const item = items.find((candidate) => (candidate.category === 'documents' || candidate.category === 'pictures') && (candidate.readerTarget?.path === ref.name || candidate.title === ref.name));
       return item?.nodeId ? { areaId: item.areaId, nodeId: item.nodeId } : undefined;
     }
+    if (ref.kind === 'knowledge') return undefined;
     if (ref.removed) return undefined;
     if (ref.item === 'checkpoint') {
       const area = areas.find((candidate) => candidate.checkpointKey === ref.key);
@@ -102,6 +107,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date): N
   const undated = newsEntries(news, now).filter((entry) => !entry.at);
   const shown = [...dated, ...undated].slice(0, NEWS_SHOWN);
   const lines = shown.map((entry): NewsLine => {
+    if (entry.ref?.kind === 'knowledge') return { text: entry.text, knowledge: { entry: entry.ref.title ? newsEntryKey(knowledge, { title: entry.ref.title, date: entry.ref.date ?? null }) : null } };
     const jump = jumpOf(entry);
     return { text: entry.text, ...(jump ? { jump } : {}) };
   });

@@ -30,6 +30,8 @@ import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
+import { isKnowledgeFile } from '../knowledge/knowledgeIndex.js';
+import { BoardKnowledge } from './BoardKnowledge.js';
 import { documentFileUrl, type ReaderTarget } from './boardActions.js';
 import { LARGE_WINDOW, type ReaderLayout } from './boardReaderLayout.js';
 import { ReaderPage } from './ReaderPage.js';
@@ -113,9 +115,12 @@ export function BoardReader({
   // The canvas is out of reach, under the reader: in the window, and where the dock covers it.
   const covering = large || covers;
   const { path, source, repo } = target;
+  // Knowledge is read as entries, not as a document: the target says so, and so does a link to the knowledge file of the workspace
+  const isKnowledge = Boolean(target.knowledge) || (!source && !repo && !target.commit && isKnowledgeFile(path, workspacePath));
+  const shownTitle = isKnowledge ? 'Knowledge' : target.title;
   // What is open: a source document, or a file. (A commit opens in the Code window.)
-  const open = source ? `source:${source}` : `file:${repo?.name ?? ''}:${path}`;
-  const isHtml = !source && (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm'));
+  const open = isKnowledge ? 'knowledge' : source ? `source:${source}` : `file:${repo?.name ?? ''}:${path}`;
+  const isHtml = !source && !isKnowledge && (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm'));
   const [viewLink, setViewLink] = useState<{ open: string; url: string } | null>(null);
   const activeViewUrl = viewLink?.open === open ? viewLink.url : null;
   const handleViewUrlReady = useCallback((url: string) => {
@@ -131,7 +136,7 @@ export function BoardReader({
       if (read.content === undefined) throw new Error('This source document is a link, not text.');
       return { name: path, kind: 'markdown', content: read.content };
     },
-    enabled: !isHtml,
+    enabled: !isHtml && !isKnowledge,
     retry: false,
   });
   const data = preview.data ?? null;
@@ -348,7 +353,7 @@ export function BoardReader({
   }, [active, covering, take, slot]);
 
   const kind = data?.kind;
-  const canViewSource = isHtml || kind === 'markdown' || kind === 'html';
+  const canViewSource = !isKnowledge && (isHtml || kind === 'markdown' || kind === 'html');
   // A source document's "path" is its stored name.
   const copyLabel = source ? 'Copy name' : 'Copy path';
   // Said for what was open when it was copied: another card starts without it.
@@ -420,9 +425,9 @@ export function BoardReader({
             ref={title}
             tabIndex={-1}
             className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground cursor-default"
-            title={target.title}
+            title={shownTitle}
           >
-            {target.title}
+            {shownTitle}
           </h2>
           <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{repo ? `${repo.name} · ${path}` : path}</p>
         </div>
@@ -474,17 +479,17 @@ export function BoardReader({
                     </MenuItem>
                   )}
               <>
-                  {!source && isHtml && (
+                  {!source && !isKnowledge && isHtml && (
                     <MenuItem render={<a href={activeViewUrl ?? `${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
                       <SquareArrowOutUpRight aria-hidden="true" />Open in browser
                     </MenuItem>
                   )}
-                  {!source && !isHtml && kind === 'html' && (
+                  {!source && !isKnowledge && !isHtml && kind === 'html' && (
                     <MenuItem render={<a href={`${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
                       <SquareArrowOutUpRight aria-hidden="true" />Open in new window
                     </MenuItem>
                   )}
-                  {!source && (isHtml || kind === 'html') && <MenuSeparator />}
+                  {!source && !isKnowledge && (isHtml || kind === 'html') && <MenuSeparator />}
                   {canViewSource && (
                     <MenuItem onClick={() => changePlace(open, { raw: !raw })}>
                       {raw ? <Eye aria-hidden="true" /> : <Code2 aria-hidden="true" />}
@@ -492,7 +497,7 @@ export function BoardReader({
                     </MenuItem>
                   )}
                   <MenuItem onClick={copyPath}><Copy aria-hidden="true" />{copyLabel}</MenuItem>
-                  {!source && (
+                  {!source && !isKnowledge && (
                     <MenuItem
                       render={
                         <a
@@ -571,7 +576,9 @@ export function BoardReader({
         )}
       </header>
       <div ref={bodyRef} onScrollCapture={onBodyScroll} className="min-h-0 flex-1 overflow-hidden">
-        {isHtml ? (
+        {isKnowledge ? (
+          <BoardKnowledge key={open} workspaceId={workspaceId} entry={target.knowledge?.entry} request={request} />
+        ) : isHtml ? (
           <ReaderPage
             key={open}
             workspaceId={workspaceId}
