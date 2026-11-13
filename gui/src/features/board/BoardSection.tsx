@@ -64,6 +64,7 @@ import {
 import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead, BoardUncommitted } from './BoardNodes.js';
 import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
+import { commitOpenFor } from './commitSequence.js';
 import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { BoardNowLine } from './BoardNowLine.js';
@@ -336,6 +337,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const show = useCallback((target: ReaderTarget, from: HTMLElement | null, preserveIntent = false) => {
     if (!preserveIntent) invalidateReferenceIntent();
+    // A commit opens in the Code window (its Commits mode), with the commits of the row it was pressed in, in the order the row shows them.
+    const commitOpen = commitOpenFor(areas, target);
+    if (commitOpen) {
+      openCodeWindow(workspaceId, { opener: from ?? pressedLink.current, commit: commitOpen, preserveIntent: true });
+      return;
+    }
     opener.current = from ?? pressedLink.current;
     const node = opener.current?.closest('.react-flow__node')?.getAttribute('data-id');
     const label = opener.current?.getAttribute('aria-label') ?? (opener.current instanceof HTMLAnchorElement ? opener.current.textContent?.trim() : null);
@@ -347,7 +354,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       ? { ...matching, ...target, ...(matching.card ? { card: matching.card } : {}), ...(matching.text ? { text: matching.text } : {}), ...(matching.byline ? { byline: matching.byline } : {}) }
       : target;
     setReader({ target: resolved, request: requests.current, trail: startTrail(resolved) });
-  }, [areas, setReader]);
+  }, [areas, setReader, workspaceId]);
 
   const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from), [show]);
   const closeReader = useCallback(() => {

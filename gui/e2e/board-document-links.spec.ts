@@ -608,10 +608,8 @@ test('fix2 keyboard Tab from the Code toolbar reaches the mixed choices', async 
 });
 
 test('fix2 a late document-link lookup does not replace the item chosen with ]', async ({ page }) => {
-  const SHA = 'a91f2e0c4d5b1234567890123456789012345678';
-  const SHA2 = 'b82e3f1d5e6c2345678901234567890123456789';
-  const COMMIT = { repo: 'billing', sha: SHA, shortSha: SHA.slice(0, 12), author: 'Anna', at: new Date(Date.now() - 30 * 60_000).toISOString(), subject: 'Write the CSV writer', body: 'Body', parents: [], files: [{ path: 'src/export.ts', status: 'modified', additions: 2, deletions: 1 }], moreFiles: 0, additions: 2, deletions: 1, pushed: false, forge: null, webUrl: null };
-  const DOCS: Record<string, string> = { 'PLAN.md': '# The plan\n\nSee [the notes](docs/notes.md).', 'docs/notes.md': '# The notes' };
+  // The trail starts from a page of the Board (commits open in the Code window now, not in the reader)
+  const DOCS: Record<string, string> = { 'start-here.md': '# Write the CSV writer\n\nSee [Reports export to CSV](PLAN.md).', 'second-note.md': '# Second note', 'PLAN.md': '# The plan\n\nSee [the notes](docs/notes.md).', 'docs/notes.md': '# The notes' };
   let release: () => void = () => undefined;
   let hold = false;
   try {
@@ -621,13 +619,14 @@ test('fix2 a late document-link lookup does not replace the item chosen with ]',
       return route.fulfill({ json: DOCS[file] ? { status: 'found', target: { origin: { kind: 'workspace', workspacePath: '/tmp/demo' }, file, viewer: 'reader' } } : { status: 'not-found', reason: 'missing' } });
     });
     await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ title: 'Reports CSV export', checkpoints: [checkpoint('Reports export to CSV', { steps: [
-      step(`Write the CSV writer (${COMMIT.shortSha})`, true), step(`Background job queue for large exports (${SHA2.slice(0, 12)})`),
+      step('Write the CSV writer', true), step('Background job queue for large exports'),
     ] })] }) }));
-    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [{ repo: 'billing', more: 0, commits: [
-      { sha: SHA, author: 'Anna', subject: COMMIT.subject, at: COMMIT.at }, { sha: SHA2, author: 'Anna', subject: 'Second commit', at: COMMIT.at },
-    ] }] }) }));
-    await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: boardFile({ cards: [boardFileCard(2, 'board-pictures/other.png', { title: 'Other picture' })] }) }));
-    await page.route('**/api/workspace/demo/commits/**', (route) => route.fulfill({ json: new URL(route.request().url()).pathname.includes(SHA2) ? { ...COMMIT, sha: SHA2, shortSha: SHA2.slice(0, 12), subject: 'Second commit' } : COMMIT }));
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: [] }) }));
+    await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: boardFile({ cards: [
+      boardFileCard(2, 'board-pictures/other.png', { title: 'Other picture', at: new Date(Date.now() - 30 * 60_000).toISOString() }),
+      boardFileCard(1, 'start-here.md', { title: 'Write the CSV writer', at: new Date(Date.now() - 20 * 60_000).toISOString() }),
+      boardFileCard(3, 'second-note.md', { title: 'Second note', at: new Date(Date.now() - 10 * 60_000).toISOString() }),
+    ] }) }));
     await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
       const name = new URL(route.request().url()).searchParams.get('name') ?? '';
       const content = DOCS[name];
@@ -645,9 +644,9 @@ test('fix2 a late document-link lookup does not replace the item chosen with ]',
     await page.goto('/#/workspaces/demo/board');
     await page.getByTestId('view-mode-split').click();
     await page.locator('.board-overview-plane button.board-area').first().click();
-    const commitButton = board.locator('#board-area .react-flow__node-commit').filter({ hasText: 'Write the CSV writer' }).getByRole('button', { name: 'Open Write the CSV writer', exact: true });
-    await expect(commitButton).toBeVisible();
-    await commitButton.click();
+    const originButton = board.locator('#board-area').getByRole('button', { name: 'Open Write the CSV writer', exact: true });
+    await expect(originButton).toBeVisible();
+    await originButton.click();
     await expect(title('Write the CSV writer')).toBeVisible();
     await reader.getByRole('link', { name: /Reports export to CSV/ }).click();
     await expect(title('PLAN.md')).toBeVisible();
@@ -656,12 +655,12 @@ test('fix2 a late document-link lookup does not replace the item chosen with ]',
     await reader.getByRole('link', { name: 'the notes', exact: true }).click();
     await asked;
     await page.keyboard.press(']');
-    await expect(title('Second commit')).toBeVisible();
+    await expect(title('Second note')).toBeVisible();
     const answered = page.waitForResponse((r) => r.url().includes('/files/reference?') && r.url().includes('notes.md'));
     release();
     await answered;
     await page.waitForTimeout(500);
-    await expect(title('Second commit'), 'the newer ] choice must stay').toBeVisible();
+    await expect(title('Second note'), 'the newer ] choice must stay').toBeVisible();
   } finally { release(); }
 });
 

@@ -19,7 +19,7 @@ export interface ReaderTarget {
   /** The text of the card the file belongs to, and its whole byline: the reader shows them under the file, where the card shows only the start of the text. */
   text?: string;
   byline?: string;
-  /** When set, opens this repository commit in the quiet reader via GET /api/workspace/:id/commits/:repo/:sha. */
+  /** When set, this is a repository commit: it opens in the Code window's Commits mode (GET /api/workspace/:id/commits/:repo/:sha), not in the reader. */
   commit?: { repo: string; sha: string };
 }
 

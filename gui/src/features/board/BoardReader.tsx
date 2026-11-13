@@ -32,8 +32,6 @@ import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { documentFileUrl, type ReaderTarget } from './boardActions.js';
 import { LARGE_WINDOW, type ReaderLayout } from './boardReaderLayout.js';
-import { forgeDisplayName, safeForgeUrl, type CommitDetail } from './commitContext.js';
-import { CommitReaderView } from './CommitReaderView.js';
 import { ReaderPage } from './ReaderPage.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 import { useCodeWindowOpen } from '../workspace-shell/openRequests.js';
@@ -114,10 +112,10 @@ export function BoardReader({
   const large = layout === 'large';
   // The canvas is out of reach, under the reader: in the window, and where the dock covers it.
   const covering = large || covers;
-  const { path, source, commit, repo } = target;
-  // What is open: a commit, a source document, or a file.
-  const open = commit ? `commit:${commit.repo}:${commit.sha}` : source ? `source:${source}` : `file:${repo?.name ?? ''}:${path}`;
-  const isHtml = !commit && !source && (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm'));
+  const { path, source, repo } = target;
+  // What is open: a source document, or a file. (A commit opens in the Code window.)
+  const open = source ? `source:${source}` : `file:${repo?.name ?? ''}:${path}`;
+  const isHtml = !source && (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm'));
   const [viewLink, setViewLink] = useState<{ open: string; url: string } | null>(null);
   const activeViewUrl = viewLink?.open === open ? viewLink.url : null;
   const handleViewUrlReady = useCallback((url: string) => {
@@ -133,39 +131,21 @@ export function BoardReader({
       if (read.content === undefined) throw new Error('This source document is a link, not text.');
       return { name: path, kind: 'markdown', content: read.content };
     },
-    enabled: !commit && !isHtml,
+    enabled: !isHtml,
     retry: false,
   });
   const data = preview.data ?? null;
 
-  const commitQuery = useQuery({
-    queryKey: ['board-commit', workspaceId, commit?.repo, commit?.sha],
-    queryFn: ({ signal }) =>
-      apiFetch<CommitDetail>(
-        `/api/workspace/${encodeURIComponent(workspaceId)}/commits/${encodeURIComponent(commit!.repo)}/${encodeURIComponent(commit!.sha)}`,
-        { signal },
-      ),
-    enabled: Boolean(commit),
-    retry: false,
-  });
-  const commitDetail = commitQuery.data ?? null;
-  const safeWebUrl = safeForgeUrl(commitDetail?.webUrl);
-  const forgeName = forgeDisplayName(commitDetail?.forge, safeWebUrl);
-
   const [maximized, setMaximized] = useState(false);
   const fullscreenToggleRef = useRef<HTMLButtonElement>(null);
   const pendingFullscreenFocus = useRef(false);
-  // What each place of the trail was left as: a commit's open file and diff mode, a page's raw choice, and the scroll. Another trail starts clean.
+  // What each place of the trail was left as: a page's raw choice, and the scroll. Another trail starts clean.
   const [placeUi, setPlaceUi] = useState<{ trailId: number | undefined; places: Record<string, { file: string | null; mode: DiffViewMode | null; raw: boolean; top?: number }> }>({ trailId, places: {} });
   if (placeUi.trailId !== trailId) setPlaceUi({ trailId, places: {} });
   const place = placeUi.places[open];
-  const commitSelectedFile = place?.file ?? null;
-  const commitViewMode = place?.mode ?? null;
   const changePlace = useCallback((key: string, change: Partial<{ file: string | null; mode: DiffViewMode | null; raw: boolean; top?: number }>) => {
     setPlaceUi((prev) => ({ ...prev, places: { ...prev.places, [key]: { ...(prev.places[key] ?? { file: null, mode: null, raw: false }), ...change } } }));
   }, []);
-  const setCommitSelectedFile = useCallback((file: string | null) => changePlace(open, { file }), [changePlace, open]);
-  const setCommitViewMode = useCallback((mode: DiffViewMode | null) => changePlace(open, { mode }), [changePlace, open]);
 
   // The scroll of each place (the outermost thing that scrolls in the reader's body), put back when the place is shown again
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -375,7 +355,7 @@ export function BoardReader({
   const [copiedFor, setCopiedFor] = useState<{ open: string; result: 'done' | 'failed' } | null>(null);
   const copiedKey = `${request}:${open}`;
   const copied = copiedFor?.open === copiedKey ? copiedFor.result : null;
-  const noun = commit ? 'SHA' : source ? 'name' : 'path';
+  const noun = source ? 'name' : 'path';
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const copyPath = () => {
@@ -385,15 +365,6 @@ export function BoardReader({
       copyTimer.current = setTimeout(() => setCopiedFor(null), 1500);
     };
     safeCopyToClipboard(path).then(finish, () => finish(false));
-  };
-  const copySha = () => {
-    const shaToCopy = commitDetail?.sha ?? commit!.sha;
-    const finish = (ok: boolean) => {
-      setCopiedFor({ open: copiedKey, result: ok ? 'done' : 'failed' });
-      clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopiedFor(null), 1500);
-    };
-    safeCopyToClipboard(shaToCopy).then(finish, () => finish(false));
   };
   const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground';
 
@@ -449,44 +420,18 @@ export function BoardReader({
             ref={title}
             tabIndex={-1}
             className="truncate rounded-sm text-sm font-semibold leading-5 text-foreground cursor-default"
-            title={commitDetail?.subject ?? target.title}
+            title={target.title}
           >
-            {commitDetail?.subject ?? target.title}
+            {target.title}
           </h2>
-          {commit ? (
-            <div className="flex min-w-0 items-center gap-1.5 leading-4">
-              <p
-                className="truncate font-mono text-xs text-muted-foreground"
-                title={`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}
-              >
-                {`${commit.repo} · ${commitDetail?.shortSha ?? commit.sha.slice(0, 7)}`}
-              </p>
-              {commitDetail?.pushed && safeWebUrl && forgeName && (
-                <a
-                  href={safeWebUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={`Open commit on ${forgeName}`}
-                  className="inline-flex shrink-0 items-center gap-1 rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[11px] font-medium leading-none text-muted-foreground transition-colors hover:border-border hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  title={`Open commit on ${forgeName}`}
-                >
-                  <span>{forgeName}</span>
-                  <SquareArrowOutUpRight aria-hidden="true" className="size-2.5 opacity-70" />
-                </a>
-              )}
-            </div>
-          ) : (
-            <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{repo ? `${repo.name} · ${path}` : path}</p>
-          )}
+          <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{repo ? `${repo.name} · ${path}` : path}</p>
         </div>
         <div className="order-3 flex items-center gap-1">
           {onAskInCLI && (
             <button
               type="button"
               onClick={() => {
-                const summary = commitDetail?.subject
-                  ? `${commitDetail.shortSha || commit?.sha}: ${commitDetail.subject}`
-                  : target.title || path;
+                const summary = target.title || path;
                 onAskInCLI(summary);
               }}
               className="nodrag nopan inline-flex h-7 items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 text-xs font-medium text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-colors cursor-pointer"
@@ -528,17 +473,7 @@ export function BoardReader({
                       <Maximize2 aria-hidden="true" />Show large
                     </MenuItem>
                   )}
-              {commit ? (
-                <>
-                  <MenuItem onClick={copySha}><Copy aria-hidden="true" />Copy sha</MenuItem>
-                  {commitDetail?.pushed && safeWebUrl && forgeName && (
-                    <MenuItem render={<a href={safeWebUrl} target="_blank" rel="noopener noreferrer" />}>
-                      <SquareArrowOutUpRight aria-hidden="true" />Open on {forgeName}
-                    </MenuItem>
-                  )}
-                </>
-              ) : (
-                <>
+              <>
                   {!source && isHtml && (
                     <MenuItem render={<a href={activeViewUrl ?? `${fileUrl}&open=1`} target="_blank" rel="noopener noreferrer" />}>
                       <SquareArrowOutUpRight aria-hidden="true" />Open in browser
@@ -569,19 +504,14 @@ export function BoardReader({
                       <Download aria-hidden="true" />Download
                     </MenuItem>
                   )}
-                </>
-              )}
+              </>
             </MenuPopup>
           </Menu>
           <span role="status" aria-live="polite" className="sr-only">
             {copied === 'done'
-              ? commit
-                ? 'SHA copied'
-                : `${noun === 'name' ? 'Name' : 'Path'} copied`
+              ? `${noun === 'name' ? 'Name' : 'Path'} copied`
               : copied === 'failed'
-                ? commit
-                  ? 'Could not copy the SHA'
-                  : `Could not copy the ${noun}`
+                ? `Could not copy the ${noun}`
                 : ''}
           </span>
           <button
@@ -641,21 +571,7 @@ export function BoardReader({
         )}
       </header>
       <div ref={bodyRef} onScrollCapture={onBodyScroll} className="min-h-0 flex-1 overflow-hidden">
-        {commit ? (
-          <CommitReaderView
-            key={open}
-            workspaceId={workspaceId}
-            repo={commit.repo}
-            sha={commit.sha}
-            query={commitQuery}
-            onOpenFile={onOpenFile}
-            selectedFile={commitSelectedFile}
-            onSelectFile={setCommitSelectedFile}
-            diffViewMode={commitViewMode}
-            onDiffViewModeChange={setCommitViewMode}
-            initialScrollTop={place?.top}
-          />
-        ) : isHtml ? (
+        {isHtml ? (
           <ReaderPage
             key={open}
             workspaceId={workspaceId}
@@ -687,7 +603,7 @@ export function BoardReader({
           />
         )}
       </div>
-      {!commit && (target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">
+      {(target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">
         {target.text && <div
           id="board-reader-note"
           ref={noteRef}

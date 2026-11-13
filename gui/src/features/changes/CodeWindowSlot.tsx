@@ -41,7 +41,7 @@ export function CodeWindowSlot({ ws, cover, sectionProps, showToast, askAI }: Pi
   if (!shown.everOpened || !accepted) return null;
   return (
     <Suspense fallback={null}>
-      <CodeWindow workspaceFile={accepted.request.workspaceFile} fileRequestId={accepted.id} ws={ws} open={shown.open} opener={accepted.request.opener} openerTarget={accepted.request.openerTarget} cover={cover} sectionProps={sectionProps} showToast={showToast} askAI={askAI} onClose={close} />
+      <CodeWindow workspaceFile={accepted.request.workspaceFile} commitOpen={accepted.request.commit} fileRequestId={accepted.id} ws={ws} open={shown.open} opener={accepted.request.opener} openerTarget={accepted.request.openerTarget} cover={cover} sectionProps={sectionProps} showToast={showToast} askAI={askAI} onClose={close} />
     </Suspense>
   );
 }

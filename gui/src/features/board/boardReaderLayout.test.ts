@@ -119,7 +119,7 @@ describe('isSameReaderTarget', () => {
 });
 
 describe('collectAreaReaderTargets', () => {
-  it('collects source documents, cards, and commits in order and deduplicates', () => {
+  it('collects source documents and cards in order, deduplicates, and leaves commits out (they open in the Code window)', () => {
     const mockArea: BoardArea = {
       id: 'area-1',
       kind: 'checkpoint',
@@ -198,7 +198,8 @@ describe('collectAreaReaderTargets', () => {
     };
 
     const targets = collectAreaReaderTargets(mockArea);
-    expect(targets).toHaveLength(3);
+    expect(targets).toHaveLength(2);
+    expect(targets.some((target) => target.commit)).toBe(false);
     // 1. Document
     expect(targets[0]).toMatchObject({
       path: 'PLAN.md',
@@ -210,11 +211,6 @@ describe('collectAreaReaderTargets', () => {
       path: 'board-pictures/live.png',
       title: 'Live Screenshot',
       card: 'card-pic-1',
-    });
-    // 3. Commit
-    expect(targets[2]).toMatchObject({
-      title: 'feat: add awesome feature',
-      commit: { repo: 'NexusFlow', sha: '1111111' },
     });
 
     // Test findReaderTargetIndex

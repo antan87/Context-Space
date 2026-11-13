@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
+import { bylineText, type ReaderTarget } from './boardActions.js';
 import type { BoardArea } from './boardAreas.js';
 import { cardOrder, uniqueId } from './boardLayout.js';
 import { stepWorkspaceFileNodeId, workspaceFileNodeId } from './workspaceFilesArea.js';
@@ -76,7 +76,7 @@ export function isSameReaderTarget(a: ReaderTarget, b: ReaderTarget): boolean {
 }
 
 /**
- * Collects all readable targets (documents, pictures, html pages, files, and commits) from an Area in stable reading order.
+ * Collects all readable targets (documents, pictures, html pages and files) from an Area. Commits are not among them: they open in the Code window in stable reading order.
  */
 export function collectAreaReaderTargets(area: BoardArea): ReaderTarget[] {
   const targets: ReaderTarget[] = [];
@@ -159,22 +159,6 @@ export function collectAreaReaderTargets(area: BoardArea): ReaderTarget[] {
         ...(file.folder ? { text: file.folder } : {}),
       });
     }
-  }
-
-  // 3. Commits
-  for (const repoEntry of area.repos) {
-    repoEntry.commits.forEach((commit, index) => {
-      const commitNodeId = repoEntry.cards[index]?.id ?? `commit:${repoEntry.repo.repo}:${commit.sha}`;
-      const parsedCommit = parseCommitNodeId(commitNodeId);
-      if (parsedCommit) {
-        add({
-          path: `${parsedCommit.repo} · ${parsedCommit.sha.slice(0, 7)}`,
-          title: commit.subject,
-          card: commitNodeId,
-          commit: parsedCommit,
-        });
-      }
-    });
   }
 
   return targets;

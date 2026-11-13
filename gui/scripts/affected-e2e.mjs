@@ -28,7 +28,8 @@ import { fileURLToPath } from 'node:url';
  * |--------------------------------------|----------------------------------------------------------|------------------------------------------------------------------------------------------------------|
  * | answerHoldOff                        | e2e/board-decisions.spec.ts                              | Isolated hold-off timer logic for decision prompt interaction.                                       |
  * |--------------------------------------|----------------------------------------------------------|------------------------------------------------------------------------------------------------------|
- * | CommitReaderView, commitContext      | e2e/board-commits.spec.ts                                 | Commit history drawer and commit context rendering; isolated from canvas graph layout.              |
+ * | CommitsView, commitsMode,            | e2e/board-commits.spec.ts,                                | Commits mode of the Code window: header, file list, diff and moving between commits; commitContext |
+ * | commitSequence, commitContext        | e2e/board-code-window.spec.ts                             | still feeds it. Isolated from canvas graph layout.                                                   |
  * |--------------------------------------|----------------------------------------------------------|------------------------------------------------------------------------------------------------------|
  * | NoteDialog                           | e2e/board-notes.spec.ts,                                 | Modal dialog for creating and editing note cards; tested by notes and area specs.                    |
  * |                                      | e2e/board-area.spec.ts                                   |                                                                                                      |
@@ -205,13 +206,27 @@ export const FOLDER_SPECS = [
     safety: 'Hold-off timer logic for question prompt decisions; verified by board-decisions.spec.ts.',
   },
 
-  // Commits / Commits reader
+  // Commits mode of the Code window
   {
-    folder: 'src/features/board/CommitReaderView',
-    path: 'gui/src/features/board/CommitReaderView.tsx',
-    bareNames: ['CommitReaderView', 'CommitReaderView.tsx'],
+    folder: 'src/features/changes/CommitsView',
+    path: 'gui/src/features/changes/CommitsView.tsx',
+    bareNames: ['CommitsView', 'CommitsView.tsx'],
+    specs: ['e2e/board-commits.spec.ts', 'e2e/board-code-window.spec.ts'],
+    safety: 'Commits mode of the Code window (header, files, diff, previous/next commit); verified by board-commits.spec.ts.',
+  },
+  {
+    folder: 'src/features/changes/commitsMode',
+    path: 'gui/src/features/changes/commitsMode.ts',
+    bareNames: ['commitsMode', 'commitsMode.ts'],
     specs: ['e2e/board-commits.spec.ts'],
-    safety: 'Commit history drawer view; verified by board-commits.spec.ts.',
+    safety: 'Pure helpers for row order, commit lists and mode state; unit tested and verified by board-commits.spec.ts.',
+  },
+  {
+    folder: 'src/features/board/commitSequence',
+    path: 'gui/src/features/board/commitSequence.ts',
+    bareNames: ['commitSequence', 'commitSequence.ts'],
+    specs: ['e2e/board-commits.spec.ts'],
+    safety: 'Finds the row of a commit card for the Code window; verified by board-commits.spec.ts.',
   },
   {
     folder: 'src/features/board/commitContext',

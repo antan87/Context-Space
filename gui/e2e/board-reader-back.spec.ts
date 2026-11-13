@@ -6,22 +6,27 @@ import { boardFile, boardFileCard, checkpoint, planFile, step, whatsNew } from '
 /**
  * The reader keeps a trail: following a picture, a plan path or a link from inside it is a step deeper, and Back, Alt+Left and
  * Escape return one step to the place as it was left. Everything is faked, and every write is refused.
+ * The trails here start from a page of the Board ("Write the CSV writer", a markdown file card): commits no longer open in the reader,
+ * they open in the Code window (see board-commits.spec.ts), so a commit is no longer a place of the trail.
  */
 const workspace = { id: 'demo', branchName: 'demo', name: 'Reports CSV export', description: 'Add CSV export', repos: [], assistants: [], workspacePath: '/tmp/demo', createdAt: '2026-10-01T00:00:00Z' };
 test.use({ workspacesData: [[workspace], { option: true }], sidebarDocked: false });
 
-const SHA = 'a91f2e0c4d5b1234567890123456789012345678';
-const SHORT = SHA.slice(0, 7);
 const SHA2 = 'b82e3f1d5e6c2345678901234567890123456789';
+const SHA = 'a91f2e0c4d5b1234567890123456789012345678';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
-const COMMIT = {
-  repo: 'billing', sha: SHA, shortSha: SHA.slice(0, 12), author: 'Anna', at: new Date(Date.now() - 30 * 60_000).toISOString(),
-  subject: 'Write the CSV writer',
-  body: Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of a long commit message that makes the reader scroll.`).join('\n'),
-  parents: [], files: [{ path: 'src/export.ts', status: 'modified', additions: 2, deletions: 1 }], moreFiles: 0, additions: 2, deletions: 1, pushed: false, forge: null, webUrl: null,
-};
-const DIFF = { repo: 'billing', repoPath: '/tmp/demo/billing', sha: SHA, file: 'src/export.ts', diff: 'diff --git a/src/export.ts b/src/export.ts\n--- a/src/export.ts\n+++ b/src/export.ts\n@@ -1,2 +1,3 @@\n-old\n+new one\n+new two\n keep\n', fileContent: 'new one\nnew two\nkeep\n', originalContent: 'old\nkeep\n', symbols: [] };
+/** The place the trails start from: a page of the Board with links to the plan, to two pictures, and a long text that makes it scroll. */
+const ORIGIN = 'Write the CSV writer';
+const START_TEXT = [
+  '# Write the CSV writer',
+  '',
+  'See [Reports export to CSV](PLAN.md). Pictures: [export.png](board-pictures/export.png) and [Other picture](board-pictures/other.png).',
+  '',
+  ...Array.from({ length: 200 }, (_, i) => `Line ${i + 1} of a long page that makes the reader scroll.`),
+].join('\n');
 const DOCS: Record<string, string> = {
+  'start-here.md': START_TEXT,
+  'second-note.md': '# Second note\n\nThe card after the first one.',
   'PLAN.md': '# The plan\n\nSee [the notes](docs/notes.md) and [the picture](board-pictures/export.png).',
   'docs/notes.md': '# The notes\n\nOpen [the picture](board-pictures/other.png) or go [deeper](deep.md).',
   'docs/deep.md': '# The deep page\n\nLink to [the deep page](deep.md) again.',
@@ -38,7 +43,7 @@ test.beforeEach(async ({ page }) => {
     json: planFile({
       title: 'Reports CSV export',
       checkpoints: [checkpoint('Reports export to CSV', { steps: [
-        step(`Write the CSV writer (${COMMIT.shortSha}). Pictures: \`board-pictures/export.png\`, \`board-pictures/other.png\``, true),
+        step(`Write the CSV writer (${SHA.slice(0, 12)}). Pictures: \`board-pictures/export.png\`, \`board-pictures/other.png\``, true),
         step(`Background job queue for large exports (${SHA2.slice(0, 12)})`),
       ] })],
     }),
@@ -50,23 +55,19 @@ test.beforeEach(async ({ page }) => {
         repo: 'billing',
         more: 0,
         commits: [
-          { sha: SHA, author: 'Anna', subject: COMMIT.subject, at: COMMIT.at },
-          { sha: SHA2, author: 'Anna', subject: 'Second commit', at: COMMIT.at },
+          { sha: SHA, author: 'Anna', subject: 'A commit of the Area', at: new Date(Date.now() - 30 * 60_000).toISOString() },
+          { sha: SHA2, author: 'Anna', subject: 'Another commit of the Area', at: new Date(Date.now() - 30 * 60_000).toISOString() },
         ],
       }],
     }),
   }));
   await page.route('**/api/workspace/demo/board', (route) => route.fulfill({
     json: boardFile({ cards: [
-      boardFileCard(2, 'board-pictures/other.png', { title: 'Other picture' }),
+      boardFileCard(2, 'board-pictures/other.png', { title: 'Other picture', at: new Date(Date.now() - 30 * 60_000).toISOString() }),
+      boardFileCard(1, 'start-here.md', { title: ORIGIN, at: new Date(Date.now() - 20 * 60_000).toISOString() }),
+      boardFileCard(3, 'second-note.md', { title: 'Second note', at: new Date(Date.now() - 10 * 60_000).toISOString() }),
     ] }),
   }));
-  await page.route('**/api/workspace/demo/commits/**', (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname.endsWith('/diff')) return route.fulfill({ json: DIFF });
-    if (url.pathname.includes(SHA2)) return route.fulfill({ json: { ...COMMIT, sha: SHA2, shortSha: SHA2.slice(0, 12), subject: 'Second commit' } });
-    return route.fulfill({ json: COMMIT });
-  });
   await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
     const name = new URL(route.request().url()).searchParams.get('name') ?? '';
     if (name.endsWith('.png')) return route.fulfill({ json: { name, kind: 'image', size: PNG.length, modifiedAt: new Date().toISOString() } });
@@ -89,9 +90,9 @@ const reader = (page: Page) => board(page).getByRole('region', { name: 'Reader',
 const title = (page: Page, name: string) => reader(page).getByRole('heading', { name, level: 2, exact: true });
 const backButton = (page: Page, label: string) => reader(page).getByRole('button', { name: `Back to ${label}`, exact: true });
 const anyBack = (page: Page) => reader(page).getByRole('button', { name: /^Back to /, });
-const commitCard = (page: Page) => board(page).locator('#board-area .react-flow__node-commit').filter({ hasText: 'Write the CSV writer' });
-const commitButton = (page: Page) => commitCard(page).getByRole('button', { name: 'Open Write the CSV writer', exact: true });
-const scroller = (page: Page) => reader(page).locator('div.overflow-y-auto').first();
+const originCard = (page: Page) => board(page).locator('#board-area').getByRole('article', { name: ORIGIN, exact: true });
+const originButton = (page: Page) => originCard(page).getByRole('button', { name: `Open ${ORIGIN}`, exact: true });
+const scroller = (page: Page) => reader(page).locator('div.overflow-auto, div.overflow-y-auto').first();
 
 async function open(page: Page, mode: 'board' | 'split', layout: 'large' | 'side') {
   await page.addInitScript((value) => {
@@ -104,10 +105,10 @@ async function open(page: Page, mode: 'board' | 'split', layout: 'large' | 'side
   await expect(page.getByTestId(`view-mode-${mode}`)).toHaveAttribute('aria-pressed', 'true');
   await page.locator('.board-overview-plane button.board-area').first().click();
   await expect(page.getByRole('button', { name: 'Board ›', exact: true })).toBeVisible();
-  await expect(commitButton(page)).toBeVisible();
+  await expect(originButton(page)).toBeVisible();
 }
 const openCommitAndPicture = async (page: Page) => {
-  await commitButton(page).click();
+  await originButton(page).click();
   await expect(title(page, 'Write the CSV writer')).toBeVisible();
   await expect(anyBack(page)).toHaveCount(0);
   await reader(page).getByRole('link', { name: 'export.png', exact: true }).click();
@@ -120,35 +121,27 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
       test.use({ viewport: { width: size.width, height: size.height } });
       test.beforeEach(async ({ page }) => open(page, size.mode, layout));
 
-      test('Back and Escape return to the commit as it was left: file, diff mode, scroll; a second Escape closes and the commit card has the keyboard', async ({ page }) => {
-        await commitButton(page).click();
-        await expect(title(page, 'Write the CSV writer')).toBeVisible();
-        await reader(page).getByRole('button', { name: /src\/export\.ts/ }).click();
-        const sideBySide = reader(page).getByRole('button', { name: 'Side by side', exact: true });
-        await expect(sideBySide).toBeVisible();
-        const before = await sideBySide.getAttribute('aria-pressed');
-        await sideBySide.click();
-        const chosen = before === 'true' ? 'false' : 'true';
-        await expect(sideBySide).toHaveAttribute('aria-pressed', chosen);
+      test('Back and Escape return to the page as it was left, scroll included; a second Escape closes and the card has the keyboard', async ({ page }) => {
+        await originButton(page).click();
+        await expect(title(page, ORIGIN)).toBeVisible();
         await scroller(page).evaluate((el) => { el.scrollTop = 160; });
         await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
         const left = await scroller(page).evaluate((el) => el.scrollTop);
 
-        await reader(page).getByRole('link', { name: 'export.png', exact: true }).click();
+        // A real click would scroll the link into view first, and then that is the place to come back to, so press it where it is
+        await reader(page).getByRole('link', { name: 'export.png', exact: true }).evaluate((el: HTMLElement) => el.click());
         await expect(title(page, 'export.png')).toBeVisible();
-        const back = backButton(page, SHORT);
+        const back = backButton(page, ORIGIN);
         await expect(back).toBeVisible();
-        await expect(back).toHaveAttribute('title', new RegExp(`Back to ${SHORT}`));
+        await expect(back).toHaveAttribute('title', new RegExp(`Back to ${ORIGIN}`));
         expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(24);
         expect(await back.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12);
-        await expect(back).toContainText(SHORT);
-        // the commit card stays lit, not the picture followed
-        await expect(commitCard(page).locator('article')).toHaveAttribute('aria-current', 'true');
+        await expect(back).toContainText(ORIGIN);
+        // the page's card stays lit, not the picture followed
+        await expect(originCard(page)).toHaveAttribute('aria-current', 'true');
 
         const restored = async () => {
-          await expect(title(page, 'Write the CSV writer')).toBeVisible();
-          await expect(reader(page).getByRole('button', { name: /src\/export\.ts/ })).toHaveAttribute('aria-expanded', 'true');
-          await expect(reader(page).getByRole('button', { name: 'Side by side', exact: true })).toHaveAttribute('aria-pressed', chosen);
+          await expect(title(page, ORIGIN)).toBeVisible();
           await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBeGreaterThanOrEqual(left - 2);
           await expect(anyBack(page)).toHaveCount(0);
         };
@@ -156,22 +149,22 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
         await restored();
 
         // Escape does the same step, and the second one closes
-        await reader(page).getByRole('link', { name: 'export.png', exact: true }).click();
+        await reader(page).getByRole('link', { name: 'export.png', exact: true }).evaluate((el: HTMLElement) => el.click());
         await expect(title(page, 'export.png')).toBeVisible();
         await page.keyboard.press('Escape');
         await restored();
         await page.keyboard.press('Escape');
         await expect(reader(page)).toHaveCount(0);
-        await expect(commitButton(page)).toBeFocused();
+        await expect(originButton(page)).toBeFocused();
       });
 
       test('the close button and a press on the board from the picture close everything', async ({ page }) => {
         await openCommitAndPicture(page);
         await reader(page).getByRole('button', { name: 'Close', exact: true }).click();
         await expect(reader(page)).toHaveCount(0);
-        await expect(commitCard(page).locator('article')).toBeVisible();
+        await expect(originCard(page)).toBeVisible();
         // reopening starts clean: no trail
-        await commitButton(page).click();
+        await originButton(page).click();
         await expect(title(page, 'Write the CSV writer')).toBeVisible();
         await expect(anyBack(page)).toHaveCount(0);
 
@@ -194,21 +187,21 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
         // the press also does its own thing (a press on the Area header steps out of the Area): step in again if it did
         const areaButton = page.locator('.board-overview-plane button.board-area').first();
         const stepOut = page.getByRole('button', { name: 'Board ›', exact: true });
-        await expect.poll(async () => (await commitButton(page).isVisible()) || !(await stepOut.isVisible())).toBe(true);
-        if (!(await commitButton(page).isVisible())) {
+        await expect.poll(async () => (await originButton(page).isVisible()) || !(await stepOut.isVisible())).toBe(true);
+        if (!(await originButton(page).isVisible())) {
           await areaButton.click();
-          await expect(commitButton(page)).toBeVisible();
+          await expect(originButton(page)).toBeVisible();
         }
-        await commitButton(page).click();
+        await originButton(page).click();
         await expect(title(page, 'Write the CSV writer')).toBeVisible();
         await expect(anyBack(page)).toHaveCount(0);
       });
 
       test('three deep through links in documents and back twice, by the button and by Alt+Left', async ({ page }) => {
-        await commitButton(page).click();
+        await originButton(page).click();
         await reader(page).getByRole('link', { name: /Reports export to CSV/ }).click();
         await expect(title(page, 'PLAN.md')).toBeVisible();
-        await expect(backButton(page, SHORT)).toBeVisible();
+        await expect(backButton(page, ORIGIN)).toBeVisible();
         await reader(page).getByRole('link', { name: 'the notes', exact: true }).click();
         await expect(title(page, 'notes.md')).toBeVisible();
         await expect(backButton(page, 'PLAN.md')).toBeVisible();
@@ -219,7 +212,7 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
         await expect(title(page, 'notes.md')).toBeVisible();
         await page.keyboard.press('Alt+ArrowLeft');
         await expect(title(page, 'PLAN.md')).toBeVisible();
-        await expect(backButton(page, SHORT)).toBeVisible();
+        await expect(backButton(page, ORIGIN)).toBeVisible();
         await page.keyboard.press('Alt+ArrowLeft');
         await expect(title(page, 'Write the CSV writer')).toBeVisible();
         await expect(anyBack(page)).toHaveCount(0);
@@ -229,7 +222,7 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
       });
 
       test('a link to the place already shown adds nothing to the trail', async ({ page }) => {
-        await commitButton(page).click();
+        await originButton(page).click();
         await reader(page).getByRole('link', { name: /Reports export to CSV/ }).click();
         await expect(title(page, 'PLAN.md')).toBeVisible();
         await reader(page).getByRole('link', { name: 'the notes', exact: true }).click();
@@ -249,13 +242,13 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
       test('] from a followed picture (not a card) goes to the card after the origin and starts a new trail', async ({ page }) => {
         await openCommitAndPicture(page);
         await expect(anyBack(page)).toBeVisible();
-        // The followed picture is not a card: the counter stays on the origin card ("2 / 3") and Next points to the card after it ("Second commit")
+        // The followed picture is not a card: the counter stays on the origin card ("2 / 3") and Next points to the card after it ("Second note")
         const navigation = reader(page).getByRole('group', { name: 'Item navigation' });
         await expect(navigation.getByText('2 / 3')).toBeVisible();
-        const next = navigation.getByRole('button', { name: 'Next: Second commit (] or Alt+→)', exact: true });
+        const next = navigation.getByRole('button', { name: 'Next: Second note (] or Alt+→)', exact: true });
         await expect(next).toBeEnabled();
         await page.keyboard.press(']');
-        await expect(title(page, 'Second commit')).toBeVisible();
+        await expect(title(page, 'Second note')).toBeVisible();
         await expect(anyBack(page)).toHaveCount(0);
         await expect(navigation.getByText('3 / 3')).toBeVisible();
         // one Escape closes the reader now
@@ -264,32 +257,30 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
       });
 
       test('following a file that is a registered card keeps counter, origin lit, and next on origin card', async ({ page }) => {
-        await commitButton(page).click();
+        await originButton(page).click();
         await expect(title(page, 'Write the CSV writer')).toBeVisible();
         // Follow link to Other picture, which IS a registered card in this area (card 1)
         await reader(page).getByRole('link', { name: 'Other picture', exact: true }).click();
         await expect(title(page, 'Other picture')).toBeVisible();
-        await expect(backButton(page, SHORT)).toBeVisible();
+        await expect(backButton(page, ORIGIN)).toBeVisible();
         // Position and next/previous stay on origin card ("2 / 3"), origin card stays lit
         const navigation = reader(page).getByRole('group', { name: 'Item navigation' });
         await expect(navigation.getByText('2 / 3')).toBeVisible();
-        await expect(commitCard(page).locator('article')).toHaveAttribute('aria-current', 'true');
-        const next = navigation.getByRole('button', { name: 'Next: Second commit (] or Alt+→)', exact: true });
+        await expect(originCard(page)).toHaveAttribute('aria-current', 'true');
+        const next = navigation.getByRole('button', { name: 'Next: Second note (] or Alt+→)', exact: true });
         await expect(next).toBeEnabled();
-        // Pressing ] moves to the card after origin (Second commit) and starts a clean trail
+        // Pressing ] moves to the card after origin (Second note) and starts a clean trail
         await page.keyboard.press(']');
-        await expect(title(page, 'Second commit')).toBeVisible();
+        await expect(title(page, 'Second note')).toBeVisible();
         await expect(anyBack(page)).toHaveCount(0);
         await expect(navigation.getByText('3 / 3')).toBeVisible();
       });
 
-      test('Back from a commit scrolled to the top restores 0 and wins over mount scrollIntoView', async ({ page }) => {
-        await commitButton(page).click();
-        await expect(title(page, 'Write the CSV writer')).toBeVisible();
-        await reader(page).getByRole('button', { name: /src\/export\.ts/ }).click();
-        await expect(reader(page).getByRole('button', { name: /src\/export\.ts/ })).toHaveAttribute('aria-expanded', 'true');
+      test('Back from a page scrolled to the top restores 0 and wins over mount scrollIntoView', async ({ page }) => {
+        await originButton(page).click();
+        await expect(title(page, ORIGIN)).toBeVisible();
 
-        // Scroll the commit down, then back to the top
+        // Scroll the page down, then back to the top
         await scroller(page).evaluate((el) => {
           el.scrollTop = 160;
           el.dispatchEvent(new Event('scroll'));
@@ -303,10 +294,9 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
         await reader(page).getByRole('link', { name: 'export.png', exact: true }).evaluate((el: HTMLElement) => el.click());
         await expect(title(page, 'export.png')).toBeVisible();
 
-        // Step back to the commit
-        await backButton(page, SHORT).click();
-        await expect(title(page, 'Write the CSV writer')).toBeVisible();
-        await expect(reader(page).getByRole('button', { name: /src\/export\.ts/ })).toHaveAttribute('aria-expanded', 'true');
+        // Step back to the page
+        await backButton(page, ORIGIN).click();
+        await expect(title(page, ORIGIN)).toBeVisible();
         // A saved 0 must restore 0 and win over the mount scrollIntoView
         await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBe(0);
       });
@@ -336,7 +326,7 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
 
       test('hidden reader does not take Alt+Left, [ or ] when Board section is inactive', async ({ page }) => {
         await openCommitAndPicture(page);
-        await expect(backButton(page, SHORT)).toBeVisible();
+        await expect(backButton(page, ORIGIN)).toBeVisible();
 
         // Navigate away to another section
         const nav = page.getByRole('navigation', { name: 'Workspace' });
@@ -354,24 +344,18 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
 
         // The reader is still on the picture with the trail intact
         await expect(title(page, 'export.png')).toBeVisible();
-        await expect(backButton(page, SHORT)).toBeVisible();
+        await expect(backButton(page, ORIGIN)).toBeVisible();
       });
 
-      test('reopening the same commit from the index starts a clean trail with no old open file or scroll', async ({ page }) => {
+      test('reopening the same page from the index starts a clean trail with no old scroll', async ({ page }) => {
         // Open the index
         await page.getByRole('button', { name: /^Board index/ }).first().click();
-        const readInReader = page.getByRole('button', { name: 'Read Write the CSV writer in reader', exact: true });
+        const readInReader = page.getByRole('button', { name: `Read ${ORIGIN} in reader`, exact: true });
         await expect(readInReader).toBeVisible();
 
-        // Open commit from the index
+        // Open the page from the index and scroll down
         await readInReader.click();
-        await expect(title(page, 'Write the CSV writer')).toBeVisible();
-
-        // Open a file, toggle side by side, and scroll down
-        await reader(page).getByRole('button', { name: /src\/export\.ts/ }).click();
-        const sideBySide = reader(page).getByRole('button', { name: 'Side by side', exact: true });
-        await expect(sideBySide).toBeVisible();
-        await sideBySide.click();
+        await expect(title(page, ORIGIN)).toBeVisible();
         await scroller(page).evaluate((el) => {
           el.scrollTop = 150;
           el.dispatchEvent(new Event('scroll'));
@@ -382,17 +366,16 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
         await reader(page).getByRole('button', { name: 'Close', exact: true }).click();
         await expect(reader(page)).toHaveCount(0);
 
-        // Reopen the SAME commit from the index (which reuses the memoized target)
+        // Reopen the SAME page from the index (which reuses the memoized target)
         const indexBtn = page.getByRole('button', { name: /^Board index/ }).first();
         if (!(await readInReader.isVisible())) {
           await indexBtn.click();
         }
         await expect(readInReader).toBeVisible();
         await readInReader.click();
-        await expect(title(page, 'Write the CSV writer')).toBeVisible();
+        await expect(title(page, ORIGIN)).toBeVisible();
 
-        // Newly opened trail starts clean: file is not expanded, scroll is 0, no Back button
-        await expect(reader(page).getByRole('button', { name: /src\/export\.ts/ })).toHaveAttribute('aria-expanded', 'false');
+        // Newly opened trail starts clean: scroll is 0, no Back button
         await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBe(0);
         await expect(anyBack(page)).toHaveCount(0);
       });
@@ -402,7 +385,7 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
         await reader(page).getByRole('button', { name: 'Full screen', exact: true }).click();
         const full = page.locator('[data-board-reader-fullscreen]');
         await expect(full).toBeVisible();
-        await expect(full.getByRole('button', { name: `Back to ${SHORT}`, exact: true })).toBeVisible();
+        await expect(full.getByRole('button', { name: `Back to ${ORIGIN}`, exact: true })).toBeVisible();
         await page.keyboard.press('Escape');
         await expect(full).toHaveCount(0);
         await expect(title(page, 'export.png')).toBeVisible();

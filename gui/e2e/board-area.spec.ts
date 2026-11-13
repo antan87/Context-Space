@@ -707,12 +707,15 @@ test.describe('Board, rows by step', () => {
     await short.getByRole('heading').click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(reading).toHaveCount(0);
-    // A commit opens in the reader
+    // A commit opens in the Code window on that commit, not in the reader
     await rowButton(page, /NexusFlow/).first().click();
     await inArea(page).getByRole('article', { name: /^a91f2e0/ }).first().click();
-    await expect(reading).toBeVisible();
-    await page.keyboard.press('Escape');
+    const code = page.getByRole('region', { name: 'Code window' });
+    await expect(code).toBeVisible();
+    await expect(code.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Commits' })).toHaveAttribute('aria-pressed', 'true');
     await expect(reading).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(code).toBeHidden();
   });
 
   test('shows no Open or Read all button on a card: the title is the one control, a press on the card does what it does, and the keyboard opens it', async ({ page }) => {

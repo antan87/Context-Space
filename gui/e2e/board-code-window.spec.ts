@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures';
-import { boardFile, boardNote, checkpoint, planFile, step, whatsNew } from './planData';
+import { boardFile, boardFileCard, boardNote, checkpoint, planFile, step, whatsNew } from './planData';
 
 /**
  * The Code window: one window over the whole workspace content (Board, Split and Terminal), opened by the Board's Code button,
@@ -725,9 +725,12 @@ test.describe('keys belong to the window while it is open', () => {
   }
 
   test('with a reader open behind the window, ] and Escape belong to the window', async ({ page }) => {
+    // A page of the Board opens the reader (a commit card opens the Code window itself now)
+    await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [boardNote(1, { title: 'A note' }), boardFileCard(2, 'docs/guide.md', { title: 'Reading page' })] }) }));
+    await page.route('**/api/workspace/demo/documents/preview?*', (route) => route.fulfill({ json: { name: 'docs/guide.md', kind: 'markdown', content: '# Guide\n\nSome text.', size: 20, modifiedAt: new Date().toISOString() } }));
     await openBoard(page, 'split');
     await stepIntoArea(page);
-    await page.getByRole('button', { name: 'Open Add the writer' }).click();
+    await page.getByRole('button', { name: 'Open Reading page' }).click();
     const reader = page.getByRole('region', { name: 'Reader' });
     await expect(reader).toBeVisible();
     const title = await reader.locator('h2').first().textContent();

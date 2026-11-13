@@ -995,6 +995,8 @@ export function invalidateDeliveryState(queryClient: QueryClient, wsId: string):
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: newsKey(wsId) }),
     queryClient.invalidateQueries({ queryKey: recentCommitsKey(wsId) }),
+    // A commit's own header (pushed or not, the forge link) changes when it is pushed; the open commit, file and scroll stay as they are.
+    queryClient.invalidateQueries({ queryKey: ['board-commit', wsId] }),
     queryClient.invalidateQueries({ queryKey: ['workspace-repositories', wsId] }),
     queryClient.invalidateQueries({ queryKey: ['workspace-progression', wsId] }),
     queryClient.invalidateQueries({ queryKey: ['workspace-finish-last', wsId] }),

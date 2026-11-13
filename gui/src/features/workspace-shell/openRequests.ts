@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { CommitOpen } from '../changes/commitsMode.js';
 
 /** A repository file, as the server's reference resolver names it. */
 export interface RepoFile {
@@ -202,23 +203,23 @@ export function resolveCodeWindowOpener(opener: HTMLElement | null, openerTarget
 
 /** Asks for the Code window of a workspace to open. `opener` is where the keyboard returns when it closes. */
 export interface WorkspaceFile { workspaceId: string; file: string; line?: number }
-export interface CodeWindowRequest { intent?: number; workspaceFile?: WorkspaceFile; close?: boolean; opener: HTMLElement | null; openerTarget?: OpenerTarget | null; /** When it was asked, so a window that mounts a moment later (another workspace) still opens for it. */ at: number; /** Made together with a move to this workspace, so the window that mounts there is the one asked for. */ navigated: boolean }
+export interface CodeWindowRequest { intent?: number; workspaceFile?: WorkspaceFile; /** Opens the window in Commits mode on this commit, with the commits of the row it came from. */ commit?: CommitOpen; close?: boolean; opener: HTMLElement | null; openerTarget?: OpenerTarget | null; /** When it was asked, so a window that mounts a moment later (another workspace) still opens for it. */ at: number; /** Made together with a move to this workspace, so the window that mounts there is the one asked for. */ navigated: boolean }
 export const codeWindowRequests = createRequestStore<CodeWindowRequest>();
 
 /**
  * Opens the Code window. With a file, it opens on that file (the Code section answers the same request a clicked path makes);
  * without one, on whatever it showed last, or the first change.
  */
-export function openCodeWindow(workspace: string, options: { opener?: HTMLElement | null; openerTarget?: OpenerTarget | null; file?: RepoFile & { line?: number }; workspaceFile?: WorkspaceFile; navigated?: boolean; preserveIntent?: boolean } = {}): number {
+export function openCodeWindow(workspace: string, options: { opener?: HTMLElement | null; openerTarget?: OpenerTarget | null; file?: RepoFile & { line?: number }; workspaceFile?: WorkspaceFile; commit?: CommitOpen; navigated?: boolean; preserveIntent?: boolean } = {}): number {
   if (!options.preserveIntent) invalidateReferenceIntent();
   if (options.file) codeRequests.open(workspace, { kind: 'file', ...options.file, intent });
   const held = typeof document !== 'undefined' ? document.activeElement : null;
   const opener = options.opener !== undefined ? options.opener : (typeof HTMLElement !== 'undefined' && held instanceof HTMLElement && held !== document.body ? held : null);
   const openerTarget = options.openerTarget !== undefined ? options.openerTarget : describeOpener(opener);
-  return codeWindowRequests.open(workspace, { intent, workspaceFile: options.workspaceFile, opener, openerTarget, at: Date.now(), navigated: options.navigated === true });
+  return codeWindowRequests.open(workspace, { intent, workspaceFile: options.workspaceFile, commit: options.commit, opener, openerTarget, at: Date.now(), navigated: options.navigated === true });
 }
 export function closeCodeWindow(workspace: string, opener: HTMLElement | null): void {
-  codeWindowRequests.open(workspace, { ...codeWindowRequests.get(workspace)?.request, close: true, opener, intent, at: Date.now(), navigated: false });
+  codeWindowRequests.open(workspace, { ...codeWindowRequests.get(workspace)?.request, commit: undefined, close: true, opener, intent, at: Date.now(), navigated: false });
 }
 
 const openWindows = new Set<string>();

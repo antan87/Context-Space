@@ -8,11 +8,15 @@ import { WorkspaceFileView } from './WorkspaceFileView.js';
 import { resolveCodeWindowOpener, setCodeWindowOpen, type OpenerTarget, type WorkspaceFile } from '../workspace-shell/openRequests.js';
 import type { Feature } from '../../types.js';
 import { CodeSection } from './CodeSection.js';
+import { indexInSequence, sameCommit, type CommitOpen, type CommitRef } from './commitsMode.js';
+import { parseCommitNodeId } from '../board/boardActions.js';
 
-type SectionProps = Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast' | 'panelActions' | 'autoSelect' | 'onAskAI' | 'onToggleFullScreen'>;
+type SectionProps = Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast' | 'panelActions' | 'autoSelect' | 'onAskAI' | 'onToggleFullScreen' | 'requestId' | 'commitOpen' | 'onShownCommit'>;
 
 export interface CodeWindowProps {
   workspaceFile?: WorkspaceFile;
+  /** The commit the window was asked to open on (Commits mode), with the commits of the row it came from. */
+  commitOpen?: CommitOpen;
   fileRequestId: number;
   ws: Feature;
   open: boolean;
@@ -26,6 +30,17 @@ export interface CodeWindowProps {
   /** Types a line into the AI session; true when one took it. */
   askAI: (message: string) => Promise<boolean>;
   onClose: () => void;
+}
+
+/** The main button of the drawn card of a commit, when it is on screen and can take the keyboard. */
+function findCommitCard(commit: CommitRef): HTMLElement | null {
+  for (const node of document.querySelectorAll<HTMLElement>('.react-flow__node-commit[data-id]')) {
+    const parsed = parseCommitNodeId(node.getAttribute('data-id') ?? '');
+    if (!parsed || !sameCommit(parsed, commit) || node.closest('[inert], [hidden]')) continue;
+    const button = node.querySelector<HTMLElement>('[data-card-main]');
+    if (button && button.isConnected && !button.hasAttribute('disabled') && button.getClientRects().length > 0) return button;
+  }
+  return null;
 }
 
 /** What a key belongs to when it is typed in it: a field, so Escape there is the field's. The editor is not one (it is checked on its own). */
@@ -42,10 +57,12 @@ const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-m
  * The Code section in a large window over the whole workspace content, the way the Board's reader is a large window over the
  * board. It stays mounted once opened (hidden and inert while closed), so the chosen file and its scroll survive a close.
  */
-export default function CodeWindow({ workspaceFile, fileRequestId, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
+export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
   const rect = useDockRect(cover);
   const panel = useRef<HTMLDivElement>(null);
   const skipFocusReturn = useRef(false);
+  const shownCommit = useRef<CommitRef | null>(null);
+  const rememberShownCommit = useCallback((commit: CommitRef | null) => { shownCommit.current = commit; }, []);
   const wasOpen = useRef(false);
   const workspace = ws.branchName;
 
@@ -90,10 +107,14 @@ export default function CodeWindow({ workspaceFile, fileRequestId, ws, open, ope
     if (!wasOpen.current) return undefined;
     wasOpen.current = false;
     if (skipFocusReturn.current) return undefined;
-    const target = resolveCodeWindowOpener(opener, openerTarget);
+    // [ and ] may have moved to another commit of the row the window was opened from: the keyboard goes to that commit's card when it is drawn.
+    const shown = shownCommit.current;
+    const sequence = commitOpen?.sequence;
+    const shownCard = shown && sequence && indexInSequence(sequence, shown) >= 0 ? findCommitCard(shown) : null;
+    const target = shownCard ?? resolveCodeWindowOpener(opener, openerTarget);
     target?.focus({ preventScroll: true });
     return undefined;
-  }, [open, opener, openerTarget]);
+  }, [open, opener, openerTarget, commitOpen]);
 
   // Escape when maximized steps back to the normal window first; otherwise it closes the window, unless something in the window has a use for it first.
   // What was open is looked at before the key does its work: a menu or the find box is already closing by the time this runs.
@@ -190,6 +211,9 @@ export default function CodeWindow({ workspaceFile, fileRequestId, ws, open, ope
           ws={ws}
           active={open && !workspaceFile}
           autoSelect
+          requestId={fileRequestId}
+          onShownCommit={rememberShownCommit}
+          commitOpen={commitOpen}
           showToast={showToast}
           onAskAI={ask}
           onToggleFullScreen={toggleMaximized}
