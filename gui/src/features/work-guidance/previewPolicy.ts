@@ -18,7 +18,7 @@
  * loading anything but presentational resources.
  *
  * Kept free of DOM access so the policy is unit-testable without a browser; the DOM-level effects
- * are asserted in gui/e2e/root-documents.spec.ts against real Chromium.
+ * are asserted in the Board reader specs (gui/e2e/board-reader.spec.ts) against real Chromium.
  */
 
 /** Applies to both modes. `base-uri`/`form-action` close off base-tag and form hijacking. */

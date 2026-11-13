@@ -10,9 +10,9 @@ import {
 } from './previewPolicy.js';
 
 /**
- * The policy contract. DOM-level effects of these options are asserted against real Chromium in
- * gui/e2e/root-documents.spec.ts; this file pins the decisions themselves so a regression in the
- * rules fails fast under `npm test`.
+ * The policy contract. The sandboxed frame an HTML page is drawn in is asserted against real Chromium in
+ * gui/e2e/board-reader.spec.ts and board-browsing.spec.ts; this file pins the decisions themselves so a
+ * regression in the rules fails fast under `npm test`.
  */
 describe('preview CSP', () => {
   it('never allows script in the default locked mode', () => {

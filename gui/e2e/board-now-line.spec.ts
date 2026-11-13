@@ -515,3 +515,22 @@ test.describe('what the AI just added still lights its Area after the board has 
     await expect(areaCard(page, AREA_ONE).locator('[title="New since you looked"]')).toHaveCount(1);
   });
 });
+
+// Moved from the old Plan tab's plan-tab spec ("an archived workspace shows what changed, but cannot say it was seen")
+test.describe('in an archived workspace', () => {
+  test.use({ workspacesData: [[{ ...workspace, archivedAt: '2026-09-28T10:00:00.000Z' }], { option: true }] });
+
+  test('the news lists what changed, and there is no Got it: nothing can be marked seen', async ({ page }) => {
+    const state = await routeNow(page, { now: { key: 'f1', by: 'claude', at: minutesAgo(1) }, news: 4 });
+    await openBoard(page, false);
+    const news = page.getByTestId('board-now-news');
+    await expect(news).toHaveText('4 new');
+    await news.click();
+    const list = page.getByTestId('board-news-list');
+    await expect(list).toBeVisible();
+    await expect(list).toContainText('A step that was removed');
+    await expect(list).toContainText('feat(board): the Code window');
+    await expect(list.getByRole('button', { name: 'Got it' })).toHaveCount(0);
+    expect(state.seen).toBe(0);
+  });
+});

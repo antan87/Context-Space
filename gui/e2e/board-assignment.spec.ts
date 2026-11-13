@@ -381,6 +381,50 @@ test.describe('Board, the Assignment card', () => {
     expect(mock.posts.at(-1).revision).toBe(2);
   });
 
+  test('says so, and keeps the description in this page, when the device cannot store drafts', async ({ page }) => {
+    // Moved from the old Plan tab's work-guidance spec: the draft store, and what the label says when it cannot keep a draft
+    await page.addInitScript(() => {
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key.startsWith('contextspace.brief-draft')) throw new DOMException('Quota exceeded', 'QuotaExceededError');
+        return setItem.call(this, key, value);
+      };
+    });
+    await routeAssignment(page);
+    await openBoard(page);
+    await startEditing(page, 'Only in memory');
+    await expect(panel(page).locator('[data-draft-state]')).toHaveText('Unsaved changes — not kept, save before you leave');
+    // Closing and opening the panel again still finds it: it is held in the page
+    await description(page).press('Escape');
+    await expect(panel(page)).toHaveCount(0);
+    await main(page).click();
+    await expect(description(page)).toHaveValue('Only in memory');
+  });
+
+  test('a half-filled spec is kept for this window only: in session storage and never on the device, and gone once added', async ({ page }) => {
+    // Moved from the old Plan tab's work-guidance spec: pasted source text is not left on the device after the window closes
+    await routeAssignment(page);
+    await openBoard(page);
+    await addSpecButton(page).click();
+    await form(page).getByLabel('Title').fill('Invoice requirements');
+    await form(page).getByLabel('Spec text').fill('# Pasted requirements');
+    await expect(panel(page).locator('[data-draft-state]')).toHaveText('Unsaved. Kept until you close this window');
+    await page.reload();
+    await expect(card(page)).toBeVisible();
+    await addSpecButton(page).click();
+    await expect(form(page).getByLabel('Title')).toHaveValue('Invoice requirements');
+    await expect(form(page).getByLabel('Spec text')).toHaveValue('# Pasted requirements');
+    expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.includes('brief-draft.document')))).toEqual([]);
+    expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.includes('brief-draft.document')))).toHaveLength(1);
+    await form(page).getByRole('button', { name: 'Add spec', exact: true }).click();
+    await expect(chips(page)).toContainText(['Export requirements', 'Invoice requirements']);
+    await page.reload();
+    await expect(card(page)).toBeVisible();
+    await addSpecButton(page).click();
+    await expect(form(page).getByLabel('Title')).toHaveValue('');
+    await expect(form(page).getByLabel('Spec text')).toHaveValue('');
+  });
+
   test('a spec chip opens the Board reader on that source, and the panel steps aside', async ({ page }) => {
     await routeAssignment(page);
     await openBoard(page);

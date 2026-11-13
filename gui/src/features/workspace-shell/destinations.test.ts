@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { SECTION_LABELS, parseSection, railSectionsFor, visibleSection } from './destinations.js';
+import { SECTION_LABELS, knowledgeRedirect, parseSection, railSectionsFor, visibleSection } from './destinations.js';
 
 describe('workspace sections', () => {
   it('name every section once', () => {
-    expect(Object.keys(SECTION_LABELS).sort()).toEqual(['board', 'changes', 'chat', 'documents', 'knowledge', 'overview', 'plan', 'services', 'sessions', 'skills']);
+    expect(Object.keys(SECTION_LABELS).sort()).toEqual(['board', 'changes', 'chat', 'documents', 'overview', 'plan', 'services', 'sessions', 'skills']);
   });
 
   it('keep old tab URLs working, aliasing deprecated sections to board', () => {
-    for (const active of ['overview', 'board', 'sessions', 'knowledge', 'skills']) {
+    for (const active of ['overview', 'board', 'sessions', 'skills']) {
       expect(parseSection(active)).toBe(active);
     }
     // Plan, changes, documents, and services tabs are deprecated and alias to board
@@ -15,6 +15,8 @@ describe('workspace sections', () => {
     expect(parseSection('changes')).toBe('board');
     expect(parseSection('documents')).toBe('board');
     expect(parseSection('services')).toBe('board');
+    // The Knowledge tab is gone too: its old address opens the board, with Knowledge open in the reader (see knowledgeRedirect)
+    expect(parseSection('knowledge')).toBe('board');
     // An unknown segment lands on the overview. No segment at all opens the board, the workspace's home.
     expect(parseSection('diff')).toBe('overview');
     expect(parseSection(undefined)).toBe('board');
@@ -31,7 +33,7 @@ describe('workspace sections', () => {
     expect(visibleSection(parseSection(undefined), true)).toBe('board');
     expect(visibleSection('chat', true)).toBe('overview');
     expect(visibleSection('chat', false)).toBe('chat');
-    expect(visibleSection('knowledge', true)).toBe('knowledge');
+    expect(visibleSection(parseSection('knowledge'), true)).toBe('board');
     expect(visibleSection('board', true)).toBe('board');
     expect(visibleSection('changes', false)).toBe('changes');
   });
@@ -64,7 +66,7 @@ describe('railSectionsFor', () => {
   });
 
   it('keeps old addresses working: active sections parse to themselves, deprecated alias to board', () => {
-    for (const section of ['overview', 'sessions', 'skills', 'knowledge', 'board'] as const) expect(parseSection(section)).toBe(section);
+    for (const section of ['overview', 'sessions', 'skills', 'board'] as const) expect(parseSection(section)).toBe(section);
     expect(parseSection('plan')).toBe('board');
     expect(parseSection('services')).toBe('board');
     // Not on the rail does not mean hidden: an active workspace still shows them.
@@ -74,7 +76,17 @@ describe('railSectionsFor', () => {
 
   it('shows an archived workspace its record and its board, and nothing to act on', () => {
     expect(railSectionsFor(true)).toEqual(['overview', 'board']);
-    // Its knowledge is still open to read, in Docs or at its old address.
-    expect(visibleSection('knowledge', true)).toBe('knowledge');
+    // Its knowledge is still open to read: its old address opens the board with Knowledge in the reader.
+    expect(knowledgeRedirect('/workspaces/old-one/knowledge')).not.toBeNull();
+    expect(visibleSection(parseSection('knowledge'), true)).toBe('board');
+  });
+
+  it('sends the old Knowledge address to the board, and only that address', () => {
+    expect(knowledgeRedirect('/workspaces/demo/knowledge')).toEqual({ workspaceId: 'demo', to: '/workspaces/demo/board' });
+    // The id keeps its encoding in the address and is decoded for the request
+    expect(knowledgeRedirect('/workspaces/feat%2Fone/knowledge')).toEqual({ workspaceId: 'feat/one', to: '/workspaces/feat%2Fone/board' });
+    for (const other of ['/workspaces/demo/board', '/workspaces/demo/documents', '/workspaces/demo', '/workspaces/demo/knowledge-base', '/workspaces/knowledge', '/settings/knowledge', '/knowledge']) {
+      expect(knowledgeRedirect(other)).toBeNull();
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Archive, Boxes, FileCode, FileText, Kanban, LayoutDashboard, Lightbulb, ListChecks, Server, Terminal, type LucideIcon } from 'lucide-react';
+import { Archive, Boxes, FileCode, FileText, Kanban, LayoutDashboard, ListChecks, Server, Terminal, type LucideIcon } from 'lucide-react';
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -15,7 +15,6 @@ const ITEMS: Partial<Record<WorkspaceSection, RailItem>> = {
   sessions: { label: 'Sessions', purpose: 'CLI sessions, conversation history, and usage logs', icon: Terminal },
   changes: { label: 'Code', purpose: 'The code and its changes: read files, review, commit and finish the work', icon: FileCode },
   documents: { label: 'Docs', purpose: 'Documents in the workspace', icon: FileText },
-  knowledge: { label: 'Knowledge', purpose: 'What the assistant has learned in this workspace', icon: Lightbulb },
   skills: { label: 'Skills', purpose: 'Assistant skills, tools, and playbooks configured for this workspace', icon: Boxes },
   services: { label: 'Services', purpose: "Your app's own processes, such as a dev server, and their logs", icon: Server },
 };

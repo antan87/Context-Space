@@ -311,3 +311,17 @@ for (const t of ['Docs', 'Fix issues', 'Chatt with ACP']) {
     }
   });
 }
+
+// Moved from the old Plan tab's verification-feedback spec: the header's check gate only says how long the tests took when a duration was recorded
+test('a pass without a recorded duration shows no invented one in the header', async ({ page }) => {
+  await mockWorkspace(page);
+  await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: {
+    lifecycle: { workspaceId: 'demo', flowType: 'feature', steps: [], fleet: [], updatedAt: '' },
+    report: { overallStatus: 'pass', canProgress: true, repos: [] },
+  } }));
+  await page.goto('/#/workspaces/demo/board');
+  const checks = page.locator('header').filter({ has: page.getByRole('heading', { level: 1 }) }).getByRole('link', { name: 'Checks passed' });
+  await expect(checks).toBeVisible();
+  await expect(checks).not.toHaveAttribute('title', /passed in/);
+  await expect(page.getByText(/120ms/)).toHaveCount(0);
+});

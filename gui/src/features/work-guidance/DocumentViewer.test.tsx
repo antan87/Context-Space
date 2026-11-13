@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DocumentViewer } from './DocumentViewer.js';
 import type { DocumentPreviewData } from './DocumentPreview.js';
 
-// DOMPurify needs a DOM, which these server renders do not have; what it strips is asserted in the browser (root-documents.spec.ts).
+// DOMPurify needs a DOM, which these server renders do not have; the options it is given are pinned in previewPolicy.test.ts.
 vi.mock('dompurify', () => ({ default: { sanitize: (html: string) => html } }));
 
 describe('DocumentViewer', () => {
@@ -105,7 +105,7 @@ describe('DocumentViewer', () => {
     expect(html).not.toContain('aria-label="Edit document"');
   });
 
-  it('shows Save and hides Edit while editing in fillChrome mode (Watch is disabled then, asserted in root-documents.spec.ts)', () => {
+  it('shows Save and hides Edit while editing in fillChrome mode', () => {
     const onToggleWatch = vi.fn();
     const html = renderToStaticMarkup(
       createElement(DocumentViewer, {

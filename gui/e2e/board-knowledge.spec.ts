@@ -374,3 +374,118 @@ test('a terminal path to the knowledge file opens the same reader, titled Knowle
   await expect(page.getByRole('menuitem', { name: 'Copy path' })).toBeVisible();
   expect(state.writes).toEqual([]);
 });
+
+/** The inside of the reader holds the keyboard: the focused element is the reader itself or something in it. */
+const focusInReader = (page: Page) => page.evaluate(() => {
+  const root = document.querySelector('[data-board-reader]');
+  return Boolean(root && document.activeElement && root.contains(document.activeElement));
+});
+
+/** The old Knowledge tab is gone: its address opens the Board with Knowledge in the reader, through the request a link to the knowledge file makes. */
+test.describe('the old Knowledge address', () => {
+  test('opens the Board with Knowledge in the reader, the keyboard in it, and writes nothing', async ({ page }) => {
+    const state = await routeKnowledge(page);
+    await page.goto('/#/workspaces/demo/knowledge');
+    await expect(page.getByTestId('board-now-line')).toBeVisible();
+    await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
+    await expect(reader(page).getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
+    await expect(reader(page).getByRole('list', { name: 'Knowledge entries' }).getByRole('listitem')).toHaveCount(14);
+    await expect.poll(() => focusInReader(page)).toBe(true);
+    // Read only: a search box and the filter, nothing to edit or save (the old tab had an editor)
+    await expect(reader(page).getByRole('button', { name: /edit|save|add|delete/i })).toHaveCount(0);
+    // Back does not return to the address that was replaced
+    await page.goBack();
+    await expect(page).not.toHaveURL(/\/knowledge$/);
+    expect(state.writes).toEqual([]);
+  });
+
+  test('asked again later, opens Knowledge again', async ({ page }) => {
+    await routeKnowledge(page);
+    await page.goto('/#/workspaces/demo/knowledge');
+    await expect(reader(page).getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
+    await reader(page).getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(reader(page)).toBeHidden();
+    await page.goto('/#/workspaces/demo/overview');
+    await page.goto('/#/workspaces/demo/knowledge');
+    await expect(reader(page).getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
+    await expect.poll(() => focusInReader(page)).toBe(true);
+  });
+});
+
+test.describe('the old Knowledge address, in an archived workspace', () => {
+  test.use({ workspacesData: [[{ ...workspace, archivedAt: '2026-09-28T10:00:00.000Z' }], { option: true }] });
+
+  test('opens the Board with Knowledge in the reader and the keyboard in it, read only', async ({ page }) => {
+    const state = await routeKnowledge(page);
+    await page.goto('/#/workspaces/demo/knowledge');
+    await expect(page.getByTestId('board-now-line')).toBeVisible();
+    await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
+    await expect(reader(page).getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
+    await expect(reader(page).getByRole('list', { name: 'Knowledge entries' }).getByRole('listitem')).toHaveCount(14);
+    await expect.poll(() => focusInReader(page)).toBe(true);
+    await expect(reader(page).getByRole('button', { name: /edit|save|add|delete/i })).toHaveCount(0);
+    expect(state.writes).toEqual([]);
+  });
+
+  test('the link under What stays readable on the record opens it', async ({ page }) => {
+    await routeKnowledge(page);
+    await page.goto('/#/workspaces/demo/overview');
+    await page.getByRole('link', { name: 'Knowledge', exact: true }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
+    await expect(reader(page).getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
+    await expect.poll(() => focusInReader(page)).toBe(true);
+  });
+});
+
+// Moved from the old Docs tab's docs-and-plan spec ("reads knowledge as entries you can search and filter"): the reading of a knowledge
+// file is KnowledgeView, which the Board reader now draws.
+const HAND_WRITTEN = `# Workspace Knowledge — demo
+
+> Append with \`ctxspace knowledge add\`.
+
+## Feature Goal
+
+Invoices should load in under a second.
+
+## Team notes
+
+Ask before changing the cache keys.
+
+## Architecture Decisions
+
+### 2026-10-02 — cache-invoice-lookups
+**Decision:** Cache invoice lookups per customer, because totals were read three times a page.
+**Scope:** \`path:api/src/invoices\`
+
+## Known Gotchas
+
+### 2026-10-03 — totals-differ-after-midnight
+**Gotcha:** Totals differ after midnight UTC: the cache key used local time.
+**Evidence:** commit abc1234
+`;
+
+test('reads knowledge as entries with where they apply and their evidence, the goal and the team notes, and filters and searches them', async ({ page }) => {
+  const state = await routeKnowledge(page, { content: HAND_WRITTEN });
+  await openBoard(page);
+  await openIndex(page);
+  await entryButton(page).click();
+  const entries = reader(page).getByRole('list', { name: 'Knowledge entries' }).getByRole('listitem');
+  await expect(entries).toHaveCount(2);
+  // Newest first, the title in words, with where it applies and the evidence
+  await expect(entries.first()).toContainText('Gotcha');
+  await expect(entries.first()).toContainText('Totals differ after midnight');
+  await expect(entries.first()).toContainText('commit abc1234');
+  await expect(entries.last()).toContainText('Applies to api/src/invoices');
+  // The goal and what was written by hand are there too, not only the entries
+  await expect(reader(page).getByRole('region', { name: 'Feature goal' })).toContainText('Invoices should load in under a second.');
+  await expect(reader(page).getByRole('region', { name: 'Team notes' })).toContainText('Ask before changing the cache keys.');
+  await reader(page).getByRole('button', { name: /^Decisions/ }).click();
+  await expect(entries).toHaveCount(1);
+  await expect(entries.first()).toContainText('Cache invoice lookups');
+  await reader(page).getByRole('button', { name: /^All/ }).click();
+  await reader(page).getByLabel('Search the knowledge').fill('midnight');
+  await expect(entries).toHaveCount(1);
+  await reader(page).getByLabel('Search the knowledge').fill('nothing like this');
+  await expect(reader(page).getByRole('status').filter({ hasText: 'Nothing matches.' })).toBeVisible();
+  expect(state.writes).toEqual([]);
+});

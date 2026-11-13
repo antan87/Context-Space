@@ -130,7 +130,8 @@ test('archive previews what happens, parks unmerged work on request, and restore
   await expect(page.getByRole('button', { name: 'Add document' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Run verification' })).toHaveCount(0);
   await page.goto('/#/workspaces/demo/knowledge');
-  await expect(page.getByRole('region', { name: 'Knowledge' })).toBeVisible();
+  // The Knowledge tab is gone: its address opens the Board with Knowledge in the reader, which has no editor
+  await expect(page.locator('[data-board-reader]').getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Edit Knowledge/ })).toHaveCount(0);
   await page.goto('/#/workspaces/demo/plan');
 

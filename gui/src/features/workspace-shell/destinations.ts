@@ -4,7 +4,7 @@
  * its URL opens on its plan, with the sessions one click away; `/chat` opens the sessions directly, and `/sessions`
  * opens the session history beside them.
  */
-export type WorkspaceSection = 'chat' | 'overview' | 'plan' | 'board' | 'documents' | 'knowledge' | 'skills' | 'changes' | 'sessions' | 'services';
+export type WorkspaceSection = 'chat' | 'overview' | 'plan' | 'board' | 'documents' | 'skills' | 'changes' | 'sessions' | 'services';
 
 export const SECTION_LABELS: Record<WorkspaceSection, string> = {
   chat: 'Chat',
@@ -12,7 +12,6 @@ export const SECTION_LABELS: Record<WorkspaceSection, string> = {
   plan: 'Plan',
   board: 'Board',
   documents: 'Documents',
-  knowledge: 'Knowledge',
   skills: 'Skills',
   changes: 'Code',
   sessions: 'Session history',
@@ -22,19 +21,30 @@ export const SECTION_LABELS: Record<WorkspaceSection, string> = {
 const ALL_SECTIONS = new Set<string>(Object.keys(SECTION_LABELS));
 
 /**
- * No segment opens the board. Legacy 'plan', 'changes', 'documents', and 'services' alias to 'board'.
- * An unknown one (an old or mistyped link) falls back to the overview instead of a blank page.
+ * No segment opens the board. The old 'plan', 'changes', 'documents', 'services' and 'knowledge' addresses alias to 'board'
+ * (there are no screens of those names any more). An unknown one (an old or mistyped link) falls back to the overview
+ * instead of a blank page.
  */
 export function parseSection(segment: string | undefined | null): WorkspaceSection {
-  if (!segment || segment === 'plan' || segment === 'changes' || segment === 'documents' || segment === 'services') return 'board';
+  if (!segment || segment === 'plan' || segment === 'changes' || segment === 'documents' || segment === 'services' || segment === 'knowledge') return 'board';
   return ALL_SECTIONS.has(segment) ? segment as WorkspaceSection : 'overview';
+}
+
+/**
+ * The old Knowledge address `/workspaces/:id/knowledge`: the Board opens with Knowledge in its reader, which is where
+ * Knowledge is read now. Gives the workspace and the address to replace it with, or null for any other path.
+ */
+export function knowledgeRedirect(pathname: string): { workspaceId: string; to: string } | null {
+  const parts = pathname.split('/').filter(Boolean); // ['workspaces', id, section]
+  if (parts[0] !== 'workspaces' || !parts[1] || parts[2] !== 'knowledge') return null;
+  return { workspaceId: decodeURIComponent(parts[1]), to: `/workspaces/${parts[1]}/board` };
 }
 
 /**
  * An archived workspace shows its record, not the places where work happens:
  * no changes, services, sessions or skills to act on. The board remains available to inspect the canvas.
  */
-export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan', 'board', 'documents', 'knowledge'];
+export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan', 'board', 'documents'];
 
 /**
  * What can open beside the chat, in the rail's order:

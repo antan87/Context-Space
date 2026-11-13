@@ -103,7 +103,6 @@ import { useFloatingChat } from '../features/chat/floatingChatStore.js';
 import { ChatDockSlot } from '../features/chat/ChatDockSlot.js';
 import { CHAT_LAYOUT, chatLayout, hasRoomBeside, useChatLayout } from '../features/chat/chatLayout.js';
 import { useElementWidth } from '../lib/useElementWidth.js';
-import { KnowledgeBase } from '../features/knowledge/KnowledgeBase.js';
 import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
 import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
@@ -147,7 +146,6 @@ interface WorkspacesPageProps {
   sessionProps: Omit<ComponentProps<typeof SessionHistory>, 'ws'>;
   /** What Code needs to commit, finish and sync, plus the change listing the overview counts files from. */
   changesProps?: { gitChanges?: { repoName: string; files?: unknown[] }[]; [key: string]: unknown };
-  knowledgeProps: Omit<ComponentProps<typeof KnowledgeBase>, 'ws'>;
   /** The generated plan summary, which the overview reads, and how to reload it after a plan change. */
 }
 
@@ -169,7 +167,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     showToast,
     sessionProps,
     changesProps,
-    knowledgeProps,
   } = props;
 
   const selected = workspaces.find((w) => w.branchName === selectedId) ?? null;
@@ -1568,7 +1565,6 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                   <SessionHistory ws={selected} showToast={showToast} {...sessionProps} />
                 </section>
               )}
-              {subTab === 'knowledge' && <KnowledgeBase ws={selected} {...knowledgeProps} readOnly={archived} />}
               {subTab === 'skills' && <WorkspaceSkillsTab ws={selected} showToast={showToast} />}
           </div>
         </div>
