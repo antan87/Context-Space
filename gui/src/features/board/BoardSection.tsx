@@ -68,6 +68,8 @@ import { commitOpenFor } from './commitSequence.js';
 import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { BoardNowLine } from './BoardNowLine.js';
+import { AssignmentCard } from './AssignmentCard.js';
+import { specTarget } from './assignmentCardView.js';
 import { firstWaiting, newsLines as buildNewsLines, nowLineParts, nowLineTarget, type NewsLine } from './nowLine.js';
 import { findThreadChain } from './boardThread.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
@@ -2243,7 +2245,19 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
             data-receded={stepped?.phase === 'open'}
             inert={stepped?.phase === 'open' ? true : undefined}
           >
-            <div className="relative min-w-0 flex-1" inert={!stepped && Boolean(reader) && (areas.length === 0 || layout === 'large' || stageDock.covers) ? true : undefined}>
+            <div className="relative flex min-w-0 flex-1 flex-col" inert={!stepped && Boolean(reader) && (areas.length === 0 || layout === 'large' || stageDock.covers) ? true : undefined}>
+              {guidance.data && (
+                <AssignmentCard
+                  key={workspaceId}
+                  workspaceId={workspaceId}
+                  guidance={guidance.data}
+                  readOnly={readOnly}
+                  hidden={Boolean(stepped) || !active}
+                  readerOpen={Boolean(reader)}
+                  onOpenSource={(doc, from) => openInReader(specTarget(doc), from)}
+                />
+              )}
+              <div className="relative min-h-0 flex-1">
               <div
                 ref={setStageContainer}
                 className="absolute inset-0"
@@ -2321,6 +2335,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                       <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
                     </ReactFlow>
                 </BoardActionsContext> : <div className="flex h-full flex-col">{emptyBody}</div>}
+              </div>
               </div>
             </div>
             {!stepped && reader && (

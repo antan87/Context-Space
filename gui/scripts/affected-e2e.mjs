@@ -34,6 +34,8 @@ import { fileURLToPath } from 'node:url';
  * | NoteDialog                           | e2e/board-notes.spec.ts,                                 | Modal dialog for creating and editing note cards; tested by notes and area specs.                    |
  * |                                      | e2e/board-area.spec.ts                                   |                                                                                                      |
  * |--------------------------------------|----------------------------------------------------------|------------------------------------------------------------------------------------------------------|
+ * | AssignmentCard, assignmentCardView    | e2e/board-assignment.spec.ts                             | Assignment card and panel above the overview; own drafts and requests; overview specs check its fit. |
+ * |--------------------------------------|----------------------------------------------------------|------------------------------------------------------------------------------------------------------|
  * | BoardSidebar                         | e2e/board-index.spec.ts                                  | Collapsible navigation sidebar drawer component beside the board; tested by board-index.spec.ts.     |
  * ============================================================================
  */
@@ -195,6 +197,22 @@ export const FOLDER_SPECS = [
     bareNames: ['nowLine', 'nowLine.ts'],
     specs: ['e2e/board-now-line.spec.ts'],
     safety: 'Now line positioning math; verified by board-now-line.spec.ts.',
+  },
+
+  // Assignment card (description and specs at the top of the overview)
+  {
+    folder: 'src/features/board/AssignmentCard',
+    path: 'gui/src/features/board/AssignmentCard.tsx',
+    bareNames: ['AssignmentCard', 'AssignmentCard.tsx'],
+    specs: ['e2e/board-assignment.spec.ts', 'e2e/board-overview.spec.ts'],
+    safety: 'Card and panel above the overview stage, with their own drafts and requests; verified by board-assignment.spec.ts, and the overview specs for fit.',
+  },
+  {
+    folder: 'src/features/board/assignmentCardView',
+    path: 'gui/src/features/board/assignmentCardView.ts',
+    bareNames: ['assignmentCardView', 'assignmentCardView.ts'],
+    specs: ['e2e/board-assignment.spec.ts'],
+    safety: 'Pure helpers (compact card view, save bodies, spec checks); unit tested and verified by board-assignment.spec.ts.',
   },
 
   // Decisions / Answer hold-off

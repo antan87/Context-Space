@@ -223,6 +223,8 @@ test.describe('Board overview in Split mode: small cards', () => {
   const PICTURE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
   /** The stage the board has in Split mode at the default 50 % share, with the app's sidebar on its rail (measured). */
+  /** The height of the Assignment card above the overview's stage. */
+  const ASSIGNMENT_CARD = 36;
   const SPLIT = [
     { window: { width: 1440, height: 900 }, stage: { width: 652, height: 824 } },
     { window: { width: 1280, height: 800 }, stage: { width: 572, height: 724 } },
@@ -254,7 +256,8 @@ test.describe('Board overview in Split mode: small cards', () => {
       json: boardFile({ cards: [boardFileCard(2, 'board-pictures/a.png', { title: 'The overview', step: undefined, area: `checkpoint:${slug(titles[pictureOn]!)}` })] }),
     }));
     // The size is set after every route is in place: a resize can mount a card's <img>, and a request with no route fails for good
-    await page.setViewportSize(size);
+    // The Assignment card takes 36 px of the stage's height: the window is made that much taller, so the stage is the one these specs were tuned for
+    await page.setViewportSize({ width: size.width, height: size.height + ASSIGNMENT_CARD });
     await page.goto('/#/workspaces/demo/board');
     if (options.split === false) {
       await page.getByTestId('view-mode-board').click();
@@ -534,7 +537,7 @@ test.describe('Board overview in Split mode: small cards', () => {
       return box.y >= stage.y - 0.5 && box.y + box.height <= stage.y + stage.height + 0.5;
     };
     expect(await whole(), 'the card of the jump is whole in view').toBe(true);
-    await page.setViewportSize({ width: 1100, height: 526 });
+    await page.setViewportSize({ width: 1100, height: 526 + ASSIGNMENT_CARD });
     await atRest(page);
     expect((await matrix(page))[5], 'the view stays where the person has it').toBe(before[5]);
     expect(await whole(), 'and the card is still whole in view').toBe(true);
@@ -636,7 +639,7 @@ test.describe('Board overview in Split mode: small cards', () => {
     expect(resting[5], 'at 1200x720 the cards stand at the top').toBe(44);
     const boxBefore = (await cards.nth(1).boundingBox())!;
     // A taller window: the cards are laid out again, and the view follows because Tab did not move it
-    await page.setViewportSize({ width: 1200, height: 832 });
+    await page.setViewportSize({ width: 1200, height: 832 + ASSIGNMENT_CARD });
     await atRest(page);
     expect((await cards.nth(1).boundingBox())!.height, 'the cards are laid out again').not.toBe(boxBefore.height);
     expect((await matrix(page))[5], 'and the cards still stand at the top').toBe(44);

@@ -810,7 +810,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     const icons = board(page).getByRole('button', { name: /^Close this panel/ });
     await expect(icons).toHaveCount(1);
     const iconBox = (await icons.boundingBox())!;
-    expect(iconBox.y).toBeLessThan(region.y + 44);
+    expect(iconBox.y).toBeLessThan(region.y + 44 + 36 /* the Assignment card sits under the Now line */);
     expect(iconBox.x + iconBox.width).toBeGreaterThan(region.x + region.width - 48);
     // Nothing is drawn under them
     for (const box of (await overviewFacts(page)).boxes) {
@@ -860,7 +860,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
   });
 
   test('steps into an Area from its row as from its card: by press, Enter and Space, and gives the keyboard back to the row', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 800 });
+    await page.setViewportSize({ width: 390, height: 836 /* the Assignment card takes 36 px */ });
     await routeAreas(page);
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
@@ -890,7 +890,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
   });
 
   test('folds the finished Areas into one last row when even the rows do not fit, and opens them on a press', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 720 });
+    await page.setViewportSize({ width: 390, height: 756 /* the Assignment card takes 36 px */ });
     await routeAreas(page, { count: 25, done: 16 });
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
@@ -1106,7 +1106,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
   });
 
   test('folds the finished Areas of the small cards as of the rows, keeps the fold open from rows to small cards, and lets it go when the overview has none', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 720 });
+    await page.setViewportSize({ width: 390, height: 756 /* the Assignment card takes 36 px */ });
     await routeAreas(page, { count: 14, done: 8 });
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
@@ -1119,7 +1119,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
     await expect(overview.locator('.react-flow__node-areaRow')).toHaveCount(13);
     // A wider stage draws small cards, with the fold as they have one: still open, nothing lost
-    await page.setViewportSize({ width: 700, height: 560 });
+    await page.setViewportSize({ width: 700, height: 596 });
     await viewAtRest(page);
     await expect(overview.locator('.react-flow__node-areaMini')).toHaveCount(13);
     await expect(fold).toHaveText('Show fewer');
@@ -1133,7 +1133,7 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await viewAtRest(page);
     await expect(overview.locator('.react-flow__node-area')).toHaveCount(1);
-    await page.setViewportSize({ width: 390, height: 720 });
+    await page.setViewportSize({ width: 390, height: 756 });
     await viewAtRest(page);
     await expect(fold).toHaveText('8 done');
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
