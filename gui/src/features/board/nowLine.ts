@@ -70,6 +70,8 @@ export interface NewsLine {
   knowledge?: { entry: string | null };
   /** An incoming commits summary line: opens Review directly on the newest commit of that group. */
   reviewCommit?: { repo: string; sha: string };
+  /** With `reviewCommit`: the line is a commit note, so Review scrolls the commit's Notes into view. */
+  notesInView?: boolean;
 }
 
 /** How many of the newest things the list shows. */
@@ -110,6 +112,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
   const shown = [...dated, ...undated].slice(0, NEWS_SHOWN);
   const lines = shown.map((entry): NewsLine => {
     if (entry.ref?.kind === 'knowledge') return { text: entry.text, knowledge: { entry: entry.ref.title ? newsEntryKey(knowledge, { title: entry.ref.title, date: entry.ref.date ?? null }) : null } };
+    if (entry.ref?.kind === 'commitNote') return { text: entry.text, reviewCommit: { repo: entry.ref.repo, sha: entry.ref.sha }, notesInView: true };
     if (entry.ref?.kind === 'incoming') return { text: entry.text, reviewCommit: { repo: entry.ref.repo, sha: entry.ref.sha } };
     const jump = jumpOf(entry);
     return { text: entry.text, ...(jump ? { jump } : {}) };

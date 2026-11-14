@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, Terminal, type LucideIcon } from 'lucide-react';
+import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, StickyNote, Terminal, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
@@ -16,6 +16,7 @@ import { useAnswerDecision, useChangePlanFile } from '../plan/planFile.js';
 import { suggestedAnswers } from '../plan/planView.js';
 import { plainText, stripHeadingColon } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
+import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } from './commitNotes.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { areaCountItems, areaCounts, foldLabel, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
@@ -936,6 +937,38 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
   </article>;
 }
 
+/**
+ * "1 note" on a commit card: the notes an AI left on that commit. Its own button (the card is not one), it opens Review on the commit with
+ * the notes in view. Nothing is drawn for a commit without notes.
+ */
+function CommitNoteMarker({ id, subject, commit }: { id: string; subject: string; commit: { repo: string; sha: string } | null }) {
+  const notes = useContext(CommitNotesContext);
+  const actions = useContext(BoardActionsContext);
+  if (!commit) return null;
+  const mine = notesOfCommit(notes, commit.repo, commit.sha);
+  const latest = mine[0];
+  if (!latest) return null;
+  const text = noteCountText(mine.length);
+  const look = 'inline-flex h-6 min-h-6 shrink-0 items-center gap-1 rounded px-1.5 -my-0.5 text-xs font-medium whitespace-nowrap text-violet-700 dark:text-violet-300';
+  if (!actions) return <span data-testid="commit-note-marker" title={latest.title} className={look}><StickyNote aria-hidden="true" className="size-3" />{text}</span>;
+  return (
+    <button
+      type="button"
+      data-testid="commit-note-marker"
+      title={latest.title}
+      aria-label={`${text}: ${latest.title}. Open in Review`}
+      onClick={(event) => {
+        event.stopPropagation();
+        requestNotesView(commit.repo, commit.sha);
+        actions.openInReader({ path: `${commit.repo} · ${commit.sha}`, title: subject, card: id, commit }, event.currentTarget);
+      }}
+      className={cn(look, 'nodrag nopan cursor-pointer hover:bg-violet-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring')}
+    >
+      <StickyNote aria-hidden="true" className="size-3" />{text}
+    </button>
+  );
+}
+
 /** One commit: its short sha, who made it and when, and its subject. */
 export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
   const shaId = useId();
@@ -979,6 +1012,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         )}
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
+        <CommitNoteMarker id={id} subject={data.subject} commit={commit} />
       </div>
       {commit ? (
         <button
@@ -1047,6 +1081,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         )}
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
+        <CommitNoteMarker id={id} subject={data.subject} commit={commit} />
       </div>
       <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">commit</span>
     </div>

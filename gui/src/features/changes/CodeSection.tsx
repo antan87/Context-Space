@@ -36,6 +36,7 @@ import { globalChangesetSymbolIndex, useChangesetSymbolStore, type ChangesetSymb
 import { omittedNotice } from './utils/omittedContent.js';
 import { refreshIncomingCommits, useIncomingCommits, useRecentCommits } from '../plan/whatsNew.js';
 import type { CommitStepLink } from '../board/commitContext.js';
+import { useCommitNotes } from '../board/commitNotes.js';
 import { CommitsList, CommitsMain } from './CommitsView.js';
 import { useCommitDetail } from './commitData.js';
 import { buildCommitListGroups } from './commitListModel.js';
@@ -414,6 +415,7 @@ export function CodeSection(props: CodeSectionProps) {
   const separateExpandedDetail = useCommitDetail(workspace, expandedDiffers ? expandedCommit : null);
   const expandedDetail = expandedDiffers ? separateExpandedDetail : commitDetail;
   const recentQuery = useRecentCommits(commitsShown ? workspace : null);
+  const commitNotes = useCommitNotes(commitsShown ? workspace : null);
   const recent = recentQuery.data;
   const incomingQuery = useIncomingCommits(workspace, { enabled: commitsShown && visible });
   const incomingReport = incomingQuery.data;
@@ -888,6 +890,7 @@ export function CodeSection(props: CodeSectionProps) {
       expandedDetail={expandedDetail}
       recentPending={recentQuery.isPending}
       incomingReport={incomingReport}
+      notes={commitNotes}
       checkingIncoming={refreshingIncoming || incomingQuery.checking}
       onCheckIncoming={handleCheckIncoming}
       returnTo={props.returnTo}

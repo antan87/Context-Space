@@ -94,7 +94,13 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, a
     const shown = shownCommit.current;
     const sequence = commitOpen?.sequence;
     const shownCard = shown && sequence && indexInSequence(sequence, shown) >= 0 ? findCommitCard(shown) : null;
-    const target = shownCard ?? resolveCodeWindowOpener(opener, openerTarget);
+    const opened = resolveCodeWindowOpener(opener, openerTarget);
+    // The keyboard returns to the control that opened Review (a card's note marker) while it is still on the card of the commit Review shows
+    const openedOnShown = Boolean(shown && opened && opened.isConnected && (() => {
+      const parsed = parseCommitNodeId(opened.closest('.react-flow__node-commit[data-id]')?.getAttribute('data-id') ?? '');
+      return parsed ? sameCommit(parsed, shown) : false;
+    })());
+    const target = openedOnShown ? opened : (shownCard ?? opened);
     target?.focus({ preventScroll: true });
     return undefined;
   }, [open, opener, openerTarget, commitOpen]);

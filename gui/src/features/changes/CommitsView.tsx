@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, Loader2, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, Loader2, RefreshCw, SquareArrowOutUpRight, StickyNote } from 'lucide-react';
 import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
@@ -9,6 +9,7 @@ import { useClockTick } from '../../lib/useClockTick.js';
 import { usePlanFile } from '../plan/planFile.js';
 import { agoText, type IncomingCommitsReport } from '../plan/whatsNew.js';
 import { useBoard } from '../board/boardData.js';
+import { noteAuthorName, noteCountText, notesOfCommit, takeNotesView, useCommitNotes, type CommitNoteEntry } from '../board/commitNotes.js';
 import {
   forgeDisplayName,
   resolveCommitContext,
@@ -76,6 +77,7 @@ export function CommitsList({
   expandedDetail,
   recentPending,
   incomingReport,
+  notes,
   checkingIncoming = false,
   onCheckIncoming,
   returnTo = 'board',
@@ -90,6 +92,8 @@ export function CommitsList({
   expandedDetail: ReturnType<typeof useCommitDetail>;
   recentPending: boolean;
   incomingReport?: IncomingCommitsReport;
+  /** The notes an AI left on commits; a commit that has some shows how many, after its sha and age. */
+  notes?: readonly CommitNoteEntry[];
   checkingIncoming?: boolean;
   onCheckIncoming?: () => void;
   returnTo?: 'board' | 'terminal';
@@ -446,6 +450,7 @@ export function CommitsList({
                 const shortSha = entry.sha.slice(0, 7);
                 const age = entry.at ? agoText(entry.at, new Date(clockNow)) : '';
                 const firstLine = firstDescriptionLine(entry.firstBodyLine);
+                const noteCount = notes ? notesOfCommit(notes, entry.repo, entry.sha).length : 0;
 
                 return (
                   <div key={commitKey(entry)} className="min-w-0">
@@ -512,6 +517,15 @@ export function CommitsList({
                             <span aria-hidden="true">·</span>
                             <span>
                               {entry.fileCount} {entry.fileCount === 1 ? 'file' : 'files'}
+                            </span>
+                          </>
+                        )}
+                        {noteCount > 0 && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span data-testid="commit-item-notes" className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-300">
+                              <StickyNote className="size-3" aria-hidden="true" />
+                              {noteCountText(noteCount)}
                             </span>
                           </>
                         )}
@@ -614,6 +628,15 @@ export function CommitsList({
   );
 }
 
+/** A note's body as shown: plain text, without its first line when that only repeats the title (the title is made from it). */
+function noteBodyText(note: CommitNoteEntry): string {
+  const body = note.body.replace(/\r\n?/g, '\n').trim();
+  const lines = body.split('\n');
+  const first = lines.findIndex((line) => line.trim() !== '');
+  if (first >= 0 && lines[first]!.trim() === note.title.trim()) return lines.slice(first + 1).join('\n').trim();
+  return body;
+}
+
 /** Commit details header + full description + clickable file grid shown when no file is open. */
 function CommitOverview({
   workspace,
@@ -621,6 +644,7 @@ function CommitOverview({
   detail,
   incomingMeta,
   headingRef,
+  ready,
   onOpenFile,
   onOpenStep,
 }: {
@@ -629,6 +653,8 @@ function CommitOverview({
   detail: CommitDetail;
   incomingMeta?: { hostName: string | null; webUrl: string | null } | null;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
+  /** The detail shown is the settled read of this very commit (not a read under way for another form of its sha). */
+  ready: boolean;
   onOpenFile: (file: string) => void;
   onOpenStep?: (step: CommitStepLink) => void;
 }) {
@@ -642,6 +668,30 @@ function CommitOverview({
     () => steps.map((raw) => ({ raw, display: formatCommitStepLabel(raw) })),
     [steps],
   );
+  const allNotes = useCommitNotes(workspace);
+  const notes = useMemo(() => notesOfCommit(allNotes, commit.repo, detail.sha || commit.sha), [allNotes, commit.repo, commit.sha, detail.sha]);
+  const notesRef = useRef<HTMLElement>(null);
+  const hasNotes = notes.length > 0;
+  const notesListRef = useRef<HTMLUListElement>(null);
+  const [listOverflows, setListOverflows] = useState(false);
+  // A scrolling list is a stop for the keyboard (to scroll it); one that fits is not
+  useLayoutEffect(() => {
+    const list = notesListRef.current;
+    if (!list) { setListOverflows(false); return undefined; }
+    const measure = () => setListOverflows(list.scrollHeight > list.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    // Measured a frame later, so a change of size caused by this very measure does not loop
+    let frame = 0;
+    const observer = new ResizeObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); });
+    observer.observe(list);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+  }, [hasNotes, notes]);
+  // Review opened from a note marker or the "Notes" line: bring the Notes into view once, without moving focus
+  useLayoutEffect(() => {
+    if (!ready || !hasNotes || !takeNotesView(commit.repo, detail.sha || commit.sha)) return;
+    notesRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [ready, hasNotes, commit.repo, commit.sha, detail.sha]);
 
   const [copied, setCopied] = useState<string | null>(null);
   useEffect(() => {
@@ -774,6 +824,39 @@ function CommitOverview({
             </div>
           )}
         </div>
+
+        {hasNotes && (
+          <section ref={notesRef} aria-label="Notes" data-testid="commit-notes" className="mt-4 scroll-mt-2">
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium text-violet-700 dark:text-violet-300">
+              <StickyNote className="size-3.5" aria-hidden="true" />
+              Notes
+              <span className="font-normal text-muted-foreground">· {notes.length}</span>
+            </h3>
+            <ul
+              ref={notesListRef}
+              tabIndex={listOverflows ? 0 : undefined}
+              aria-label="Notes on this commit, newest first"
+              className="max-h-[42vh] space-y-2 overflow-y-auto rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {notes.map((note) => {
+                const noteAgo = agoText(note.at) || note.at;
+                return (
+                  <li key={note.id} data-testid="commit-note" className="rounded-md border border-violet-500/30 bg-violet-500/5 p-3">
+                    <div className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+                      <span data-testid="commit-note-by" className="font-medium text-foreground/90">{noteAuthorName(note.by)}</span>
+                      <span aria-hidden="true">·</span>
+                      <time dateTime={note.at} title={note.at}>{noteAgo}</time>
+                    </div>
+                    <p data-testid="commit-note-title" dir="auto" className="mt-1 text-[13px] font-semibold leading-snug text-foreground [overflow-wrap:anywhere]">{note.title}</p>
+                    {noteBodyText(note) && (
+                      <div data-testid="commit-note-body" dir="auto" className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/95 [overflow-wrap:anywhere]">{noteBodyText(note)}</div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
 
         <section aria-label="Changed files" className="mt-5">
           <h3 data-testid="commit-file-count" className="mb-2 text-xs font-medium text-muted-foreground">
@@ -980,6 +1063,7 @@ export function CommitsMain({
         detail={data}
         incomingMeta={incomingMeta}
         headingRef={commitHeadingRef}
+        ready={!detail.isFetching && !detail.isPending}
         onOpenFile={onOpenFile}
         onOpenStep={onOpenStep}
       />

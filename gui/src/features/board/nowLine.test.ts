@@ -123,7 +123,7 @@ describe('where the parts go', () => {
     }]);
   });
 
-  it('keeps commitNote entries in Now counts and lines without wiring click yet', () => {
+  it('counts commitNote entries and opens Review on the commit with its Notes in view', () => {
     const view = news({
       notes: {
         items: [{
@@ -143,6 +143,8 @@ describe('where the parts go', () => {
     expect(nowLineParts({ focus: null, areas, news: view }).news).toBe(1);
     expect(newsLines(view, areas)).toEqual([{
       text: 'AI note on 3bc923f (NexusFlow): Merge conflict in boardRows.ts — kept both · 1 min ago',
+      reviewCommit: { repo: 'NexusFlow', sha: '3bc923fabcdef0123456789' },
+      notesInView: true,
     }]);
   });
 });

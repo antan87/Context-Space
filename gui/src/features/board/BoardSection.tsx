@@ -67,6 +67,7 @@ import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint,
 import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
 import { commitOpenFor } from './commitSequence.js';
+import { CommitNotesContext, commitNotesOf, requestNotesView } from './commitNotes.js';
 import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { BoardNowLine } from './BoardNowLine.js';
@@ -280,6 +281,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (prev.workspaceId === workspaceId && prev.sig !== null && prev.sig !== knowledgeNewsSig) void queryClient.invalidateQueries({ queryKey: knowledgeFileKey(workspaceId) });
   }, [workspaceId, newsView, knowledgeNewsSig, queryClient]);
   const board = boardQuery.data;
+  const commitNotes = useMemo(() => commitNotesOf(board?.cards), [board?.cards]);
   const workspaceFiles = workspaceFilesQuery.data?.files;
   const [showArchived, setShowArchived] = useState(false);
 
@@ -821,6 +823,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return;
     }
     if (line.reviewCommit) {
+      if (line.notesInView) requestNotesView(line.reviewCommit.repo, line.reviewCommit.sha);
       openCodeWindow(workspaceId, { opener: originBtn ?? null, commit: line.reviewCommit });
       return;
     }
@@ -2654,6 +2657,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   >
                     <BoardActionsContext value={areaActions}>
                       <BoardReadingContext value={reader?.trail.origin.card ?? null}>
+                       <CommitNotesContext value={commitNotes}>
                         <ReactFlow
                           id="board-area-flow"
                           className="board-flow board-flow-rows"
@@ -2703,6 +2707,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                         >
                           <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
                         </ReactFlow>
+                       </CommitNotesContext>
                       </BoardReadingContext>
                     </BoardActionsContext>
                   </div>
