@@ -96,7 +96,7 @@ function isAtPendingBackOrigin(live: WindowHistorySnapshot, pending: PendingBack
  * in the Board, a path pressed in the terminal, or the old `/changes` link): then the window loads, and afterwards it stays
  * mounted, hidden while closed, so the file and its scroll are kept.
  */
-export function CodeWindowSlot({ ws, cover, sectionProps, showToast, askAI }: Pick<WindowProps, 'cover' | 'sectionProps' | 'showToast' | 'askAI'> & { ws: Feature }) {
+export function CodeWindowSlot({ ws, cover, sectionProps, showToast, askAI, returnTo, onOpenStep }: Pick<WindowProps, 'cover' | 'sectionProps' | 'showToast' | 'askAI' | 'returnTo' | 'onOpenStep'> & { ws: Feature }) {
   const workspace = ws.branchName;
   const request = useCodeWindowRequest(workspace);
   const navigate = useNavigate();
@@ -382,6 +382,8 @@ export function CodeWindowSlot({ ws, cover, sectionProps, showToast, askAI }: Pi
         sectionProps={sectionProps}
         showToast={showToast}
         askAI={askAI}
+        returnTo={returnTo}
+        onOpenStep={onOpenStep}
         onClose={close}
       />
     </Suspense>

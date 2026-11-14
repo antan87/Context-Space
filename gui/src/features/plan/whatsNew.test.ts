@@ -125,4 +125,14 @@ describe('boardNews: what the Board draws its commits from', () => {
     expect(boardNews(own, undefined)!.commits).toEqual(own.commits);
     expect(boardNews(undefined, recent)).toBeUndefined();
   });
+
+  it('caps each repository to 10 commits on the Board and rolls trimmed commits into more', () => {
+    const fifteen = Array.from({ length: 15 }, (_, i) => commit((0x1000000 + i).toString(16).padStart(7, '0'), i + 1));
+    const recent15 = { at: NOW.toISOString(), from: ago(72 * 60), commits: [{ repo: 'api', more: 0, commits: fifteen }] };
+    const headLikeNews = news({ empty: false, commits: [{ repo: 'api', more: 5, commits: fifteen.slice(0, 10) }] });
+    const merged = boardNews(headLikeNews, recent15)!;
+    expect(merged.commits[0]!.commits).toHaveLength(10);
+    expect(merged.commits[0]!.more).toBe(5);
+    expect(commitsOnBoard(merged)).toBe(10);
+  });
 });

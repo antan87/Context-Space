@@ -13,7 +13,15 @@ export interface NewsSection<T> { items: T[]; more: number }
 
 export interface NewsDocument { name: string; kind: string; change: 'added' | 'changed'; at: string }
 export interface NewsKnowledge { id: string; title: string; date: string | null; type: string | null }
-export interface NewsCommit { sha: string; author: string; subject: string; at: string }
+export interface NewsCommit {
+  sha: string;
+  author: string;
+  subject: string;
+  at: string;
+  firstBodyLine?: string;
+  fileCount?: number;
+  pushed?: boolean;
+}
 export interface NewsRepo { repo: string; commits: NewsCommit[]; more: number; moreAtLeast?: true; problem?: string }
 
 export interface WhatsNewView {
@@ -76,6 +84,12 @@ export function useRecentCommits(workspace: string | null) {
 }
 
 /**
+ * Maximum commits per repository passed to the Board, matching backend `NEWS_LIMIT` (`10`)
+ * while Review's `Commits` list reads up to `50` directly from `useRecentCommits`.
+ */
+const BOARD_RECENT_COMMITS_LIMIT = 10;
+
+/**
  * What the Board draws its commits from: the recent commits (the last few days) and whatever the news lists, each once, with the
  * news only saying which are new. Marking the news as seen empties `news`, and takes nothing off the board. A recent list that could
  * not be read leaves the news's own commits, as before.
@@ -87,15 +101,18 @@ export function boardNews(news: WhatsNewView | undefined, recent: RecentCommits 
   const commits = [...recent.commits.map((repo) => repo.repo), ...news.commits.map((repo) => repo.repo)].filter((name, index, all) => all.indexOf(name) === index).map((name): NewsRepo => {
     const a = recent.commits.find((repo) => repo.repo === name);
     const b = news.commits.find((repo) => repo.repo === name);
+    const aSorted = [...(a?.commits ?? [])].sort((x, y) => (y.at > x.at ? 1 : y.at < x.at ? -1 : 0));
+    const aShown = aSorted.slice(0, BOARD_RECENT_COMMITS_LIMIT);
+    const aOverflow = aSorted.length - aShown.length;
     const seen = new Set<string>();
-    const list = [...(a?.commits ?? []), ...(b?.commits ?? [])].filter((commit) => {
+    const list = [...aShown, ...(b?.commits ?? [])].filter((commit) => {
       const key = commit.sha.slice(0, 7);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     }).sort((x, y) => (y.at > x.at ? 1 : y.at < x.at ? -1 : 0));
     const problem = a?.problem ?? b?.problem;
-    return { repo: name, commits: list, more: Math.max(a?.more ?? 0, b?.more ?? 0), ...(a?.moreAtLeast || b?.moreAtLeast ? { moreAtLeast: true as const } : {}), ...(problem && list.length === 0 ? { problem } : {}) };
+    return { repo: name, commits: list, more: Math.max((a?.more ?? 0) + aOverflow, b?.more ?? 0), ...(a?.moreAtLeast || b?.moreAtLeast ? { moreAtLeast: true as const } : {}), ...(problem && list.length === 0 ? { problem } : {}) };
   });
   return { ...news, basis: 'first-look', from: recent.from < news.from ? recent.from : news.from, commits, unseenCommits: unseen };
 }

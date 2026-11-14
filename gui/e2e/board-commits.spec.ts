@@ -74,7 +74,6 @@ const commitHeader = (page: Page) => win(page).getByTestId('commit-header');
 const modeButton = (page: Page, name: string) => win(page).getByRole('group', { name: 'Show' }).getByRole('button', { name: new RegExp(`^${name}( \\d+)?$`) });
 const commitCardOf = (page: Page, subject: string) => board(page).locator('#board-area .react-flow__node-commit').filter({ hasText: subject });
 const commitButtonOf = (page: Page, subject: string) => commitCardOf(page, subject).getByRole('button', { name: `Open ${subject}` });
-const openFileName = (page: Page) => win(page).locator('p[title]').filter({ hasText: /\w/ }).last();
 /** The long description of a commit: several paragraphs, so it cannot fit in the three lines the header folds it to. */
 const LONG_BODY = [
   'Implements CSV streaming for large datasets.',
@@ -392,24 +391,21 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(header.getByTestId('commit-body')).toContainText('Implements CSV streaming for large datasets.');
     await expect(header.getByTestId('commit-body')).toBeInViewport();
 
-    // The tree lists this commit's files with the numbers and the status; it opens on the first one
-    const tree = win(page).getByRole('tree', { name: 'Files changed in this commit' });
+    // The left tree lists commits and expands this commit's files with stats & status; right opens on full description + file grid first
+    const tree = win(page).getByRole('tree', { name: 'Commits' });
     await expect(tree).toBeVisible();
-    await expect(win(page).getByTestId('commit-file-count')).toHaveText('4 files changed');
+    await expect(win(page).getByTestId('commit-file-count')).toContainText('4 files changed');
     await expect(tree.getByRole('treeitem', { name: /export\.ts/ })).toContainText('+12 −4');
     await expect(tree.getByRole('treeitem', { name: /new\.ts/ })).toContainText('+5');
     await expect(tree.getByRole('treeitem', { name: /sample\.bin/ })).toContainText('binary');
     await expect(tree.getByRole('treeitem', { name: /new\.ts/ })).toContainText('R');
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('1 / 4');
 
-    // A later file's diff is shown with the whole header still on the first screen
+    // Selecting a file opens the slim file diff view with room for the diff
     await tree.getByRole('treeitem', { name: /export\.ts/ }).click();
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
+    await expect(win(page)).toContainText('file 1 of 4');
+    await expect(win(page).getByRole('button', { name: /Read the description/i })).toBeVisible();
     await expect(win(page).locator('.monaco-diff-editor, [data-testid="fallback-diff"]').first()).toBeVisible();
-    await expect(header.getByTestId('commit-subject')).toBeInViewport();
-    await expect(header.getByTestId('commit-body')).toBeInViewport();
-    const [headerBox, diffBox] = [await header.boundingBox(), await win(page).locator('.monaco-diff-editor, [data-testid="fallback-diff"]').first().boundingBox()];
-    expect(diffBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
+    const diffBox = await win(page).locator('.monaco-diff-editor, [data-testid="fallback-diff"]').first().boundingBox();
     // The diff keeps real room: more than a third of the window's height
     expect(diffBox!.height).toBeGreaterThan(200);
   });
@@ -439,39 +435,27 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(button).toBeFocused();
   });
 
-  test('a long description folds to a few lines with More, and the file list and diff keep their room', async ({ page }) => {
+  test('a long description renders in full without More folding, and the file grid stays accessible', async ({ page }) => {
     await setupCommitBoard(page, makeCommitDetail());
     await commitButtonOf(page, 'Write the CSV writer').click();
-    const body = commitHeader(page).getByTestId('commit-body');
-    const more = commitHeader(page).getByRole('button', { name: 'More', exact: true });
-    await expect(more).toBeVisible();
-    const folded = await body.boundingBox();
-    expect(folded!.height).toBeLessThan(70);
-    await more.click();
-    await expect(commitHeader(page).getByRole('button', { name: 'Less', exact: true })).toHaveAttribute('aria-expanded', 'true');
+    const body = win(page).getByTestId('commit-body');
+    await expect(commitHeader(page).getByRole('button', { name: 'More', exact: true })).toHaveCount(0);
     await expect(body).toContainText('Rare case: an empty report still writes the header row.');
-    // Still inside the window: the header never grows past what leaves the diff a place
-    const [header, window] = [await commitHeader(page).boundingBox(), await win(page).boundingBox()];
-    expect(header!.height).toBeLessThan(window!.height * 0.5);
+    await expect(win(page).getByTestId('commit-files-grid')).toBeVisible();
   });
 
-  test('[ and ] move through the commits of the row in the order it shows them, and stop at the ends', async ({ page }) => {
+  test('[ and ] move through the commits in order, and stop at the ends', async ({ page }) => {
     const { first, second, third } = rowOfThree();
     await setupCommitBoard(page, first, [second, third]);
 
     await commitButtonOf(page, 'Add CSV stream formatter').click();
     const subject = commitHeader(page).getByTestId('commit-subject');
-    const position = commitHeader(page).getByTestId('commit-position');
     await expect(subject).toHaveText('Add CSV stream formatter');
-    await expect(position).toHaveText('2 of 3 · Reports export to CSV');
-    await expect(win(page).getByTestId('commit-file-count')).toHaveText('1 file changed');
-    await expect(win(page).getByTestId('commit-file-position')).toHaveCount(0);
-    await expect(openFileName(page)).toContainText('stream.ts');
+    await expect(win(page).getByTestId('commit-file-count')).toContainText('1 file changed');
+    await expect(win(page).getByTestId('commit-position')).toHaveCount(0);
 
     await page.keyboard.press(']');
     await expect(subject).toHaveText('Test the CSV formatter');
-    await expect(position).toHaveText('3 of 3 · Reports export to CSV');
-    await expect(commitHeader(page).getByRole('button', { name: 'Next commit' })).toBeDisabled();
     // At the end ] does nothing, and the keyboard stays in the window
     await page.keyboard.press(']');
     await expect(subject).toHaveText('Test the CSV formatter');
@@ -480,15 +464,13 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await page.keyboard.press('[');
     await page.keyboard.press('[');
     await expect(subject).toHaveText('Write the CSV writer');
-    await expect(position).toHaveText('1 of 3 · Reports export to CSV');
-    await expect(commitHeader(page).getByRole('button', { name: 'Previous commit' })).toBeDisabled();
     await page.keyboard.press('[');
     await expect(subject).toHaveText('Write the CSV writer');
-    // Each move opens that commit's own first file
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('1 / 4');
 
-    // The visible buttons do the same
-    await commitHeader(page).getByRole('button', { name: 'Next commit' }).click();
+    // Opening a file shows file 1 of 4, then ] moves to the next commit's description
+    await win(page).locator('[data-testid="commit-files-grid"] button').first().click();
+    await expect(win(page)).toContainText('file 1 of 4');
+    await page.keyboard.press(']');
     await expect(subject).toHaveText('Add CSV stream formatter');
 
     // Neither key moves the Board or a reader behind the window
@@ -518,18 +500,13 @@ test.describe('Commit cards open the Code window on that commit', () => {
     const subject = commitHeader(page).getByTestId('commit-subject');
     await expect(subject).toHaveText('Write the CSV writer');
 
-    await commitHeader(page).getByRole('button', { name: 'Choose a commit' }).click();
-    const choices = page.getByTestId('commit-choice');
-    await expect(page.getByRole('menu')).toContainText('Reports export to CSV');
-    await expect(choices.first()).toContainText('Write the CSV writer');
-    await expect(page.getByRole('menu')).toContainText('Other recent commits in api');
-    await choices.filter({ hasText: 'Add the export endpoint' }).click();
+    const tree = win(page).getByRole('tree', { name: 'Commits' });
+    await expect(tree).toContainText('Reports export to CSV');
+    await expect(tree).toContainText('Other recent commits in api');
+    await tree.locator('[role="treeitem"][aria-expanded]').filter({ hasText: 'Add the export endpoint' }).click();
     await expect(subject).toHaveText('Add the export endpoint');
     await expect(commitHeader(page).getByTestId('commit-repo')).toHaveText('api');
-    await expect(win(page).getByTestId('commit-file-count')).toHaveText('1 file changed');
-    // A commit chosen from the list moves through its repository's recent commits
-    await expect(commitHeader(page).getByTestId('commit-position')).toHaveText('1 of 1 · api');
-    await expect(commitHeader(page).getByRole('button', { name: 'Next commit' })).toBeDisabled();
+    await expect(win(page).getByTestId('commit-file-count')).toContainText('1 file changed');
   });
 
   test('opened without a row (the Commits button of the Code window), it lists recent commits and opens the newest; Changes and Files are unchanged', async ({ page }) => {
@@ -546,7 +523,6 @@ test.describe('Commit cards open the Code window on that commit', () => {
 
     await modeButton(page, 'Commits').click();
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Write the CSV writer');
-    await expect(commitHeader(page).getByTestId('commit-position')).toHaveText('1 of 3 · billing');
     await page.keyboard.press(']');
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Add CSV stream formatter');
 
@@ -574,12 +550,12 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await commitButtonOf(page, 'Write the CSV writer').click();
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Write the CSV writer');
     await win(page).getByRole('treeitem', { name: /export\.ts/ }).click();
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
-    const next = commitHeader(page).getByRole('button', { name: 'Next commit' });
-    await next.focus();
-    await expect(next).toBeFocused();
+    await expect(win(page)).toContainText('file 1 of 4');
+    const readDesc = win(page).getByRole('button', { name: /Read the description/i });
+    await readDesc.focus();
+    await expect(readDesc).toBeFocused();
 
-    // The news, the recent commits and the board change (a newer commit arrives, so the row is longer); every query is stale and asked again
+    // The news, the recent commits and the board change (a newer commit arrives); every query is stale and asked again
     const newest = makeCommitDetail({ sha: 'd4e5f6a7b8c901234567890123456789012345ab', shortSha: 'd4e5f6a', subject: 'A newer commit that arrived meanwhile', at: minutesAgo(1) });
     const all = [newest, first, second, third].map((c) => ({ sha: c.sha, author: c.author, subject: c.subject, at: c.at }));
     await page.unroute('**/api/workspace/demo/news');
@@ -595,14 +571,11 @@ test.describe('Commit cards open the Code window on that commit', () => {
 
     await expect(win(page)).toBeVisible();
     await expect(modeButton(page, 'Commits')).toHaveAttribute('aria-pressed', 'true');
-    await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Write the CSV writer');
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
-    // The row it was opened from is kept as it was, and so is the keyboard
-    await expect(commitHeader(page).getByTestId('commit-position')).toHaveText('1 of 3 · Reports export to CSV');
-    await expect(next).toBeFocused();
+    await expect(readDesc).toContainText('Write the CSV writer');
+    await expect(win(page)).toContainText('file 1 of 4');
+    await expect(readDesc).toBeFocused();
     // The list now knows the new commit (the one list that is meant to follow the news)
-    await commitHeader(page).getByRole('button', { name: 'Choose a commit' }).click();
-    await expect(page.getByRole('menu')).toContainText('A newer commit that arrived meanwhile');
+    await expect(win(page).getByRole('tree', { name: 'Commits' })).toContainText('A newer commit that arrived meanwhile');
   });
 
   test('text typed in the Finish form (and the commit message) in Changes survives a trip to Commits and back', async ({ page }) => {
@@ -670,7 +643,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await commitButtonOf(page, 'Write the CSV writer').click();
     await expect(commitHeader(page).getByTestId('commit-pushed')).toHaveText('not pushed');
     await win(page).getByRole('treeitem', { name: /export\.ts/ }).click();
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
+    await expect(win(page)).toContainText('file 1 of 4');
     // The commit gets pushed (a Finish elsewhere); the server now answers pushed
     const pushed = makeCommitDetail({ pushed: true, forge: 'github', webUrl: `https://github.com/org/billing/commit/${FULL_SHA}` });
     await page.route('**/api/workspace/demo/commits/billing/*', (route) => (route.request().url().includes('/diff') ? route.fallback() : route.fulfill({ json: pushed })));
@@ -683,10 +656,11 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await answered;
     await page.waitForTimeout(600);
     await modeButton(page, 'Commits').click();
+    await expect(win(page)).toContainText('file 1 of 4');
+    await win(page).getByRole('button', { name: /Read the description/i }).click();
     await expect(commitHeader(page).getByTestId('commit-pushed')).toHaveText('pushed');
     await expect(commitHeader(page).getByRole('link', { name: 'Open commit on GitHub' })).toBeVisible();
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Write the CSV writer');
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
   });
 
   test('after a push made outside the app (the AI in the terminal), reopening the commit says pushed', async ({ page }) => {
@@ -767,16 +741,25 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await commitButtonOf(page, 'Add the API route').click();
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Add the API route');
     await expect(commitHeader(page).getByTestId('commit-repo')).toHaveText('api');
-    await expect(win(page).getByTestId('commit-file-count')).toHaveText('1 file changed');
+    await expect(win(page).getByTestId('commit-file-count')).toContainText('1 file changed');
     // The row it came from holds only its own repository's commit
-    await expect(commitHeader(page).getByTestId('commit-position')).toHaveText('1 of 1 · Reports export to CSV');
+    const list = win(page).getByRole('tree', { name: 'Commits' });
+    const apiHeld = list.locator('> div').filter({ hasText: 'Reports export to CSV' });
+    await expect(apiHeld.locator('[data-testid="commit-tree-item"]')).toHaveCount(1);
+    await expect(apiHeld).toContainText('Add the API route');
+    await expect(apiHeld).not.toContainText('Write the CSV writer');
+    await expect(list.locator('> div').filter({ hasText: 'Other recent commits in billing' })).toContainText('Write the CSV writer');
     await page.keyboard.press('Escape');
     await expect(win(page)).toBeHidden();
 
     await commitButtonOf(page, 'Write the CSV writer').click();
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Write the CSV writer');
     await expect(commitHeader(page).getByTestId('commit-repo')).toHaveText('billing');
-    await expect(win(page).getByTestId('commit-file-count')).toHaveText('4 files changed');
+    await expect(win(page).getByTestId('commit-file-count')).toContainText('4 files changed');
+    const billingHeld = list.locator('> div').filter({ hasText: 'Reports export to CSV' });
+    await expect(billingHeld.locator('[data-testid="commit-tree-item"]')).toHaveCount(1);
+    await expect(billingHeld).toContainText('Write the CSV writer');
+    await expect(billingHeld).not.toContainText('Add the API route');
   });
 
   test('a pushed commit has a forge link; the sha copies and says so; an unpushed one has no link', async ({ page }) => {
@@ -838,7 +821,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
       return undefined;
     });
     await commitButtonOf(page, 'Write the CSV writer').click();
-    const tree = win(page).getByRole('tree', { name: 'Files changed in this commit' });
+    const tree = win(page).getByRole('tree', { name: 'Commits' });
 
     await tree.getByRole('treeitem', { name: /export\.ts/ }).click();
     const diffToolbar = win(page).getByRole('toolbar', { name: 'Diff' });
@@ -860,9 +843,9 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(fallbackDiff.locator('[data-diff-marker="-"]').first()).toBeVisible();
     await expect(fallbackDiff.locator('[data-diff-marker="+"]').first()).toBeVisible();
 
-    // The viewer's Next file steps down the tree and opens that file
+    // The viewer's Next file steps down the list and opens the next file
     await diffToolbar.getByRole('button', { name: 'Next file' }).click();
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('3 / 4');
+    await expect(win(page)).toContainText('file 2 of 4');
 
     await tree.getByRole('treeitem', { name: /sample\.bin/ }).click();
     await expect(win(page).getByRole('note')).toHaveText(/binary file/i);
@@ -878,9 +861,9 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await setupCommitBoard(page, makeCommitDetail());
     await commitButtonOf(page, 'Write the CSV writer').click();
     await win(page).getByRole('treeitem', { name: /export\.ts/ }).click();
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
+    await expect(win(page)).toContainText('file 1 of 4');
     await expect(win(page).getByRole('button', { name: /Full screen|Exit full screen/i })).toHaveCount(0);
-    await expect(commitHeader(page).getByTestId('commit-subject')).toBeInViewport();
+    await expect(win(page).getByRole('button', { name: /Read the description/i })).toBeInViewport();
     const coverBox = await page.locator('[data-code-window-backdrop]').boundingBox();
     const winBox = await win(page).boundingBox();
     expect(winBox!.width).toBeCloseTo(coverBox!.width, 0);

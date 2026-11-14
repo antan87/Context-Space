@@ -21,7 +21,7 @@ import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.
 import { boardNews, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
-import { documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
+import { boardStepRequests, documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useBoardStepRequest, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
 import { filesChangedText } from '../changes/changeSummary.js';
 import { useRepoChanges } from '../changes/useRepoChanges.js';
 import { BoardActionsContext, BoardReadingContext, firstControl, knowledgeTarget, type BoardActions, type ReaderTarget } from './boardActions.js';
@@ -824,6 +824,35 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     if (line.jump.nodeId) jumpToItem({ areaId: line.jump.areaId, nodeId: line.jump.nodeId, readerTarget: line.jump.readerTarget }, false);
     else jumpToArea(line.jump.areaId);
   }, [jumpToItem, jumpToArea, recordBoardJump, show]);
+
+  const boardStepRequest = useBoardStepRequest(workspaceId);
+  useEffect(() => {
+    if (!active || areasLoading || codeOpen || !boardStepRequest) return;
+    const { step } = boardStepRequest.request;
+    boardStepRequests.acknowledge(workspaceId, boardStepRequest.id);
+    const targetArea = areas.find((a) => a.kind !== 'work' && a.planItems?.steps?.some((s) => s.key === step.key));
+    if (targetArea) {
+      if (stepped?.phase === 'open' && stepped.areaId !== targetArea.id) {
+        recordBoardJump(stageContainer, targetArea.id);
+      }
+      const rows = areaRows(targetArea, { news: newsView, size: stageSize });
+      let targetNodeId = `row:step:${step.key}`;
+      for (const row of rows) {
+        if (row.id === `row:step:${step.key}`) {
+          targetNodeId = `row:step:${step.key}`;
+          break;
+        }
+        if (row.groups?.some((g) => g.key === step.key)) {
+          targetNodeId = `${row.id}:step:${step.key}`;
+          break;
+        }
+      }
+      jumpToItem({ areaId: targetArea.id, nodeId: targetNodeId }, false, true);
+    } else {
+      const planFile = step.planPath || planView?.file || 'PLAN.md';
+      show({ path: planFile, title: fileTitle(planFile) }, null);
+    }
+  }, [active, areasLoading, codeOpen, boardStepRequest, workspaceId, areas, newsView, stageSize, stepped, stageContainer, jumpToItem, planView, show, recordBoardJump]);
   // The search is the Board index's own: opening it (it may be folded to its rail, or a drawer) and putting the keyboard in its box
   const [searchRequest, setSearchRequest] = useState(0);
   const openSearch = useCallback(() => {

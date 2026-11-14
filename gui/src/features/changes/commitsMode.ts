@@ -2,7 +2,14 @@ import type { RecentCommits } from '../plan/whatsNew.js';
 
 /** A commit by repository and (short or full) SHA. The same SHA prefix in two repositories is two commits. */
 export interface CommitRef { repo: string; sha: string }
-export interface SequenceCommit extends CommitRef { subject?: string; author?: string; at?: string }
+export interface SequenceCommit extends CommitRef {
+  subject?: string;
+  author?: string;
+  at?: string;
+  firstBodyLine?: string;
+  fileCount?: number;
+  pushed?: boolean;
+}
 
 /** The commits of the row a commit was opened from, in the order the row shows them, and what to call the row. */
 export interface CommitSequence { label: string; commits: SequenceCommit[] }
@@ -41,12 +48,33 @@ const byNewest = (a: { at?: string }, b: { at?: string }) => (b.at ?? '') > (a.a
 export function recentSequence(recent: RecentCommits | undefined, repo: string): CommitSequence | null {
   const entry = recent?.commits.find((item) => item.repo === repo);
   if (!entry || entry.commits.length === 0) return null;
-  return { label: repo, commits: [...entry.commits].sort(byNewest).map((commit) => ({ repo, sha: commit.sha, subject: commit.subject, author: commit.author, at: commit.at })) };
+  return {
+    label: repo,
+    commits: [...entry.commits].sort(byNewest).map((commit) => ({
+      repo,
+      sha: commit.sha,
+      subject: commit.subject,
+      author: commit.author,
+      at: commit.at,
+      ...(commit.firstBodyLine !== undefined ? { firstBodyLine: commit.firstBodyLine } : {}),
+      ...(commit.fileCount !== undefined ? { fileCount: commit.fileCount } : {}),
+      ...(commit.pushed !== undefined ? { pushed: commit.pushed } : {}),
+    })),
+  };
 }
 
 /** The newest recent commit over all repositories: what the mode opens on when no row sent it. */
 export function newestRecentCommit(recent: RecentCommits | undefined): SequenceCommit | null {
-  const all = (recent?.commits ?? []).flatMap((entry) => entry.commits.map((commit) => ({ repo: entry.repo, sha: commit.sha, subject: commit.subject, author: commit.author, at: commit.at })));
+  const all = (recent?.commits ?? []).flatMap((entry) => entry.commits.map((commit) => ({
+    repo: entry.repo,
+    sha: commit.sha,
+    subject: commit.subject,
+    author: commit.author,
+    at: commit.at,
+    ...(commit.firstBodyLine !== undefined ? { firstBodyLine: commit.firstBodyLine } : {}),
+    ...(commit.fileCount !== undefined ? { fileCount: commit.fileCount } : {}),
+    ...(commit.pushed !== undefined ? { pushed: commit.pushed } : {}),
+  })));
   return all.sort(byNewest)[0] ?? null;
 }
 

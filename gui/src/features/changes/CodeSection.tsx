@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import {
   ArrowDownUp, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ExternalLink, FileCode, GitCommitHorizontal, ListTree,
   Flag, FolderTree, Loader2, MoreHorizontal, RefreshCw, Search, X, ZoomIn, ZoomOut,
@@ -33,9 +33,11 @@ import { disposeChangesetModelsAfterEditors } from './utils/changesetModelStore.
 import { globalChangesetSymbolIndex, useChangesetSymbolStore, type ChangesetSymbol, type RawAstSymbol } from './utils/changesetSymbolIndex.js';
 import { omittedNotice } from './utils/omittedContent.js';
 import { useRecentCommits } from '../plan/whatsNew.js';
-import { CommitsMain, CommitsTree } from './CommitsView.js';
-import { orderedCommitFiles, useCommitDetail } from './commitData.js';
-import { applyCodeRequest, effectiveSequence, neighbourCommit, newestRecentCommit, sameCommit, type CommitOpen, type CommitRef, type CommitsModeState } from './commitsMode.js';
+import type { CommitStepLink } from '../board/commitContext.js';
+import { CommitsList, CommitsMain } from './CommitsView.js';
+import { useCommitDetail } from './commitData.js';
+import { buildCommitListGroups } from './commitListModel.js';
+import { applyCodeRequest, newestRecentCommit, sameCommit, type CommitOpen, type CommitRef, type CommitsModeState } from './commitsMode.js';
 
 const MonacoFileViewer = lazy(() => import('./adapters/MonacoFileViewer.js').then((module) => ({ default: module.MonacoFileViewer })));
 
@@ -95,6 +97,10 @@ export interface CodeSectionProps {
   breadcrumb?: ReactNode;
   /** Optional active Board area title for context. */
   area?: string;
+  /** Where closing Review returns (`board` or `terminal`). */
+  returnTo?: 'board' | 'terminal';
+  /** Navigates to a plan step on the Board and closes Review. */
+  onOpenStep?: (step: CommitStepLink) => void;
   /** Grows with every request to open the window. A request for a commit opens Commits mode on it; any other leaves Commits for the working tree. */
   requestId?: number;
   /** The commit the latest request asked for, with the commits of the row it came from. */
@@ -140,6 +146,7 @@ export function CodeSection(props: CodeSectionProps) {
   // Commits mode shows one commit of the repositories: which, the row it came from (for [ and ]) and its open file. It lives here, not in the
   // mode's view, so leaving to Changes or Files and coming back finds the same commit and file.
   const [commits, setCommits] = useState<CommitsModeState>(() => applyCodeRequest({ open: false, commit: null, held: null }, props.commitOpen));
+  const [expandedCommit, setExpandedCommit] = useState<CommitRef | null>(() => applyCodeRequest({ open: false, commit: null, held: null }, props.commitOpen).commit);
   const [commitFile, setCommitFile] = useState<string | null>(null);
   const commitsOpen = commits.open;
   const [repos, setRepos] = useState<CodeRepo[]>([]);
@@ -175,10 +182,16 @@ export function CodeSection(props: CodeSectionProps) {
   // Beside the chat in a small window the toolbar keeps one row: short labels, and Finish moves into the menu.
   const compactToolbar = width > 0 && width < 560;
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerToggleRef = useRef<HTMLButtonElement>(null);
+  const drawerCloseFocusRef = useRef<'toggle' | null>(null);
+  const prevDrawerOpenRef = useRef(false);
+  const focusSeqRef = useRef(0);
+  const [focusMainRequest, setFocusMainRequest] = useState<{ target: 'heading' | 'file'; seq: number } | null>(null);
   /** Changes and Files choose what the tree lists, so in a narrow panel choosing one shows the tree. */
   const switchMode = (next: Mode) => {
     setCommits((current) => (current.open ? { ...current, open: false } : current));
     setMode(next);
+    setFocusMainRequest(null);
     if (narrow) setDrawerOpen(true);
   };
   const showCommits = () => {
@@ -377,10 +390,13 @@ export function CodeSection(props: CodeSectionProps) {
     if (!active || props.requestId === undefined || props.requestId === handledOpen.current) return;
     handledOpen.current = props.requestId;
     const asked = props.commitOpen;
-    if (asked && !sameCommit(commits.commit, asked)) setCommitFile(null);
+    if (asked) {
+      setCommitFile(null);
+      setExpandedCommit({ repo: asked.repo, sha: asked.sha });
+      setDrawerOpen(false);
+    }
     setCommits((current) => applyCodeRequest(current, asked));
-    if (asked) setDrawerOpen(false);
-  }, [active, props.requestId, props.commitOpen, commits.commit]);
+  }, [active, props.requestId, props.commitOpen]);
 
   // ─── Commits mode ──────────────────────────────────────────────────────────
   const commitsShown = commitsOpen && active;
@@ -388,35 +404,124 @@ export function CodeSection(props: CodeSectionProps) {
   const shownCommit = commitsOpen ? commits.commit : null;
   useEffect(() => { onShownCommit?.(shownCommit); }, [onShownCommit, shownCommit]);
   const commitDetail = useCommitDetail(workspace, commitsShown ? commits.commit : null);
+  const expandedDiffers = Boolean(
+    commitsShown && expandedCommit && (!commits.commit || !sameCommit(expandedCommit, commits.commit)),
+  );
+  const separateExpandedDetail = useCommitDetail(workspace, expandedDiffers ? expandedCommit : null);
+  const expandedDetail = expandedDiffers ? separateExpandedDetail : commitDetail;
   const recentQuery = useRecentCommits(commitsShown ? workspace : null);
   const recent = recentQuery.data;
-  const commitSequence = useMemo(() => effectiveSequence(commits.commit, commits.held, recent), [commits.commit, commits.held, recent]);
-  const commitFiles = useMemo(() => orderedCommitFiles(commitDetail.data), [commitDetail.data]);
+  const commitGroups = useMemo(
+    () => buildCommitListGroups(commits.held, recent, commits.commit, commitDetail.data),
+    [commits.held, recent, commits.commit, commitDetail.data],
+  );
+  const allListCommits = useMemo(() => commitGroups.flatMap((group) => group.commits), [commitGroups]);
+  const currentCommitIndex = useMemo(
+    () => (commits.commit ? allListCommits.findIndex((entry) => sameCommit(entry, commits.commit)) : -1),
+    [allListCommits, commits.commit],
+  );
+  const hasNextCommit = currentCommitIndex >= 0 && currentCommitIndex < allListCommits.length - 1;
+  const commitFiles = useMemo(() => (commitDetail.data?.files ?? []).map((entry) => entry.path), [commitDetail.data]);
   const chooseCommit = (next: CommitRef) => {
     if (!sameCommit(commits.commit, next)) setCommitFile(null);
     setCommits((current) => ({ ...current, commit: next }));
+    setExpandedCommit(next);
+    setDrawerOpen(false);
   };
   const stepCommit = (delta: 1 | -1) => {
-    const next = neighbourCommit(commitSequence, commits.commit, delta);
+    if (currentCommitIndex < 0) return;
+    const next = allListCommits[currentCommitIndex + delta];
     if (next) chooseCommit({ repo: next.repo, sha: next.sha });
   };
-  const chooseCommitFile = (file: string) => { setCommitFile(file); setDrawerOpen(false); };
+  const requestMainFocus = (target: 'heading' | 'file') => {
+    focusSeqRef.current += 1;
+    setFocusMainRequest({ target, seq: focusSeqRef.current });
+  };
+  const closeDrawer = (returnFocus: 'toggle' | 'none' = 'none') => {
+    drawerCloseFocusRef.current = returnFocus === 'toggle' ? 'toggle' : null;
+    setDrawerOpen(false);
+  };
+  const handleSelectCommit = (clicked: CommitRef) => {
+    const closingDrawer = Boolean(narrow && drawerOpen);
+    if (!sameCommit(commits.commit, clicked)) {
+      setCommitFile(null);
+      setCommits((current) => ({ ...current, commit: clicked }));
+      setExpandedCommit(clicked);
+      if (closingDrawer) {
+        closeDrawer('none');
+        requestMainFocus('heading');
+      } else {
+        setDrawerOpen(false);
+      }
+      return;
+    }
+    if (commitFile !== null) {
+      setCommitFile(null);
+      setExpandedCommit(clicked);
+      if (closingDrawer) {
+        closeDrawer('none');
+        requestMainFocus('heading');
+      } else {
+        setDrawerOpen(false);
+      }
+      return;
+    }
+    if (closingDrawer) {
+      setExpandedCommit(clicked);
+      closeDrawer('none');
+      requestMainFocus('heading');
+      return;
+    }
+    const wasExpanded = Boolean(expandedCommit && sameCommit(expandedCommit, clicked));
+    setExpandedCommit(wasExpanded ? null : clicked);
+    if (!wasExpanded) setDrawerOpen(false);
+  };
+  const chooseCommitFile = (file: string) => {
+    const closingDrawer = Boolean(narrow && drawerOpen);
+    if (commits.commit) setExpandedCommit((current) => (current && sameCommit(current, commits.commit) ? current : commits.commit));
+    setCommitFile(file);
+    if (closingDrawer) {
+      closeDrawer('none');
+      requestMainFocus('file');
+    } else {
+      setDrawerOpen(false);
+    }
+  };
+  const handleSelectFile = (targetCommit: CommitRef, file: string) => {
+    const closingDrawer = Boolean(narrow && drawerOpen);
+    setCommits((current) => (sameCommit(current.commit, targetCommit) ? current : { ...current, commit: targetCommit }));
+    setExpandedCommit(targetCommit);
+    setCommitFile(file);
+    if (closingDrawer) {
+      closeDrawer('none');
+      requestMainFocus('file');
+    } else {
+      setDrawerOpen(false);
+    }
+  };
+  const handleTreeStateChange = (next: { commit: CommitRef | null; expanded: CommitRef | null; file: string | null; chosen?: boolean }) => {
+    const closingDrawer = Boolean(narrow && drawerOpen && next.chosen);
+    setCommits((current) => ({ ...current, commit: next.commit }));
+    setExpandedCommit(closingDrawer ? (next.expanded ?? next.commit) : next.expanded);
+    setCommitFile(next.file);
+    if (closingDrawer) {
+      closeDrawer('none');
+      requestMainFocus(next.file ? 'file' : 'heading');
+    }
+  };
   const stepCommitFile = (delta: 1 | -1) => {
     const index = commitFile ? commitFiles.indexOf(commitFile) : -1;
     const next = commitFiles[index === -1 ? (delta > 0 ? 0 : commitFiles.length - 1) : index + delta];
     if (next) chooseCommitFile(next);
   };
-  // With no commit asked for, the mode opens on the newest recent one; and a commit opens on its first file. Both only fill what is empty.
+  // With no commit asked for, Commits mode opens on the newest recent commit and shows its description first.
   const newestRecent = newestRecentCommit(recent);
   useEffect(() => {
     if (!commitsShown || commits.commit || !newestRecent) return;
-    setCommits((current) => (current.commit ? current : { ...current, commit: { repo: newestRecent.repo, sha: newestRecent.sha } }));
+    const first = { repo: newestRecent.repo, sha: newestRecent.sha };
+    setCommits((current) => (current.commit ? current : { ...current, commit: first }));
+    setExpandedCommit((current) => current ?? first);
   }, [commitsShown, commits.commit, newestRecent]);
-  const firstCommitFile = commitDetail.data ? commitFiles[0] : undefined;
-  useEffect(() => {
-    if (!commitsShown || commitFile || !firstCommitFile) return;
-    setCommitFile(firstCommitFile);
-  }, [commitsShown, commitFile, firstCommitFile]);
 
   // A file opened by name that is not a change can only be shown in the tree under Files. The listing can be up to
   // REFRESH_MS old, and a file made moments ago may be a change it does not have yet, so it is listed again once
@@ -552,22 +657,26 @@ export function CodeSection(props: CodeSectionProps) {
     });
   };
 
-  // Alt+Arrow steps through files; bare j/k stay with the diff viewer's hunks.
+  // Alt+Arrow steps through files; bare j/k stay with the diff viewer's hunks. Stands down in fields, menus, dialogs and find boxes.
   usePaneHotkey((event) => {
     if (!event.altKey || event.metaKey || event.ctrlKey) return;
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (commitsOpen) stepCommitFile(event.key === 'ArrowDown' ? 1 : -1);
-      else step(event.key === 'ArrowDown' ? 1 : -1);
-    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('.find-widget, [role="dialog"], [role="alertdialog"], [role="menu"], [data-slot="menu-popup"]')) return;
+    if (target && !target.closest('.xterm, .monaco-editor') && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [data-slot="menu-popup"], .find-widget.visible')) return;
+    event.preventDefault();
+    if (commitsOpen) stepCommitFile(event.key === 'ArrowDown' ? 1 : -1);
+    else step(event.key === 'ArrowDown' ? 1 : -1);
   }, { respectTerminal: false, enabled: active });
 
-  // [ and ] go to the previous and next file, as in the Board's reader. Not while typing, and not in the editor (its own keys).
+  // [ and ] go to the previous and next file, as in the Board's reader. Stand down while typing, in menus/dialogs, and in the editor.
   usePaneHotkey((event) => {
     if (event.metaKey || event.ctrlKey || event.altKey || (event.key !== '[' && event.key !== ']')) return;
-    if (event.target instanceof Element && event.target.closest('.monaco-editor, [role="dialog"], [data-slot="menu-popup"]')) return;
+    if (event.target instanceof Element && event.target.closest('.monaco-editor, .find-widget, [role="dialog"], [role="alertdialog"], [role="menu"], [data-slot="menu-popup"]')) return;
+    if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [data-slot="menu-popup"], .find-widget.visible')) return;
     event.preventDefault();
-    // In Commits, [ and ] move between the commits of the row; in Changes and Files, between files.
+    // In Commits, [ and ] move between the commits in the list; in Changes and Files, between files.
     if (commitsOpen) stepCommit(event.key === ']' ? 1 : -1);
     else step(event.key === ']' ? 1 : -1);
   }, { respectTerminal: true, enabled: active });
@@ -581,23 +690,43 @@ export function CodeSection(props: CodeSectionProps) {
       if (narrow) setDrawerOpen(true);
       else setTreeHidden(false);
       requestAnimationFrame(() => { filterInput.current?.focus(); filterInput.current?.select(); });
-    } else if (event.key === 'Escape' && query) {
+    } else if (event.key === 'Escape' && !commitsOpen && query) {
       event.preventDefault();
       changeQuery('');
     } else if (event.key === 'Escape' && drawerOpen) {
       event.preventDefault();
-      setDrawerOpen(false);
+      closeDrawer('toggle');
     }
   }, { respectTerminal: true, enabled: active });
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  // Narrow (beside the chat in a small window): the code takes the width and the tree opens over it.
   const mainView = commitsOpen ? 'commits' : commit.open ? 'commit' : finishOpen ? 'finish' : 'file';
   const shownDiff = diff && selection && sameFile(diff.target, selection) ? diff.data : null;
   const fileNotice = omittedNotice(shownDiff && (shownDiff.contentOmitted || shownDiff.diffOmitted) ? { content: shownDiff.contentOmitted, diff: shownDiff.diffOmitted } : undefined);
-  // Narrow (beside the chat in a small window): the code takes the width and the tree opens over it.
   const treeAsDrawer = narrow && (selection !== null || mainView !== 'file');
   const treeVisible = narrow ? !treeAsDrawer || drawerOpen : !treeHidden;
-  const toggleTree = () => (narrow ? setDrawerOpen((open) => !open) : setTreeHidden((hidden) => !hidden));
+  const toggleTree = () => {
+    if (narrow) {
+      if (drawerOpen) closeDrawer('toggle');
+      else setDrawerOpen(true);
+    } else {
+      setTreeHidden((hidden) => !hidden);
+    }
+  };
+
+  useLayoutEffect(() => {
+    const wasOpen = prevDrawerOpenRef.current;
+    prevDrawerOpenRef.current = drawerOpen;
+    if (!wasOpen || drawerOpen || !active || !sectionElement) return;
+    if (drawerCloseFocusRef.current === 'toggle') {
+      drawerCloseFocusRef.current = null;
+      drawerToggleRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (document.activeElement === null || document.activeElement === document.body) {
+      sectionElement.focus({ preventScroll: true });
+    }
+  }, [drawerOpen, active, sectionElement]);
   const iconButton = 'size-7 p-0';
   // Side by side where the code has 760 px or more, inline (with wrapped lines) below; the viewer's own button wins.
   const codeWidth = width - (treeVisible && !treeAsDrawer && !narrow ? treeWidth + 6 : 0);
@@ -728,7 +857,20 @@ export function CodeSection(props: CodeSectionProps) {
       </Button>
     </>
   );
-  const sideTree = commitsOpen ? <CommitsTree commit={commits.commit} detail={commitDetail} file={commitFile} onFile={chooseCommitFile} /> : tree;
+  const sideTree = commitsOpen ? (
+    <CommitsList
+      groups={commitGroups}
+      commit={commits.commit}
+      expanded={expandedCommit}
+      file={commitFile}
+      expandedDetail={expandedDetail}
+      recentPending={recentQuery.isPending}
+      returnTo={props.returnTo}
+      onSelectCommit={handleSelectCommit}
+      onSelectFile={handleSelectFile}
+      onTreeStateChange={handleTreeStateChange}
+    />
+  ) : tree;
   const fileName = selection?.file.split('/').at(-1) ?? '';
   const fileFolder = selection ? selection.file.slice(0, selection.file.length - fileName.length) : '';
 
@@ -741,7 +883,7 @@ export function CodeSection(props: CodeSectionProps) {
       >
         {props.backAction}
         {props.breadcrumb}
-        <Button size="icon-sm" variant={treeVisible ? 'secondary' : 'ghost'} className={cn(iconButton, 'shrink-0')} aria-label={treeVisible ? 'Hide the file tree' : 'Show the file tree'} aria-expanded={treeVisible}
+        <Button ref={drawerToggleRef} size="icon-sm" variant={treeVisible ? 'secondary' : 'ghost'} className={cn(iconButton, 'shrink-0')} aria-label={treeVisible ? 'Hide the file tree' : 'Show the file tree'} aria-expanded={treeVisible}
           title={treeVisible ? 'Hide the file tree' : 'Show the file tree'} onClick={toggleTree}>
           <FolderTree className={cn('size-3.5', treeVisible && 'text-foreground')} />
         </Button>
@@ -830,7 +972,7 @@ export function CodeSection(props: CodeSectionProps) {
         )}
         {treeAsDrawer && drawerOpen && (
           <>
-            <button type="button" aria-label="Close the file tree" className="absolute inset-0 z-20 bg-background/40 backdrop-blur-[1px]" onClick={() => setDrawerOpen(false)} />
+            <button type="button" aria-label="Close the file tree" className="absolute inset-0 z-20 bg-background/40 backdrop-blur-[1px]" onClick={() => closeDrawer('toggle')} />
             <aside aria-label="Files" className="absolute inset-y-0 left-0 z-30 flex w-[min(320px,88%)] flex-col border-r border-border bg-background shadow-2xl">
               {sideTree}
             </aside>
@@ -880,17 +1022,18 @@ export function CodeSection(props: CodeSectionProps) {
               detail={commitDetail}
               file={commitFile}
               ordered={commitFiles}
-              sequence={commitSequence}
-              held={commits.held}
-              recent={recent}
-              onCommit={chooseCommit}
-              onStepCommit={stepCommit}
+              hasNextCommit={hasNextCommit}
+              onOpenFile={chooseCommitFile}
+              onSelectCommitView={() => setCommitFile(null)}
+              onNextCommit={() => stepCommit(1)}
               onStepFile={stepCommitFile}
+              onOpenStep={props.onOpenStep}
               viewMode={viewMode}
               onToggleViewMode={() => setUserViewMode(viewMode === 'side-by-side' ? 'unified' : 'side-by-side')}
               fontControls={fontControls}
               showToast={showToast}
               recentPending={recentQuery.isPending}
+              focusTargetRequest={focusMainRequest}
             />
           ) : mainView === 'commit' ? (
             <div className="min-h-0 flex-1 overflow-auto p-3" onPointerDownCapture={supersedeReference} onKeyDownCapture={supersedeReference} onInputCapture={supersedeReference}>

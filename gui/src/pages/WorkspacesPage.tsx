@@ -109,6 +109,8 @@ import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
 import { ChatMarkdown } from '../components/ChatMarkdown.js';
 import { CodeWindowSlot } from '../features/changes/CodeWindowSlot.js';
 import { fillPromptForWorkspace } from '../features/terminal/promptFill.js';
+import { openBoardStep } from '../features/workspace-shell/openRequests.js';
+import type { CommitStepLink } from '../features/board/commitContext.js';
 
 type SubTab = WorkspaceSection;
 
@@ -941,6 +943,11 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               sectionProps={codeSectionProps as never}
               showToast={showToast}
               askAI={(message) => sendToSession(message, true)}
+              returnTo={subTab === 'chat' ? 'terminal' : 'board'}
+              onOpenStep={(step: CommitStepLink) => {
+                openBoardStep(selected.branchName, step);
+                if (subTab !== 'board') onSelectTab(selected.branchName, 'board');
+              }}
             />
           )}
           {showPanel && (

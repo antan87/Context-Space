@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { CommitStepLink } from '../board/commitContext.js';
 import type { CommitOpen } from '../changes/commitsMode.js';
 
 /** A repository file, as the server's reference resolver names it. */
@@ -244,4 +245,13 @@ export function useCodeRequest(workspace: string): OpenRequest<CodeRequest> | nu
 
 export function useDocumentRequest(workspace: string): OpenRequest<{ name: string; repo?: { name: string; path: string }; opener?: HTMLElement | null; intent?: number }> | null {
   return useSyncExternalStore(documentRequests.subscribe, () => documentRequests.get(workspace), () => null);
+}
+
+export interface BoardStepRequest { step: CommitStepLink }
+export const boardStepRequests = createRequestStore<BoardStepRequest>();
+export function openBoardStep(workspace: string, step: CommitStepLink): number {
+  return boardStepRequests.open(workspace, { step });
+}
+export function useBoardStepRequest(workspace: string): OpenRequest<BoardStepRequest> | null {
+  return useSyncExternalStore(boardStepRequests.subscribe, () => boardStepRequests.get(workspace), () => null);
 }

@@ -23,7 +23,16 @@ export function commitOpenFor(areas: readonly BoardArea[], target: ReaderTarget)
   const entry = found.area.repos[found.index]!;
   const sequence: CommitSequence = {
     label: found.area.data.title,
-    commits: entry.commits.map((item) => ({ repo: commit.repo, sha: item.sha, subject: item.subject, author: item.author, at: item.at })),
+    commits: entry.commits.map((item) => ({
+      repo: commit.repo,
+      sha: item.sha,
+      subject: item.subject,
+      author: item.author,
+      at: item.at,
+      ...(item.firstBodyLine !== undefined ? { firstBodyLine: item.firstBodyLine } : {}),
+      ...(item.fileCount !== undefined ? { fileCount: item.fileCount } : {}),
+      ...(item.pushed !== undefined ? { pushed: item.pushed } : {}),
+    })),
   };
   return { ...open, sequence };
 }

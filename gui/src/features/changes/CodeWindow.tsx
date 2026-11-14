@@ -5,11 +5,12 @@ import { useDockRect } from '../chat/dockPlacement.js';
 import { WorkspaceFileView } from './WorkspaceFileView.js';
 import { resolveCodeWindowOpener, setCodeWindowOpen, type OpenerTarget, type WorkspaceFile } from '../workspace-shell/openRequests.js';
 import type { Feature } from '../../types.js';
+import type { CommitStepLink } from '../board/commitContext.js';
 import { CodeSection } from './CodeSection.js';
 import { indexInSequence, sameCommit, type CommitOpen, type CommitRef } from './commitsMode.js';
 import { parseCommitNodeId } from '../board/boardActions.js';
 
-type SectionProps = Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast' | 'panelActions' | 'autoSelect' | 'onAskAI' | 'requestId' | 'commitOpen' | 'onShownCommit' | 'backAction' | 'breadcrumb' | 'area'>;
+type SectionProps = Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast' | 'panelActions' | 'autoSelect' | 'onAskAI' | 'requestId' | 'commitOpen' | 'onShownCommit' | 'backAction' | 'breadcrumb' | 'area' | 'returnTo' | 'onOpenStep'>;
 
 export interface CodeWindowProps {
   workspaceFile?: WorkspaceFile;
@@ -18,6 +19,10 @@ export interface CodeWindowProps {
   fileRequestId: number;
   /** Area name shown in the Review breadcrumb when opened from an Area. */
   area?: string;
+  /** Where closing Review returns the person (`board` or `terminal`). */
+  returnTo?: 'board' | 'terminal';
+  /** Navigates to a plan step on the Board and closes Review. */
+  onOpenStep?: (step: CommitStepLink) => void;
   ws: Feature;
   open: boolean;
   /** Where the keyboard returns on close; when it is gone, the Board's Review button. */
@@ -55,7 +60,7 @@ const OWNS_ESCAPE = '[data-slot="menu-popup"], [role="dialog"], [role="menu"], .
  * The Review page over the workspace content (full-frame below WorkspaceHeader in Board, Split and phone widths).
  * It stays mounted once opened (hidden and inert while closed), so the chosen file and its scroll survive a close.
  */
-export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, area, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
+export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, area, returnTo = 'board', onOpenStep, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
   const rect = useDockRect(cover);
   const panel = useRef<HTMLDivElement>(null);
   const skipFocusReturn = useRef(false);
@@ -132,16 +137,27 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, a
     return sent;
   }, [askAI, onClose]);
 
+  const openStep = useCallback((step: CommitStepLink) => {
+    skipFocusReturn.current = true;
+    onOpenStep?.(step);
+    onClose();
+  }, [onOpenStep, onClose]);
+
+  const backToTerminal = returnTo === 'terminal';
+  const backText = backToTerminal ? 'Terminal' : 'Board';
+  const backAria = backToTerminal ? 'Back to the Terminal' : 'Back to the Board';
+  const backTitle = backToTerminal ? 'Back to the Terminal (Esc)' : 'Back to the Board (Esc)';
+
   const backAction = (
     <button
       type="button"
       className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs font-medium text-foreground outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-      aria-label="Back to the Board"
-      title="Back to the Board (Esc)"
+      aria-label={backAria}
+      title={backTitle}
       onClick={handleClose}
     >
       <span aria-hidden="true">← </span>
-      <span>Board</span>
+      <span>{backText}</span>
       <kbd
         aria-hidden="true"
         className="hidden @[34rem]:inline-flex items-center rounded border border-border bg-muted px-1 py-0.5 font-mono text-xs font-medium leading-none text-muted-foreground"
@@ -157,7 +173,7 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, a
       data-testid="review-breadcrumb"
       className="hidden @[44rem]:flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground"
     >
-      <span className="shrink-0">Board</span>
+      <span className="shrink-0">{backText}</span>
       {area && (
         <>
           <span aria-hidden="true" className="shrink-0 text-muted-foreground/60">›</span>
@@ -200,6 +216,8 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, a
           onShownCommit={rememberShownCommit}
           commitOpen={commitOpen}
           area={area}
+          returnTo={returnTo}
+          onOpenStep={openStep}
           backAction={backAction}
           breadcrumb={breadcrumb}
           showToast={showToast}

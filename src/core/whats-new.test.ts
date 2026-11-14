@@ -422,4 +422,64 @@ describe('the commits the Board draws', () => {
     await recentCommits(root, { now: NOW });
     await expect(fs.access(seenFile())).rejects.toThrow();
   });
+
+  it('includes firstBodyLine, fileCount and pushed on recentCommits without altering whatsNew, and supports up to 50 commits', async () => {
+    const commitEnv = (hoursAgo: number) => {
+      const date = ago(hoursAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      return { GIT_AUTHOR_NAME: 'Anna', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_AUTHOR_DATE: date, GIT_COMMITTER_NAME: 'Anna', GIT_COMMITTER_EMAIL: 'a@example.com', GIT_COMMITTER_DATE: date };
+    };
+    await fs.writeFile(path.join(api, 'alpha.ts'), 'export const a = 1;\n');
+    await fs.writeFile(path.join(api, 'beta.ts'), 'export const b = 2;\n');
+    await execa('git', ['add', 'alpha.ts', 'beta.ts'], { cwd: api, env: commitEnv(3) });
+    await execa('git', ['commit', '-m', 'Add two files', '-m', '\nFirst body paragraph.\nSecond line.'], { cwd: api, env: commitEnv(3) });
+
+    const bare = path.join(root, 'remote.git');
+    await execa('git', ['init', '--bare', bare], { cwd: root });
+    await execa('git', ['remote', 'add', 'origin', bare], { cwd: api });
+    await execa('git', ['push', 'origin', 'HEAD'], { cwd: api });
+
+    await fs.writeFile(path.join(api, 'gamma.ts'), 'export const c = 3;\n');
+    await execa('git', ['add', 'gamma.ts'], { cwd: api, env: commitEnv(2) });
+    await execa('git', ['commit', '-m', 'No body local commit'], { cwd: api, env: commitEnv(2) });
+    await execa('git', ['commit', '--allow-empty', '-m', 'Empty local commit'], { cwd: api, env: commitEnv(1) });
+
+    const recent = await recentCommits(root, { now: NOW });
+    expect(recent.commits[0]!.commits).toEqual([
+      {
+        sha: expect.stringMatching(/^[0-9a-f]{7,}$/),
+        subject: 'Empty local commit',
+        author: 'Anna',
+        at: ago(1).toISOString(),
+        fileCount: 0,
+        pushed: false,
+      },
+      {
+        sha: expect.stringMatching(/^[0-9a-f]{7,}$/),
+        subject: 'No body local commit',
+        author: 'Anna',
+        at: ago(2).toISOString(),
+        fileCount: 1,
+        pushed: false,
+      },
+      {
+        sha: expect.stringMatching(/^[0-9a-f]{7,}$/),
+        subject: 'Add two files',
+        author: 'Anna',
+        at: ago(3).toISOString(),
+        firstBodyLine: 'First body paragraph.',
+        fileCount: 2,
+        pushed: true,
+      },
+    ]);
+
+    const news = await whatsNew(root, 'user', { now: NOW });
+    expect(news.commits[0]!.commits[0]).not.toHaveProperty('fileCount');
+    expect(news.commits[0]!.commits[2]).not.toHaveProperty('firstBodyLine');
+
+    for (let i = 0; i < 15; i += 1) {
+      await commit(`Batch commit ${i + 1}`, ago(1));
+    }
+    const batch = await recentCommits(root, { now: NOW });
+    expect(batch.commits[0]!.commits).toHaveLength(18);
+  });
 });

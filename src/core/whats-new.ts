@@ -91,6 +91,9 @@ export interface NewsCommit {
   author: string;
   subject: string;
   at: string;
+  firstBodyLine?: string;
+  fileCount?: number;
+  pushed?: boolean;
 }
 
 /** One repository's commits, or why they could not be read. */
@@ -373,6 +376,17 @@ function knowledgeNews(entries: NewsKnowledge[], record: SeenRecord | null, from
   return capped(entries.filter((entry) => !known.has(entry.id) && (oldest === null || (entry.date ?? '') >= oldest)), limit);
 }
 
+const RECENT_COMMITS_LIMIT = 50;
+
+function firstNonEmptyLine(body: string): string | undefined {
+  const line = body
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0);
+  return line ? line.slice(0, 300) : undefined;
+}
+
 function parseCommits(stdout: string): NewsCommit[] {
   return stdout.split('\n').filter(Boolean).map((line) => {
     const [sha = '', author = '', date = '', ...subject] = line.split('\x1f');
@@ -381,16 +395,71 @@ function parseCommits(stdout: string): NewsCommit[] {
   });
 }
 
+function parseDetailedCommits(stdout: string, unpushed: Set<string> | null): NewsCommit[] {
+  const parts = stdout.split('\x00');
+  const commits: NewsCommit[] = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    const header = parts[i] ?? '';
+    const stats = parts[i + 1] ?? '';
+    const [fullSha = '', sha = '', parents = '', author = '', date = '', subject = '', ...bodyParts] = header.split('\x1f');
+    if (!sha) continue;
+    const time = new Date(date);
+    const body = bodyParts.join('\x1f');
+    const firstBodyLine = firstNonEmptyLine(body);
+    const match = stats.match(/(\d+)\s+files?\s+changed/);
+    const isMerge = parents.trim().includes(' ');
+    const fileCount = match ? Number(match[1]) : isMerge ? undefined : 0;
+    commits.push({
+      sha,
+      author,
+      at: Number.isNaN(time.getTime()) ? date : time.toISOString(),
+      subject,
+      ...(firstBodyLine !== undefined ? { firstBodyLine } : {}),
+      ...(fileCount !== undefined ? { fileCount } : {}),
+      ...(unpushed !== null ? { pushed: !unpushed.has(fullSha.trim()) } : {}),
+    });
+  }
+  return commits;
+}
+
 /** Commits since the recorded HEAD; when that is unknown or gone (a rebase), the commits since `from`. */
-async function repoNews(repo: RepoHead, recorded: string | undefined, from: string, limit: number): Promise<NewsRepo> {
+async function repoNews(
+  repo: RepoHead,
+  recorded: string | undefined,
+  from: string,
+  limit: number,
+  options: { detailed?: boolean } = {},
+): Promise<NewsRepo> {
   const none: NewsRepo = { repo: repo.name, commits: [], more: 0 };
   if (repo.problem) return { ...none, problem: repo.problem };
   if (!repo.head || repo.head === recorded) return none;
-  const log = (...range: string[]) => git(repo.path, ['log', `--max-count=${COMMITS_COUNTED}`, '--format=%h%x1f%an%x1f%cI%x1f%s', ...range, '--']);
+  const detailed = options.detailed === true;
+  const format = detailed
+    ? '--format=%x00%H%x1f%h%x1f%P%x1f%an%x1f%cI%x1f%s%x1f%b%x00S:'
+    : '--format=%h%x1f%an%x1f%cI%x1f%s';
+  const extra = detailed ? ['--shortstat'] : [];
+  const sinceArg = `--since=${new Date(from).toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+  const log = (...range: string[]) => git(repo.path, ['log', `--max-count=${COMMITS_COUNTED}`, ...extra, format, ...range, '--']);
+  const revRange = recorded ? [`${recorded}..${repo.head}`] : [sinceArg, repo.head];
+  let unpushedPromise: ReturnType<typeof git> | Promise<null> = detailed
+    ? git(repo.path, ['rev-list', '--max-count=500', ...revRange, '--not', '--remotes', '--'])
+    : Promise.resolve(null);
   let result = recorded ? await log(`${recorded}..${repo.head}`) : null;
-  if (!result?.ok) result = await log(`--since=${new Date(from).toISOString().replace(/\.\d{3}Z$/, 'Z')}`, repo.head);
+  if (!result?.ok) {
+    if (recorded && detailed) {
+      unpushedPromise = git(repo.path, ['rev-list', '--max-count=500', sinceArg, repo.head, '--not', '--remotes', '--']);
+    }
+    result = await log(sinceArg, repo.head);
+  }
   if (!result.ok) return { ...none, problem: result.reason };
-  const commits = parseCommits(result.stdout);
+  let unpushed: Set<string> | null = null;
+  if (detailed) {
+    const revResult = await unpushedPromise;
+    if (revResult?.ok) {
+      unpushed = new Set(revResult.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+    }
+  }
+  const commits = detailed ? parseDetailedCommits(result.stdout, unpushed) : parseCommits(result.stdout);
   const section = capped(commits, limit);
   return { ...none, commits: section.items, more: section.more, ...(commits.length >= COMMITS_COUNTED ? { moreAtLeast: true as const } : {}) };
 }
@@ -468,6 +537,6 @@ export async function recentCommits(workspacePath: string, options: { now?: Date
   const from = new Date(now.getTime() - (options.days ?? FIRST_LOOK_DAYS) * 24 * 60 * 60 * 1000).toISOString();
   const repos = await getWorkspaceRepoPaths(root).catch(() => []);
   const heads = await Promise.all(repos.map(repoHead));
-  const commits = await Promise.all(heads.map((repo) => repoNews(repo, undefined, from, options.limit ?? NEWS_LIMIT)));
+  const commits = await Promise.all(heads.map((repo) => repoNews(repo, undefined, from, options.limit ?? RECENT_COMMITS_LIMIT, { detailed: true })));
   return { at: now.toISOString(), from, commits };
 }
