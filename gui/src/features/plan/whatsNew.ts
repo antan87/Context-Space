@@ -76,6 +76,17 @@ export interface NewsIncomingRepoView {
   groups: NewsIncomingGroupView[];
 }
 
+export interface NewsCommitNoteView {
+  id: string;
+  repo: string;
+  sha: string;
+  shortSha: string;
+  title: string;
+  body: string;
+  by: string;
+  at: string;
+}
+
 export interface WhatsNewView {
   reader: string;
   /** When the list was made; Got it sends it back, so what is marked is exactly what was shown. */
@@ -88,6 +99,7 @@ export interface WhatsNewView {
   plan: NewsSection<PlanFileChange>;
   documents: NewsSection<NewsDocument>;
   knowledge: NewsSection<NewsKnowledge>;
+  notes?: NewsSection<NewsCommitNoteView>;
   commits: NewsRepo[];
   /** Unseen commits on local remote-tracking refs (never triggers a fetch). */
   incoming?: NewsIncomingRepoView[];
@@ -425,6 +437,7 @@ export function useMarkNewsSeen(workspace: string) {
         ...news,
         empty: true,
         plan: { items: [], more: 0 },
+        notes: { items: [], more: 0 },
       });
     },
     onError: () => { void queryClient.invalidateQueries({ queryKey: newsKey(workspace) }); },
@@ -448,8 +461,15 @@ export function formatIncomingNewsLine(repo: string, count: number, author: stri
   return `${repo}: ${summary}`;
 }
 
+export function formatCommitNoteNewsLine(note: Pick<NewsCommitNoteView, 'by' | 'shortSha' | 'repo' | 'title'>): string {
+  const actor = note.by === 'ai'
+    ? 'AI'
+    : `${note.by.charAt(0).toUpperCase()}${note.by.slice(1)}`;
+  return `${actor} note on ${note.shortSha} (${note.repo}): ${note.title}`;
+}
+
 /** What the list holds, as counts: ["3 plan changes", "1 new document", "2 commits"]. Nothing that is zero. */
-export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'knowledge' | 'commits' | 'incoming'>): string[] {
+export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'knowledge' | 'notes' | 'commits' | 'incoming'>): string[] {
   const documents = news.documents.items;
   const added = documents.filter((document) => document.change === 'added').length;
   // Past the ones listed, which of the rest are new is not known, so then they are only counted.
@@ -460,11 +480,13 @@ export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'know
   const commits = news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0) + incomingCommits;
   const commitsAtLeast = news.commits.some((repo) => repo.moreAtLeast);
   const knowledge = news.knowledge.items.length + news.knowledge.more;
+  const notes = (news.notes?.items.length ?? 0) + (news.notes?.more ?? 0);
   const plan = news.plan.items.length + news.plan.more;
   return [
     plan ? count(plan, 'plan change', 'plan changes') : '',
     ...documentCounts,
     knowledge ? count(knowledge, 'new knowledge entry', 'new knowledge entries') : '',
+    notes ? count(notes, 'note', 'notes') : '',
     commits ? `${commits}${commitsAtLeast ? '+' : ''} ${commits === 1 && !commitsAtLeast ? 'commit' : 'commits'}` : '',
   ].filter(Boolean);
 }
@@ -490,6 +512,7 @@ export type NewsRef =
   | { kind: 'plan'; item: PlanFileChange['kind']; key: string; removed: boolean }
   | { kind: 'document'; name: string }
   | { kind: 'commit'; repo: string; sha: string }
+  | { kind: 'commitNote'; repo: string; sha: string; noteId: string }
   | { kind: 'incoming'; repo: string; sha: string; author: string; count: number; host: string | null }
   /** A knowledge entry by its day and title, or the knowledge in general (the line "and 3 more"). */
   | { kind: 'knowledge'; title?: string; date?: string | null };
@@ -525,22 +548,30 @@ export function newsEntries(news: WhatsNewView, now: Date = new Date()): NewsEnt
         ref: { kind: 'incoming', repo: repo.repo, sha: group.newestSha, author: group.author, count: group.count, host: repo.host?.name ?? null },
       })),
     ),
+    ...(news.notes?.items ?? []).map((note): NewsEntry => ({
+      group: 'Notes',
+      text: withTime(formatCommitNoteNewsLine(note), note.at, now),
+      at: note.at,
+      ref: { kind: 'commitNote', repo: note.repo, sha: note.sha, noteId: note.id },
+    })),
+    ...more('Notes', news.notes?.more ?? 0),
     ...problems.map((text): NewsEntry => ({ group: 'Not read', text })),
   ];
 }
 
-/** The same short lines `ctxspace news` prints, under the headings Plan, Documents, Knowledge and Commits. */
+/** The same short lines `ctxspace news` prints, under the headings Plan, Documents, Knowledge, Commits and Notes. */
 export function newsGroups(news: WhatsNewView, now: Date = new Date()): NewsGroup[] {
   const entries = newsEntries(news, now);
-  return ['Plan', 'Documents', 'Knowledge', 'Commits', 'Not read']
+  return ['Plan', 'Documents', 'Knowledge', 'Commits', 'Notes', 'Not read']
     .map((title) => ({ title, lines: entries.filter((entry) => entry.group === title).map((entry) => entry.text) }))
     .filter((group) => group.lines.length > 0);
 }
 
-/** How many things are new: plan changes, documents, knowledge entries and commits, including those past the ones listed. Zero when it was seen. */
+/** How many things are new: plan changes, documents, knowledge entries, commit notes and commits, including those past the ones listed. Zero when it was seen. */
 export function newsTotal(news: WhatsNewView | undefined): number {
   if (!news || news.empty) return 0;
   return news.plan.items.length + news.plan.more + news.documents.items.length + news.documents.more + news.knowledge.items.length + news.knowledge.more
+    + (news.notes?.items.length ?? 0) + (news.notes?.more ?? 0)
     + news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0)
     + (news.incoming ?? []).reduce((total, repo) => total + repo.groups.reduce((sum, group) => sum + group.count, 0), 0);
 }

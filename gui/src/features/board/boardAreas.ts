@@ -354,14 +354,15 @@ export function buildBoardAreas({
     }
   }
 
+  const areaCards = (board?.cards ?? []).filter((card) => !card.about);
   const filesArea = buildWorkspaceFilesArea(workspaceFiles, {
-    existingCards: board?.cards,
+    existingCards: areaCards,
     excludePaths: combinedExcludePaths,
     now,
   });
 
   if (drafts.length === 0) {
-    const hasCards = (board?.cards.length ?? 0) > 0;
+    const hasCards = areaCards.length > 0;
     const hasDocs = (documents?.length ?? 0) > 0;
     const hasNews = Boolean(news?.commits.some((r) => r.commits.length > 0 || Boolean(r.problem) || r.more > 0));
     if (!hasCards && !hasDocs && !hasNews) {
@@ -390,7 +391,7 @@ export function buildBoardAreas({
 
   // Pre-assign item IDs & transitive link ownership
   const allCandidateIds = new Set<string>(areaIds);
-  const cardList = cardOrder(board?.cards ?? []);
+  const cardList = cardOrder(areaCards);
   for (const card of cardList) {
     allCandidateIds.add(card.id);
   }

@@ -30,6 +30,8 @@ import { isGitRepo } from '../utils/git.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit } from './commit-log-format.js';
 import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from './incoming-commits.js';
+import { BoardWorkspaceError } from './board.js';
+import { listCommitNotes } from './commit-notes.js';
 
 export { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit };
 
@@ -43,6 +45,7 @@ const SEEN_LOCK = '.contextspace/seen.lock';
 /** What one record keeps. A longer list is cut to the newest, and the cut is remembered by the length. */
 const KEPT_KNOWLEDGE = 500;
 const KEPT_DOCUMENTS = 1000;
+const KEPT_NOTES = 500;
 /** The readers kept in the file; the least recent ones are dropped. */
 const KEPT_READERS = 20;
 /** The most commits one repository counts, so a long history is never walked. */
@@ -62,6 +65,8 @@ export interface SeenRecord {
   knowledge: string[];
   /** The names of the documents, newest first. */
   documents: string[];
+  /** The ids of commit notes seen then. */
+  notes?: string[];
 }
 
 /** `readers`: when each reader last looked. `pending`: what the report a screen showed them saw, until they say so. */
@@ -134,6 +139,17 @@ export interface NewsIncomingRepo {
   groups: NewsIncomingGroup[];
 }
 
+export interface NewsCommitNote {
+  id: string;
+  repo: string;
+  sha: string;
+  shortSha: string;
+  title: string;
+  body: string;
+  by: string;
+  at: string;
+}
+
 export interface WhatsNew {
   reader: string;
   /** When this report was made; hand it to {@link markSeen} to say the reader has looked. */
@@ -148,6 +164,8 @@ export interface WhatsNew {
   documents: NewsSection<NewsDocument>;
   /** Newest first. */
   knowledge: NewsSection<NewsKnowledge>;
+  /** Newest first. */
+  notes?: NewsSection<NewsCommitNote>;
   commits: NewsRepo[];
   /** Unseen commits sitting on local remote-tracking refs (never fetched during news). */
   incoming?: NewsIncomingRepo[];
@@ -182,12 +200,14 @@ function recordFrom(value: unknown): SeenRecord | null {
   const strings = (list: unknown, max: number) => (Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string').slice(0, max) : []);
   const repos = Object.entries(isObject(value.repos) ? value.repos : {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && SHA.test(entry[1]));
   const incoming = Object.entries(isObject(value.incoming) ? value.incoming : {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && SHA.test(entry[1]));
+  const notes = Array.isArray(value.notes) ? strings(value.notes, KEPT_NOTES) : undefined;
   return {
     at: value.at,
     repos: Object.fromEntries(repos),
     ...(incoming.length > 0 ? { incoming: Object.fromEntries(incoming) } : {}),
     knowledge: strings(value.knowledge, KEPT_KNOWLEDGE),
     documents: strings(value.documents, KEPT_DOCUMENTS),
+    ...(notes !== undefined ? { notes } : {}),
   };
 }
 
@@ -275,6 +295,7 @@ interface Snapshot {
   heads: RepoHead[];
   documents: DocumentFile[];
   knowledge: NewsKnowledge[];
+  notes: NewsCommitNote[];
   problems: string[];
 }
 
@@ -342,12 +363,16 @@ async function takeSnapshot(root: string): Promise<Snapshot> {
     return fallback;
   };
   const repos = await getWorkspaceRepoPaths(root).catch(unreadable('The list of repositories', []));
-  const [heads, documents, knowledge] = await Promise.all([
+  const readNotes = unreadable('Commit notes', [] as NewsCommitNote[]);
+  const [heads, documents, knowledge, notes] = await Promise.all([
     Promise.all(repos.map(repoHead)),
     readDocuments(root, repos).catch(unreadable('The documents', [])),
     readKnowledge(root).catch(unreadable('The knowledge', [])),
+    listCommitNotes(root).then((items): NewsCommitNote[] =>
+      items.map(({ id, repo, sha, shortSha, title, body, by, at }) => ({ id, repo, sha, shortSha, title, body, by, at })),
+    ).catch((error) => (error instanceof BoardWorkspaceError ? [] : readNotes(error))),
   ]);
-  return { heads, documents, knowledge, problems };
+  return { heads, documents, knowledge, notes, problems };
 }
 
 function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, string> = {}): SeenRecord {
@@ -358,6 +383,7 @@ function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, s
     ...(incomingEntries.length > 0 ? { incoming: Object.fromEntries(incomingEntries) } : {}),
     knowledge: snapshot.knowledge.slice(0, KEPT_KNOWLEDGE).map((entry) => entry.id),
     documents: snapshot.documents.slice(0, KEPT_DOCUMENTS).map((document) => document.name),
+    notes: snapshot.notes.slice(0, KEPT_NOTES).map((note) => note.id),
   };
 }
 
@@ -405,6 +431,22 @@ function knowledgeNews(entries: NewsKnowledge[], record: SeenRecord | null, from
   // A record cut to its newest entries says nothing about the entries older than its oldest.
   const oldest = record.knowledge.length >= KEPT_KNOWLEDGE ? entries.find((entry) => entry.id === record.knowledge.at(-1))?.date ?? null : null;
   return capped(entries.filter((entry) => !known.has(entry.id) && (oldest === null || (entry.date ?? '') >= oldest)), limit);
+}
+
+/** Notes the record does not list; without a record, or after an upgrade without `notes`, only notes made since `from` or `record.at`. */
+function commitNoteNews(notes: NewsCommitNote[], record: SeenRecord | null, from: number, limit: number): NewsSection<NewsCommitNote> {
+  if (!record) return capped(notes.filter((note) => afterTime(note.at, from)), limit);
+  if (record.notes === undefined) return capped(notes.filter((note) => afterTime(note.at, Date.parse(record.at))), limit);
+  const known = new Set(record.notes);
+  const oldest = record.notes.length >= KEPT_NOTES ? notes.find((note) => note.id === record.notes!.at(-1))?.at ?? null : null;
+  return capped(notes.filter((note) => !known.has(note.id) && (oldest === null || note.at >= oldest)), limit);
+}
+
+export function formatCommitNoteNewsLine(note: Pick<NewsCommitNote, 'by' | 'shortSha' | 'repo' | 'title'>): string {
+  const actor = note.by === 'ai'
+    ? 'AI'
+    : `${note.by.charAt(0).toUpperCase()}${note.by.slice(1)}`;
+  return `${actor} note on ${note.shortSha} (${note.repo}): ${note.title}`;
 }
 
 const RECENT_COMMITS_LIMIT = 50;
@@ -558,6 +600,7 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
   ]);
   const documents = documentNews(snapshot.documents, kept, fromMs, limit);
   const knowledge = knowledgeNews(snapshot.knowledge, kept, fromMs, limit);
+  const notes = commitNoteNews(snapshot.notes, kept, fromMs, limit);
   const incomingRefs = Object.fromEntries(
     localIncoming.flatMap((entry) => (entry.trackingRefOid ? [[entry.repo, entry.trackingRefOid] as const] : [])),
   );
@@ -569,10 +612,10 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
   const nextRecord = recordOf(snapshot, now.toISOString(), incomingRefs);
   if (options.mark) await saveRecord(root, name, nextRecord);
   else if (options.pending) await savePending(root, name, nextRecord);
-  const empty = [plan, documents, knowledge].every((section) => section.items.length === 0)
+  const empty = [plan, documents, knowledge, notes].every((section) => section.items.length === 0)
     && commits.every((repo) => repo.commits.length === 0)
     && incoming.length === 0;
-  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, commits, incoming, problems, empty };
+  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, notes, commits, incoming, problems, empty };
 }
 
 /**

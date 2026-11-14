@@ -629,7 +629,7 @@ export function boardLayout({ plan, documents, news, board, showArchived = false
   const positions = new Map(Object.entries(board?.positions ?? {}));
   const unplaced: LaneCard[] = [];
   const free: BoardNode[] = [];
-  for (const card of cardOrder((board?.cards ?? []).filter((entry) => showArchived || !entry.archived))) {
+  for (const card of cardOrder((board?.cards ?? []).filter((entry) => !entry.about && (showArchived || !entry.archived)))) {
     const entry = cardPlan(card, now);
     const at = positions.get(card.id);
     if (at) free.push(freeCard(entry, at, entry.z)); else unplaced.push(entry);

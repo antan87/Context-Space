@@ -225,4 +225,50 @@ describe('board routes', () => {
     expect((await app.request('/api/workspace/canvas/board/changes')).status).toBe(404);
     expect((await app.request('/api/workspace/canvas/board', { method: 'DELETE' })).status).toBe(404);
   });
+
+  it('refuses about through POST /board/changes and refuses area or step updates on commit notes', async () => {
+    const rejected = await post({
+      changes: [{ op: 'add_card', kind: 'note', title: 'User commit note', about: 'commit:App:1234567' }],
+    });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toMatch(/about|commit note/i);
+    await expect(fs.access(path.join(root, BOARD_FILE))).rejects.toThrow();
+
+    // Seed a commit note created by addCommitNote (the only valid path).
+    const commitNoteId = randomUUID();
+    const now = new Date().toISOString();
+    await fs.writeFile(
+      path.join(root, BOARD_FILE),
+      JSON.stringify({
+        version: 1,
+        revision: 1,
+        cards: [{
+          id: commitNoteId,
+          kind: 'note',
+          title: 'AI commit note',
+          body: 'kept both',
+          pinned: false,
+          archived: false,
+          by: 'claude',
+          at: now,
+          updatedBy: 'claude',
+          updatedAt: now,
+          about: 'commit:App:1234567abcdef0123456789abcdef0123456789',
+        }],
+        links: [],
+        positions: {},
+      }),
+    );
+
+    const areaReject = await post({ changes: [{ op: 'update_card', id: commitNoteId, area: 'plan:own' }] });
+    expect(areaReject.status).toBe(400);
+    expect(areaReject.body.error).toMatch(/commit note|area|step/i);
+
+    const stepReject = await post({ changes: [{ op: 'update_card', id: commitNoteId, step: 'build-the-board' }] });
+    expect(stepReject.status).toBe(400);
+    expect(stepReject.body.error).toMatch(/commit note|area|step/i);
+
+    expect((await stored()).cards[0]).not.toHaveProperty('area');
+    expect((await stored()).cards[0]).not.toHaveProperty('step');
+  });
 });

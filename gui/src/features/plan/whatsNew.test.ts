@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBoardAreas, extractFreshSets } from '../board/boardAreas.js';
-import { boardNews, agoText, newsCounts, newsGroups, newsHeading, newsSummary, type WhatsNewView } from './whatsNew.js';
+import { boardNews, agoText, newsCounts, newsEntries, newsGroups, newsHeading, newsSummary, newsTotal, type WhatsNewView } from './whatsNew.js';
 
 const NOW = new Date('2026-06-17T12:00:00.000Z');
 const ago = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000).toISOString();
@@ -179,5 +179,35 @@ describe('boardNews: what the Board draws its commits from', () => {
     expect(newsGroups(multi, NOW)).toEqual([
       { title: 'Commits', lines: ['api: 2 new commits from Maria on GitHub', 'billing: 1 new commit from Bob'] },
     ]);
+  });
+
+  it('includes commit notes under Notes with commitNote ref and counts', () => {
+    const view = news({
+      notes: {
+        items: [{
+          id: 'note-1',
+          repo: 'NexusFlow',
+          sha: '3bc923fabcdef0123456789',
+          shortSha: '3bc923f',
+          title: 'Merge conflict in boardRows.ts — kept both',
+          body: 'Merge conflict in boardRows.ts — kept both\nChecked imports.',
+          by: 'ai',
+          at: ago(5),
+        }],
+        more: 0,
+      },
+    });
+    expect(newsCounts(view)).toEqual(['1 note']);
+    expect(newsTotal(view)).toBe(1);
+    expect(newsGroups(view, NOW)).toEqual([
+      { title: 'Notes', lines: ['AI note on 3bc923f (NexusFlow): Merge conflict in boardRows.ts — kept both · 5 min ago'] },
+    ]);
+    const entries = newsEntries(view, NOW);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      group: 'Notes',
+      text: 'AI note on 3bc923f (NexusFlow): Merge conflict in boardRows.ts — kept both · 5 min ago',
+      ref: { kind: 'commitNote', repo: 'NexusFlow', sha: '3bc923fabcdef0123456789', noteId: 'note-1' },
+    });
   });
 });

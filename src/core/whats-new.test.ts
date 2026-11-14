@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { addCommitNote } from './commit-notes.js';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -756,6 +757,67 @@ describe('incoming commits on remote-tracking refs', () => {
       }]);
     } finally {
       await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('tracks commit notes in whatsNew and seen.json without losing notes added during a pending report', async () => {
+    vi.useFakeTimers();
+    try {
+      const sha = await commit('Fix merge edge case', ago(60));
+      await write('.contextspace/seen.json', JSON.stringify({
+        version: 1,
+        readers: {},
+        pending: {},
+      }));
+
+      vi.setSystemTime(ago(20));
+      const oldNote = await addCommitNote(root, {
+        commit: sha.slice(0, 7),
+        text: 'Pre-upgrade note\nShould stay unseen after upgrade.',
+      });
+
+      // Simulate upgraded pre-CN1 seen record (no `notes` field): existing note before seen.at stays unseen.
+      await write('.contextspace/seen.json', JSON.stringify({
+        version: 1,
+        readers: {
+          user: { at: ago(15).toISOString(), repos: { api: sha }, knowledge: [], documents: [] },
+        },
+        pending: {},
+      }));
+      const upgraded = await whatsNew(root, 'user', { now: ago(10) });
+      expect(upgraded.notes?.items).toEqual([]);
+      expect(upgraded.empty).toBe(true);
+
+      // A new note arrives at t = -8h. A pending report sees it...
+      vi.setSystemTime(ago(8));
+      const n1 = await addCommitNote(root, {
+        commit: sha.slice(0, 7),
+        text: 'Merge conflict in boardRows.ts — kept both\nCheck both branches.',
+        by: 'claude',
+      });
+      const pendingReport = await whatsNew(root, 'user', { now: ago(5), pending: true });
+      expect(pendingReport.empty).toBe(false);
+      expect(pendingReport.notes?.items.map((n) => n.id)).toEqual([n1.note.id]);
+
+      // ...and BEFORE the user marks it seen, a second note n2 lands at t = -3h!
+      vi.setSystemTime(ago(3));
+      const n2 = await addCommitNote(root, {
+        commit: sha,
+        text: 'Follow-up finding on rebase',
+      });
+
+      await markSeen(root, 'user', pendingReport.at);
+      const afterSeen = await whatsNew(root, 'user', { now: NOW, mark: true });
+      expect(afterSeen.notes?.items.map((n) => n.id)).toEqual([n2.note.id]);
+      expect(afterSeen.notes?.items.map((n) => n.id)).not.toContain(n1.note.id);
+      expect(afterSeen.notes?.items.map((n) => n.id)).not.toContain(oldNote.note.id);
+
+      // Once marked seen, it does not reappear.
+      const quiet = await whatsNew(root, 'user', { now: new Date(NOW.getTime() + 60_000) });
+      expect(quiet.notes?.items).toEqual([]);
+      expect(quiet.empty).toBe(true);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

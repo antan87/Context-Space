@@ -68,6 +68,8 @@ interface CardBase {
   area?: string;
   /** The key of the plan step (a `PlanLine.key` in PLAN.md) the card is about. */
   step?: string;
+  /** The commit node id (`commit:<repo>:<sha>`) this note is attached to, keeping it off Areas. */
+  about?: string;
   /** One line on why a person should look at the card, and when it was set (set by the board, never by the caller). */
   look?: string;
   lookAt?: string;
@@ -164,7 +166,25 @@ const CHECKPOINT = new RegExp(`^checkpoint:[\\p{L}\\p{N}][\\p{L}\\p{N}-]{0,89}${
 const DOCUMENT = new RegExp(`^document:${UUID_SOURCE}${COPY}$`);
 // The repository comes first and may hold anything but separators; the hash after the last colon ends it.
 // eslint-disable-next-line no-control-regex
-const COMMIT = new RegExp(`^commit:[^\\\\/\\u0000-\\u001f\\u007f]{1,200}:[0-9a-f]{7,64}${COPY}$`);
+const COMMIT_TARGET = /^commit:[^\\/\u0000-\u001f\u007f]{1,200}:[0-9a-f]{7,64}$/;
+// eslint-disable-next-line no-control-regex
+const COMMIT = new RegExp(`${COMMIT_TARGET.source.slice(0, -1)}${COPY}$`);
+
+/** True when `value` is an exact commit node id (`commit:<repo>:<sha>`, without `#copy`). */
+export function isCommitAboutId(value: unknown): value is string {
+  return typeof value === 'string' && COMMIT_TARGET.test(value);
+}
+
+/** Splits `commit:<repo>:<sha>` into its repository name and hex hash, or returns null. */
+export function parseCommitAbout(value: unknown): { repo: string; sha: string } | null {
+  if (!isCommitAboutId(value)) return null;
+  const lastColon = value.lastIndexOf(':');
+  if (lastColon <= 'commit:'.length) return null;
+  return {
+    repo: value.slice('commit:'.length, lastColon),
+    sha: value.slice(lastColon + 1),
+  };
+}
 
 /** The ways a node on the board is named, for messages and tool descriptions. */
 export const BOARD_NODE_ID_FORMATS = {
@@ -240,12 +260,14 @@ function cleanCard(raw: unknown): BoardCard | null {
   if (!title || !by || !validTime(raw.at)) return null;
   const area = isBoardAreaId(raw.area) ? raw.area : undefined;
   const step = isBoardStepKey(raw.step) ? raw.step : undefined;
+  const about = raw.kind === 'note' && isCommitAboutId(raw.about) ? raw.about : undefined;
   const look = typeof raw.look === 'string' && raw.look.length <= BOARD_LIMITS.look ? cleanScreenText(raw.look, BOARD_LIMITS.look) : undefined;
   const base = {
     id: raw.id, title, pinned: raw.pinned === true, archived: raw.archived === true, by, at: raw.at,
     updatedBy: actor(raw.updatedBy) ?? by, updatedAt: validTime(raw.updatedAt) ? raw.updatedAt : raw.at,
     ...(area ? { area } : {}),
     ...(step ? { step } : {}),
+    ...(about ? { about } : {}),
     ...(look ? { look, lookAt: validTime(raw.lookAt) ? raw.lookAt : validTime(raw.updatedAt) ? raw.updatedAt : raw.at } : {}),
   };
   if (raw.kind === 'note') return { ...base, kind: 'note', body: cleanScreenBlock(raw.body, BOARD_LIMITS.body) ?? '' };
@@ -383,6 +405,7 @@ const nodeId = z.string().refine(isBoardNodeId, NOT_A_NODE);
 const NOT_AN_AREA = `That is not a board area id. Use ${BOARD_NODE_ID_FORMATS.checkpoint} or plan:own, as board_read shows them.`;
 const areaId = z.string().refine(isBoardAreaId, NOT_AN_AREA);
 const stepKey = z.string().refine(isBoardStepKey, 'That is not a plan step key.');
+const commitAboutId = z.string().refine(isCommitAboutId, `That is not a commit target. Use ${BOARD_NODE_ID_FORMATS.commit}.`);
 const look = z.string().trim().min(1).max(BOARD_LIMITS.look).refine((text) => !/[\r\n\u0085\u2028\u2029]/.test(text), 'The reason to look is one line.');
 
 /** The fields a change is made of, so another surface (the MCP tools) can offer the same limits. */
@@ -396,6 +419,7 @@ export const boardFields = {
   nodeId,
   area: areaId,
   step: stepKey,
+  about: commitAboutId,
   look,
 };
 
@@ -411,6 +435,7 @@ const addCardSchema = z.object({
   pinned: z.boolean().optional(),
   area: boardFields.area.optional(),
   step: boardFields.step.optional(),
+  about: boardFields.about.optional(),
   look: boardFields.look.optional(),
   position: point.optional(),
 }).strict().superRefine((card, context) => {
@@ -419,9 +444,13 @@ const addCardSchema = z.object({
     if (!card.title) refuse('title', 'A note needs a title.');
     if (card.path !== undefined) refuse('path', 'A note has no path. Use kind "file" to show a file.');
     if (card.description !== undefined) refuse('description', 'A note has a body, not a description.');
+    if (card.about !== undefined && (card.area !== undefined || card.step !== undefined)) {
+      refuse('about', 'A commit note does not sit in an area or step.');
+    }
   } else {
     if (!card.path) refuse('path', 'A file card needs the path of a file inside the workspace.');
     if (card.body !== undefined) refuse('body', 'A file card has a description, not a body.');
+    if (card.about !== undefined) refuse('about', 'Only a note can attach to a commit.');
   }
 });
 
@@ -473,7 +502,7 @@ function describeIssue(issue: z.core.$ZodIssue, where: string): string {
 }
 
 /** Checks a list of changes against the schemas. Throws {@link BoardInputError} saying which change and field is wrong. */
-export function parseBoardChanges(input: unknown): BoardChange[] {
+export function parseBoardChanges(input: unknown, options: { allowCommitAbout?: boolean } = {}): BoardChange[] {
   if (!Array.isArray(input) || input.length === 0) throw new BoardInputError('Give at least one change.');
   if (input.length > BOARD_LIMITS.changes) throw new BoardInputError(`At most ${BOARD_LIMITS.changes} changes can be made at once.`);
   return input.map((raw, index) => {
@@ -482,7 +511,11 @@ export function parseBoardChanges(input: unknown): BoardChange[] {
     if (!op) throw new BoardInputError(`${where}: "op" must be one of ${Object.keys(SCHEMAS).join(', ')}.`);
     const result = SCHEMAS[op].safeParse(raw);
     if (!result.success) throw new BoardInputError(describeIssue(result.error.issues[0]!, where));
-    return result.data as BoardChange;
+    const parsed = result.data as BoardChange;
+    if (!options.allowCommitAbout && parsed.op === 'add_card' && parsed.about !== undefined) {
+      throw new BoardInputError(`${where}, about: Commit notes can only be added through addCommitNote / ctxspace note.`);
+    }
+    return parsed;
   });
 }
 
@@ -579,11 +612,12 @@ function apply({ board, by, now, log, stepIsHint }: Applying, { change, filePath
       if (board.cards.length >= BOARD_LIMITS.cards) throw new BoardChangeError(`The board is full: it holds at most ${BOARD_LIMITS.cards} cards. Remove some first.`);
       const id = change.id ?? randomUUID();
       if (board.cards.some((card) => card.id === id)) throw new BoardChangeError(`A card with id ${id} is already on the board.`);
-      const area = change.step && !stepIsHint ? areaOfStep(stepAreas, change.step, change.area) : change.area;
+      const area = change.about ? undefined : (change.step && !stepIsHint ? areaOfStep(stepAreas, change.step, change.area) : change.area);
       const base = {
         id, pinned: change.pinned === true, archived: false, by, at: now, updatedBy: by, updatedAt: now,
         ...(area ? { area } : {}),
         ...(change.step ? { step: change.step } : {}),
+        ...(change.about ? { about: change.about } : {}),
         ...(change.look ? { look: cleanLook(change.look), lookAt: now } : {}),
       };
       const card: BoardCard = change.kind === 'note'
@@ -598,6 +632,9 @@ function apply({ board, by, now, log, stepIsHint }: Applying, { change, filePath
       const card = findCard(board, change.id);
       if (change.body !== undefined && card.kind !== 'note') throw new BoardChangeError('A file card has a description, not a body.');
       if (change.description !== undefined && card.kind !== 'file') throw new BoardChangeError('A note has a body, not a description.');
+      if (card.about !== undefined && (change.area !== undefined || change.step !== undefined)) {
+        throw new BoardChangeError('A commit note stays on its commit and cannot be placed in an area or step.');
+      }
       if (change.title !== undefined) card.title = cleanTitle(change.title);
       if (change.body !== undefined && card.kind === 'note') card.body = cleanScreenBlock(change.body, BOARD_LIMITS.body) ?? '';
       if (change.description !== undefined && card.kind === 'file') card.description = cleanScreenBlock(change.description, BOARD_LIMITS.description) ?? '';
@@ -692,6 +729,8 @@ export interface BoardChangeOptions {
   revision?: number;
   /** Every add in this call has its step filled in by the caller, not asked for: each is kept as a hint and does not pin its card to the step's area. Not part of any change a caller can send. */
   stepIsHint?: boolean;
+  /** Internal capability for addCommitNote to attach `about` on an AI commit note; never exposed to HTTP/MCP or permitted for `user`. */
+  allowCommitAbout?: boolean;
 }
 
 /**
@@ -703,8 +742,8 @@ export interface BoardChangeOptions {
  * `ArchivedWorkspaceError` when it is archived, and {@link BoardFileError} when the board file is not a board.
  */
 export async function changeBoard(workspacePath: string, changes: unknown, options: BoardChangeOptions): Promise<{ board: Board; results: BoardChangeResult[] }> {
-  const valid = parseBoardChanges(changes);
   const by = actor(options.by) ?? 'ai';
+  const valid = parseBoardChanges(changes, { allowCommitAbout: options.allowCommitAbout === true && by !== 'user' });
   const location = await locate(workspacePath);
   const prepared = await prepare(location.root, valid);
 

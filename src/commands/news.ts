@@ -7,7 +7,7 @@
 
 import { BRAND_NAME } from '../core/constants.js';
 import { ago } from '../core/plan-file-text.js';
-import { FIRST_LOOK_DAYS, formatIncomingNewsLine, newsReaderName, whatsNew, type NewsPlanChange, type WhatsNew } from '../core/whats-new.js';
+import { FIRST_LOOK_DAYS, formatCommitNoteNewsLine, formatIncomingNewsLine, newsReaderName, whatsNew, type NewsPlanChange, type WhatsNew } from '../core/whats-new.js';
 import { planChangeBy } from './plan.js';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 
@@ -97,6 +97,10 @@ export function renderNews(report: WhatsNew, now: Date = new Date()): string {
     ...(report.incoming ?? []).flatMap((repo) =>
       repo.groups.map((group) => formatIncomingNewsLine(repo.repo, group.count, group.author, repo.host)),
     ),
+  ]);
+  section('Notes', [
+    ...(report.notes?.items ?? []).map((note) => `${formatCommitNoteNewsLine(note)} · ${when(note.at, now)}`),
+    ...(report.notes?.more ? [more(report.notes.more, 'more')] : []),
   ]);
   if (problems.length) lines.push('', ...problems);
   return lines.join('\n');

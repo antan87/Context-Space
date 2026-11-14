@@ -18,7 +18,9 @@ import {
   isBoardAreaId,
   isBoardNodeId,
   isBoardStepKey,
+  isCommitAboutId,
   parseBoardChanges,
+  parseCommitAbout,
   readBoard,
   readBoardChanges,
   type Board,
@@ -971,5 +973,61 @@ describe('telling open screens', () => {
     const { board } = await changeBoard(root, [note('Made anyway')], as('user'));
     expect(board.revision).toBe(1);
     expect((await readBoard(root)).cards[0]!.title).toBe('Made anyway');
+  });
+});
+
+describe('commit note about field', () => {
+  it('validates, stores, and cleans about on notes only', async () => {
+    expect(isCommitAboutId('commit:NexusFlow:3bc923f')).toBe(true);
+    expect(isCommitAboutId('commit:NexusFlow:3bc923f#1')).toBe(false);
+    expect(parseCommitAbout('commit:repo:with:colon:3bc923f')).toEqual({ repo: 'repo:with:colon', sha: '3bc923f' });
+    expect(parseCommitAbout('card:' + randomUUID())).toBeNull();
+
+    const { board } = await changeBoard(root, [
+      note('Conflict kept both', { about: 'commit:NexusFlow:3bc923fabcdef0123456789abcdef0123456789' }),
+    ], { ...as('claude'), allowCommitAbout: true });
+    expect(board.cards[0]!.about).toBe('commit:NexusFlow:3bc923fabcdef0123456789abcdef0123456789');
+    expect((await readBoard(root)).cards[0]!.about).toBe('commit:NexusFlow:3bc923fabcdef0123456789abcdef0123456789');
+
+    await write('docs/a.md');
+    await expect(changeBoard(root, [file('docs/a.md', { about: 'commit:NexusFlow:3bc923f' })], { ...as('ai'), allowCommitAbout: true })).rejects.toBeInstanceOf(BoardInputError);
+    await expect(changeBoard(root, [note('X', { area: 'plan:own', about: 'commit:NexusFlow:3bc923f' })], { ...as('ai'), allowCommitAbout: true })).rejects.toBeInstanceOf(BoardInputError);
+    await expect(changeBoard(root, [note('X', { about: 'commit:NexusFlow:3bc923f#1' })], { ...as('ai'), allowCommitAbout: true })).rejects.toBeInstanceOf(BoardInputError);
+
+    // Corrupted about in stored file is cleanly stripped while keeping note data.
+    const raw = await stored();
+    raw.cards[0]!.about = 'not-a-commit';
+    await fs.writeFile(boardPath(), JSON.stringify(raw));
+    expect((await readBoard(root)).cards[0]!.about).toBeUndefined();
+  });
+
+  it('refuses about on user and generic board changes, and refuses area/step updates on cards with about', async () => {
+    await expect(
+      changeBoard(root, [note('User note', { about: 'commit:NexusFlow:3bc923f' })], as('user')),
+    ).rejects.toBeInstanceOf(BoardInputError);
+    await expect(
+      changeBoard(root, [note('Generic AI note', { about: 'commit:NexusFlow:3bc923f' })], as('claude')),
+    ).rejects.toBeInstanceOf(BoardInputError);
+
+    const id = randomUUID();
+    await seed({
+      cards: [{
+        ...card(1),
+        id,
+        about: 'commit:NexusFlow:3bc923fabcdef0123456789abcdef0123456789',
+      }],
+    });
+    await expect(
+      changeBoard(root, [{ op: 'update_card', id, area: 'plan:own' }], as('user')),
+    ).rejects.toBeInstanceOf(BoardChangeError);
+    await expect(
+      changeBoard(root, [{ op: 'update_card', id, step: 'some-step' }], as('claude')),
+    ).rejects.toBeInstanceOf(BoardChangeError);
+    await expect(
+      changeBoard(root, [{ op: 'update_card', id, area: null }], as('user')),
+    ).rejects.toBeInstanceOf(BoardChangeError);
+    // Updating title/archived without area or step still works.
+    const { board: renamed } = await changeBoard(root, [{ op: 'update_card', id, title: 'Updated commit note' }], as('claude'));
+    expect(renamed.cards[0]!.title).toBe('Updated commit note');
   });
 });

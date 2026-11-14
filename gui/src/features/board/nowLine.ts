@@ -90,7 +90,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
       const item = items.find((candidate) => (candidate.category === 'documents' || candidate.category === 'pictures') && (candidate.readerTarget?.path === ref.name || candidate.title === ref.name));
       return item?.nodeId ? { areaId: item.areaId, nodeId: item.nodeId } : undefined;
     }
-    if (ref.kind === 'knowledge' || ref.kind === 'incoming') return undefined;
+    if (ref.kind === 'knowledge' || ref.kind === 'incoming' || ref.kind === 'commitNote') return undefined;
     if (ref.removed) return undefined;
     if (ref.item === 'checkpoint') {
       const area = areas.find((candidate) => candidate.checkpointKey === ref.key);

@@ -122,4 +122,27 @@ describe('where the parts go', () => {
       reviewCommit: { repo: 'billing', sha: 'f1e2d3c' },
     }]);
   });
+
+  it('keeps commitNote entries in Now counts and lines without wiring click yet', () => {
+    const view = news({
+      notes: {
+        items: [{
+          id: 'note-1',
+          repo: 'NexusFlow',
+          sha: '3bc923fabcdef0123456789',
+          shortSha: '3bc923f',
+          title: 'Merge conflict in boardRows.ts — kept both',
+          body: 'Merge conflict in boardRows.ts — kept both',
+          by: 'ai',
+          at: iso(1),
+        }],
+        more: 0,
+      },
+    });
+    const areas = buildBoardAreas({ plan: plan(null), board, news: view });
+    expect(nowLineParts({ focus: null, areas, news: view }).news).toBe(1);
+    expect(newsLines(view, areas)).toEqual([{
+      text: 'AI note on 3bc923f (NexusFlow): Merge conflict in boardRows.ts — kept both · 1 min ago',
+    }]);
+  });
 });

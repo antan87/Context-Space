@@ -1837,5 +1837,30 @@ describe('boardAreas', () => {
       expect(fold?.data.count).toBe(2);
       expect(foldLabel(fold!.data)).toBe('2 done');
     });
+
+    it('keeps commit note cards (about: commit:...) out of all Areas and avoids empty fallback area', () => {
+      const commitId = 'commit:NexusFlow:3bc923fabcdef0123456789abcdef0123456789';
+      const commitNote = sampleCard('cn-1', 'Merge conflict kept both', undefined, {
+        about: commitId,
+      });
+      const normalLinked = sampleCard('card-1', 'Regular card linked to commit', undefined);
+      const links: BoardLink[] = [
+        { id: 'lnk-1', from: 'cn-1', to: commitId, label: 'note', by: 'claude', at: '2026-10-01T00:00:00Z' },
+        { id: 'lnk-2', from: 'card-1', to: commitId, label: 'found while', by: 'claude', at: '2026-10-01T00:00:00Z' },
+      ];
+
+      // Without a plan and with ONLY a commit note, no empty Current work Area is created.
+      expect(buildBoardAreas({
+        board: { revision: 1, cards: [commitNote], links: [links[0]!], positions: {} },
+      })).toEqual([]);
+
+      // With a plan and regular cards alongside a commit note, only regular cards appear in Areas.
+      const areas = buildBoardAreas({
+        plan: samplePlan,
+        board: { revision: 2, cards: [commitNote, normalLinked], links, positions: {} },
+      });
+      const placedIds = areas.flatMap((area) => area.cards.map((c) => c.id));
+      expect(placedIds).toEqual(['card-1']);
+    });
   });
 });

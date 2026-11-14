@@ -230,4 +230,23 @@ describe('newsCommand', () => {
     }), NOW);
     expect(text).toContain('Commits\n  api: 2 new commits from Maria on GitHub');
   });
+
+  it('prints commit notes under Notes with repo, short hash, actor, and title', () => {
+    const text = renderNews(report({
+      notes: {
+        items: [{
+          id: 'note-1',
+          repo: 'NexusFlow',
+          sha: '3bc923fabcdef0123456789',
+          shortSha: '3bc923f',
+          title: 'Merge conflict in boardRows.ts — kept both',
+          body: 'Merge conflict in boardRows.ts — kept both',
+          by: 'ai',
+          at: ago(5),
+        }],
+        more: 0,
+      },
+    }), NOW);
+    expect(text).toContain('Notes\n  AI note on 3bc923f (NexusFlow): Merge conflict in boardRows.ts — kept both · 5 min ago');
+  });
 });

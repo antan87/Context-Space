@@ -248,5 +248,18 @@ describe('board change builders', () => {
       id,
     });
   });
+
+  it('keeps valid commit about on notes and drops it elsewhere', () => {
+    const board = cleanBoard(reply({
+      cards: [
+        note(1, { about: 'commit:NexusFlow:3bc923fabcdef' }),
+        note(2, { about: 'commit:NexusFlow:3bc923f#1' }),
+        file(3, { about: 'commit:NexusFlow:3bc923f' }),
+      ],
+    }));
+    expect(board.cards[0]?.about).toBe('commit:NexusFlow:3bc923fabcdef');
+    expect(board.cards[1]?.about).toBeUndefined();
+    expect(board.cards[2]?.about).toBeUndefined();
+  });
 });
 

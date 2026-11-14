@@ -26,6 +26,8 @@ interface CardBase {
   area?: string;
   /** The key of the plan step (in PLAN.md) the card is about. */
   step?: string;
+  /** The commit node id (`commit:<repo>:<sha>`) this note is attached to, keeping it off Areas. */
+  about?: string;
   /** One line on why a person should look at the card, and when it was set. Not shown yet. */
   look?: string;
   lookAt?: string;
@@ -67,7 +69,9 @@ const UUID = new RegExp(`^${UUID_SOURCE}$`);
 const COPY = '(?:#[0-9]{1,3})?';
 const CHECKPOINT = new RegExp(`^checkpoint:[\\p{L}\\p{N}][\\p{L}\\p{N}-]{0,89}${COPY}$`, 'u');
 const DOCUMENT = new RegExp(`^document:${UUID_SOURCE}${COPY}$`);
-const COMMIT = new RegExp(`^commit:[^\\\\/\\u0000-\\u001f\\u007f]{1,200}:[0-9a-f]{7,64}${COPY}$`);
+// eslint-disable-next-line no-control-regex
+const COMMIT_TARGET = /^commit:[^\\/\u0000-\u001f\u007f]{1,200}:[0-9a-f]{7,64}$/;
+const COMMIT = new RegExp(`${COMMIT_TARGET.source.slice(0, -1)}${COPY}$`);
 
 /** Whether `value` is a card's id (a uuid). A card id can never read as a generated node's id, which has a prefix. */
 export const isCardId = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
@@ -110,12 +114,14 @@ function cleanCard(raw: unknown): BoardCard | null {
   if (!title) return null;
   const area = isBoardAreaId(raw.area) ? raw.area : undefined;
   const step = typeof raw.step === 'string' && raw.step.length <= 120 && STEP_KEY.test(raw.step) ? raw.step : undefined;
+  const about = raw.kind === 'note' && typeof raw.about === 'string' && COMMIT_TARGET.test(raw.about) ? raw.about : undefined;
   const look = typeof raw.look === 'string' && raw.look.trim() && !/[\r\n]/.test(raw.look) ? raw.look.trim().slice(0, 140) : undefined;
   const base = {
     id: raw.id, title, pinned: raw.pinned === true, archived: raw.archived === true, by: raw.by, at: raw.at,
     updatedBy: actor(raw.updatedBy) ? raw.updatedBy : raw.by, updatedAt: validTime(raw.updatedAt) ? raw.updatedAt : raw.at,
     ...(area ? { area } : {}),
     ...(step ? { step } : {}),
+    ...(about ? { about } : {}),
     ...(look ? { look, ...(validTime(raw.lookAt) ? { lookAt: raw.lookAt } : {}) } : {}),
   };
   if (raw.kind === 'note') return { ...base, kind: 'note', body: typeof raw.body === 'string' ? raw.body.slice(0, BOARD_DATA_LIMITS.text) : '' };
