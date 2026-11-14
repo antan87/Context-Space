@@ -288,5 +288,6 @@ If \`ctxspace\` is not on PATH, use \`./.contextspace/bin/ctxspace\` (bash) or \
 - \`.agents/skills/\` — enabled playbooks; Claude copies: \`.claude/skills/\`.
 - Need the user's answer or approval? Run \`${CLI_NAME} ask "<question>" --option "<answer>" ...\` (or MCP \`request_user_input\`) so this chat is flagged, then ask in the chat and end your turn.
 - Show your work: MCP \`show_in_reader\`, \`annotate_document\` and \`suggest_next\` put it beside the user's chat. They only show things. No MCP: say it in the chat.
+- Force-push only with \`git push --force-with-lease --force-if-includes\`: ContextSpace fetches your branch in the background, so a plain lease no longer protects others' commits.
 ${ownInstructions}${customCommands}${teamwork}${enterpriseSection}`;
 }

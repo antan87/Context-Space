@@ -242,6 +242,14 @@ describe('buildContextContent', () => {
       expect(content).toContain('cannot be recovered from the code or git history');
     });
 
+    it('warns agents to force-push only with --force-with-lease --force-if-includes', async () => {
+      const content = await buildContextContent(ctxFor({}));
+
+      expect(content).toContain(
+        "Force-push only with `git push --force-with-lease --force-if-includes`: ContextSpace fetches your branch in the background, so a plain lease no longer protects others' commits.",
+      );
+    });
+
     it('names repos that carry their own instructions, which override these', async () => {
       const ctx = ctxFor({});
       (ctx.analysis!.get(nodeRepo)! as { existingAIConfigs: unknown }).existingAIConfigs = [

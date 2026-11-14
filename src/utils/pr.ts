@@ -30,7 +30,7 @@ export interface GhStatus {
 }
 
 /** Determines the forge kind from a hostname. */
-function forgeKind(host: string): ForgeKind {
+export function forgeKind(host: string): ForgeKind {
   const h = host.toLowerCase().trim();
   if (h === 'github.com' || h.endsWith('.github.com')) return 'github';
   if (h === 'gitlab.com' || h.endsWith('.gitlab.com')) return 'gitlab';
@@ -49,6 +49,26 @@ function forgeKind(host: string): ForgeKind {
 
 function stripGitSuffix(s: string): string {
   return s.replace(/\.git$/, '');
+}
+
+function toNormalizedUrl(url: string): URL | null {
+  const raw = url.trim();
+  if (!raw) return null;
+  let normalized = raw;
+  const scp = raw.match(/^([^@/:]+)@([^:]+):(.+)$/); // git@host:owner/repo(.git)
+  if (scp && !raw.includes('://')) {
+    normalized = `ssh://${scp[1]}@${scp[2]}/${scp[3]}`;
+  }
+  try {
+    return new URL(normalized);
+  } catch {
+    return null;
+  }
+}
+
+/** Extracts the hostname from an HTTP(S), SSH, or SCP-style Git remote URL, or `null` for local paths. */
+export function extractRemoteHost(url: string): string | null {
+  return toNormalizedUrl(url)?.hostname || null;
 }
 
 /**
@@ -72,32 +92,23 @@ export function parseRemoteUrl(url: string): ParsedRemote | null {
     };
   }
 
-  // Normalize into a URL we can parse with the WHATWG URL class.
-  let normalized = raw;
-  const scp = raw.match(/^([^@]+)@([^:]+):(.+)$/); // git@host:owner/repo(.git)
-  if (scp && !raw.includes('://')) {
-    normalized = `ssh://${scp[1]}@${scp[2]}/${scp[3]}`;
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(normalized);
-  } catch {
-    return null;
-  }
+  const parsed = toNormalizedUrl(raw);
+  if (!parsed) return null;
 
   const host = parsed.hostname;
   const kind = forgeKind(host);
   const segments = parsed.pathname.split('/').filter(Boolean).map((s) => decodeURIComponent(s));
   if (segments.length < 2) return null;
 
-  // Azure HTTPS: /{org}/{project}/_git/{repo}  (org may be a leading path segment)
+  // Azure HTTPS: /{org}/{project}/_git/{repo} or https://{org}.visualstudio.com/[DefaultCollection/]{project}/_git/{repo}
   const gitIdx = segments.indexOf('_git');
   if (kind === 'azure' && gitIdx >= 1) {
     const repo = segments[gitIdx + 1];
     const project = segments[gitIdx - 1];
-    // The org is whatever precedes the project (Azure hosts it at /{org}/...).
-    const org = segments.slice(0, gitIdx - 1).join('/') || project;
+    const lowerHost = host.toLowerCase();
+    const org = lowerHost.endsWith('.visualstudio.com')
+      ? host.slice(0, host.length - '.visualstudio.com'.length)
+      : segments.slice(0, gitIdx - 1).join('/') || project;
     if (repo) {
       return { host: 'dev.azure.com', owner: org, project, repo: stripGitSuffix(repo), kind: 'azure' };
     }

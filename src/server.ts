@@ -6,6 +6,7 @@ import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
 import { registerPlanFileRoutes } from './http/plan-file-routes.js';
 import { registerNewsRoutes } from './http/news-routes.js';
+import { registerIncomingRoutes } from './http/incoming-routes.js';
 import { registerCommitRoutes } from './http/commit-routes.js';
 import { registerViewRoutes } from './http/view-routes.js';
 import { registerBoardRoutes } from './http/board-routes.js';
@@ -2644,6 +2645,10 @@ registerPlanFileRoutes(app, async (id) => {
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
 registerNewsRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerIncomingRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
