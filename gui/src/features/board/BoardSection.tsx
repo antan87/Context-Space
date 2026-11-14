@@ -18,7 +18,7 @@ import { usePageVisible } from '../../lib/usePageVisible.js';
 import { useClockTick } from '../../lib/useClockTick.js';
 import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useSetPlanNow, useTickPlanStep } from '../plan/planFile.js';
 import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.js';
-import { boardNews, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
+import { boardNews, useIncomingCommits, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
 import { boardStepRequests, documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useBoardStepRequest, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
@@ -230,6 +230,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const visible = usePageVisible();
   const listening = active && visible;
+  useIncomingCommits(workspaceId, { enabled: listening });
   const connected = useFeedConnected(workspaceId, listening);
   const boardQuery = useBoard(workspaceId, { poll: listening && !connected });
   const queryClient = useQueryClient();
@@ -819,11 +820,15 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       show(knowledgeTarget(line.knowledge.entry), originBtn ?? null);
       return;
     }
+    if (line.reviewCommit) {
+      openCodeWindow(workspaceId, { opener: originBtn ?? null, commit: line.reviewCommit });
+      return;
+    }
     if (!line.jump) return;
     recordBoardJump(originBtn);
     if (line.jump.nodeId) jumpToItem({ areaId: line.jump.areaId, nodeId: line.jump.nodeId, readerTarget: line.jump.readerTarget }, false);
     else jumpToArea(line.jump.areaId);
-  }, [jumpToItem, jumpToArea, recordBoardJump, show]);
+  }, [jumpToItem, jumpToArea, recordBoardJump, show, workspaceId]);
 
   const boardStepRequest = useBoardStepRequest(workspaceId);
   useEffect(() => {

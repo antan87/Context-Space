@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   ArrowDownUp, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, ExternalLink, FileCode, GitCommitHorizontal, ListTree,
   Flag, FolderTree, Loader2, MoreHorizontal, RefreshCw, Search, X, ZoomIn, ZoomOut,
@@ -9,6 +10,7 @@ import { perfMark } from '../../lib/perfMarks.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { useElementWidth } from '../../lib/useElementWidth.js';
+import { usePageVisible } from '../../lib/usePageVisible.js';
 import { useConfig } from '../../lib/api/queries.js';
 import type { Feature } from '../../types.js';
 import { Button } from '../../components/ui/button.js';
@@ -32,7 +34,7 @@ import { getEditorLabel, openInVsCodeAtLine } from './adapters/ExternalDiffLaunc
 import { disposeChangesetModelsAfterEditors } from './utils/changesetModelStore.js';
 import { globalChangesetSymbolIndex, useChangesetSymbolStore, type ChangesetSymbol, type RawAstSymbol } from './utils/changesetSymbolIndex.js';
 import { omittedNotice } from './utils/omittedContent.js';
-import { useRecentCommits } from '../plan/whatsNew.js';
+import { refreshIncomingCommits, useIncomingCommits, useRecentCommits } from '../plan/whatsNew.js';
 import type { CommitStepLink } from '../board/commitContext.js';
 import { CommitsList, CommitsMain } from './CommitsView.js';
 import { useCommitDetail } from './commitData.js';
@@ -399,7 +401,9 @@ export function CodeSection(props: CodeSectionProps) {
   }, [active, props.requestId, props.commitOpen]);
 
   // ─── Commits mode ──────────────────────────────────────────────────────────
+  const visible = usePageVisible();
   const commitsShown = commitsOpen && active;
+  const queryClient = useQueryClient();
   const onShownCommit = props.onShownCommit;
   const shownCommit = commitsOpen ? commits.commit : null;
   useEffect(() => { onShownCommit?.(shownCommit); }, [onShownCommit, shownCommit]);
@@ -411,11 +415,28 @@ export function CodeSection(props: CodeSectionProps) {
   const expandedDetail = expandedDiffers ? separateExpandedDetail : commitDetail;
   const recentQuery = useRecentCommits(commitsShown ? workspace : null);
   const recent = recentQuery.data;
+  const incomingQuery = useIncomingCommits(workspace, { enabled: commitsShown && visible });
+  const incomingReport = incomingQuery.data;
+  const [refreshingIncoming, setRefreshingIncoming] = useState(false);
+  const handleCheckIncoming = useCallback(() => {
+    if (refreshingIncoming || incomingQuery.checking) return;
+    setRefreshingIncoming(true);
+    void refreshIncomingCommits(queryClient, workspace)
+      .catch(() => undefined)
+      .finally(() => setRefreshingIncoming(false));
+  }, [incomingQuery.checking, queryClient, refreshingIncoming, workspace]);
   const commitGroups = useMemo(
-    () => buildCommitListGroups(commits.held, recent, commits.commit, commitDetail.data),
-    [commits.held, recent, commits.commit, commitDetail.data],
+    () => buildCommitListGroups(commits.held, recent, commits.commit, commitDetail.data, incomingReport),
+    [commits.held, recent, commits.commit, commitDetail.data, incomingReport],
   );
   const allListCommits = useMemo(() => commitGroups.flatMap((group) => group.commits), [commitGroups]);
+  const openCommitItem = useMemo(
+    () => (commits.commit ? allListCommits.find((entry) => sameCommit(entry, commits.commit)) : undefined),
+    [allListCommits, commits.commit],
+  );
+  const openIncomingMeta = openCommitItem?.incoming
+    ? { hostName: openCommitItem.host?.name ?? null, webUrl: openCommitItem.webUrl ?? null }
+    : null;
   const currentCommitIndex = useMemo(
     () => (commits.commit ? allListCommits.findIndex((entry) => sameCommit(entry, commits.commit)) : -1),
     [allListCommits, commits.commit],
@@ -514,14 +535,15 @@ export function CodeSection(props: CodeSectionProps) {
     const next = commitFiles[index === -1 ? (delta > 0 ? 0 : commitFiles.length - 1) : index + delta];
     if (next) chooseCommitFile(next);
   };
-  // With no commit asked for, Commits mode opens on the newest recent commit and shows its description first.
+  // With no commit asked for, Commits mode opens on the newest recent commit (or first incoming commit) and shows its description first.
   const newestRecent = newestRecentCommit(recent);
+  const defaultCommit = newestRecent ?? allListCommits[0] ?? null;
   useEffect(() => {
-    if (!commitsShown || commits.commit || !newestRecent) return;
-    const first = { repo: newestRecent.repo, sha: newestRecent.sha };
+    if (!commitsShown || commits.commit || !defaultCommit) return;
+    const first = { repo: defaultCommit.repo, sha: defaultCommit.sha };
     setCommits((current) => (current.commit ? current : { ...current, commit: first }));
     setExpandedCommit((current) => current ?? first);
-  }, [commitsShown, commits.commit, newestRecent]);
+  }, [commitsShown, commits.commit, defaultCommit]);
 
   // A file opened by name that is not a change can only be shown in the tree under Files. The listing can be up to
   // REFRESH_MS old, and a file made moments ago may be a change it does not have yet, so it is listed again once
@@ -865,6 +887,9 @@ export function CodeSection(props: CodeSectionProps) {
       file={commitFile}
       expandedDetail={expandedDetail}
       recentPending={recentQuery.isPending}
+      incomingReport={incomingReport}
+      checkingIncoming={refreshingIncoming || incomingQuery.checking}
+      onCheckIncoming={handleCheckIncoming}
       returnTo={props.returnTo}
       onSelectCommit={handleSelectCommit}
       onSelectFile={handleSelectFile}
@@ -1020,6 +1045,7 @@ export function CodeSection(props: CodeSectionProps) {
               workspace={workspace}
               commit={commits.commit}
               detail={commitDetail}
+              incomingMeta={openIncomingMeta}
               file={commitFile}
               ordered={commitFiles}
               hasNextCommit={hasNextCommit}

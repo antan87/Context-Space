@@ -1,12 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, Loader2, SquareArrowOutUpRight } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, Loader2, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { useConfig } from '../../lib/api/queries.js';
+import { useClockTick } from '../../lib/useClockTick.js';
 import { usePlanFile } from '../plan/planFile.js';
-import { agoText } from '../plan/whatsNew.js';
+import { agoText, type IncomingCommitsReport } from '../plan/whatsNew.js';
 import { useBoard } from '../board/boardData.js';
 import {
   forgeDisplayName,
@@ -35,7 +36,15 @@ import {
   formatCommitStepLabel,
   splitFilePath,
   statusCode,
+  type CommitTreeRow,
 } from './commitListModel.js';
+
+const PROBLEM_INCOMING_STATES = new Set<IncomingCommitsReport['repos'][number]['state']>([
+  'sign-in',
+  'offline',
+  'error',
+  'busy',
+]);
 
 const statusColour = (type: string) =>
   type === 'added'
@@ -66,6 +75,9 @@ export function CommitsList({
   file,
   expandedDetail,
   recentPending,
+  incomingReport,
+  checkingIncoming = false,
+  onCheckIncoming,
   returnTo = 'board',
   onSelectCommit,
   onSelectFile,
@@ -77,13 +89,46 @@ export function CommitsList({
   file: string | null;
   expandedDetail: ReturnType<typeof useCommitDetail>;
   recentPending: boolean;
+  incomingReport?: IncomingCommitsReport;
+  checkingIncoming?: boolean;
+  onCheckIncoming?: () => void;
   returnTo?: 'board' | 'terminal';
   onSelectCommit: (commit: CommitRef) => void;
   onSelectFile: (commit: CommitRef, filePath: string) => void;
   onTreeStateChange: (next: { commit: CommitRef | null; expanded: CommitRef | null; file: string | null; chosen?: boolean }) => void;
 }) {
+  const clockNow = useClockTick();
+  const checking = Boolean(checkingIncoming);
+  const lastFetchAt = useMemo(() => {
+    let newest: string | null = null;
+    let newestMs = -Infinity;
+    for (const repo of incomingReport?.repos ?? []) {
+      if (!repo.lastFetchAt) continue;
+      const ms = Date.parse(repo.lastFetchAt);
+      if (Number.isFinite(ms) && ms > newestMs) {
+        newestMs = ms;
+        newest = repo.lastFetchAt;
+      }
+    }
+    return newest;
+  }, [incomingReport]);
+  const statusRepos = useMemo(
+    () => (incomingReport?.repos ?? []).filter((repo) => PROBLEM_INCOMING_STATES.has(repo.state) && Boolean(repo.message)),
+    [incomingReport],
+  );
+  const multiRepo = (incomingReport?.repos.length ?? 0) > 1;
   const treeRef = useRef<HTMLDivElement>(null);
   const pendingFocusId = useRef<string | null>(null);
+  const focusedTreeItemRef = useRef<{ el: HTMLElement; id: string } | null>(null);
+  const anchorOffsetRef = useRef<{ id: string; top: number } | null>(null);
+  const groupMoveScrollRef = useRef<{ scrollTop: number; targetId: string } | null>(null);
+  const restoringFocusRef = useRef(false);
+  const programmaticScrollTopRef = useRef<number | null>(null);
+  const lastCommittedLayoutRef = useRef<{ scrollTop: number; scrollHeight: number }>({
+    scrollTop: 0,
+    scrollHeight: 0,
+  });
+  const prevRowsRef = useRef<CommitTreeRow[] | null>(null);
   const scrolledFilesForRef = useRef<string | null>(null);
   const prevScrollStateRef = useRef<{ currentId: string | null; expandedId: string | null; focusTick: number }>({
     currentId: null,
@@ -116,9 +161,29 @@ export function CommitsList({
   const expandedId = expanded ? commitItemId(expanded) : null;
   const hasExpandedFiles = Boolean(expandedId && expandedFiles.length > 0);
 
+  const findTreeItem = (root: HTMLElement, targetId: string) =>
+    Array.from(root.querySelectorAll<HTMLElement>('[data-tree-id]')).find(
+      (el) => el.dataset.treeId === targetId,
+    ) ?? null;
+
+  const itemTopInRoot = (root: HTMLElement, el: HTMLElement) =>
+    el.getBoundingClientRect().top - root.getBoundingClientRect().top;
+
   useLayoutEffect(() => {
     const root = treeRef.current;
     if (!root) return;
+
+    const finishLayout = () => {
+      const activeEl = focusedTreeItemRef.current;
+      if (activeEl && activeEl.el.isConnected && !groupMoveScrollRef.current) {
+        anchorOffsetRef.current = { id: activeEl.id, top: itemTopInRoot(root, activeEl.el) };
+      }
+      lastCommittedLayoutRef.current = { scrollTop: root.scrollTop, scrollHeight: root.scrollHeight };
+    };
+
+    const rowsChanged = prevRowsRef.current !== null && prevRowsRef.current !== rows;
+    prevRowsRef.current = rows;
+
     const prev = prevScrollStateRef.current;
     const navChanged =
       prev.currentId !== currentId ||
@@ -129,20 +194,52 @@ export function CommitsList({
     }
     prevScrollStateRef.current = { currentId, expandedId, focusTick };
 
-    const findById = (targetId: string) =>
-      Array.from(root.querySelectorAll<HTMLElement>('[data-tree-id]')).find(
-        (el) => el.dataset.treeId === targetId,
-      ) ?? null;
-
     if (pendingFocusId.current) {
       const targetId = pendingFocusId.current;
       pendingFocusId.current = null;
-      const el = findById(targetId);
+      const el = findTreeItem(root, targetId);
       if (el) {
+        const beforeScroll = root.scrollTop;
         el.focus({ preventScroll: true });
         el.scrollIntoView?.({ block: 'nearest' });
+        if (root.scrollTop !== beforeScroll) {
+          programmaticScrollTopRef.current = root.scrollTop;
+        }
+        focusedTreeItemRef.current = { el, id: targetId };
+        groupMoveScrollRef.current = null;
         if (expandedId && hasExpandedFiles) scrolledFilesForRef.current = expandedId;
+        finishLayout();
         return;
+      }
+    }
+
+    const held = focusedTreeItemRef.current;
+    const active = document.activeElement;
+    const focusWasLostFromTree = Boolean(
+      held
+      && !held.el.isConnected
+      && (active === null || active === document.body || active === root),
+    );
+    if (held && !held.el.isConnected) {
+      const replacement =
+        findTreeItem(root, held.id)
+        ?? (currentId ? findTreeItem(root, currentId) : null);
+      if (focusWasLostFromTree) {
+        restoringFocusRef.current = true;
+        try {
+          if (replacement) {
+            replacement.focus({ preventScroll: true });
+            focusedTreeItemRef.current = { el: replacement, id: replacement.dataset.treeId ?? held.id };
+          } else {
+            root.focus({ preventScroll: true });
+          }
+        } finally {
+          restoringFocusRef.current = false;
+        }
+      } else if (replacement) {
+        focusedTreeItemRef.current = { el: replacement, id: replacement.dataset.treeId ?? held.id };
+      } else {
+        focusedTreeItemRef.current = null;
       }
     }
 
@@ -150,10 +247,93 @@ export function CommitsList({
     if (filesJustAppeared) scrolledFilesForRef.current = expandedId;
 
     if ((navChanged || filesJustAppeared) && currentId) {
-      const currentEl = findById(currentId);
+      const currentEl = findTreeItem(root, currentId);
+      const beforeScroll = root.scrollTop;
       currentEl?.scrollIntoView?.({ block: 'nearest' });
+      if (root.scrollTop !== beforeScroll) {
+        programmaticScrollTopRef.current = root.scrollTop;
+      }
+      groupMoveScrollRef.current = null;
+      finishLayout();
+      return;
     }
-  }, [currentId, expandedId, hasExpandedFiles, focusTick]);
+
+    // Preserve scroll position when a visible focused item moves groups across a 1-step or 2-step refetch
+    const prevLayout = lastCommittedLayoutRef.current;
+    const anchor = anchorOffsetRef.current;
+    if (
+      focusWasLostFromTree
+      && !groupMoveScrollRef.current
+      && anchor
+      && anchor.top >= 0
+      && anchor.top <= root.clientHeight
+      && held
+    ) {
+      groupMoveScrollRef.current = { scrollTop: prevLayout.scrollTop, targetId: held.id };
+    }
+
+    const pendingMove = groupMoveScrollRef.current;
+    if (pendingMove && (focusWasLostFromTree || rowsChanged)) {
+      const maxScroll = Math.max(0, root.scrollHeight - root.clientHeight);
+      const targetScroll = Math.max(0, Math.min(maxScroll, pendingMove.scrollTop));
+      if (Math.abs(targetScroll - root.scrollTop) > 1) {
+        programmaticScrollTopRef.current = targetScroll;
+        root.scrollTop = targetScroll;
+      } else if (root.scrollTop !== prevLayout.scrollTop) {
+        programmaticScrollTopRef.current = root.scrollTop;
+      }
+      const targetEl = findTreeItem(root, pendingMove.targetId);
+      const targetTop = targetEl ? itemTopInRoot(root, targetEl) : -1;
+      const fitsScroll = Math.abs(targetScroll - pendingMove.scrollTop) <= 1;
+      const inView = Boolean(targetEl && targetTop >= 0 && targetTop < root.clientHeight);
+      if (fitsScroll && inView) {
+        groupMoveScrollRef.current = null;
+      }
+    }
+
+    finishLayout();
+  }, [currentId, expandedId, hasExpandedFiles, focusTick, rows]);
+
+  const handleTreeFocus = (event: FocusEvent<HTMLDivElement>) => {
+    if (restoringFocusRef.current) return;
+    const root = treeRef.current;
+    const item = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-tree-id]') : null;
+    const id = item?.dataset.treeId ?? null;
+    if (!root || !item || !id) return;
+    focusedTreeItemRef.current = { el: item, id };
+    anchorOffsetRef.current = { id, top: itemTopInRoot(root, item) };
+    groupMoveScrollRef.current = null;
+  };
+
+  const handleTreeBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const root = treeRef.current;
+    const next = event.relatedTarget;
+    if (next instanceof Node && root?.contains(next)) return;
+    if (focusedTreeItemRef.current?.el.isConnected) {
+      focusedTreeItemRef.current = null;
+      anchorOffsetRef.current = null;
+      groupMoveScrollRef.current = null;
+    }
+  };
+
+  const handleTreeScroll = () => {
+    const root = treeRef.current;
+    if (!root) return;
+    if (
+      programmaticScrollTopRef.current !== null
+      && Math.abs(root.scrollTop - programmaticScrollTopRef.current) <= 1
+    ) {
+      programmaticScrollTopRef.current = null;
+      lastCommittedLayoutRef.current = { scrollTop: root.scrollTop, scrollHeight: root.scrollHeight };
+      return;
+    }
+    programmaticScrollTopRef.current = null;
+    groupMoveScrollRef.current = null;
+    lastCommittedLayoutRef.current = { scrollTop: root.scrollTop, scrollHeight: root.scrollHeight };
+    const focused = focusedTreeItemRef.current;
+    if (!focused || !focused.el.isConnected) return;
+    anchorOffsetRef.current = { id: focused.id, top: itemTopInRoot(root, focused.el) };
+  };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.metaKey || event.ctrlKey) return;
@@ -184,14 +364,60 @@ export function CommitsList({
     });
   };
 
+  const checkedLabel = useMemo(() => {
+    if (lastFetchAt) {
+      const age = agoText(lastFetchAt, new Date(clockNow));
+      return `Checked ${age || 'just now'}`;
+    }
+    return checking ? 'Checking…' : '';
+  }, [lastFetchAt, clockNow, checking]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {(onCheckIncoming || checkedLabel || statusRepos.length > 0) && (
+        <div className="shrink-0 border-b border-border/70 px-2.5 py-1.5">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {checkedLabel}
+            </span>
+            {onCheckIncoming && (
+              <button
+                type="button"
+                data-testid="incoming-check-now"
+                aria-disabled={checking || undefined}
+                onClick={() => {
+                  if (!checking) onCheckIncoming();
+                }}
+                className={cn(
+                  'inline-flex min-h-6 shrink-0 items-center gap-1 rounded px-2 text-xs font-medium text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  checking ? 'cursor-default opacity-60' : 'cursor-pointer hover:bg-accent hover:text-foreground',
+                )}
+              >
+                <RefreshCw className={cn('size-3', checking && 'animate-spin')} aria-hidden="true" />
+                <span>{checking ? 'Checking…' : 'Check now'}</span>
+              </button>
+            )}
+          </div>
+          {statusRepos.map((repo) => (
+            <p
+              key={repo.repo}
+              data-testid="incoming-status"
+              className="mt-1 break-words text-xs leading-4 text-muted-foreground"
+            >
+              {multiRepo ? `${repo.repo}: ${repo.message}` : repo.message}
+            </p>
+          ))}
+        </div>
+      )}
       <div
         ref={treeRef}
         role="tree"
         aria-label="Commits"
         tabIndex={-1}
         onKeyDown={handleKeyDown}
+        onFocus={handleTreeFocus}
+        onBlur={handleTreeBlur}
+        onScroll={handleTreeScroll}
         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-2 outline-none [scrollbar-gutter:stable]"
       >
         {groups.length === 0 && recentPending && (
@@ -204,7 +430,7 @@ export function CommitsList({
           <p className="px-2 py-1.5 text-xs text-muted-foreground">No commits in this workspace.</p>
         )}
         {groups.map((group) => (
-          <div key={group.label} className="mb-2 last:mb-0">
+          <div key={group.id ?? group.label} className="mb-2 last:mb-0">
             <div
               role="presentation"
               className="px-2 pb-1 pt-1.5 text-xs font-medium text-muted-foreground"
@@ -218,7 +444,7 @@ export function CommitsList({
                 const isSelected = isCurrentCommit && file === null;
                 const isExpanded = Boolean(expanded && sameCommit(entry, expanded));
                 const shortSha = entry.sha.slice(0, 7);
-                const age = entry.at ? agoText(entry.at) : '';
+                const age = entry.at ? agoText(entry.at, new Date(clockNow)) : '';
                 const firstLine = firstDescriptionLine(entry.firstBodyLine);
 
                 return (
@@ -262,6 +488,18 @@ export function CommitsList({
                         </span>
                       </div>
                       <div className="flex min-w-0 flex-wrap items-center gap-x-1 pl-5 text-xs leading-4 text-muted-foreground">
+                        {entry.incoming && entry.author && (
+                          <span className="inline-flex max-w-full min-w-0 items-center gap-x-1">
+                            <span
+                              data-testid="commit-item-author"
+                              title={entry.author}
+                              className="min-w-0 truncate font-medium text-foreground/85"
+                            >
+                              {entry.author}
+                            </span>
+                            <span aria-hidden="true" className="shrink-0">·</span>
+                          </span>
+                        )}
                         <code className="font-mono text-xs">{shortSha}</code>
                         {age && (
                           <>
@@ -277,7 +515,7 @@ export function CommitsList({
                             </span>
                           </>
                         )}
-                        {entry.pushed === false && (
+                        {!entry.incoming && entry.pushed === false && (
                           <>
                             <span aria-hidden="true">·</span>
                             <span className="text-amber-600 dark:text-amber-400">not pushed</span>
@@ -381,6 +619,7 @@ function CommitOverview({
   workspace,
   commit,
   detail,
+  incomingMeta,
   headingRef,
   onOpenFile,
   onOpenStep,
@@ -388,6 +627,7 @@ function CommitOverview({
   workspace: string;
   commit: CommitRef;
   detail: CommitDetail;
+  incomingMeta?: { hostName: string | null; webUrl: string | null } | null;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   onOpenFile: (file: string) => void;
   onOpenStep?: (step: CommitStepLink) => void;
@@ -455,24 +695,47 @@ function CommitOverview({
               <span aria-hidden="true">·</span>
               <span data-testid="commit-repo">{detail.repo || commit.repo}</span>
               <span aria-hidden="true">·</span>
-              <span
-                data-testid="commit-pushed"
-                className={detail.pushed ? undefined : 'text-amber-600 dark:text-amber-400'}
-              >
-                {detail.pushed ? 'pushed' : 'not pushed'}
-              </span>
-              {detail.pushed && webUrl && forge && (
-                <a
-                  href={webUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={`Open commit on ${forge}`}
-                  title={`Open commit on ${forge}`}
-                  className="inline-flex h-6 min-w-6 items-center gap-1 rounded border border-border/60 bg-muted/40 px-1.5 text-xs font-medium text-foreground hover:border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {forge}
-                  <SquareArrowOutUpRight className="size-3 opacity-70" aria-hidden="true" />
-                </a>
+              {incomingMeta ? (
+                <>
+                  <span data-testid="commit-pushed">
+                    {incomingMeta.hostName ? `on ${incomingMeta.hostName}, not in your copy yet` : 'not in your copy yet'}
+                  </span>
+                  {(safeForgeUrl(incomingMeta.webUrl ?? null) ?? webUrl) && (incomingMeta.hostName ?? forge) && (
+                    <a
+                      href={(safeForgeUrl(incomingMeta.webUrl ?? null) ?? webUrl)!}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Open on ${incomingMeta.hostName ?? forge}`}
+                      title={`Open on ${incomingMeta.hostName ?? forge}`}
+                      className="inline-flex h-6 min-w-6 items-center gap-1 rounded border border-border/60 bg-muted/40 px-1.5 text-xs font-medium text-foreground hover:border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {`Open on ${incomingMeta.hostName ?? forge}`}
+                      <SquareArrowOutUpRight className="size-3 opacity-70" aria-hidden="true" />
+                    </a>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span
+                    data-testid="commit-pushed"
+                    className={detail.pushed ? undefined : 'text-amber-600 dark:text-amber-400'}
+                  >
+                    {detail.pushed ? 'pushed' : 'not pushed'}
+                  </span>
+                  {detail.pushed && webUrl && forge && (
+                    <a
+                      href={webUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Open commit on ${forge}`}
+                      title={`Open commit on ${forge}`}
+                      className="inline-flex h-6 min-w-6 items-center gap-1 rounded border border-border/60 bg-muted/40 px-1.5 text-xs font-medium text-foreground hover:border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {forge}
+                      <SquareArrowOutUpRight className="size-3 opacity-70" aria-hidden="true" />
+                    </a>
+                  )}
+                </>
               )}
             </div>
             {formattedSteps.length > 0 && (
@@ -567,6 +830,7 @@ export function CommitsMain({
   workspace,
   commit,
   detail,
+  incomingMeta,
   file,
   ordered,
   hasNextCommit,
@@ -585,6 +849,7 @@ export function CommitsMain({
   workspace: string;
   commit: CommitRef | null;
   detail: ReturnType<typeof useCommitDetail>;
+  incomingMeta?: { hostName: string | null; webUrl: string | null } | null;
   file: string | null;
   ordered: string[];
   hasNextCommit: boolean;
@@ -713,6 +978,7 @@ export function CommitsMain({
         workspace={workspace}
         commit={commit}
         detail={data}
+        incomingMeta={incomingMeta}
         headingRef={commitHeadingRef}
         onOpenFile={onOpenFile}
         onOpenStep={onOpenStep}

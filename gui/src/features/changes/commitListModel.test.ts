@@ -177,3 +177,137 @@ describe('flattenCommitTree and applyCommitTreeKey', () => {
     expect(spaceFile).toMatchObject({ commit: c1, expanded: c1, file: 'src/a.ts', chosen: true });
   });
 });
+
+describe('buildCommitListGroups with incoming commits', () => {
+  it('places incoming commits first newest-first, omits empty incoming repos, and deduplicates once pulled into recent', () => {
+    const recent: RecentCommits = {
+      at: '2026-10-01T12:00:00Z',
+      from: '2026-09-29T12:00:00Z',
+      commits: [{
+        repo: 'billing',
+        more: 0,
+        commits: [{ sha: 'aaaaaaa1111', author: 'Alice', subject: 'Local commit', at: '2026-10-01T08:00:00Z', pushed: false }],
+      }],
+    };
+    const incoming = {
+      at: '2026-10-01T12:00:00Z',
+      repos: [
+        {
+          repo: 'billing',
+          remote: 'origin',
+          branch: 'main',
+          host: { kind: 'azure' as const, name: 'Azure DevOps' },
+          lastFetchAt: '2026-10-01T11:59:00Z',
+          fetching: false,
+          state: 'ok' as const,
+          message: null,
+          behind: 2,
+          commits: [
+            { sha: 'bbbbbbb1111', author: 'Bob', subject: 'Older incoming', at: '2026-10-01T09:00:00Z', incoming: true as const, webUrl: 'https://dev.azure.com/o/p/_git/billing/commit/bbbbbbb1111' },
+            { sha: 'ccccccc2222', author: 'Maria', subject: 'Newer incoming', at: '2026-10-01T11:00:00Z', incoming: true as const, webUrl: 'https://dev.azure.com/o/p/_git/billing/commit/ccccccc2222' },
+          ],
+          more: 0,
+        },
+        {
+          repo: 'empty-repo',
+          remote: 'origin',
+          branch: 'main',
+          host: { kind: 'github' as const, name: 'GitHub' },
+          lastFetchAt: '2026-10-01T11:59:00Z',
+          fetching: false,
+          state: 'ok' as const,
+          message: null,
+          behind: 0,
+          commits: [],
+          more: 0,
+        },
+      ],
+    };
+
+    const groups = buildCommitListGroups(null, recent, null, null, incoming);
+    expect(groups.map((g) => g.label)).toEqual(['billing · On Azure DevOps, not in your copy yet', 'Recent commits in billing']);
+    expect(groups[0]!.commits.map((c) => [c.sha, c.author, c.incoming])).toEqual([
+      ['ccccccc2222', 'Maria', true],
+      ['bbbbbbb1111', 'Bob', true],
+    ]);
+
+    // After pull: commit ccccccc2222 now sits in recent as well -> leaves incoming cleanly without duplication
+    const pulledRecent: RecentCommits = {
+      ...recent,
+      commits: [{
+        repo: 'billing',
+        more: 0,
+        commits: [
+          { sha: 'ccccccc2222', author: 'Maria', subject: 'Newer incoming', at: '2026-10-01T11:00:00Z', pushed: true },
+          ...recent.commits[0]!.commits,
+        ],
+      }],
+    };
+    const afterPull = buildCommitListGroups(null, pulledRecent, null, null, incoming);
+    expect(afterPull[0]!.commits.map((c) => c.sha)).toEqual(['bbbbbbb1111']);
+    expect(afterPull[1]!.commits.map((c) => c.sha)).toEqual(['ccccccc2222', 'aaaaaaa1111']);
+  });
+
+  it('prefixes incoming group labels with the repository name when multiple repositories exist, and omits it for one repository', () => {
+    const singleRepoRecent: RecentCommits = {
+      at: '2026-10-01T12:00:00Z',
+      from: '2026-09-29T12:00:00Z',
+      commits: [{ repo: 'api', more: 0, commits: [] }],
+    };
+    const singleIncoming = {
+      at: '2026-10-01T12:00:00Z',
+      repos: [{
+        repo: 'api',
+        remote: 'origin',
+        branch: 'main',
+        host: { kind: 'github' as const, name: 'GitHub' },
+        lastFetchAt: '2026-10-01T11:59:00Z',
+        fetching: false,
+        state: 'ok' as const,
+        message: null,
+        behind: 1,
+        commits: [{ sha: 'aaaaaaa1111', author: 'Maria', subject: 'Single repo incoming', at: '2026-10-01T11:00:00Z', incoming: true as const }],
+        more: 0,
+      }],
+    };
+    expect(buildCommitListGroups(null, singleRepoRecent, null, null, singleIncoming).map((g) => g.label)).toEqual([
+      'On GitHub, not in your copy yet',
+    ]);
+
+    const multiIncoming = {
+      at: '2026-10-01T12:00:00Z',
+      repos: [
+        {
+          repo: 'api',
+          remote: 'origin',
+          branch: 'main',
+          host: { kind: 'github' as const, name: 'GitHub' },
+          lastFetchAt: '2026-10-01T11:59:00Z',
+          fetching: false,
+          state: 'ok' as const,
+          message: null,
+          behind: 1,
+          commits: [{ sha: 'bbbbbbb2222', author: 'Maria', subject: 'API incoming', at: '2026-10-01T11:00:00Z', incoming: true as const }],
+          more: 0,
+        },
+        {
+          repo: 'web',
+          remote: 'origin',
+          branch: 'main',
+          host: null,
+          lastFetchAt: '2026-10-01T11:59:00Z',
+          fetching: false,
+          state: 'ok' as const,
+          message: null,
+          behind: 1,
+          commits: [{ sha: 'ccccccc3333', author: 'Bob', subject: 'Web incoming', at: '2026-10-01T10:00:00Z', incoming: true as const }],
+          more: 0,
+        },
+      ],
+    };
+    expect(buildCommitListGroups(null, singleRepoRecent, null, null, multiIncoming).map((g) => g.label)).toEqual([
+      'api · On GitHub, not in your copy yet',
+      'web · Not in your copy yet',
+    ]);
+  });
+});

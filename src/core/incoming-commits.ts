@@ -13,8 +13,8 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 import { isGitRepo } from '../utils/git.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
-import { buildCommitUrl, extractRemoteHost, forgeKind, parseRemoteUrl, type ForgeKind, type ParsedRemote } from '../utils/pr.js';
-import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog } from './whats-new.js';
+import { buildCommitUrl, extractRemoteHost, forgeKind, parseRemoteUrl, resolvePreferredRemoteUrl, type ForgeKind, type ParsedRemote } from '../utils/pr.js';
+import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog } from './commit-log-format.js';
 
 export const INCOMING_COMMITS_LIMIT = 50;
 export const STALE_FETCH_MS = 5 * 60_000;
@@ -432,10 +432,13 @@ async function resolveRepoTarget(repoPath: string): Promise<ResolvedTarget | nul
     runReadGit(repoPath, ['config', '--get', `remote.${remote}.url`]),
     trackingRef ? readRefOid(repoPath, trackingRef) : Promise.resolve(null),
   ]);
-  const urlRes = cfgUrlRes.ok && cfgUrlRes.stdout.trim()
-    ? cfgUrlRes
-    : await runReadGit(repoPath, ['remote', 'get-url', remote]);
-  const remoteUrl = urlRes.ok ? urlRes.stdout.trim() : null;
+  const remoteUrl = await resolvePreferredRemoteUrl(
+    cfgUrlRes.ok ? cfgUrlRes.stdout : '',
+    async () => {
+      const effective = await runReadGit(repoPath, ['remote', 'get-url', remote]);
+      return effective.ok ? effective.stdout : null;
+    },
+  );
   const hostInfo = remoteUrl ? resolveHostInfo(remoteUrl) : null;
 
   return {
@@ -753,14 +756,27 @@ async function readIncomingRange(
   repoPath: string,
   trackingRef: string,
   parsedRemote: ParsedRemote | null,
+  options: { notRef?: string; limit?: number; shortstat?: boolean; headOid?: string | null } = {},
 ): Promise<{ behind: number; commits: IncomingCommit[]; more: number; error?: string }> {
-  const headExists = await refExists(repoPath, 'HEAD');
-  let revRangeArgs = headExists
-    ? ['--cherry-pick', '--right-only', `HEAD...${trackingRef}`]
-    : [trackingRef];
+  let leftRef: string | null;
+  if (options.headOid === undefined) {
+    leftRef = (await refExists(repoPath, 'HEAD')) ? 'HEAD' : null;
+  } else if (options.headOid === null) {
+    leftRef = null;
+  } else {
+    const trimmed = options.headOid.trim();
+    if (!trimmed || trimmed.startsWith('-') || !(await refExists(repoPath, `${trimmed}^{commit}`))) {
+      return { behind: 0, commits: [], more: 0 };
+    }
+    leftRef = trimmed;
+  }
+  const notArgs = options.notRef ? ['--not', options.notRef] : [];
+  let revRangeArgs = leftRef
+    ? ['--cherry-pick', '--right-only', `${leftRef}...${trackingRef}`, ...notArgs]
+    : [trackingRef, ...notArgs];
   let countRes = await runReadGit(repoPath, ['rev-list', '--count', ...revRangeArgs, '--']);
-  if (!countRes.ok && headExists && isMissingLazyObjectError(countRes.stderr)) {
-    revRangeArgs = [`HEAD..${trackingRef}`];
+  if (!countRes.ok && leftRef && isMissingLazyObjectError(countRes.stderr)) {
+    revRangeArgs = [`${leftRef}..${trackingRef}`, ...notArgs];
     countRes = await runReadGit(repoPath, ['rev-list', '--count', ...revRangeArgs, '--']);
   }
   if (!countRes.ok) {
@@ -771,22 +787,23 @@ async function readIncomingRange(
     return { behind: 0, commits: [], more: 0 };
   }
 
+  const maxCount = options.limit ?? INCOMING_COMMITS_LIMIT;
   const runLog = (shortstat: boolean, rangeArgs: string[]) => runReadGit(repoPath, [
     'log',
-    `--max-count=${INCOMING_COMMITS_LIMIT}`,
+    `--max-count=${maxCount}`,
     ...(shortstat ? ['--shortstat'] : []),
     DETAILED_COMMIT_FORMAT,
     ...rangeArgs,
     '--',
   ]);
 
-  let hasShortstat = true;
-  let logRes = await runLog(true, revRangeArgs);
+  let hasShortstat = options.shortstat !== false;
+  let logRes = await runLog(hasShortstat, revRangeArgs);
   if (!logRes.ok && isMissingLazyObjectError(logRes.stderr)) {
     hasShortstat = false;
     logRes = await runLog(false, revRangeArgs);
-    if (!logRes.ok && headExists && revRangeArgs[0] === '--cherry-pick' && isMissingLazyObjectError(logRes.stderr)) {
-      revRangeArgs = [`HEAD..${trackingRef}`];
+    if (!logRes.ok && leftRef && revRangeArgs[0] === '--cherry-pick' && isMissingLazyObjectError(logRes.stderr)) {
+      revRangeArgs = [`${leftRef}..${trackingRef}`, ...notArgs];
       const fallbackCount = await runReadGit(repoPath, ['rev-list', '--count', ...revRangeArgs, '--']);
       if (fallbackCount.ok) {
         behind = Number.parseInt(fallbackCount.stdout.trim(), 10) || 0;
@@ -1031,5 +1048,51 @@ export async function incomingCommits(
   return {
     at: new Date(clock()).toISOString(),
     repos: results,
+  };
+}
+
+export interface LocalIncomingRepoSnapshot {
+  host: IncomingHost | null;
+  trackingRefOid: string | null;
+  commits: IncomingCommit[];
+}
+
+/**
+ * Reads incoming commits from the repository's local remote-tracking ref without fetching.
+ * Used by What's new so checks stay offline-instant and diff cleanly against the last seen remote ref.
+ */
+export async function readLocalIncomingForRepo(
+  repoPath: string,
+  options: { seenTrackingOid?: string; limit?: number; headOid?: string | null } = {},
+): Promise<LocalIncomingRepoSnapshot> {
+  if (!(await isGitRepo(repoPath).catch(() => false))) {
+    return { host: null, trackingRefOid: null, commits: [] };
+  }
+  const target = await resolveRepoTarget(repoPath).catch(() => null);
+  if (!target || !target.trackingRefExists || !target.trackingRefOid) {
+    return { host: target?.host ?? null, trackingRefOid: null, commits: [] };
+  }
+  const { trackingRefOid } = target;
+  if (options.seenTrackingOid && options.seenTrackingOid === trackingRefOid) {
+    return { host: target.host, trackingRefOid, commits: [] };
+  }
+  let notRef: string | undefined;
+  if (
+    options.seenTrackingOid
+    && !options.seenTrackingOid.startsWith('-')
+    && await refExists(repoPath, `${options.seenTrackingOid}^{commit}`)
+  ) {
+    notRef = options.seenTrackingOid;
+  }
+  const range = await readIncomingRange(repoPath, trackingRefOid, target.parsedRemote, {
+    notRef,
+    limit: options.limit ?? 200,
+    shortstat: false,
+    ...(options.headOid !== undefined ? { headOid: options.headOid } : {}),
+  });
+  return {
+    host: target.host,
+    trackingRefOid,
+    commits: range.commits,
   };
 }

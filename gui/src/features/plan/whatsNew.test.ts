@@ -135,4 +135,49 @@ describe('boardNews: what the Board draws its commits from', () => {
     expect(merged.commits[0]!.more).toBe(5);
     expect(commitsOnBoard(merged)).toBe(10);
   });
+
+  it('includes incoming commits in news counts and groups without adding them to Board Areas', () => {
+    const view = news({
+      incoming: [{
+        repo: 'billing',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{ author: 'Maria', count: 3, newestSha: 'f1e2d3c', newestAt: ago(5), subject: 'Stream CSV' }],
+      }],
+    });
+    expect(newsCounts(view)).toEqual(['3 commits']);
+    expect(newsGroups(view, NOW)).toEqual([{ title: 'Commits', lines: ['billing: 3 new commits from Maria on Azure DevOps'] }]);
+    const merged = boardNews(view, { at: NOW.toISOString(), from: ago(60), commits: [] })!;
+    expect(commitsOnBoard(merged)).toBe(0);
+  });
+
+  it('prefixes incoming news lines with the repository name in both single-repo and multi-repo reports', () => {
+    const single = news({
+      incoming: [{
+        repo: 'api',
+        host: { kind: 'github', name: 'GitHub' },
+        groups: [{ author: 'Maria', count: 2, newestSha: 'abc1234', newestAt: ago(5), subject: 'Fix auth' }],
+      }],
+    });
+    expect(newsGroups(single, NOW)).toEqual([
+      { title: 'Commits', lines: ['api: 2 new commits from Maria on GitHub'] },
+    ]);
+
+    const multi = news({
+      incoming: [
+        {
+          repo: 'api',
+          host: { kind: 'github', name: 'GitHub' },
+          groups: [{ author: 'Maria', count: 2, newestSha: 'abc1234', newestAt: ago(5), subject: 'Fix auth' }],
+        },
+        {
+          repo: 'billing',
+          host: null,
+          groups: [{ author: 'Bob', count: 1, newestSha: 'def5678', newestAt: ago(10), subject: 'Round totals' }],
+        },
+      ],
+    });
+    expect(newsGroups(multi, NOW)).toEqual([
+      { title: 'Commits', lines: ['api: 2 new commits from Maria on GitHub', 'billing: 1 new commit from Bob'] },
+    ]);
+  });
 });

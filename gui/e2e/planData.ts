@@ -37,9 +37,11 @@ export function whatsNew(fields: Partial<WhatsNewView> = {}): WhatsNewView {
   const empty = { items: [], more: 0 };
   const report: WhatsNewView = {
     reader: 'user', at: new Date(now).toISOString(), from: new Date(now - 2 * 3_600_000).toISOString(), basis: 'last-look',
-    plan: empty, documents: empty, knowledge: empty, commits: [], problems: [], empty: true, ...fields,
+    plan: empty, documents: empty, knowledge: empty, commits: [], incoming: [], problems: [], empty: true, ...fields,
   };
-  const nothing = [report.plan, report.documents, report.knowledge].every((section) => section.items.length === 0) && report.commits.every((repo) => repo.commits.length === 0);
+  const nothing = [report.plan, report.documents, report.knowledge].every((section) => section.items.length === 0)
+    && report.commits.every((repo) => repo.commits.length === 0)
+    && (report.incoming ?? []).every((repo) => repo.groups.length === 0);
   return { ...report, empty: fields.empty ?? nothing };
 }
 

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider, type UseQueryResult } from '@tanstack/react-query';
 import type { CommitDetail } from '../board/commitContext.js';
+import type { IncomingCommitsReport } from '../plan/whatsNew.js';
 import { CommitsList, CommitsMain } from './CommitsView.js';
 import { buildCommitListGroups } from './commitListModel.js';
 import type { CommitSequence } from './commitsMode.js';
@@ -131,5 +132,132 @@ describe('Commits mode view (RV2)', () => {
     expect(html).toContain('data-testid="commit-list-keys"');
     expect(html).toContain('generator.ts');
     expect(html).toContain('back to Board');
+  });
+
+  it('shows incoming status lines only for problem states (sign-in, offline, error, busy) and omits no-upstream / no-remote', () => {
+    const query = { data: detail, isPending: false, isError: false, error: null, refetch: () => undefined } as unknown as UseQueryResult<CommitDetail, Error>;
+    const quietReport: IncomingCommitsReport = {
+      at: '2026-10-01T12:00:00Z',
+      repos: [
+        {
+          repo: 'api',
+          remote: 'origin',
+          branch: 'feat/local',
+          host: { kind: 'github', name: 'GitHub' },
+          lastFetchAt: '2026-10-01T11:59:00Z',
+          fetching: false,
+          state: 'no-upstream',
+          message: 'No upstream branch configured yet',
+          behind: 0,
+          commits: [],
+          more: 0,
+        },
+        {
+          repo: 'scratch',
+          remote: null,
+          branch: 'main',
+          host: null,
+          lastFetchAt: '2026-10-01T11:59:00Z',
+          fetching: false,
+          state: 'no-remote',
+          message: 'Repository has no remotes configured',
+          behind: 0,
+          commits: [],
+          more: 0,
+        },
+      ],
+    };
+    const quietHtml = renderToStaticMarkup(
+      createElement(CommitsList, {
+        groups: [],
+        commit: null,
+        expanded: null,
+        file: null,
+        expandedDetail: query,
+        recentPending: false,
+        incomingReport: quietReport,
+        onCheckIncoming: () => {},
+        onSelectCommit: () => {},
+        onSelectFile: () => {},
+        onTreeStateChange: () => {},
+      }),
+    );
+    expect(quietHtml).not.toContain('data-testid="incoming-status"');
+    expect(quietHtml).not.toContain('No upstream branch configured yet');
+    expect(quietHtml).not.toContain('Repository has no remotes configured');
+
+    const problemReport: IncomingCommitsReport = {
+      at: '2026-10-01T12:00:00Z',
+      repos: [
+        { ...quietReport.repos[0]!, repo: 'a', state: 'sign-in', message: 'Sign in needed' },
+        { ...quietReport.repos[0]!, repo: 'b', state: 'offline', message: 'Could not reach origin' },
+        { ...quietReport.repos[0]!, repo: 'c', state: 'error', message: 'Fetch failed' },
+        { ...quietReport.repos[0]!, repo: 'd', state: 'busy', message: 'Git repository is busy' },
+      ],
+    };
+    const problemHtml = renderToStaticMarkup(
+      createElement(CommitsList, {
+        groups: [],
+        commit: null,
+        expanded: null,
+        file: null,
+        expandedDetail: query,
+        recentPending: false,
+        incomingReport: problemReport,
+        onSelectCommit: () => {},
+        onSelectFile: () => {},
+        onTreeStateChange: () => {},
+      }),
+    );
+    expect(problemHtml.match(/data-testid="incoming-status"/g)).toHaveLength(4);
+    expect(problemHtml).toContain('a: Sign in needed');
+    expect(problemHtml).toContain('b: Could not reach origin');
+    expect(problemHtml).toContain('c: Fetch failed');
+    expect(problemHtml).toContain('d: Git repository is busy');
+  });
+
+  it('truncates long incoming author names on one line with a title tooltip', () => {
+    const query = { data: detail, isPending: false, isError: false, error: null, refetch: () => undefined } as unknown as UseQueryResult<CommitDetail, Error>;
+    const longAuthor = 'Alexandrina Bartholomew-Montgomery-Featherstonehaugh the Third';
+    const incoming: IncomingCommitsReport = {
+      at: '2026-10-01T12:00:00Z',
+      repos: [{
+        repo: 'billing',
+        remote: 'origin',
+        branch: 'main',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        lastFetchAt: '2026-10-01T11:59:00Z',
+        fetching: false,
+        state: 'ok',
+        message: null,
+        behind: 1,
+        commits: [{
+          sha: 'f1e2d3c4b5a6',
+          author: longAuthor,
+          subject: 'Add streaming CSV writer',
+          at: '2026-10-01T11:50:00Z',
+          incoming: true,
+        }],
+        more: 0,
+      }],
+    };
+    const groups = buildCommitListGroups(null, undefined, null, null, incoming);
+    const html = renderToStaticMarkup(
+      createElement(CommitsList, {
+        groups,
+        commit: null,
+        expanded: null,
+        file: null,
+        expandedDetail: query,
+        recentPending: false,
+        incomingReport: incoming,
+        onSelectCommit: () => {},
+        onSelectFile: () => {},
+        onTreeStateChange: () => {},
+      }),
+    );
+    expect(html).toContain('data-testid="commit-item-author"');
+    expect(html).toContain(`title="${longAuthor}"`);
+    expect(html).toContain('truncate');
   });
 });

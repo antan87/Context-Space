@@ -11,7 +11,7 @@ import { assertPathWithin } from '../resources/fs-safety.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, type OmittedReason } from '../services/repository-file.js';
 import { extractAstSymbols, type ExtractedSymbol } from '../services/symbolService.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
-import { buildCommitUrl, parseRemoteUrl, type ForgeKind } from '../utils/pr.js';
+import { buildCommitUrl, parseRemoteUrl, resolvePreferredRemoteUrl, type ForgeKind } from '../utils/pr.js';
 
 /**
  * 32 MB bound for diff calls (numstat and name-status). Even massive commits
@@ -460,12 +460,23 @@ export async function readCommit(
       const chosenRemote = matchingRemotes.has('origin') ? 'origin' : Array.from(matchingRemotes)[0];
       if (chosenRemote) {
         try {
-          const { stdout: remoteUrl } = await execa(
+          const configured = await execa(
             'git',
-            ['remote', 'get-url', chosenRemote],
-            { cwd: repoPath, maxBuffer: MAX_COMMIT_DIFF_BYTES },
+            ['config', '--get', `remote.${chosenRemote}.url`],
+            { cwd: repoPath, maxBuffer: MAX_COMMIT_DIFF_BYTES, reject: false },
           );
-          const parsed = parseRemoteUrl(remoteUrl.trim());
+          const remoteUrl = await resolvePreferredRemoteUrl(
+            configured.exitCode === 0 ? configured.stdout : '',
+            async () => {
+              const effective = await execa(
+                'git',
+                ['remote', 'get-url', chosenRemote],
+                { cwd: repoPath, maxBuffer: MAX_COMMIT_DIFF_BYTES, reject: false },
+              );
+              return effective.exitCode === 0 ? effective.stdout : null;
+            },
+          );
+          const parsed = remoteUrl ? parseRemoteUrl(remoteUrl) : null;
           if (parsed) {
             forge = parsed.kind;
             webUrl = buildCommitUrl(parsed, fullSha);

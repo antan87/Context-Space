@@ -4,7 +4,8 @@
  * words are pure so they are tested alone; the queries read the list and say the user has seen it.
  */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useLayoutEffect, useSyncExternalStore } from 'react';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client.js';
 import { changeLine, type PlanFileChange } from './planFile.js';
 import { whenText } from './planView.js';
@@ -24,6 +25,57 @@ export interface NewsCommit {
 }
 export interface NewsRepo { repo: string; commits: NewsCommit[]; more: number; moreAtLeast?: true; problem?: string }
 
+export type IncomingState = 'ok' | 'checking' | 'sign-in' | 'offline' | 'busy' | 'no-remote' | 'no-upstream' | 'error';
+
+export interface IncomingHost {
+  kind: 'github' | 'gitlab' | 'bitbucket' | 'azure' | 'local' | 'other';
+  name: string;
+}
+
+export interface IncomingCommitView {
+  sha: string;
+  author: string;
+  subject: string;
+  at: string;
+  firstBodyLine?: string;
+  fileCount?: number;
+  incoming: true;
+  webUrl?: string | null;
+}
+
+export interface IncomingRepoView {
+  repo: string;
+  remote: string | null;
+  branch: string | null;
+  host: IncomingHost | null;
+  lastFetchAt: string | null;
+  fetching: boolean;
+  state: IncomingState;
+  message: string | null;
+  behind: number;
+  commits: IncomingCommitView[];
+  more: number;
+}
+
+export interface IncomingCommitsReport {
+  at: string;
+  repos: IncomingRepoView[];
+}
+
+export interface NewsIncomingGroupView {
+  author: string;
+  count: number;
+  newestSha: string;
+  newestAt: string;
+  subject: string;
+}
+
+export interface NewsIncomingRepoView {
+  repo: string;
+  host: IncomingHost | null;
+  groups: NewsIncomingGroupView[];
+}
+
 export interface WhatsNewView {
   reader: string;
   /** When the list was made; Got it sends it back, so what is marked is exactly what was shown. */
@@ -37,6 +89,8 @@ export interface WhatsNewView {
   documents: NewsSection<NewsDocument>;
   knowledge: NewsSection<NewsKnowledge>;
   commits: NewsRepo[];
+  /** Unseen commits on local remote-tracking refs (never triggers a fetch). */
+  incoming?: NewsIncomingRepoView[];
   /** Only on what the Board draws (`boardNews`): the commits that are new to the reader, a part of `commits`, which is the recent ones. */
   unseenCommits?: NewsRepo[];
   problems: string[];
@@ -67,6 +121,248 @@ export function useWhatsNew(workspace: string | null) {
 export interface RecentCommits { at: string; from: string; commits: NewsRepo[] }
 
 export const recentCommitsKey = (workspace: string | null) => ['recent-commits', workspace] as const;
+
+export const incomingCommitsKey = (workspace: string | null) => ['incoming-commits', workspace] as const;
+
+const INCOMING_FETCH_RETRY_MS = 5_000;
+const INCOMING_FETCH_MAX_RETRIES = 8;
+
+interface IncomingWatcherState {
+  subscribers: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  retries: number;
+  exhausted: boolean;
+  wasFetching: boolean;
+  inFlightRequests: number;
+  activeRetry: boolean;
+  lastFetchFailed: boolean;
+  wantsFollowUp: boolean;
+  listeners: Set<() => void>;
+}
+
+const incomingWatchersByClient = new WeakMap<QueryClient, Map<string, IncomingWatcherState>>();
+
+function getClientWatchers(queryClient: QueryClient): Map<string, IncomingWatcherState> {
+  let map = incomingWatchersByClient.get(queryClient);
+  if (!map) {
+    map = new Map();
+    incomingWatchersByClient.set(queryClient, map);
+  }
+  return map;
+}
+
+function getWatcher(queryClient: QueryClient, workspace: string | null): IncomingWatcherState | undefined {
+  if (!workspace) return undefined;
+  return getClientWatchers(queryClient).get(workspace);
+}
+
+function ensureWatcher(queryClient: QueryClient, workspace: string): IncomingWatcherState {
+  const map = getClientWatchers(queryClient);
+  let watcher = map.get(workspace);
+  if (!watcher) {
+    watcher = {
+      subscribers: 0,
+      timer: null,
+      retries: 0,
+      exhausted: false,
+      wasFetching: false,
+      inFlightRequests: 0,
+      activeRetry: false,
+      lastFetchFailed: false,
+      wantsFollowUp: false,
+      listeners: new Set(),
+    };
+    map.set(workspace, watcher);
+  }
+  return watcher;
+}
+
+function notifyWatcher(watcher: IncomingWatcherState): void {
+  for (const listener of watcher.listeners) listener();
+}
+
+function cancelWatcherTimer(watcher: IncomingWatcherState): void {
+  if (watcher.timer !== null) {
+    clearTimeout(watcher.timer);
+    watcher.timer = null;
+  }
+}
+
+function isWatcherPending(watcher: IncomingWatcherState | undefined): boolean {
+  if (!watcher) return false;
+  return watcher.inFlightRequests > 0 || watcher.activeRetry || watcher.timer !== null;
+}
+
+function scheduleWatcherRetry(queryClient: QueryClient, workspace: string, watcher: IncomingWatcherState): void {
+  if (
+    watcher.timer !== null
+    || watcher.subscribers <= 0
+    || watcher.exhausted
+    || watcher.lastFetchFailed
+    || watcher.retries >= INCOMING_FETCH_MAX_RETRIES
+  ) {
+    return;
+  }
+  watcher.timer = setTimeout(() => {
+    const current = getWatcher(queryClient, workspace);
+    if (!current) return;
+    current.timer = null;
+    if (current.subscribers <= 0 || current.exhausted || current.retries >= INCOMING_FETCH_MAX_RETRIES) {
+      current.wantsFollowUp = false;
+      notifyWatcher(current);
+      return;
+    }
+    current.retries += 1;
+    current.activeRetry = true;
+    notifyWatcher(current);
+    void queryClient.invalidateQueries({ queryKey: incomingCommitsKey(workspace) }).finally(() => {
+      current.activeRetry = false;
+      notifyWatcher(current);
+    });
+  }, INCOMING_FETCH_RETRY_MS);
+}
+
+function applyIncomingReport(
+  queryClient: QueryClient,
+  workspace: string,
+  watcher: IncomingWatcherState,
+  report: IncomingCommitsReport,
+): void {
+  const fetching = report.repos.some((repo) => repo.fetching);
+  watcher.lastFetchFailed = false;
+  if (!fetching) {
+    cancelWatcherTimer(watcher);
+    const justFinished = watcher.wasFetching;
+    watcher.wasFetching = false;
+    watcher.wantsFollowUp = false;
+    watcher.retries = 0;
+    watcher.exhausted = false;
+    if (justFinished) {
+      void queryClient.invalidateQueries({ queryKey: newsKey(workspace) });
+    }
+    return;
+  }
+  watcher.wasFetching = true;
+  if (watcher.retries >= INCOMING_FETCH_MAX_RETRIES) {
+    cancelWatcherTimer(watcher);
+    watcher.exhausted = true;
+    watcher.wantsFollowUp = false;
+    return;
+  }
+  watcher.wantsFollowUp = true;
+  scheduleWatcherRetry(queryClient, workspace, watcher);
+}
+
+export async function fetchIncomingCommits(workspace: string, opts?: { refresh?: boolean; signal?: AbortSignal }): Promise<IncomingCommitsReport> {
+  const suffix = opts?.refresh ? '?refresh=1' : '';
+  const report = await apiFetch<IncomingCommitsReport>(`/api/workspace/${encodeURIComponent(workspace)}/incoming${suffix}`, { signal: opts?.signal });
+  if (typeof report?.at !== 'string' || !Array.isArray(report.repos)) {
+    throw new Error('the incoming commits came back in a form this version of the app does not read');
+  }
+  return report;
+}
+
+export async function refreshIncomingCommits(queryClient: QueryClient, workspace: string): Promise<IncomingCommitsReport> {
+  const watcher = ensureWatcher(queryClient, workspace);
+  cancelWatcherTimer(watcher);
+  watcher.retries = 0;
+  watcher.exhausted = false;
+  watcher.lastFetchFailed = false;
+  watcher.wantsFollowUp = false;
+  watcher.activeRetry = false;
+  watcher.inFlightRequests += 1;
+  notifyWatcher(watcher);
+  try {
+    const report = await fetchIncomingCommits(workspace, { refresh: true });
+    applyIncomingReport(queryClient, workspace, watcher, report);
+    queryClient.setQueryData(incomingCommitsKey(workspace), report);
+    void queryClient.invalidateQueries({ queryKey: recentCommitsKey(workspace) });
+    if (!report.repos.some((repo) => repo.fetching)) {
+      void queryClient.invalidateQueries({ queryKey: newsKey(workspace) });
+    }
+    return report;
+  } catch (error) {
+    watcher.lastFetchFailed = true;
+    watcher.wantsFollowUp = false;
+    cancelWatcherTimer(watcher);
+    throw error;
+  } finally {
+    watcher.inFlightRequests = Math.max(0, watcher.inFlightRequests - 1);
+    notifyWatcher(watcher);
+  }
+}
+
+export function useIncomingCommits(workspace: string | null, options: { enabled?: boolean } = {}) {
+  const enabled = Boolean(workspace) && (options.enabled ?? true);
+  const queryClient = useQueryClient();
+
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!enabled || !workspace) return () => undefined;
+      const watcher = ensureWatcher(queryClient, workspace);
+      watcher.listeners.add(listener);
+      return () => {
+        watcher.listeners.delete(listener);
+      };
+    },
+    [enabled, workspace, queryClient],
+  );
+
+  const getSnapshot = useCallback(
+    () => (enabled && workspace ? isWatcherPending(getWatcher(queryClient, workspace)) : false),
+    [enabled, workspace, queryClient],
+  );
+
+  const watcherPending = useSyncExternalStore(subscribe, getSnapshot, () => false);
+
+  const query = useQuery({
+    queryKey: incomingCommitsKey(workspace),
+    queryFn: async ({ signal }) => {
+      const watcher = ensureWatcher(queryClient, workspace!);
+      watcher.inFlightRequests += 1;
+      notifyWatcher(watcher);
+      try {
+        const report = await fetchIncomingCommits(workspace!, { signal });
+        applyIncomingReport(queryClient, workspace!, watcher, report);
+        return report;
+      } catch (error) {
+        if (!signal.aborted) {
+          watcher.lastFetchFailed = true;
+          watcher.wantsFollowUp = false;
+          cancelWatcherTimer(watcher);
+        }
+        throw error;
+      } finally {
+        watcher.inFlightRequests = Math.max(0, watcher.inFlightRequests - 1);
+        notifyWatcher(watcher);
+      }
+    },
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  useLayoutEffect(() => {
+    if (!enabled || !workspace) return undefined;
+    const watcher = ensureWatcher(queryClient, workspace);
+    watcher.subscribers += 1;
+    if (watcher.wantsFollowUp && !watcher.exhausted && !watcher.lastFetchFailed) {
+      scheduleWatcherRetry(queryClient, workspace, watcher);
+      notifyWatcher(watcher);
+    }
+    return () => {
+      const current = getWatcher(queryClient, workspace);
+      if (!current) return;
+      current.subscribers = Math.max(0, current.subscribers - 1);
+      if (current.subscribers <= 0) {
+        cancelWatcherTimer(current);
+      }
+    };
+  }, [enabled, workspace, queryClient]);
+
+  const checking = enabled && (query.fetchStatus === 'fetching' || watcherPending);
+  return { ...query, checking };
+}
 
 export function useRecentCommits(workspace: string | null) {
   return useQuery({
@@ -144,15 +440,24 @@ export function agoText(at: string | undefined, now: Date = new Date()): string 
   return whenText(at, now);
 }
 
+export function formatIncomingNewsLine(repo: string, count: number, author: string, host: { name: string } | null | undefined): string {
+  const noun = count === 1 ? 'commit' : 'commits';
+  const summary = host?.name
+    ? `${count} new ${noun} from ${author} on ${host.name}`
+    : `${count} new ${noun} from ${author}`;
+  return `${repo}: ${summary}`;
+}
+
 /** What the list holds, as counts: ["3 plan changes", "1 new document", "2 commits"]. Nothing that is zero. */
-export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'knowledge' | 'commits'>): string[] {
+export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'knowledge' | 'commits' | 'incoming'>): string[] {
   const documents = news.documents.items;
   const added = documents.filter((document) => document.change === 'added').length;
   // Past the ones listed, which of the rest are new is not known, so then they are only counted.
   const documentCounts = news.documents.more
     ? [count(documents.length + news.documents.more, 'document', 'documents')]
     : [added ? count(added, 'new document', 'new documents') : '', documents.length - added ? count(documents.length - added, 'changed document', 'changed documents') : ''];
-  const commits = news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0);
+  const incomingCommits = (news.incoming ?? []).reduce((total, repo) => total + repo.groups.reduce((sum, group) => sum + group.count, 0), 0);
+  const commits = news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0) + incomingCommits;
   const commitsAtLeast = news.commits.some((repo) => repo.moreAtLeast);
   const knowledge = news.knowledge.items.length + news.knowledge.more;
   const plan = news.plan.items.length + news.plan.more;
@@ -185,6 +490,7 @@ export type NewsRef =
   | { kind: 'plan'; item: PlanFileChange['kind']; key: string; removed: boolean }
   | { kind: 'document'; name: string }
   | { kind: 'commit'; repo: string; sha: string }
+  | { kind: 'incoming'; repo: string; sha: string; author: string; count: number; host: string | null }
   /** A knowledge entry by its day and title, or the knowledge in general (the line "and 3 more"). */
   | { kind: 'knowledge'; title?: string; date?: string | null };
 
@@ -211,6 +517,14 @@ export function newsEntries(news: WhatsNewView, now: Date = new Date()): NewsEnt
       ...repo.commits.map((commit): NewsEntry => ({ group: 'Commits', text: withTime(`${repo.repo}: ${commit.sha} ${commit.subject} (${commit.author})`, commit.at, now), at: commit.at, ref: { kind: 'commit', repo: repo.repo, sha: commit.sha } })),
       ...(repo.more ? [{ group: 'Commits', text: `and ${repo.more}${repo.moreAtLeast ? '+' : ''} more in ${repo.repo}` }] : []),
     ]),
+    ...(news.incoming ?? []).flatMap((repo): NewsEntry[] =>
+      repo.groups.map((group): NewsEntry => ({
+        group: 'Commits',
+        text: formatIncomingNewsLine(repo.repo, group.count, group.author, repo.host),
+        at: group.newestAt,
+        ref: { kind: 'incoming', repo: repo.repo, sha: group.newestSha, author: group.author, count: group.count, host: repo.host?.name ?? null },
+      })),
+    ),
     ...problems.map((text): NewsEntry => ({ group: 'Not read', text })),
   ];
 }
@@ -227,5 +541,6 @@ export function newsGroups(news: WhatsNewView, now: Date = new Date()): NewsGrou
 export function newsTotal(news: WhatsNewView | undefined): number {
   if (!news || news.empty) return 0;
   return news.plan.items.length + news.plan.more + news.documents.items.length + news.documents.more + news.knowledge.items.length + news.knowledge.more
-    + news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0);
+    + news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0)
+    + (news.incoming ?? []).reduce((total, repo) => total + repo.groups.reduce((sum, group) => sum + group.count, 0), 0);
 }

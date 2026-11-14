@@ -9,6 +9,7 @@ import { execa } from 'execa';
 import {
   classifyGitFetchError,
   incomingCommits,
+  readLocalIncomingForRepo,
   resetIncomingCommitsState,
   resolveHostInfo,
   waitForIncomingFetches,
@@ -1684,5 +1685,53 @@ exec git-upload-pack "$@"
       if (prevTrace === undefined) delete process.env.GIT_TRACE;
       else process.env.GIT_TRACE = prevTrace;
     }
+  });
+
+  it('resolves forge host and webUrl for aliased remotes via insteadOf without breaking mirror rewrites', async () => {
+    const { ws, bare, repo, maria } = await createWorkspaceWithBareRemote(root);
+    const sha = await commitAsMaria(maria, 'Aliased remote commit', { 'alias.ts': 'export const a = 1;\n' });
+
+    let fakeNow = Date.parse('2026-11-14T13:00:00.000Z');
+    const now = () => fakeNow;
+    // Populate local remote-tracking ref and cooldown timestamp from local bare repo (no external network)
+    await incomingCommits(ws, { refresh: true, now });
+
+    // Rewrite remote URL to an alias `gh:acme/api.git` with `url.https://github.com/.insteadOf gh:`
+    await git(repo, 'config', 'url.https://github.com/.insteadOf', 'gh:');
+    await git(repo, 'remote', 'set-url', 'origin', 'gh:acme/api.git');
+
+    const localAliased = await readLocalIncomingForRepo(repo);
+    expect(localAliased.host).toEqual({ kind: 'github', name: 'GitHub' });
+    expect(localAliased.commits[0]?.webUrl).toBe(`https://github.com/acme/api/commit/${sha}`);
+
+    fakeNow += 1_000; // still inside cooldown -> incomingCommits reads locally without fetching GitHub
+    const cachedAliased = await incomingCommits(ws, { now });
+    expect(cachedAliased.repos[0]?.host).toEqual({ kind: 'github', name: 'GitHub' });
+    expect(cachedAliased.repos[0]?.commits[0]?.webUrl).toBe(`https://github.com/acme/api/commit/${sha}`);
+
+    // Mirror rewrite to a local bare path must keep the unknown raw host rather than falling back to a path
+    await git(repo, 'config', '--unset-all', 'url.https://github.com/.insteadOf');
+    await git(repo, 'remote', 'set-url', 'origin', 'https://git.internal.corp/team/api.git');
+    await git(repo, 'config', `url.${bare}.insteadOf`, 'https://git.internal.corp/team/api.git');
+    const localMirror = await readLocalIncomingForRepo(repo);
+    expect(localMirror.host).toEqual({ kind: 'unknown', name: 'git.internal.corp' });
+    expect(localMirror.commits[0]?.webUrl).toBeUndefined();
+  });
+
+  it('uses a snapshot headOid instead of live HEAD when reading local incoming commits', async () => {
+    const { repo, maria, branch } = await createWorkspaceWithBareRemote(root);
+    await commitAsMaria(maria, 'Snapshot incoming 1', { 's1.ts': '1\n' });
+    await commitAsMaria(maria, 'Snapshot incoming 2', { 's2.ts': '2\n' });
+    await git(repo, 'fetch', 'origin');
+
+    const prePullHead = (await git(repo, 'rev-parse', 'HEAD')).trim();
+    // Simulate a concurrent fast-forward pull advancing live HEAD after the repo snapshot was taken
+    await git(repo, 'merge', '--ff-only', `origin/${branch}`);
+
+    const liveHeadResult = await readLocalIncomingForRepo(repo);
+    expect(liveHeadResult.commits).toEqual([]);
+
+    const snapshotHeadResult = await readLocalIncomingForRepo(repo, { headOid: prePullHead });
+    expect(snapshotHeadResult.commits.map((c) => c.subject)).toEqual(['Snapshot incoming 2', 'Snapshot incoming 1']);
   });
 });

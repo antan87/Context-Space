@@ -170,6 +170,8 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/workspace/*/news', json(whatsNew()));
     // The Board's recent commits (what it draws, whatever was seen): none unless a spec says
     await page.route('**/api/workspace/*/recent-commits', (route) => route.fulfill({ json: { at: new Date().toISOString(), from: new Date(Date.now() - 3 * 86_400_000).toISOString(), commits: [] } }));
+    // Incoming commits pushed by others: none unless a spec registers its own route
+    await page.route('**/api/workspace/*/incoming**', (route) => route.fulfill({ json: { at: new Date().toISOString(), repos: [] } }));
     // Nothing has been put on the board; a spec about the board routes its own.
     await page.route('**/api/workspace/*/board', json(boardFile()));
     // No workspace files by default; specs about Workspace files register their own listing route.

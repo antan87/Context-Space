@@ -483,3 +483,279 @@ describe('the commits the Board draws', () => {
     expect(batch.commits[0]!.commits).toHaveLength(18);
   });
 });
+
+describe('incoming commits on remote-tracking refs', () => {
+  const setupIncomingRemote = async () => {
+    const ext = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'whats-new-remote-')));
+    const bare = path.join(ext, 'remote.git');
+    await execa('git', ['init', '--bare', '-b', 'main', bare]);
+    const azureUrl = 'https://dev.azure.com/org/proj/_git/api';
+    await execa('git', ['config', 'user.name', 'Anna'], { cwd: api });
+    await execa('git', ['config', 'user.email', 'a@example.com'], { cwd: api });
+    await execa('git', ['config', `url.${bare}.insteadOf`, azureUrl], { cwd: api });
+    await execa('git', ['remote', 'add', 'origin', azureUrl], { cwd: api });
+
+    await commit('Initial local', ago(10), 'Anna');
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: api });
+    await whatsNew(root, 'user', { mark: true, now: ago(9) });
+
+    const maria = path.join(ext, 'maria');
+    await execa('git', ['clone', bare, maria]);
+    await execa('git', ['config', 'user.name', 'Maria'], { cwd: maria });
+    await execa('git', ['config', 'user.email', 'maria@example.com'], { cwd: maria });
+
+    const mariaEnv = (hoursAgo: number) => {
+      const date = ago(hoursAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      return {
+        GIT_AUTHOR_NAME: 'Maria',
+        GIT_AUTHOR_EMAIL: 'maria@example.com',
+        GIT_AUTHOR_DATE: date,
+        GIT_COMMITTER_NAME: 'Maria',
+        GIT_COMMITTER_EMAIL: 'maria@example.com',
+        GIT_COMMITTER_DATE: date,
+      };
+    };
+
+    const commitAsMaria = async (subject: string, hoursAgo: number) => {
+      await fs.writeFile(path.join(maria, `${subject.replace(/\W+/g, '_')}.txt`), subject);
+      const env = mariaEnv(hoursAgo);
+      await execa('git', ['add', '.'], { cwd: maria, env });
+      await execa('git', ['commit', '-m', subject], { cwd: maria, env });
+      return (await execa('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: maria })).stdout.trim();
+    };
+
+    return { ext, azureUrl, maria, mariaEnv, commitAsMaria };
+  };
+
+  it('groups unseen incoming commits by author and host without fetching, preserves unseen commits across pending markSeen, and clears on pull', async () => {
+    const { ext, azureUrl, maria, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commitAsMaria('First incoming change', 4);
+      const secondShort = await commitAsMaria('Second incoming change', 2);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const first = await whatsNew(root, 'user', { pending: true, now: ago(1) });
+      expect(first.empty).toBe(false);
+      expect(first.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 2,
+          newestSha: secondShort,
+          newestAt: ago(2).toISOString(),
+          subject: 'Second incoming change',
+        }],
+      }]);
+
+      // Maria pushes a 3rd commit and it gets fetched BEFORE markSeen is called: pending promotes snapshot 1's tracking SHA
+      const thirdShort = await commitAsMaria('Third incoming commit', 0.5);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      await markSeen(root, 'user', first.at);
+
+      const next = await whatsNew(root, 'user', { pending: true, now: NOW });
+      expect(next.empty).toBe(false);
+      expect(next.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 1,
+          newestSha: thirdShort,
+          newestAt: ago(0.5).toISOString(),
+          subject: 'Third incoming commit',
+        }],
+      }]);
+
+      await markSeen(root, 'user', next.at);
+
+      // Even if a 4th commit exists on an unreachable remote, whatsNew never fetches and stays instant/empty
+      await commitAsMaria('Fourth unfetched commit', 0.2);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['remote', 'set-url', 'origin', 'https://127.0.0.1:1/never-fetched.git'], { cwd: api });
+      const quiet = await whatsNew(root, 'user', { now: NOW });
+      expect(quiet.incoming).toEqual([]);
+      expect(quiet.empty).toBe(true);
+
+      // Pulling brings commits into HEAD; seen incoming commits do not return as new commits
+      await execa('git', ['remote', 'set-url', 'origin', azureUrl], { cwd: api });
+      await execa('git', ['merge', '--ff-only', 'origin/main'], { cwd: api });
+      const afterPull = await whatsNew(root, 'user', { now: NOW });
+      expect(afterPull.incoming).toEqual([]);
+      expect(afterPull.commits).toEqual([{ repo: 'api', commits: [], more: 0 }]);
+      expect(afterPull.empty).toBe(true);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-report seen incoming commits after pulling by merge', async () => {
+    const { ext, maria, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commit('Anna local commit', ago(5), 'Anna');
+      await commitAsMaria('Maria merge change 1', 4);
+      await commitAsMaria('Maria merge change 2', 3);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const seenReport = await whatsNew(root, 'user', { pending: true, now: ago(2) });
+      expect(seenReport.incoming?.[0]?.groups[0]?.count).toBe(2);
+      await markSeen(root, 'user', seenReport.at);
+
+      await execa('git', ['merge', '--no-edit', 'origin/main'], { cwd: api });
+      const afterMerge = await whatsNew(root, 'user', { now: NOW });
+      expect(afterMerge.incoming).toEqual([]);
+      const commitSubjects = afterMerge.commits[0]!.commits.map((c) => c.subject);
+      expect(commitSubjects).not.toContain('Maria merge change 1');
+      expect(commitSubjects).not.toContain('Maria merge change 2');
+      expect(commitSubjects).toEqual([expect.stringMatching(/^Merge /)]);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-report seen incoming commits after rebasing local commits onto them', async () => {
+    const { ext, maria, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commit('Anna local work', ago(5), 'Anna');
+      await commitAsMaria('Maria rebase target 1', 4);
+      await commitAsMaria('Maria rebase target 2', 3);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const seenReport = await whatsNew(root, 'user', { pending: true, now: ago(2) });
+      expect(seenReport.incoming?.[0]?.groups[0]?.count).toBe(2);
+      await markSeen(root, 'user', seenReport.at);
+
+      await execa('git', ['rebase', 'origin/main'], { cwd: api });
+      const afterRebase = await whatsNew(root, 'user', { now: NOW });
+      expect(afterRebase.incoming).toEqual([]);
+      expect(afterRebase.commits[0]!.commits.map((c) => c.subject)).toEqual(['Anna local work']);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('reports only the amended commit after a remote force-push instead of re-reporting already-seen commits', async () => {
+    const { ext, maria, mariaEnv, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commitAsMaria('Maria C1', 4);
+      await commitAsMaria('Maria C2', 3);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const rep1 = await whatsNew(root, 'user', { pending: true, now: ago(2) });
+      expect(rep1.incoming?.[0]?.groups[0]?.count).toBe(2);
+      await markSeen(root, 'user', rep1.at);
+
+      // Maria amends C2 -> C2' and force-pushes; C1 was already seen and must not be counted again
+      await fs.writeFile(path.join(maria, 'Maria_C2.txt'), 'Maria C2 amended content');
+      const amendEnv = mariaEnv(1);
+      await execa('git', ['add', '.'], { cwd: maria, env: amendEnv });
+      await execa('git', ['commit', '--amend', '-m', 'Maria C2 amended'], { cwd: maria, env: amendEnv });
+      const amendedShort = (await execa('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: maria })).stdout.trim();
+      await execa('git', ['push', '--force', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const rep2 = await whatsNew(root, 'user', { now: NOW });
+      expect(rep2.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 1,
+          newestSha: amendedShort,
+          newestAt: ago(1).toISOString(),
+          subject: 'Maria C2 amended',
+        }],
+      }]);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores pre-existing incoming commits older than the window on a first look and after upgrading pre-OP2 seen state', async () => {
+    const ext = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'whats-new-old-incoming-')));
+    try {
+      const bare = path.join(ext, 'remote.git');
+      await execa('git', ['init', '--bare', '-b', 'main', bare]);
+      const azureUrl = 'https://dev.azure.com/org/proj/_git/api';
+      await execa('git', ['config', 'user.name', 'Anna'], { cwd: api });
+      await execa('git', ['config', 'user.email', 'a@example.com'], { cwd: api });
+      await execa('git', ['config', `url.${bare}.insteadOf`, azureUrl], { cwd: api });
+      await execa('git', ['remote', 'add', 'origin', azureUrl], { cwd: api });
+
+      const initialHead = await commit('Initial local commit', ago(24 * 25), 'Anna');
+      await execa('git', ['push', '-u', 'origin', 'main'], { cwd: api });
+
+      const maria = path.join(ext, 'maria');
+      await execa('git', ['clone', bare, maria]);
+      await execa('git', ['config', 'user.name', 'Maria'], { cwd: maria });
+      await execa('git', ['config', 'user.email', 'maria@example.com'], { cwd: maria });
+
+      const commitAt = async (subject: string, hoursAgo: number) => {
+        await fs.writeFile(path.join(maria, `${subject.replace(/\W+/g, '_')}.txt`), subject);
+        const date = ago(hoursAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        const env = {
+          GIT_AUTHOR_NAME: 'Maria',
+          GIT_AUTHOR_EMAIL: 'maria@example.com',
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_NAME: 'Maria',
+          GIT_COMMITTER_EMAIL: 'maria@example.com',
+          GIT_COMMITTER_DATE: date,
+        };
+        await execa('git', ['add', '.'], { cwd: maria, env });
+        await execa('git', ['commit', '-m', subject], { cwd: maria, env });
+        return (await execa('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: maria })).stdout.trim();
+      };
+
+      await commitAt('20-day-old upstream commit', 24 * 20);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      // 1. First look (no seen.json): defaults to 3-day window, so 20-day-old incoming is not reported as new
+      const firstLook = await whatsNew(root, 'user', { now: NOW });
+      expect(firstLook.basis).toBe('first-look');
+      expect(firstLook.incoming).toEqual([]);
+
+      // 2. Upgraded pre-OP2 seen.json (has repos map, lacks incoming tracking field)
+      await write('.contextspace/seen.json', JSON.stringify({
+        version: 1,
+        readers: {
+          user: {
+            at: ago(2).toISOString(),
+            repos: { api: initialHead },
+            knowledge: [],
+            documents: [],
+          },
+        },
+      }));
+      const afterUpgrade = await whatsNew(root, 'user', { now: NOW });
+      expect(afterUpgrade.basis).toBe('last-look');
+      expect(afterUpgrade.incoming).toEqual([]);
+
+      // 3. A genuinely new incoming commit after `from` is still reported without the 20-day-old one
+      const recentShort = await commitAt('Fresh incoming commit', 1);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const withFresh = await whatsNew(root, 'user', { now: NOW });
+      expect(withFresh.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 1,
+          newestSha: recentShort,
+          newestAt: ago(1).toISOString(),
+          subject: 'Fresh incoming commit',
+        }],
+      }]);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+});

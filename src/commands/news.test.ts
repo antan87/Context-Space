@@ -201,4 +201,33 @@ describe('newsCommand', () => {
     await newsCommand({ workspace: 'reports', peek: true });
     expect(resolve.resolveWorkspaceQuiet).toHaveBeenCalledWith('reports');
   });
+
+  it('prints incoming commit summaries per repository and author under Commits', () => {
+    const text = renderNews(report({
+      incoming: [
+        {
+          repo: 'billing',
+          host: { kind: 'azure', name: 'Azure DevOps' },
+          groups: [{ author: 'Maria', count: 3, newestSha: 'f1e2d3c', newestAt: ago(10), subject: 'Stream CSV chunks' }],
+        },
+        {
+          repo: 'api',
+          host: { kind: 'github', name: 'GitHub' },
+          groups: [{ author: 'Bob', count: 1, newestSha: 'c4b5a69', newestAt: ago(5), subject: 'Add health check' }],
+        },
+      ],
+    }), NOW);
+    expect(text).toContain('Commits\n  billing: 3 new commits from Maria on Azure DevOps\n  api: 1 new commit from Bob on GitHub');
+  });
+
+  it('always prefixes incoming lines with the repository name, even for a single repository', () => {
+    const text = renderNews(report({
+      incoming: [{
+        repo: 'api',
+        host: { kind: 'github', name: 'GitHub' },
+        groups: [{ author: 'Maria', count: 2, newestSha: 'abc1234', newestAt: ago(5), subject: 'Fix auth' }],
+      }],
+    }), NOW);
+    expect(text).toContain('Commits\n  api: 2 new commits from Maria on GitHub');
+  });
 });

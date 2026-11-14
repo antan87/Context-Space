@@ -229,3 +229,27 @@ export async function createPrWithGh(
     return { url: null, error: error instanceof Error ? error.message : String(error) };
   }
 }
+
+/**
+ * Resolves the preferred git remote URL for forge detection and commit links.
+ * Keeps the raw config URL when it already identifies a known forge (so local
+ * mirror `insteadOf` rewrites preserve the upstream host), and falls back to
+ * `git remote get-url` when the raw URL is empty or an alias (`gh:org/repo`)
+ * whose effective URL resolves to a known forge.
+ */
+export async function resolvePreferredRemoteUrl(
+  rawUrl: string,
+  readEffectiveUrl: () => Promise<string | null>,
+): Promise<string | null> {
+  const raw = rawUrl.trim();
+  const rawParsed = raw ? parseRemoteUrl(raw) : null;
+  if (rawParsed && rawParsed.kind !== 'unknown') return raw;
+
+  const effective = (await readEffectiveUrl())?.trim() ?? '';
+  if (!raw) return effective || null;
+  if (effective) {
+    const effectiveParsed = parseRemoteUrl(effective);
+    if (effectiveParsed && effectiveParsed.kind !== 'unknown') return effective;
+  }
+  return raw;
+}

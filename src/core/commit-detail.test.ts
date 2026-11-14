@@ -714,4 +714,52 @@ describe('readCommitFileDiff', () => {
     expect(result.diff).toContain('src/pages/[id].tsx');
     expect(result.diff).not.toContain('src/pages/i.tsx');
   });
+
+  it('resolves Azure DevOps forge and webUrl when url.<dir>.insteadOf rewrites the remote', async () => {
+    const bare = path.join(root, 'bare.git');
+    await execa('git', ['init', '--bare', '-b', 'main', bare]);
+    const azureUrl = 'https://dev.azure.com/acme/reports/_git/my-repo';
+    await runGit(['config', `url.${bare}.insteadOf`, azureUrl]);
+    await runGit(['remote', 'add', 'origin', azureUrl]);
+
+    await fs.writeFile(path.join(repoDir, 'base.ts'), 'export const base = 1;\n');
+    const baseSha = await commit('Base commit');
+    await runGit(['push', '-u', 'origin', 'main']);
+
+    // Simulate coworker pushing directly to the bare repo, then local fetch updating origin/main
+    const other = path.join(root, 'other');
+    await execa('git', ['clone', bare, other]);
+    await fs.writeFile(path.join(other, 'incoming.ts'), 'export const incoming = true;\n');
+    await runGit(['add', '.'], other);
+    await runGit(['commit', '-m', 'Incoming from Maria'], other, {
+      GIT_AUTHOR_NAME: 'Maria',
+      GIT_AUTHOR_EMAIL: 'maria@example.com',
+      GIT_COMMITTER_NAME: 'Maria',
+      GIT_COMMITTER_EMAIL: 'maria@example.com',
+    });
+    const incomingSha = (await runGit(['rev-parse', 'HEAD'], other)).stdout.trim();
+    await runGit(['push', 'origin', 'HEAD:main'], other);
+    await runGit(['fetch', 'origin']);
+    expect(baseSha).not.toBe(incomingSha);
+
+    const detail = await readCommit(root, 'my-repo', incomingSha);
+    expect(detail.author).toBe('Maria');
+    expect(detail.pushed).toBe(true);
+    expect(detail.forge).toBe('azure');
+    expect(detail.webUrl).toBe(`https://dev.azure.com/acme/reports/_git/my-repo/commit/${incomingSha}`);
+  });
+
+  it('resolves forge and webUrl when url.<base>.insteadOf aliases a short prefix such as gh:', async () => {
+    await runGit(['config', 'url.https://github.com/.insteadOf', 'gh:']);
+    await runGit(['remote', 'add', 'origin', 'gh:acme/api.git']);
+
+    await fs.writeFile(path.join(repoDir, 'alias.ts'), 'export const aliased = 1;\n');
+    const sha = await commit('Commit via gh alias');
+    await runGit(['update-ref', 'refs/remotes/origin/main', sha]);
+
+    const detail = await readCommit(root, 'my-repo', sha);
+    expect(detail.pushed).toBe(true);
+    expect(detail.forge).toBe('github');
+    expect(detail.webUrl).toBe(`https://github.com/acme/api/commit/${sha}`);
+  });
 });

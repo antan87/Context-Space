@@ -28,6 +28,10 @@ import { listRootDocuments } from './root-documents.js';
 import { assertNoLinkedPathComponents, atomicWriteFile } from '../resources/fs-safety.js';
 import { isGitRepo } from '../utils/git.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
+import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit } from './commit-log-format.js';
+import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from './incoming-commits.js';
+
+export { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit };
 
 /** How many items each section lists (per repository for commits); the rest are counted. */
 export const NEWS_LIMIT = 10;
@@ -52,6 +56,8 @@ export interface SeenRecord {
   at: string;
   /** Each repository's HEAD, by the repository's name. */
   repos: Record<string, string>;
+  /** Each repository's last-seen remote-tracking commit, by the repository's name. */
+  incoming?: Record<string, string>;
   /** The ids (date and title as a slug) of the knowledge entries. */
   knowledge: string[];
   /** The names of the documents, newest first. */
@@ -114,6 +120,20 @@ export interface NewsSection<T> {
   more: number;
 }
 
+export interface NewsIncomingGroup {
+  author: string;
+  count: number;
+  newestSha: string;
+  newestAt: string;
+  subject: string;
+}
+
+export interface NewsIncomingRepo {
+  repo: string;
+  host: IncomingHost | null;
+  groups: NewsIncomingGroup[];
+}
+
 export interface WhatsNew {
   reader: string;
   /** When this report was made; hand it to {@link markSeen} to say the reader has looked. */
@@ -129,6 +149,8 @@ export interface WhatsNew {
   /** Newest first. */
   knowledge: NewsSection<NewsKnowledge>;
   commits: NewsRepo[];
+  /** Unseen commits sitting on local remote-tracking refs (never fetched during news). */
+  incoming?: NewsIncomingRepo[];
   /** Things that could not be read, one line each. A repository that could not be read is in `commits` instead. */
   problems: string[];
   /** Nothing changed in any section. */
@@ -159,7 +181,14 @@ function recordFrom(value: unknown): SeenRecord | null {
   if (!isObject(value) || typeof value.at !== 'string' || Number.isNaN(Date.parse(value.at))) return null;
   const strings = (list: unknown, max: number) => (Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string').slice(0, max) : []);
   const repos = Object.entries(isObject(value.repos) ? value.repos : {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && SHA.test(entry[1]));
-  return { at: value.at, repos: Object.fromEntries(repos), knowledge: strings(value.knowledge, KEPT_KNOWLEDGE), documents: strings(value.documents, KEPT_DOCUMENTS) };
+  const incoming = Object.entries(isObject(value.incoming) ? value.incoming : {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && SHA.test(entry[1]));
+  return {
+    at: value.at,
+    repos: Object.fromEntries(repos),
+    ...(incoming.length > 0 ? { incoming: Object.fromEntries(incoming) } : {}),
+    knowledge: strings(value.knowledge, KEPT_KNOWLEDGE),
+    documents: strings(value.documents, KEPT_DOCUMENTS),
+  };
 }
 
 const EMPTY_SEEN: SeenFile = { version: 1, readers: {}, pending: {} };
@@ -321,10 +350,12 @@ async function takeSnapshot(root: string): Promise<Snapshot> {
   return { heads, documents, knowledge, problems };
 }
 
-function recordOf(snapshot: Snapshot, at: string): SeenRecord {
+function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, string> = {}): SeenRecord {
+  const incomingEntries = Object.entries(incomingRefs).filter(([, sha]) => SHA.test(sha));
   return {
     at,
     repos: Object.fromEntries(snapshot.heads.flatMap((repo) => (repo.head ? [[repo.name, repo.head] as const] : []))),
+    ...(incomingEntries.length > 0 ? { incoming: Object.fromEntries(incomingEntries) } : {}),
     knowledge: snapshot.knowledge.slice(0, KEPT_KNOWLEDGE).map((entry) => entry.id),
     documents: snapshot.documents.slice(0, KEPT_DOCUMENTS).map((document) => document.name),
   };
@@ -378,15 +409,6 @@ function knowledgeNews(entries: NewsKnowledge[], record: SeenRecord | null, from
 
 const RECENT_COMMITS_LIMIT = 50;
 
-function firstNonEmptyLine(body: string): string | undefined {
-  const line = body
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((entry) => entry.trim())
-    .find((entry) => entry.length > 0);
-  return line ? line.slice(0, 300) : undefined;
-}
-
 function parseCommits(stdout: string): NewsCommit[] {
   return stdout.split('\n').filter(Boolean).map((line) => {
     const [sha = '', author = '', date = '', ...subject] = line.split('\x1f');
@@ -395,45 +417,37 @@ function parseCommits(stdout: string): NewsCommit[] {
   });
 }
 
-/** Git `--format` string expected by {@link parseDetailedCommitLog}. */
-export const DETAILED_COMMIT_FORMAT = '--format=%x00%H%x1f%h%x1f%P%x1f%an%x1f%cI%x1f%s%x1f%b%x00S:';
-
-export interface ParsedDetailedCommit {
-  fullSha: string;
-  sha: string;
-  author: string;
-  at: string;
-  subject: string;
-  firstBodyLine?: string;
-  fileCount?: number;
+function groupIncomingByAuthor(commits: IncomingCommit[]): NewsIncomingGroup[] {
+  const byAuthor = new Map<string, NewsIncomingGroup>();
+  for (const commit of commits) {
+    const author = commit.author || 'Unknown';
+    const existing = byAuthor.get(author);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      byAuthor.set(author, {
+        author,
+        count: 1,
+        newestSha: commit.sha,
+        newestAt: commit.at,
+        subject: commit.subject,
+      });
+    }
+  }
+  return [...byAuthor.values()];
 }
 
-/** Parses `git log --shortstat` output formatted with {@link DETAILED_COMMIT_FORMAT}. */
-export function parseDetailedCommitLog(stdout: string): ParsedDetailedCommit[] {
-  const parts = stdout.split('\x00');
-  const commits: ParsedDetailedCommit[] = [];
-  for (let i = 1; i < parts.length; i += 2) {
-    const header = parts[i] ?? '';
-    const stats = parts[i + 1] ?? '';
-    const [fullSha = '', sha = '', parents = '', author = '', date = '', subject = '', ...bodyParts] = header.split('\x1f');
-    if (!sha) continue;
-    const time = new Date(date);
-    const body = bodyParts.join('\x1f');
-    const firstBodyLine = firstNonEmptyLine(body);
-    const match = stats.match(/(\d+)\s+files?\s+changed/);
-    const isMerge = parents.trim().includes(' ');
-    const fileCount = match ? Number(match[1]) : isMerge ? undefined : 0;
-    commits.push({
-      fullSha: fullSha.trim(),
-      sha,
-      author,
-      at: Number.isNaN(time.getTime()) ? date : time.toISOString(),
-      subject,
-      ...(firstBodyLine !== undefined ? { firstBodyLine } : {}),
-      ...(fileCount !== undefined ? { fileCount } : {}),
-    });
-  }
-  return commits;
+export function formatIncomingNewsLine(
+  repo: string,
+  count: number,
+  author: string,
+  host: { name: string } | null | undefined,
+): string {
+  const noun = count === 1 ? 'commit' : 'commits';
+  const summary = host?.name
+    ? `${count} new ${noun} from ${author} on ${host.name}`
+    : `${count} new ${noun} from ${author}`;
+  return `${repo}: ${summary}`;
 }
 
 function parseDetailedCommits(stdout: string, unpushed: Set<string> | null): NewsCommit[] {
@@ -449,7 +463,7 @@ async function repoNews(
   recorded: string | undefined,
   from: string,
   limit: number,
-  options: { detailed?: boolean } = {},
+  options: { detailed?: boolean; seenIncomingOid?: string } = {},
 ): Promise<NewsRepo> {
   const none: NewsRepo = { repo: repo.name, commits: [], more: 0 };
   if (repo.problem) return { ...none, problem: repo.problem };
@@ -460,15 +474,22 @@ async function repoNews(
     : '--format=%h%x1f%an%x1f%cI%x1f%s';
   const extra = detailed ? ['--shortstat'] : [];
   const sinceArg = `--since=${new Date(from).toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
-  const log = (...range: string[]) => git(repo.path, ['log', `--max-count=${COMMITS_COUNTED}`, ...extra, format, ...range, '--']);
+  let seenIncoming: string | undefined;
+  if (options.seenIncomingOid && SHA.test(options.seenIncomingOid)) {
+    const exists = await git(repo.path, ['rev-parse', '--verify', '-q', `${options.seenIncomingOid}^{commit}`]);
+    if (exists.ok) seenIncoming = options.seenIncomingOid;
+  }
+  const notArgs = seenIncoming ? ['--not', seenIncoming] : [];
+  const log = (...range: string[]) => git(repo.path, ['log', `--max-count=${COMMITS_COUNTED}`, ...extra, format, ...range, ...notArgs, '--']);
   const revRange = recorded ? [`${recorded}..${repo.head}`] : [sinceArg, repo.head];
+  const unpushedExclude = seenIncoming ? [`^${seenIncoming}`] : [];
   let unpushedPromise: ReturnType<typeof git> | Promise<null> = detailed
-    ? git(repo.path, ['rev-list', '--max-count=500', ...revRange, '--not', '--remotes', '--'])
+    ? git(repo.path, ['rev-list', '--max-count=500', ...revRange, ...unpushedExclude, '--not', '--remotes', '--'])
     : Promise.resolve(null);
   let result = recorded ? await log(`${recorded}..${repo.head}`) : null;
   if (!result?.ok) {
     if (recorded && detailed) {
-      unpushedPromise = git(repo.path, ['rev-list', '--max-count=500', sinceArg, repo.head, '--not', '--remotes', '--']);
+      unpushedPromise = git(repo.path, ['rev-list', '--max-count=500', sinceArg, repo.head, ...unpushedExclude, '--not', '--remotes', '--']);
     }
     result = await log(sinceArg, repo.head);
   }
@@ -518,20 +539,40 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
 
   const snapshot = await takeSnapshot(root);
   problems.push(...snapshot.problems);
-  const [plan, commits] = await Promise.all([
+  const [plan, commits, localIncoming] = await Promise.all([
     planNews(root, name, fromMs, now.getTime(), limit).catch((error): NewsSection<NewsPlanChange> => {
       problems.push(`The plan could not be read: ${reasonOf(error)}`);
       return { items: [], more: 0 };
     }),
-    Promise.all(snapshot.heads.map((repo) => repoNews(repo, kept?.repos[repo.name], from, limit))),
+    Promise.all(snapshot.heads.map((repo) => repoNews(repo, kept?.repos[repo.name], from, limit, { seenIncomingOid: kept?.incoming?.[repo.name] }))),
+    Promise.all(snapshot.heads.map(async (repo) => {
+      if (repo.problem) return { repo: repo.name, host: null, trackingRefOid: null, commits: [] as IncomingCommit[] };
+      const seenTrackingOid = kept?.incoming?.[repo.name];
+      const res = await readLocalIncomingForRepo(repo.path, {
+        seenTrackingOid,
+        headOid: repo.head ?? null,
+      });
+      const filtered = !seenTrackingOid ? res.commits.filter((commit) => afterTime(commit.at, fromMs)) : res.commits;
+      return { repo: repo.name, host: res.host, trackingRefOid: res.trackingRefOid, commits: filtered };
+    })),
   ]);
   const documents = documentNews(snapshot.documents, kept, fromMs, limit);
   const knowledge = knowledgeNews(snapshot.knowledge, kept, fromMs, limit);
+  const incomingRefs = Object.fromEntries(
+    localIncoming.flatMap((entry) => (entry.trackingRefOid ? [[entry.repo, entry.trackingRefOid] as const] : [])),
+  );
+  const incoming: NewsIncomingRepo[] = localIncoming.flatMap((entry) => {
+    const groups = groupIncomingByAuthor(entry.commits);
+    return groups.length > 0 ? [{ repo: entry.repo, host: entry.host, groups }] : [];
+  });
 
-  if (options.mark) await saveRecord(root, name, recordOf(snapshot, now.toISOString()));
-  else if (options.pending) await savePending(root, name, recordOf(snapshot, now.toISOString()));
-  const empty = [plan, documents, knowledge].every((section) => section.items.length === 0) && commits.every((repo) => repo.commits.length === 0);
-  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, commits, problems, empty };
+  const nextRecord = recordOf(snapshot, now.toISOString(), incomingRefs);
+  if (options.mark) await saveRecord(root, name, nextRecord);
+  else if (options.pending) await savePending(root, name, nextRecord);
+  const empty = [plan, documents, knowledge].every((section) => section.items.length === 0)
+    && commits.every((repo) => repo.commits.length === 0)
+    && incoming.length === 0;
+  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, commits, incoming, problems, empty };
 }
 
 /**

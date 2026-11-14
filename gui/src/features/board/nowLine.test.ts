@@ -106,4 +106,20 @@ describe('where the parts go', () => {
     expect(partsFor(plan({ key: 'c', by: 'codex', at: iso(0) })).parts.who).toBe('Codex · just now');
     expect(partsFor(plan({ key: 'c', by: 'user', at: iso(0) })).parts.who).toBe('You · just now');
   });
+
+  it('turns incoming commits into Review-opening lines without adding a spurious more row', () => {
+    const view = news({
+      incoming: [{
+        repo: 'billing',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{ author: 'Maria', count: 3, newestSha: 'f1e2d3c', newestAt: iso(2), subject: 'Stream CSV' }],
+      }],
+    });
+    const areas = buildBoardAreas({ plan: plan(null), board, news: view });
+    expect(nowLineParts({ focus: null, areas, news: view }).news).toBe(3);
+    expect(newsLines(view, areas)).toEqual([{
+      text: 'billing: 3 new commits from Maria on Azure DevOps',
+      reviewCommit: { repo: 'billing', sha: 'f1e2d3c' },
+    }]);
+  });
 });

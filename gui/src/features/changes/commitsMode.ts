@@ -1,4 +1,4 @@
-import type { RecentCommits } from '../plan/whatsNew.js';
+import type { IncomingHost, RecentCommits } from '../plan/whatsNew.js';
 
 /** A commit by repository and (short or full) SHA. The same SHA prefix in two repositories is two commits. */
 export interface CommitRef { repo: string; sha: string }
@@ -9,6 +9,9 @@ export interface SequenceCommit extends CommitRef {
   firstBodyLine?: string;
   fileCount?: number;
   pushed?: boolean;
+  incoming?: boolean;
+  host?: IncomingHost | null;
+  webUrl?: string | null;
 }
 
 /** The commits of the row a commit was opened from, in the order the row shows them, and what to call the row. */
@@ -89,7 +92,7 @@ export function effectiveSequence(current: CommitRef | null, held: CommitSequenc
   return own && indexInSequence(own, current) >= 0 ? own : null;
 }
 
-export interface CommitListGroup { label: string; commits: SequenceCommit[] }
+export interface CommitListGroup { id?: string; label: string; commits: SequenceCommit[] }
 
 /**
  * What the list in the header offers: the row's commits first, then the other recent commits of each repository, every commit

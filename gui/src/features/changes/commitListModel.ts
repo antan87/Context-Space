@@ -1,5 +1,5 @@
 import type { CommitDetail, CommitDetailFile, CommitStepLink } from '../board/commitContext.js';
-import type { RecentCommits } from '../plan/whatsNew.js';
+import type { IncomingCommitsReport, RecentCommits } from '../plan/whatsNew.js';
 import { plainText } from '../../lib/plainText.js';
 import {
   commitKey,
@@ -129,15 +129,17 @@ const byNewestCommit = (a: SequenceCommit, b: SequenceCommit): number => {
 
 /**
  * Builds the deduplicated left-hand commit groups:
- * 1) held row commits (newest first, enriched from recent & detail)
- * 2) other recent commits
- * 3) if the open commit isn't in either source, ensures it is still shown once
+ * 1) incoming commits per repository (newest first, omitted when none)
+ * 2) held row commits (newest first, enriched from recent & detail)
+ * 3) other recent commits
+ * 4) if the open commit isn't in any source, ensures it is still shown once
  */
 export function buildCommitListGroups(
   held: CommitSequence | null,
   recent: RecentCommits | undefined,
   current: CommitRef | null,
   detail?: CommitDetail | null,
+  incomingReport?: IncomingCommitsReport,
 ): CommitListGroup[] {
   const recentIndex = new Map<string, SequenceCommit>();
   for (const repoEntry of recent?.commits ?? []) {
@@ -171,27 +173,88 @@ export function buildCommitListGroups(
       firstBodyLine: c.firstBodyLine ?? r?.firstBodyLine ?? detailFirstLine,
       fileCount: c.fileCount ?? r?.fileCount ?? detailFileCount,
       pushed: c.pushed ?? r?.pushed ?? fromDetail?.pushed,
+      ...(c.incoming ? { incoming: true } : {}),
+      ...(c.host !== undefined ? { host: c.host } : {}),
+      ...(c.webUrl !== undefined ? { webUrl: c.webUrl } : {}),
     };
   };
 
-  const baseGroups = composeCommitList(held, recent).map((group, idx) => {
-    const sorted = idx === 0 && held ? [...group.commits].sort(byNewestCommit) : group.commits;
-    return { label: group.label, commits: sorted.map(enrich) };
-  });
+  const workspaceRepos = new Set<string>();
+  for (const r of incomingReport?.repos ?? []) workspaceRepos.add(r.repo);
+  for (const r of recent?.commits ?? []) workspaceRepos.add(r.repo);
+  for (const c of held?.commits ?? []) workspaceRepos.add(c.repo);
+  if (current) workspaceRepos.add(current.repo);
+  if (detail) workspaceRepos.add(detail.repo);
+  const multiRepo = workspaceRepos.size > 1;
+
+  const emitted = new Set<string>();
+  const incomingGroups: CommitListGroup[] = [];
+  for (const repoEntry of incomingReport?.repos ?? []) {
+    if (repoEntry.commits.length === 0) continue;
+    const baseLabel = repoEntry.host?.name
+      ? `On ${repoEntry.host.name}, not in your copy yet`
+      : 'Not in your copy yet';
+    const label = multiRepo ? `${repoEntry.repo} · ${baseLabel}` : baseLabel;
+    const items: SequenceCommit[] = [];
+    for (const incomingCommit of repoEntry.commits) {
+      const candidate: SequenceCommit = {
+        repo: repoEntry.repo,
+        sha: incomingCommit.sha,
+        subject: incomingCommit.subject,
+        author: incomingCommit.author,
+        at: incomingCommit.at,
+        ...(incomingCommit.firstBodyLine !== undefined ? { firstBodyLine: incomingCommit.firstBodyLine } : {}),
+        ...(incomingCommit.fileCount !== undefined ? { fileCount: incomingCommit.fileCount } : {}),
+        incoming: true,
+        host: repoEntry.host,
+        webUrl: incomingCommit.webUrl ?? null,
+      };
+      const key = commitKey(candidate);
+      // Once a commit lands in recent (HEAD), recent owns it so nothing duplicates or lingers in incoming.
+      if (recentIndex.has(key) || emitted.has(key)) continue;
+      emitted.add(key);
+      items.push(enrich(candidate));
+    }
+    if (items.length > 0) {
+      items.sort(byNewestCommit);
+      incomingGroups.push({
+        id: `incoming:${repoEntry.repo}`,
+        label,
+        commits: items,
+      });
+    }
+  }
+
+  const baseGroups = composeCommitList(held, recent)
+    .map((group, idx) => {
+      const sorted = idx === 0 && held ? [...group.commits].sort(byNewestCommit) : group.commits;
+      const commits = sorted
+        .filter((entry) => {
+          const key = commitKey(entry);
+          if (emitted.has(key)) return false;
+          emitted.add(key);
+          return true;
+        })
+        .map(enrich);
+      return { label: group.label, commits };
+    })
+    .filter((group) => group.commits.length > 0);
+
+  const groups = [...incomingGroups, ...baseGroups];
 
   if (current) {
-    const allPresent = baseGroups.some((g) => g.commits.some((c) => sameCommit(c, current)));
+    const allPresent = groups.some((g) => g.commits.some((c) => sameCommit(c, current)));
     if (!allPresent) {
       const entry = enrich({ repo: current.repo, sha: current.sha });
       if (baseGroups.length > 0) {
         baseGroups[0] = { ...baseGroups[0]!, commits: [entry, ...baseGroups[0]!.commits] };
-      } else {
-        baseGroups.push({ label: current.repo, commits: [entry] });
+        return [...incomingGroups, ...baseGroups];
       }
+      groups.push({ label: current.repo, commits: [entry] });
     }
   }
 
-  return baseGroups;
+  return groups;
 }
 
 /** Flattens the visible tree items (commits plus only the expanded commit's files). */

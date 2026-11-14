@@ -68,6 +68,8 @@ export interface NewsLine {
   jump?: { areaId: string; nodeId: string | null; readerTarget?: NavItem['readerTarget'] };
   /** A knowledge line: it opens Knowledge in the reader, on the entry (its key) or, when the line cannot name one, at the top. */
   knowledge?: { entry: string | null };
+  /** An incoming commits summary line: opens Review directly on the newest commit of that group. */
+  reviewCommit?: { repo: string; sha: string };
 }
 
 /** How many of the newest things the list shows. */
@@ -88,7 +90,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
       const item = items.find((candidate) => (candidate.category === 'documents' || candidate.category === 'pictures') && (candidate.readerTarget?.path === ref.name || candidate.title === ref.name));
       return item?.nodeId ? { areaId: item.areaId, nodeId: item.nodeId } : undefined;
     }
-    if (ref.kind === 'knowledge') return undefined;
+    if (ref.kind === 'knowledge' || ref.kind === 'incoming') return undefined;
     if (ref.removed) return undefined;
     if (ref.item === 'checkpoint') {
       const area = areas.find((candidate) => candidate.checkpointKey === ref.key);
@@ -108,11 +110,13 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
   const shown = [...dated, ...undated].slice(0, NEWS_SHOWN);
   const lines = shown.map((entry): NewsLine => {
     if (entry.ref?.kind === 'knowledge') return { text: entry.text, knowledge: { entry: entry.ref.title ? newsEntryKey(knowledge, { title: entry.ref.title, date: entry.ref.date ?? null }) : null } };
+    if (entry.ref?.kind === 'incoming') return { text: entry.text, reviewCommit: { repo: entry.ref.repo, sha: entry.ref.sha } };
     const jump = jumpOf(entry);
     return { text: entry.text, ...(jump ? { jump } : {}) };
   });
   // The rest is said, not hidden: "and 11 more"
-  const counted = shown.filter((entry) => !/^and \d/.test(entry.text)).length;
+  const counted = shown.filter((entry) => !/^and \d/.test(entry.text))
+    .reduce((sum, entry) => sum + (entry.ref?.kind === 'incoming' ? entry.ref.count : 1), 0);
   const rest = newsTotal(news) - counted;
   return rest > 0 ? [...lines, { text: `and ${rest} more` }] : lines;
 }
