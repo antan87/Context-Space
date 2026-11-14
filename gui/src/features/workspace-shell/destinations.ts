@@ -13,7 +13,7 @@ export const SECTION_LABELS: Record<WorkspaceSection, string> = {
   board: 'Board',
   documents: 'Documents',
   skills: 'Skills',
-  changes: 'Code',
+  changes: 'Review',
   sessions: 'Session history',
   services: 'Services',
 };

@@ -89,8 +89,12 @@ export interface CodeSectionProps {
    * none to take it (nothing open, disconnected, or a plain shell), and then the request is copied instead.
    */
   onAskAI?: (message: string) => Promise<boolean>;
-  /** Toggles full screen; called when a double press on the toolbar fires. */
-  onToggleFullScreen?: () => void;
+  /** Back-to-Board control placed at the left of the Review toolbar. */
+  backAction?: ReactNode;
+  /** Breadcrumb trail shown next to Back when the viewport allows. */
+  breadcrumb?: ReactNode;
+  /** Optional active Board area title for context. */
+  area?: string;
   /** Grows with every request to open the window. A request for a commit opens Commits mode on it; any other leaves Commits for the working tree. */
   requestId?: number;
   /** The commit the latest request asked for, with the commits of the row it came from. */
@@ -732,43 +736,39 @@ export function CodeSection(props: CodeSectionProps) {
     <section ref={setSectionElement} tabIndex={-1} aria-label="Workspace code" className="flex h-full min-h-0 min-w-0 flex-col bg-background outline-hidden">
       <div
         role="toolbar"
-        aria-label="Code"
-        className="flex h-10 min-w-0 shrink-0 items-center gap-1 overflow-hidden border-b border-border px-1.5 select-none"
-        onDoubleClick={(event) => {
-          const target = event.target as HTMLElement | null;
-          if (!target || target !== event.currentTarget) return;
-          if (target.closest('button, a, [role="button"], [role="menu"], [role="group"], input, textarea, select')) return;
-          props.onToggleFullScreen?.();
-        }}
+        aria-label="Review"
+        className="flex h-12 min-w-0 shrink-0 items-center gap-1 overflow-hidden border-b border-border bg-card px-2 @[34rem]:gap-2 @[34rem]:px-3 select-none"
       >
-        <Button size="xs" variant={treeVisible ? 'secondary' : 'ghost'} className={iconButton} aria-label={treeVisible ? 'Hide the file tree' : 'Show the file tree'} aria-expanded={treeVisible}
+        {props.backAction}
+        {props.breadcrumb}
+        <Button size="icon-sm" variant={treeVisible ? 'secondary' : 'ghost'} className={cn(iconButton, 'shrink-0')} aria-label={treeVisible ? 'Hide the file tree' : 'Show the file tree'} aria-expanded={treeVisible}
           title={treeVisible ? 'Hide the file tree' : 'Show the file tree'} onClick={toggleTree}>
           <FolderTree className={cn('size-3.5', treeVisible && 'text-foreground')} />
         </Button>
-        <div role="group" aria-label="Show" className="inline-flex h-7 items-center rounded-md bg-muted/60 p-0.5">
+        <div role="group" aria-label="Show" className="inline-flex h-8 shrink-0 items-center rounded-md bg-muted/60 p-0.5">
           <button type="button" aria-pressed={!commitsOpen && mode === 'changes'} onClick={() => switchMode('changes')}
-            className={cn('inline-flex h-6 items-center gap-1 rounded px-2 text-xs', !commitsOpen && mode === 'changes' ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}>
-            Changes{changedFiles !== undefined && changedFiles > 0 ? <span className="tabular-nums text-muted-foreground">{changedFiles}</span> : null}
-          </button>
-          <button type="button" aria-pressed={!commitsOpen && mode === 'files'} onClick={() => switchMode('files')}
-            className={cn('inline-flex h-6 items-center rounded px-2 text-xs', !commitsOpen && mode === 'files' ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}>
-            Files
+            className={cn('inline-flex h-7 items-center gap-1 whitespace-nowrap rounded px-1.5 @[36rem]:px-2 text-xs', !commitsOpen && mode === 'changes' ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}>
+            Not committed{changedFiles !== undefined && changedFiles > 0 ? <span className="hidden @[36rem]:inline tabular-nums text-muted-foreground">{changedFiles}</span> : null}
           </button>
           <button type="button" aria-pressed={commitsOpen} onClick={showCommits}
-            className={cn('inline-flex h-6 items-center rounded px-2 text-xs', commitsOpen ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}>
+            className={cn('inline-flex h-7 items-center whitespace-nowrap rounded px-1.5 @[36rem]:px-2 text-xs', commitsOpen ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}>
             Commits
           </button>
+          <button type="button" aria-pressed={!commitsOpen && mode === 'files'} onClick={() => switchMode('files')}
+            className={cn('inline-flex h-7 items-center whitespace-nowrap rounded px-1.5 @[36rem]:px-2 text-xs', !commitsOpen && mode === 'files' ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}>
+            Files
+          </button>
         </div>
-        {loading && <Loader2 className="size-3 animate-spin text-muted-foreground" aria-label="Refreshing" />}
+        {loading && <Loader2 className="hidden @[36rem]:block size-3 shrink-0 animate-spin text-muted-foreground" aria-label="Refreshing" />}
         <div role="group" aria-label="Actions" className="ml-auto flex shrink-0 items-center gap-1">
           {!commitsOpen && (<>
-          <Button size="xs" variant={mainView === 'commit' ? 'secondary' : 'outline'} disabled={changedFiles === 0} aria-pressed={mainView === 'commit'}
-            aria-label="Review & commit" title="Review the changes and commit them" {...activation}
+          <Button size="sm" variant={mainView === 'commit' ? 'secondary' : 'outline'} disabled={changedFiles === 0} aria-pressed={mainView === 'commit'}
+            aria-label="Review & commit" title="Review the changes and commit them" className="px-2 @[34rem]:px-2.5" {...activation}
             onClick={() => toggleForm('commit')}>
-            <GitCommitHorizontal className="size-3.5" />{compactToolbar ? 'Commit' : 'Review & commit'}
+            <GitCommitHorizontal className="hidden @[30rem]:block size-3.5" />{compactToolbar ? 'Commit' : 'Review & commit'}
           </Button>
           {!compactToolbar && (
-            <Button size="xs" variant={mainView === 'finish' ? 'secondary' : 'ghost'} aria-pressed={mainView === 'finish'} {...activation}
+            <Button size="sm" variant={mainView === 'finish' ? 'secondary' : 'ghost'} aria-pressed={mainView === 'finish'} {...activation}
               onClick={() => toggleForm('finish')}>
               Finish…
             </Button>

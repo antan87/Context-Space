@@ -1125,7 +1125,7 @@ export function BoardUncommitted({ id, data }: NodeProps<UncommittedNode>) {
   const actions = useContext(BoardActionsContext);
   const opens = Boolean(actions);
   const open = (button: HTMLElement) => {
-    openCodeWindow(actions!.workspaceId, { opener: button, file: { repoName: data.repoName, repoPath: data.repoPath, file: data.firstFile } });
+    openCodeWindow(actions!.workspaceId, { opener: button, area: actions?.activeAreaTitle, file: { repoName: data.repoName, repoPath: data.repoPath, file: data.firstFile } });
   };
   return <article
     tabIndex={-1}
@@ -1141,7 +1141,7 @@ export function BoardUncommitted({ id, data }: NodeProps<UncommittedNode>) {
         type="button"
         id={titleId}
         data-card-main
-        aria-label={`Open ${data.title} in Code`}
+        aria-label={`Open ${data.title} in Review`}
         disabled={!opens}
         onClick={(event) => open(event.currentTarget)}
         className="nodrag nopan min-w-0 truncate rounded-sm text-left font-medium text-foreground outline-hidden hover:underline disabled:pointer-events-none"

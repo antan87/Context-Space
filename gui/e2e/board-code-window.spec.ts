@@ -102,7 +102,7 @@ test.beforeEach(async ({ page }) => {
 });
 test.afterEach(() => { expect(writes, 'no test here may write').toEqual([]); });
 
-const windowOf = (page: Page) => page.getByRole('region', { name: 'Code window' });
+const windowOf = (page: Page) => page.getByRole('region', { name: 'Review', exact: true });
 const openName = (page: Page) => windowOf(page).locator('p[title]').first();
 async function openBoard(page: Page, mode: 'board' | 'split') {
   await page.addInitScript(() => { if (window === window.top) localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 })); });
@@ -120,10 +120,10 @@ for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }])
     test.describe(`${size.width}x${size.height} in ${mode}`, () => {
       test.use({ viewport: size });
 
-      test('the button counts the changes; the card opens the first file with tree and code side by side; the window closes three ways and gives the keyboard back', async ({ page }) => {
+      test('the button counts the changes; the card opens the first file with tree and code side by side; the page closes three ways and gives the keyboard back', async ({ page }) => {
         await openBoard(page, mode);
         // Level 0 and inside an Area both have the button, with the count
-        const button = page.getByRole('button', { name: 'Code, 3 files changed' });
+        const button = page.getByRole('button', { name: 'Review, 3 files changed' });
         await expect(button).toBeVisible();
         await expect(button).toContainText('3');
         await stepIntoArea(page);
@@ -136,18 +136,26 @@ for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }])
         await expect(card).not.toContainText('abc1234');
         await expect(page.locator('.react-flow__node-commit')).toHaveCount(2);
 
-        await card.getByRole('button', { name: /3 files changed in Code/ }).click();
+        await card.getByRole('button', { name: /3 files changed in Review/ }).click();
         const win = windowOf(page);
         await expect(win).toBeVisible();
         await expect(openName(page)).toHaveText('src/server/handler.ts');
-        // The window covers the workspace content (both panes in Split) at the reader's large proportions
+        // Review fills 100% of the workspace content area (both panes in Split) with zero inset
         const covered = await page.evaluate(() => {
           const rect = (document.querySelector('[data-code-window]') as HTMLElement).getBoundingClientRect();
           const back = (document.querySelector('[data-code-window-backdrop]') as HTMLElement).getBoundingClientRect();
-          return { w: rect.width / back.width, h: rect.height / back.height, backW: back.width, vw: window.innerWidth };
+          return {
+            dx: Math.abs(rect.left - back.left),
+            dy: Math.abs(rect.top - back.top),
+            dw: Math.abs(rect.width - back.width),
+            dh: Math.abs(rect.height - back.height),
+            backW: back.width,
+          };
         });
-        expect(covered.w).toBeCloseTo(0.92, 1);
-        expect(covered.h).toBeCloseTo(0.88, 1);
+        expect(covered.dx).toBeLessThanOrEqual(1);
+        expect(covered.dy).toBeLessThanOrEqual(1);
+        expect(covered.dw).toBeLessThanOrEqual(1);
+        expect(covered.dh).toBeLessThanOrEqual(1);
         if (mode === 'split') expect(covered.backW).toBeGreaterThan(size.width * 0.75);
         // Tree and code are on screen together, side by side
         const tree = win.getByRole('tree', { name: 'api changed files' });
@@ -166,27 +174,27 @@ for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }])
         await expect(change).toBeVisible();
         expect((await change.boundingBox())!.height).toBeLessThan(30);
 
-        // Escape closes; the keyboard returns to the card's button
+        // 1) Escape closes; the keyboard returns to the card's button
         await page.keyboard.press('Escape');
         await expect(win).toBeHidden();
-        await expect(card.getByRole('button', { name: /in Code/ })).toBeFocused();
-        // The × closes
+        await expect(card.getByRole('button', { name: /in Review/ })).toBeFocused();
+        // 2) ← Board closes
         await button.click();
         await expect(win).toBeVisible();
-        await win.getByRole('button', { name: 'Close', exact: true }).click();
+        await win.getByRole('button', { name: 'Back to the Board' }).click();
         await expect(win).toBeHidden();
         await expect(button).toBeFocused();
-        // A press outside (on the dimmed area) closes
+        // 3) Browser Back closes
         await button.click();
         await expect(win).toBeVisible();
-        await page.locator('[data-code-window-backdrop]').click({ position: { x: 4, y: 4 } });
+        await page.goBack();
         await expect(win).toBeHidden();
         await expect(button).toBeFocused();
       });
 
       test('reopening keeps the chosen file, and ] and [ move between files', async ({ page }) => {
         await openBoard(page, mode);
-        await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+        await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
         const win = windowOf(page);
         await expect(openName(page)).toHaveText('src/server/handler.ts');
         await win.getByRole('treeitem', { name: /routes\.ts/ }).click();
@@ -198,7 +206,7 @@ for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }])
         await expect(openName(page)).toHaveText('src/server/routes.ts');
         await page.keyboard.press('Escape');
         await expect(win).toBeHidden();
-        await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+        await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
         await expect(win).toBeVisible();
         await expect(openName(page)).toHaveText('src/server/routes.ts');
       });
@@ -213,13 +221,13 @@ const codeFontSizeOf = async (page: Page) => {
 };
 
 for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }]) {
-  test.describe(`larger code and full screen at ${size.width}x${size.height}`, () => {
+  test.describe(`larger code and full-frame layout at ${size.width}x${size.height}`, () => {
     test.use({ viewport: size });
 
     test('code font size is 14 px by default, Larger and Smaller change it live in diff and Files, are disabled at ends, and survive reload', async ({ page }) => {
       await openBoard(page, 'board');
       await page.evaluate(() => localStorage.removeItem('contextspace.code-panel.font-size'));
-      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
       const win = windowOf(page);
       await expect(win.locator('.monaco-diff-editor')).toBeVisible();
 
@@ -271,114 +279,48 @@ for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }])
 
       // Survives reload
       await page.reload();
-      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
       await expect(win.locator('.monaco-diff-editor')).toBeVisible();
       await expect.poll(() => codeFontSizeOf(page)).toBe('16px');
     });
 
-    test('full screen fills the viewport, double press on toolbar toggles it, Escape returns to window then closes, reopening starts in normal window, selection is kept', async ({ page }) => {
+    test('opens full-frame without a Full screen button, toolbar double press keeps size, and filter gets Escape before Review closes', async ({ page }) => {
       await openBoard(page, 'board');
-      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
       const win = windowOf(page);
       await expect(win.locator('.monaco-diff-editor')).toBeVisible();
 
-      // Choose a file
       await win.getByRole('treeitem', { name: /routes\.ts/ }).click();
       await expect(openName(page)).toHaveText('src/server/routes.ts');
 
-      // Normal window does not fill viewport
-      const normalBounds = await win.boundingBox();
-      expect(normalBounds!.width).toBeLessThan(size.width - 20);
-      expect(normalBounds!.height).toBeLessThan(size.height - 20);
+      await expect(win.getByRole('button', { name: /Full screen|Exit full screen/i })).toHaveCount(0);
+      const backBounds = await page.locator('[data-code-window-backdrop]').boundingBox();
+      const winBounds = await win.boundingBox();
+      expect(winBounds!.width).toBeCloseTo(backBounds!.width, 0);
+      expect(winBounds!.height).toBeCloseTo(backBounds!.height, 0);
 
-      // Full screen button
-      const fullScreenBtn = win.getByRole('button', { name: 'Full screen', exact: true });
-      await expect(fullScreenBtn).toBeVisible();
-      await fullScreenBtn.click();
-
-      // Fills viewport and toggle button stays focused
-      const exitBtn = win.getByRole('button', { name: 'Exit full screen' });
-      await expect(exitBtn).toBeVisible();
-      await expect(exitBtn).toBeFocused();
-
-      const fullBounds = await win.boundingBox();
-      expect(fullBounds!.x).toBe(0);
-      expect(fullBounds!.y).toBe(0);
-      expect(fullBounds!.width).toBe(size.width);
-      expect(fullBounds!.height).toBe(size.height);
-
-      // Selected file is kept
-      await expect(openName(page)).toHaveText('src/server/routes.ts');
-
-      // Double press on empty part of toolbar toggles back to normal window
-      const toolbar = win.getByRole('toolbar', { name: 'Code' });
+      // Double press on toolbar does not shrink or toggle anything
+      const toolbar = win.getByRole('toolbar', { name: 'Review' });
       await toolbar.dblclick({ position: { x: 300, y: 15 } });
-      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
-      const backBounds = await win.boundingBox();
-      expect(backBounds!.width).toBeLessThan(size.width - 20);
+      const afterDbl = await win.boundingBox();
+      expect(afterDbl!.width).toBeCloseTo(backBounds!.width, 0);
+      expect(afterDbl!.height).toBeCloseTo(backBounds!.height, 0);
 
-      // Double press toggles to full screen again
-      await toolbar.dblclick({ position: { x: 300, y: 15 } });
-      await expect(win.getByRole('button', { name: 'Exit full screen' })).toBeVisible();
-      const fullAgainBounds = await win.boundingBox();
-      expect(fullAgainBounds!.width).toBe(size.width);
-
-      // First Escape steps back to normal window
-      await page.keyboard.press('Escape');
-      await expect(win).toBeVisible();
-      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
-      const escBounds = await win.boundingBox();
-      expect(escBounds!.width).toBeLessThan(size.width - 20);
-      await expect(openName(page)).toHaveText('src/server/routes.ts');
-
-      // Second Escape closes the window
-      await page.keyboard.press('Escape');
-      await expect(win).toBeHidden();
-
-      // Reopening starts in the normal window
-      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
-      await expect(win).toBeVisible();
-      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
-      const reopenBounds = await win.boundingBox();
-      expect(reopenBounds!.width).toBeLessThan(size.width - 20);
-      expect(reopenBounds!.height).toBeLessThan(size.height - 20);
-    });
-
-    test('in full screen, filter gets Escape first, next Escape leaves full screen, next Escape closes window', async ({ page }) => {
-      await openBoard(page, 'board');
-      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
-      const win = windowOf(page);
-      await expect(win.locator('.monaco-diff-editor')).toBeVisible();
-
-      // Enter full screen
-      await win.getByRole('button', { name: 'Full screen', exact: true }).click();
-      await expect(win.getByRole('button', { name: 'Exit full screen' })).toBeVisible();
-
-      // Type a filter
+      // Filter gets Escape first, then Escape closes Review
       const filterInput = win.getByLabel('Filter files');
       await filterInput.fill('routes');
       await expect(filterInput).toHaveValue('routes');
+      await win.getByRole('treeitem', { name: /routes\.ts/ }).click();
 
-      // Press a file in the tree (moves focus to the treeitem)
-      const treeItem = win.getByRole('treeitem', { name: /routes\.ts/ });
-      await treeItem.click();
-
-      // Press Escape: filter clears and window stays in full screen
       await page.keyboard.press('Escape');
       await expect(filterInput).toHaveValue('');
-      await expect(win.getByRole('button', { name: 'Exit full screen' })).toBeVisible();
-
-      // Next Escape: leaves full screen
-      await page.keyboard.press('Escape');
-      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
       await expect(win).toBeVisible();
 
-      // Next Escape: closes the window
       await page.keyboard.press('Escape');
       await expect(win).toBeHidden();
     });
 
-    test('a double press on a disabled Review & commit does not toggle full screen', async ({ page }) => {
+    test('a double press on a disabled Review & commit stays full-frame', async ({ page }) => {
       await page.route('**/api/workspace/*/changes', (route) => route.fulfill({ json: { changes: [] } }));
       await openBoard(page, 'board');
       await page.getByTestId('board-code-button').click();
@@ -388,53 +330,33 @@ for (const size of [{ width: 1280, height: 800 }, { width: 1100, height: 700 }])
       const reviewBtn = win.getByRole('button', { name: 'Review & commit' });
       await expect(reviewBtn).toBeDisabled();
 
-      // Double press on disabled Review & commit
       await reviewBtn.dblclick({ force: true });
-
-      // Does not toggle full screen: still normal window, button is still "Full screen"
-      await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
-      await expect(win.getByRole('button', { name: 'Exit full screen' })).toHaveCount(0);
+      await expect(win.getByRole('button', { name: /Full screen|Exit full screen/i })).toHaveCount(0);
+      await expect(win).toBeVisible();
     });
   });
 }
 
-test.describe('full screen at narrow 700 px viewport', () => {
+test.describe('Back to the Board at narrow 700 px viewport', () => {
   test.use({ viewport: { width: 700, height: 700 } });
 
-  test('Exit full screen and Close buttons are not covered by the narrow header and work', async ({ page }) => {
+  test('Back to the Board button is not covered by the narrow header and closes Review', async ({ page }) => {
     await openBoard(page, 'board');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     const win = windowOf(page);
     await expect(win.locator('.monaco-diff-editor')).toBeVisible();
 
-    // Enter full screen
-    await win.getByRole('button', { name: 'Full screen', exact: true }).click();
-    const exitBtn = win.getByRole('button', { name: 'Exit full screen' });
-    const closeBtn = win.getByRole('toolbar', { name: 'Code' }).getByRole('button', { name: 'Close', exact: true });
-    await expect(exitBtn).toBeVisible();
-    await expect(closeBtn).toBeVisible();
+    const backBtn = win.getByRole('toolbar', { name: 'Review' }).getByRole('button', { name: 'Back to the Board' });
+    await expect(backBtn).toBeVisible();
 
-    // elementFromPoint on Exit full screen and Close buttons returns those buttons
-    const exitTarget = await exitBtn.evaluate((el) => {
+    const backTarget = await backBtn.evaluate((el) => {
       const r = el.getBoundingClientRect();
       const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
       return hit?.closest('button') === el;
     });
-    expect(exitTarget).toBe(true);
+    expect(backTarget).toBe(true);
 
-    const closeTarget = await closeBtn.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-      return hit?.closest('button') === el;
-    });
-    expect(closeTarget).toBe(true);
-
-    // They work: clicking Exit full screen steps back to normal window
-    await exitBtn.click();
-    await expect(win.getByRole('button', { name: 'Full screen', exact: true })).toBeVisible();
-
-    // And clicking Close closes the window
-    await closeBtn.click();
+    await backBtn.click();
     await expect(win).toBeHidden();
   });
 });
@@ -451,7 +373,7 @@ test.describe('the editor follows the app theme', () => {
     test(`is ${scheme} in ${scheme} mode, and follows a switch made while the file is open`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: scheme });
       await openBoard(page, 'board');
-      await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
       await expect(windowOf(page).locator('.monaco-diff-editor')).toBeVisible();
       await expect(page.locator('html')).toHaveClass(scheme === 'dark' ? /dark/ : /^(?!.*dark)/);
       await expect.poll(() => editorBackground(page)).toBeGreaterThan(scheme === 'light' ? 200 : -1);
@@ -466,9 +388,9 @@ test.describe('the editor follows the app theme', () => {
 test.describe('keys inside the window', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
-  test('Escape in the commit text field, in a menu and in the Ask AI form is theirs; the window stays', async ({ page }) => {
+  test('Escape in the commit text field, in a menu and in the Ask AI form is theirs; the page stays', async ({ page }, testInfo) => {
     await openBoard(page, 'board');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     const win = windowOf(page);
     await expect(openName(page)).toHaveText('src/server/handler.ts');
     // a menu
@@ -484,7 +406,7 @@ test.describe('keys inside the window', () => {
     await page.keyboard.press('Escape');
     await expect(askForm).toHaveCount(0);
     await expect(win).toBeVisible();
-    // the commit form: its file list is there, and Escape in the message field does not close the window
+    // the commit form: its file list is there, and Escape in the message field does not close the page
     await win.getByRole('button', { name: 'Review & commit' }).click();
     const panel = win.getByRole('region', { name: 'Review commit' });
     await expect(panel.getByRole('checkbox', { name: 'Include api/src/server/handler.ts' })).toHaveAttribute('aria-checked', 'true');
@@ -493,19 +415,18 @@ test.describe('keys inside the window', () => {
     await page.keyboard.press('Escape');
     await expect(win).toBeVisible();
     await expect(panel.getByLabel('Commit message')).toHaveValue('draft');
-    await page.screenshot({ path: `${process.env.PICS ?? 'test-results'}/commit-form-1280.png` });
-    // The editor ships without a find box in this build, so its Escape is the window's: with the keyboard in the editor and nothing open, it closes
+    await page.screenshot({ path: testInfo.outputPath('commit-form-1280.png') });
+    // The editor ships without a find box in this build, so its Escape closes the page
     await win.getByRole('button', { name: 'Review & commit' }).click();
     await win.locator('.monaco-diff-editor .modified .view-lines').first().click();
-    // and then, with nothing open, Escape in the editor closes the window
     await page.keyboard.press('Escape');
     await expect(win).toBeHidden();
   });
 
-  test('[ does not collapse the sidebar while the window is open', async ({ page }) => {
+  test('[ does not collapse the sidebar while the page is open', async ({ page }) => {
     await page.addInitScript(() => { if (window === window.top) localStorage.setItem('ctxspace_sidebar_docked_v1', 'true'); });
     await openBoard(page, 'board');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     await expect(openName(page)).toHaveText('src/server/handler.ts');
     const docked = () => page.evaluate(() => localStorage.getItem('ctxspace_sidebar_docked_v1'));
     await windowOf(page).getByRole('treeitem', { name: /handler\.ts/ }).focus();
@@ -547,7 +468,7 @@ test.describe('other ways in', () => {
     });
   }
 
-  test('the old /changes address opens the board with the window over it, and closing leaves the address on the board', async ({ page }) => {
+  test('the old /changes address opens the board with Review over it, and closing leaves the address on the board', async ({ page }) => {
     await page.goto('/#/workspaces/demo/changes');
     await expect(windowOf(page)).toBeVisible();
     await expect(openName(page)).toHaveText('src/server/handler.ts');
@@ -558,9 +479,9 @@ test.describe('other ways in', () => {
     expect(new URL(page.url()).hash).toBe('#/workspaces/demo/board');
   });
 
-  test('Code stays out of the rail', async ({ page }) => {
+  test('Review stays out of the rail', async ({ page }) => {
     await page.goto('/#/workspaces/demo/board');
-    await expect(page.getByRole('navigation').getByRole('link', { name: 'Code' })).toHaveCount(0);
+    await expect(page.getByRole('navigation').getByRole('link', { name: /Code|Review/ })).toHaveCount(0);
   });
 });
 
@@ -569,7 +490,7 @@ test.describe('Ask AI', () => {
 
   const ask = async (page: Page) => {
     await openBoard(page, 'split');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     const win = windowOf(page);
     await expect(win.locator('.monaco-diff-editor')).toBeVisible();
     await win.getByRole('button', { name: 'Ask AI' }).click();
@@ -608,7 +529,7 @@ test.describe('commit from the window', () => {
       await route.fulfill({ json: { skipped: [], results: [{ repoName: 'api', success: true, committed: true, pushed: false, branch: 'feat/x', commitHash: 'aaa1111', filesChanged: 2, message: 'ok' }] } });
     });
     await openBoard(page, 'board');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     const win = windowOf(page);
     await win.getByRole('button', { name: 'Review & commit' }).click();
     const panel = win.getByRole('region', { name: 'Review commit' });
@@ -626,7 +547,7 @@ test.describe('keys belong to the window while it is open', () => {
 
   test('an unticked file stays unticked across opening a file, ] , closing the form and closing the window', async ({ page }) => {
     await openBoard(page, 'board');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     const win = windowOf(page);
     await win.getByRole('button', { name: 'Review & commit' }).click();
     const panel = win.getByRole('region', { name: 'Review commit' });
@@ -640,7 +561,7 @@ test.describe('keys belong to the window while it is open', () => {
     await win.getByRole('treeitem', { name: /routes\.ts/ }).click();
     await page.keyboard.press('Escape');
     await expect(win).toBeHidden();
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     await win.getByRole('button', { name: 'Review & commit' }).click();
     const again = win.getByRole('region', { name: 'Review commit' });
     await expect(again.getByRole('checkbox', { name: 'Include api/README.md' })).toHaveAttribute('aria-checked', 'false');
@@ -650,7 +571,7 @@ test.describe('keys belong to the window while it is open', () => {
   test('Escape after the last file closes the window and leaves the Area open; focus never falls to the page', async ({ page }) => {
     await openBoard(page, 'board');
     await stepIntoArea(page);
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     const win = windowOf(page);
     await expect(openName(page)).toHaveText('src/server/handler.ts');
     const next = win.locator('button[aria-keyshortcuts="Alt+ArrowDown"]');
@@ -667,7 +588,7 @@ test.describe('keys belong to the window while it is open', () => {
   test('Escape with the keyboard on the page body closes the window, not the board behind it', async ({ page }) => {
     await openBoard(page, 'board');
     await stepIntoArea(page);
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     await expect(openName(page)).toHaveText('src/server/handler.ts');
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('Escape');
@@ -679,7 +600,7 @@ test.describe('keys belong to the window while it is open', () => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(baseURL!).origin });
     termTarget = 'shell';
     await openBoard(page, 'split');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     const win = windowOf(page);
     await expect(win.locator('.monaco-diff-editor')).toBeVisible();
     await win.getByRole('button', { name: 'Ask AI' }).click();
@@ -693,7 +614,7 @@ test.describe('keys belong to the window while it is open', () => {
   test('[ still works for the sidebar after the window has been opened and closed', async ({ page }) => {
     await page.addInitScript(() => { if (window === window.top) localStorage.setItem('ctxspace_sidebar_docked_v1', 'true'); });
     await openBoard(page, 'board');
-    await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+    await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
     await expect(openName(page)).toHaveText('src/server/handler.ts');
     await page.keyboard.press('Escape');
     await expect(windowOf(page)).toBeHidden();
@@ -708,8 +629,8 @@ test.describe('keys belong to the window while it is open', () => {
       if (mode === 'split') await openBoard(page, 'split');
       else await page.goto('/#/workspaces/demo/chat');
       await expect(page.getByRole('textbox', { name: /Search saved sessions/ })).toBeVisible({ timeout: 20000 });
-      // the Code button lives on the board; from the terminal the window is opened by the old address
-      if (mode === 'split') await page.getByRole('button', { name: 'Code, 3 files changed' }).click();
+      // the Review button lives on the board; from the terminal the page is opened by the old address
+      if (mode === 'split') await page.getByRole('button', { name: 'Review, 3 files changed' }).click();
       else await page.evaluate(() => { location.hash = '#/workspaces/demo/changes'; });
       const win = windowOf(page);
       await expect(openName(page)).toHaveText('src/server/handler.ts');
@@ -836,7 +757,7 @@ test.describe('the commit form is kept per workspace', () => {
     await form().getByLabel('Commit message').fill('demo message');
     await expect(summary()).toContainText('Commit 2 files');
     await expect(summary()).toContainText('without pushing');
-    await windowOf(page).getByRole('toolbar', { name: 'Code' }).getByRole('button', { name: 'Close', exact: true }).click();
+    await windowOf(page).getByRole('toolbar', { name: 'Review' }).getByRole('button', { name: 'Back to the Board' }).click();
 
     // other: starts with its own state: form closed, empty message, everything ticked, push on
     await go('other');
@@ -852,7 +773,7 @@ test.describe('the commit form is kept per workspace', () => {
     // leave something of its own there
     await include('src/server/handler.ts').click();
     await form().getByLabel('Commit message').fill('other message');
-    await windowOf(page).getByRole('toolbar', { name: 'Code' }).getByRole('button', { name: 'Close', exact: true }).click();
+    await windowOf(page).getByRole('toolbar', { name: 'Review' }).getByRole('button', { name: 'Back to the Board' }).click();
 
     // back in demo: exactly what was left
     await go('demo');
@@ -863,7 +784,7 @@ test.describe('the commit form is kept per workspace', () => {
     await expect(include('src/server/handler.ts')).toHaveAttribute('aria-checked', 'true');
     await expect(summary()).toContainText('Commit 2 files');
     await expect(summary()).toContainText('without pushing');
-    await windowOf(page).getByRole('toolbar', { name: 'Code' }).getByRole('button', { name: 'Close', exact: true }).click();
+    await windowOf(page).getByRole('toolbar', { name: 'Review' }).getByRole('button', { name: 'Back to the Board' }).click();
 
     // and in other: what was left there
     await go('other');
@@ -875,7 +796,7 @@ test.describe('the commit form is kept per workspace', () => {
     await form().getByRole('button', { name: /^Commit/ }).last().click();
     await expect.poll(() => posts.other).toBeTruthy();
     expect(posts.other).toEqual({ message: 'other message', noPush: false, files: { api: ['src/server/routes.ts', 'README.md'] } });
-    await windowOf(page).getByRole('toolbar', { name: 'Code' }).getByRole('button', { name: 'Close', exact: true }).click();
+    await windowOf(page).getByRole('toolbar', { name: 'Review' }).getByRole('button', { name: 'Back to the Board' }).click();
 
     // a commit in other cleared only other: demo still has its own
     await go('demo');
@@ -996,11 +917,11 @@ test.describe('two repositories in one workspace', () => {
 
     await openBoard(page, 'board');
 
-    // 1. Board header Code button shows total changes across both repos (2 in api + 2 in web = 4 files)
+    // 1. Board header Review button shows total changes across both repos (2 in api + 2 in web = 4 files)
     const codeBtn = page.getByTestId('board-code-button');
     await expect(codeBtn).toBeVisible();
     await expect(codeBtn).toContainText('4');
-    await expect(codeBtn).toHaveAttribute('aria-label', 'Code, 4 files changed');
+    await expect(codeBtn).toHaveAttribute('aria-label', 'Review, 4 files changed');
 
     // 2. Open an Area to verify uncommitted cards for both repos
     await page.locator('button.board-area').first().click();
@@ -1014,8 +935,8 @@ test.describe('two repositories in one workspace', () => {
     await expect(uncommittedApi).toContainText('2 files changed');
     await expect(uncommittedWeb).toContainText('2 files changed');
 
-    // 3. Clicking web's uncommitted card opens CodeWindow directly on web's first file
-    await uncommittedWeb.getByRole('button', { name: /Open .* in Code/ }).click();
+    // 3. Clicking web's uncommitted card opens Review directly on web's first file
+    await uncommittedWeb.getByRole('button', { name: /Open .* in Review/ }).click();
     const win = windowOf(page);
     await expect(win).toBeVisible();
     await expect(openName(page)).toContainText('src/client/App.tsx');
@@ -1060,7 +981,7 @@ test.describe('two repositories in one workspace', () => {
         web: ['src/client/App.tsx'],
       },
     });
-    await win.locator('button[title="Close"]').click();
+    await win.getByRole('button', { name: 'Back to the Board' }).click();
     await expect(page.locator('.react-flow__node-commit').filter({ hasText: 'New API commit' })).toBeVisible();
     await expect(page.locator('.react-flow__node-commit').filter({ hasText: 'New web commit' })).toBeVisible();
   });

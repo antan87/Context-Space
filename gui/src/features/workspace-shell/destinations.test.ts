@@ -4,6 +4,7 @@ import { SECTION_LABELS, knowledgeRedirect, parseSection, railSectionsFor, visib
 describe('workspace sections', () => {
   it('name every section once', () => {
     expect(Object.keys(SECTION_LABELS).sort()).toEqual(['board', 'changes', 'chat', 'documents', 'overview', 'plan', 'services', 'sessions', 'skills']);
+    expect(SECTION_LABELS.changes).toBe('Review');
   });
 
   it('keep old tab URLs working, aliasing deprecated sections to board', () => {

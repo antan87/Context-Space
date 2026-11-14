@@ -150,10 +150,10 @@ test('repo code opens existing Code on the explicit file and returns to narrow F
   const result = nav.getByRole('button', { name: /src\/server.ts Repository · api/ });
   await result.click();
   await expect(nav).toBeHidden();
-  const win = page.getByRole('region', { name: 'Code window' });
+  const win = page.getByRole('region', { name: 'Review', exact: true });
   await expect(win).toBeVisible();
   await expect.poll(() => asked.some((value) => { const url = new URL(value); return url.searchParams.get('repo') === 'api' && url.searchParams.get('file') === 'src/server.ts'; })).toBe(true);
-  await win.getByRole('button', { name: 'Close', exact: true }).click();
+  await win.getByRole('button', { name: 'Back to the Board' }).click();
   await expect(nav).toBeVisible();
   await expect(result).toBeFocused();
   await expect(nav.getByPlaceholder('Search files…')).toHaveValue('server');
@@ -269,7 +269,7 @@ test('workspace code/config/extensionless files use read-only Code and return to
     return route.fulfill({ json: { content: name === 'src/shared.ts' ? 'export const origin = "workspace";' : 'workspace configuration' } });
   });
   const nav = await filesSetup(page, ['src/local.ts', 'src/shared.ts', 'config.yaml', 'Makefile'], []);
-  const win = page.getByRole('region', { name: 'Code window' });
+  const win = page.getByRole('region', { name: 'Review', exact: true });
   for (const name of ['src/shared.ts', 'config.yaml', 'Makefile', 'src/shared.ts']) {
     await nav.getByPlaceholder('Search files…').fill(name);
     const result = nav.getByRole('button', { name: `${name} Workspace`, exact: true });
@@ -280,7 +280,7 @@ test('workspace code/config/extensionless files use read-only Code and return to
     await expect(win.getByTestId('code-file-viewer').locator('textarea')).toHaveJSProperty('readOnly', true);
     await expect(win.getByRole('button', { name: /Commit|Sync|Finish|terminal/i })).toHaveCount(0);
     await expect.poll(() => reads.at(-1)).toBe(name);
-    await win.getByRole('button', { name: 'Close', exact: true }).click();
+    await win.getByRole('button', { name: 'Back to the Board' }).click();
     await expect(result).toBeFocused();
     await expect(nav.getByPlaceholder('Search files…')).toHaveValue(name);
   }
@@ -298,7 +298,7 @@ test('same code path opens workspace, api and web with isolated identities', asy
     return route.fulfill({ json: { diff: '', fileContent: `export const ${repo}Origin = true;` } });
   });
   const nav = await filesSetup(page, ['src/shared.ts'], ['api', 'web'].map((repoName) => ({ repoName, repoPath: `/repos/${repoName}`, files: [{ file: 'src/shared.ts', type: 'unchanged' }] })));
-  const win = page.getByRole('region', { name: 'Code window' });
+  const win = page.getByRole('region', { name: 'Review', exact: true });
   for (const origin of ['Workspace', 'Repository · api', 'Workspace', 'Repository · web']) {
     await nav.getByRole('button', { name: `src/shared.ts ${origin}`, exact: true }).click();
     await expect(win).toBeVisible();
@@ -307,7 +307,7 @@ test('same code path opens workspace, api and web with isolated identities', asy
     if (origin === 'Workspace') await expect(win.getByText('Workspace · demo · Read only', { exact: true })).toBeVisible();
     else await expect(win.getByTestId('workspace-code-view')).toHaveCount(0);
     await expect(win.getByTestId('code-file-viewer').filter({ visible: true })).toBeVisible();
-    await win.getByRole('button', { name: 'Close', exact: true }).click();
+    await win.getByRole('button', { name: 'Back to the Board' }).click();
     await expect(nav).toBeVisible();
   }
 });
@@ -330,17 +330,17 @@ test('workspace scan coverage, read error Retry, binary and size omissions are e
   await expect(nav.getByText(/Workspace listing is limited/)).toBeVisible();
   await expect(nav.getByText('Could not scan unreadable.')).toBeVisible();
   await nav.getByRole('button', { name: 'src/local.ts Workspace', exact: true }).click();
-  const win = page.getByRole('region', { name: 'Code window' });
+  const win = page.getByRole('region', { name: 'Review', exact: true });
   await expect(win.getByRole('alert')).toHaveText('File no longer exists.');
   fail = false;
   await win.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(win.getByTestId('code-file-viewer')).toBeVisible();
-  await win.getByRole('button', { name: 'Close', exact: true }).click();
+  await win.getByRole('button', { name: 'Back to the Board' }).click();
   for (const [name, message] of [['binary.dat', 'Binary file: text preview omitted.'], ['large.ts', 'File exceeds the 1 MiB preview limit.']]) {
     await nav.getByRole('button', { name: `${name} Workspace`, exact: true }).click();
     await expect(win.getByRole('status')).toHaveText(message);
     await expect(win.getByTestId('code-file-viewer')).toHaveCount(0);
-    await win.getByRole('button', { name: 'Close', exact: true }).click();
+    await win.getByRole('button', { name: 'Back to the Board' }).click();
   }
 });
 
@@ -360,7 +360,7 @@ test('switching workspace while a Code read is pending cannot show old file text
   if (!await nav.isVisible()) await page.getByRole('button', { name: 'Board index', exact: true }).click();
   await nav.getByRole('button', { name: 'Files', exact: true }).click();
   await nav.getByRole('button', { name: 'src/shared.ts Workspace', exact: true }).click();
-  const win = page.getByRole('region', { name: 'Code window' });
+  const win = page.getByRole('region', { name: 'Review', exact: true });
   await expect(win.getByText('Workspace · other · Read only', { exact: true })).toBeVisible();
   await expect(win.getByTestId('code-file-viewer').getByText('NEW_WORKSPACE', { exact: true })).toBeVisible();
   await expect(win.getByText('OLD_WORKSPACE', { exact: true })).toHaveCount(0);

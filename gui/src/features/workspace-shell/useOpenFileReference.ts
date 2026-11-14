@@ -21,7 +21,7 @@ type Resolution =
   | { status: 'not-found'; reason: 'missing' | 'directory' | 'outside-roots' };
 
 /** Route the server's explicit identity without guessing its origin from a path. */
-export function openReferenceTarget(workspace: string, target: ReferenceTarget, line: number | undefined, opener: HTMLElement | null, navigate?: NavigateFunction, navigated = false, openerTarget?: OpenerTarget | null): number {
+export function openReferenceTarget(workspace: string, target: ReferenceTarget, line: number | undefined, opener: HTMLElement | null, navigate?: NavigateFunction, navigated = false, openerTarget?: OpenerTarget | null, area?: string): number {
   const intent = invalidateReferenceIntent();
   if (!line && target.viewer === 'reader') {
     closeCodeWindow(workspace, opener);
@@ -29,22 +29,24 @@ export function openReferenceTarget(workspace: string, target: ReferenceTarget, 
     documentRequests.open(workspace, { name: target.file, opener, intent, ...(target.origin.kind === 'repository' ? { repo: { name: target.origin.repoName, path: target.origin.repoPath } } : {}) });
     if (navigate) goToWorkspace(navigate, workspace, 'board');
   } else if (target.origin.kind === 'workspace') {
-    openCodeWindow(workspace, { opener, openerTarget, workspaceFile: { workspaceId: workspace, file: target.file, line }, navigated, preserveIntent: true });
+    openCodeWindow(workspace, { opener, openerTarget, workspaceFile: { workspaceId: workspace, file: target.file, line }, navigated, preserveIntent: true, area });
   } else {
-    openCodeWindow(workspace, { opener, openerTarget, file: { repoName: target.origin.repoName, repoPath: target.origin.repoPath, file: target.file, line }, navigated, preserveIntent: true });
+    openCodeWindow(workspace, { opener, openerTarget, file: { repoName: target.origin.repoName, repoPath: target.origin.repoPath, file: target.file, line }, navigated, preserveIntent: true, area });
   }
   return intent;
 }
 
 // Kept for callers; the server now resolves the origin, so these are no longer needed here.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function useOpenFileReference(workspace: string, _workspacePath: string, _repoPaths: readonly string[] = []) {
+export function useOpenFileReference(workspace: string, _workspacePath: string, _repoPaths: readonly string[] = [], getArea?: () => string | undefined) {
   const navigate = useNavigate();
   const { pathname, key: routeKey } = useLocation();
   const routeKeyRef = useRef(routeKey);
+  const getAreaRef = useRef(getArea);
   useLayoutEffect(() => {
     routeKeyRef.current = routeKey;
-  }, [routeKey]);
+    getAreaRef.current = getArea;
+  }, [routeKey, getArea]);
   // Only the initial move belongs to this click. Once landed, any later route is a new intent.
   const navigation = useRef<{ from: string; pending: boolean } | null>(null);
   const owned = useRef<number | null>(null);
@@ -78,6 +80,7 @@ export function useOpenFileReference(workspace: string, _workspacePath: string, 
     const from = browserPath();
     const here = parseWorkspacePath(from)?.workspace;
     const elsewhere = Boolean(here && here !== workspace);
+    const area = !elsewhere && click.onReader ? getAreaRef.current?.() : undefined;
     navigation.current = { from: routeKeyRef.current, pending: elsewhere };
     const isCurrent = () => {
       if (!referenceIntentIsCurrent(request)) return false;
@@ -88,7 +91,7 @@ export function useOpenFileReference(workspace: string, _workspacePath: string, 
     if (elsewhere) goToWorkspace(navigate, workspace, 'board');
     if (!click.onReader) {
       codeRequests.open(workspace, { kind: 'locating', path: parsed.path, line, intent: request });
-      openCodeWindow(workspace, { opener: held, openerTarget: heldTarget, navigated: elsewhere, preserveIntent: true });
+      openCodeWindow(workspace, { opener: held, openerTarget: heldTarget, navigated: elsewhere, preserveIntent: true, area });
     }
     try {
       const query = new URLSearchParams({ path: parsed.path, ...(click.cwd ? { cwd: click.cwd } : {}) });
@@ -96,15 +99,15 @@ export function useOpenFileReference(workspace: string, _workspacePath: string, 
       if (!isCurrent()) return;
       if (resolution.status === 'found') {
         if (click.onReader && !line && resolution.target.viewer === 'reader') click.onReader(resolution.target, request);
-        else owned.current = openReferenceTarget(workspace, resolution.target, line, held, navigate, elsewhere, heldTarget);
+        else owned.current = openReferenceTarget(workspace, resolution.target, line, held, navigate, elsewhere, heldTarget, area);
       } else {
-        if (click.onReader) openCodeWindow(workspace, { opener: held, openerTarget: heldTarget, navigated: elsewhere, preserveIntent: true });
+        if (click.onReader) openCodeWindow(workspace, { opener: held, openerTarget: heldTarget, navigated: elsewhere, preserveIntent: true, area });
         if (resolution.status === 'ambiguous') codeRequests.open(workspace, { kind: 'ambiguous', path: parsed.path, line, candidates: resolution.candidates, truncated: resolution.truncated, opener: held, intent: request });
         else codeRequests.open(workspace, { kind: 'not-found', path: parsed.path, line, reason: resolution.reason, intent: request });
       }
     } catch (error) {
       if (!isCurrent()) return;
-      if (click.onReader) openCodeWindow(workspace, { opener: held, openerTarget: heldTarget, navigated: elsewhere, preserveIntent: true });
+      if (click.onReader) openCodeWindow(workspace, { opener: held, openerTarget: heldTarget, navigated: elsewhere, preserveIntent: true, area });
       codeRequests.open(workspace, { kind: 'not-found', path: parsed.path, line, intent: request, reason: 'error', message: error instanceof Error ? error.message : 'The path could not be looked up.' });
     }
   }, [navigate, workspace]);

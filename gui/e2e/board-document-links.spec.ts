@@ -241,13 +241,13 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 1100, height: 700
   await expect(fullscreen).toBeVisible();
   // Another feature can request Code while the reader is fullscreen; the real window owns paint and Escape.
   await page.getByTestId('board-code-button').evaluate((button: HTMLElement) => button.click());
-  const code = page.getByRole('region', { name: 'Code window', exact: true });
+  const code = page.getByRole('region', { name: 'Review', exact: true });
   await expect(code).toBeVisible();
   await expect.poll(() => code.evaluate((panel) => {
     const box = panel.getBoundingClientRect();
     return panel.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
   })).toBe(true);
-  await code.getByRole('button', { name: 'Close', exact: true }).focus();
+  await code.getByRole('button', { name: 'Back to the Board' }).focus();
   await page.keyboard.press('Escape');
   await expect(code).toBeHidden();
   await expect(fullscreen).toBeVisible();
@@ -306,7 +306,7 @@ test('a workspace document line from terminal opens workspace Code and repeated 
   const view = page.getByTestId('workspace-code-view');
   await expect(view).toContainText('Workspace · demo · Read only');
   await expect(view).toContainText('three');
-  await page.getByRole('region', { name: 'Code window' }).getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('region', { name: 'Review', exact: true }).getByRole('button', { name: 'Back to the Board' }).click();
   await clickDocument(page);
   await expect(view).toContainText('three');
 });
@@ -320,12 +320,12 @@ test('closing a locating window cancels its late terminal reference', async ({ p
     await page.getByTestId('view-mode-split').click();
     await clickDocument(page);
     await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
-    await page.getByRole('region', { name: 'Code window' }).getByRole('button', { name: 'Close', exact: true }).click();
+    await page.getByRole('region', { name: 'Review', exact: true }).getByRole('button', { name: 'Back to the Board' }).click();
     const response = page.waitForResponse('**/files/reference?*');
     release();
     await response;
     await expect(page.locator('[data-board-reader]')).toHaveCount(0);
-    await expect(page.getByRole('region', { name: 'Code window' })).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeHidden();
   } finally { release(); }
 });
 
@@ -338,7 +338,7 @@ test('manual Code selection wins over a deferred terminal reference', async ({ p
     await page.getByTestId('view-mode-split').click();
     await clickDocument(page);
     await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
-    const win = page.getByRole('region', { name: 'Code window' });
+    const win = page.getByRole('region', { name: 'Review', exact: true });
     await win.getByRole('treeitem', { name: /handler\.ts/ }).click();
     await expect(win.locator('p[title]').first()).toHaveText('src/server/handler.ts');
     const response = page.waitForResponse('**/files/reference?*');
@@ -364,7 +364,7 @@ test('switching workspace cancels a deferred terminal reference', async ({ page 
     await response;
     await page.goto('/#/workspaces/demo/board');
     await expect(page.locator('[data-board-reader]')).toHaveCount(0);
-    await expect(page.getByRole('region', { name: 'Code window' })).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeHidden();
   } finally { release(); }
 });
 
@@ -385,9 +385,9 @@ test(`correction typed Finish draft wins over deferred terminal file reference${
   try {
     await page.setViewportSize({ width: 1600, height: 900 });
     await page.goto('/#/workspaces/demo/board'); await page.getByTestId('view-mode-split').click(); await clickDocument(page);
-    const win=page.getByRole('region',{name:'Code window'}); await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
+    const win=page.getByRole('region',{name:'Review',exact:true}); await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
     if (compact) {
-      await page.setViewportSize({ width: 600, height: 900 });
+      await page.setViewportSize({ width: 500, height: 900 });
       await expect(win.getByRole('button', { name: 'Finish…', exact: true })).toHaveCount(0);
       await win.getByRole('button', { name: 'More code actions' }).click();
       await page.getByRole('menuitem', { name: 'Finish…' }).click();
@@ -456,12 +456,12 @@ for (const origin of ['repository', 'workspace'] as const) {
       await clickDocument(page);
       await expect(page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' })).toBeVisible();
     await page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' }).click();
-      const win = page.getByRole('region', { name: 'Code window' });
+      const win = page.getByRole('region', { name: 'Review', exact: true });
       await expect(win).toBeVisible();
       await expect.poll(() => references).toEqual([{ path: 'docs/guide.md', cwd: null }, { path: 'src/shared.ts', cwd: root }]);
       const view = origin === 'workspace' ? page.getByTestId('workspace-code-view') : win;
       await expect.poll(async () => (await view.locator('.view-line').allTextContents()).join('\n').replace(/\u00a0/g, ' ')).toContain(`// shared number ${line ?? 1}`);
-      await win.getByRole('button', { name: 'Close', exact: true }).click();
+      await win.getByRole('button', { name: 'Back to the Board' }).click();
       await expect(page.locator('[data-board-reader]')).toContainText('Guide');
       await expect(page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' })).toBeFocused();
     });
@@ -480,7 +480,7 @@ for (const delivery of ['pending', 'queued-repository', 'queued-workspace'] as c
       await page.goto('/#/workspaces/demo/board');
       await page.getByTestId('view-mode-split').click();
       await clickDocument(page);
-      const win = page.getByRole('region', { name: 'Code window' });
+      const win = page.getByRole('region', { name: 'Review', exact: true });
       await expect(page.getByTestId('code-reference-notice')).toContainText('Looking for');
       if (delivery !== 'pending') {
         // A capture listener queues the result immediately before React handles the newer form click.
@@ -521,7 +521,7 @@ for (const reference of ['/source/api/src/shared.ts#L35', '~/api/src/shared.ts:3
     await clickDocument(page);
     await expect(page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' })).toBeVisible();
     await page.locator('[data-board-reader]').getByRole('link', { name: 'Open code' }).click();
-    await expect(page.getByRole('region', { name: 'Code window' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
     expect(requests.at(-1)).toEqual({ path: reference.startsWith('~') ? '~/api/src/shared.ts' : '/source/api/src/shared.ts', cwd: '/tmp/api' });
   });
 }
@@ -594,7 +594,7 @@ test('fix2 keyboard Tab from the Code toolbar reaches the mixed choices', async 
   await clickDocument(page);
   const notice = page.getByTestId('code-reference-notice');
   await expect(notice.getByRole('button', { name: 'Workspace/README.md' })).toBeVisible();
-  const win = page.getByRole('region', { name: 'Code window' });
+  const win = page.getByRole('region', { name: 'Review', exact: true });
   await win.getByRole('button', { name: 'Finish…', exact: true }).focus();
   let reached = false;
   for (let i = 0; i < 25 && !reached; i++) {
@@ -725,13 +725,13 @@ test('correction Markdown code link keeps focus across background updates while 
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
     releaseRef();
-    const win = page.getByRole('region', { name: 'Code window' });
+    const win = page.getByRole('region', { name: 'Review', exact: true });
     await expect(win).toBeVisible();
     await expect.poll(async () => (await win.locator('.view-line').allTextContents()).join('\n').replace(/\u00a0/g, ' ')).toContain('// shared number 35');
 
     changesVersion = 2;
     const changesRefetched = page.waitForResponse((r) => r.url().endsWith('/api/workspace/demo/changes') && r.request().method() === 'GET');
-    await win.getByRole('button', { name: 'Close', exact: true }).click();
+    await win.getByRole('button', { name: 'Back to the Board' }).click();
     await changesRefetched;
 
     await expect(page.locator('[data-board-reader]')).toContainText('Guide');
@@ -774,7 +774,7 @@ test('correction Markdown code link returns focus to equivalent link after reade
   await expect(reader.getByRole('link', { name: 'Open code' })).toBeVisible();
   await reader.getByRole('link', { name: 'Open code' }).click();
 
-  const win = page.getByRole('region', { name: 'Code window' });
+  const win = page.getByRole('region', { name: 'Review', exact: true });
   await expect(win).toBeVisible();
   await expect.poll(async () => (await win.locator('.view-line').allTextContents()).join('\n').replace(/\u00a0/g, ' ')).toContain('// shared number 35');
 
@@ -784,6 +784,6 @@ test('correction Markdown code link returns focus to equivalent link after reade
   await previewRefetched;
   await expect(reader).toContainText('Updated section inserted above the link.');
 
-  await win.getByRole('button', { name: 'Close', exact: true }).click();
+  await win.getByRole('button', { name: 'Back to the Board' }).click();
   await expect(reader.getByRole('link', { name: 'Open code' })).toBeFocused();
 });

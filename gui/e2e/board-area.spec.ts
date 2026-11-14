@@ -707,10 +707,10 @@ test.describe('Board, rows by step', () => {
     await short.getByRole('heading').click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(reading).toHaveCount(0);
-    // A commit opens in the Code window on that commit, not in the reader
+    // A commit opens in Review on that commit, not in the reader
     await rowButton(page, /NexusFlow/).first().click();
     await inArea(page).getByRole('article', { name: /^a91f2e0/ }).first().click();
-    const code = page.getByRole('region', { name: 'Code window' });
+    const code = page.getByRole('region', { name: 'Review', exact: true });
     await expect(code).toBeVisible();
     await expect(code.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Commits' })).toHaveAttribute('aria-pressed', 'true');
     await expect(reading).toHaveCount(0);

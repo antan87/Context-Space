@@ -89,6 +89,8 @@ export interface BoardActions {
   deleteNote?: (id: string) => Promise<boolean>;
   /** Whether the board is in read-only mode (e.g. for archived workspaces). */
   readOnly?: boolean;
+  /** Title of the currently stepped Area when inside Level 1 (Area view). */
+  activeAreaTitle?: string;
   /** Available areas on the board for area/step picking in note dialogs. */
   availableAreas?: Array<{
     id: string;

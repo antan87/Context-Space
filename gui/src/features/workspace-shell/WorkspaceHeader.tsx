@@ -147,7 +147,7 @@ export function WorkspaceHeader({ workspaceId, title, branchName, mode, repoCoun
                 {copied ? <Check aria-hidden="true" size={12} className="text-[var(--state-done)]" /> : <Copy aria-hidden="true" size={12} />} <span>{copied ? 'Branch name copied' : 'Copy branch name'}</span>
               </MenuItem>}
               <MenuItem onClick={() => navigate(`${base}/changes`)} className="flex items-center gap-2 py-1.5 text-xs">
-                <FileDiff aria-hidden="true" size={12} /> <span className="text-muted-foreground">Changes</span> <span>{changes}</span>
+                <FileDiff aria-hidden="true" size={12} /> <span className="text-muted-foreground">Review</span> <span>{changes}</span>
               </MenuItem>
               {warnings.map((warning) => (
                 <MenuItem key={warning.id} onClick={() => setShown(warning)} className="flex items-center gap-2 py-1.5 text-xs text-[var(--state-needs)]">

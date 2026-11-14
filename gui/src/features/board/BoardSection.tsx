@@ -358,7 +358,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     // A commit opens in the Code window (its Commits mode), with the commits of the row it was pressed in, in the order the row shows them.
     const commitOpen = commitOpenFor(areas, target);
     if (commitOpen) {
-      openCodeWindow(workspaceId, { opener: from ?? pressedLink.current, commit: commitOpen, preserveIntent: true });
+      openCodeWindow(workspaceId, { opener: from ?? pressedLink.current, commit: commitOpen, area: commitOpen.sequence?.label ?? activeAreaTitleRef.current, preserveIntent: true });
       return;
     }
     opener.current = from ?? pressedLink.current;
@@ -384,7 +384,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   // Following something from inside the reader is a step deeper: the place left stays on the trail, and Back, Alt+Left and Escape return to it.
   // (The card the trail started from keeps the keyboard and the light; the opener is not touched.)
-  const openFileReference = useOpenFileReference(workspaceId, workspacePath ?? '');
+  const activeAreaTitleRef = useRef<string | undefined>(undefined);
+  const openFileReference = useOpenFileReference(workspaceId, workspacePath ?? '', [], () => activeAreaTitleRef.current);
   const areasRef = useRef(areas);
   useLayoutEffect(() => {
     areasRef.current = areas;
@@ -531,6 +532,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const focusing = useRef(false);
 
   const activeArea = areas.find((a) => a.id === stepped?.areaId);
+  activeAreaTitleRef.current = stepped ? activeArea?.data.title : undefined;
   const [areaAddStepOpen, setAreaAddStepOpen] = useState(false);
   const [areaAddStepText, setAreaAddStepText] = useState('');
   const [areaAddStepError, setAreaAddStepError] = useState<string | null>(null);
@@ -2087,6 +2089,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     workspaceId,
     workspacePath,
     readOnly,
+    activeAreaTitle: activeArea?.data.title,
     openInReader,
     toggleGroup: () => {},
     keepFocus: () => {},
@@ -2108,7 +2111,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, openInReader, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
+  }), [workspaceId, workspacePath, readOnly, activeArea?.data.title, openInReader, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const backdropPress = useRef({ down: false, up: false });
 
@@ -2158,7 +2161,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   // `inArea`: narrower than 44rem the word gives way to the icon, and the count stays
   const codeButton = (inArea = false) => {
     if (readOnly) return null;
-    const name = changes.files > 0 ? `Code, ${filesChangedText(changes.files)}` : 'Code';
+    const name = changes.files > 0 ? `Review, ${filesChangedText(changes.files)}` : 'Review';
     return (
       <Button
         size="sm"
@@ -2167,10 +2170,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         aria-label={name}
         data-testid="board-code-button"
         className={cn('nodrag nopan min-h-[24px] cursor-pointer gap-1.5 px-2.5 text-[12.5px] font-medium', inArea && 'gap-0.5 px-1 @[34rem]:gap-1 @[34rem]:px-1.5 @[44rem]:gap-1.5 @[44rem]:px-2.5')}
-        onClick={(event) => openCodeWindow(workspaceId, { opener: event.currentTarget })}
+        onClick={(event) => openCodeWindow(workspaceId, { opener: event.currentTarget, area: inArea ? activeArea?.data.title : undefined })}
       >
         <Code2 className="size-4" aria-hidden="true" />
-        <span className={inArea ? 'hidden @[44rem]:inline' : undefined}>Code</span>
+        <span className={inArea ? 'hidden @[44rem]:inline' : undefined}>Review</span>
         {changes.files > 0 && <span className={cn('tabular-nums text-muted-foreground', inArea && 'hidden @[30rem]:inline')}>{changes.files}</span>}
       </Button>
     );
@@ -2234,8 +2237,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           onOpenFile={(file, button) => {
             fileReturnPending.current = { kind: !file.document ? 'code' : 'reader', seen: false };
             if (navDock.overlays) setNarrowNavOpen(false);
-            if (file.repo && !file.document) openCodeWindow(workspaceId, { opener: button, file: { repoName: file.repo.name, repoPath: file.repo.path, file: file.path } });
-            else if (!file.document) openCodeWindow(workspaceId, { opener: button, workspaceFile: { workspaceId, file: file.path } });
+            if (file.repo && !file.document) openCodeWindow(workspaceId, { opener: button, area: stepped ? activeArea?.data.title : undefined, file: { repoName: file.repo.name, repoPath: file.repo.path, file: file.path } });
+            else if (!file.document) openCodeWindow(workspaceId, { opener: button, area: stepped ? activeArea?.data.title : undefined, workspaceFile: { workspaceId, file: file.path } });
             else show({ path: file.path, title: fileTitle(file.path), repo: file.repo }, button);
           }}
           dock={navDock}

@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useRef, type ComponentProps } from 'react';
 import { createPortal } from 'react-dom';
-import { Maximize2, Minimize2, X } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { useDockRect } from '../chat/dockPlacement.js';
-import { LARGE_WINDOW } from '../board/boardReaderLayout.js';
 import { WorkspaceFileView } from './WorkspaceFileView.js';
 import { resolveCodeWindowOpener, setCodeWindowOpen, type OpenerTarget, type WorkspaceFile } from '../workspace-shell/openRequests.js';
 import type { Feature } from '../../types.js';
@@ -11,16 +9,18 @@ import { CodeSection } from './CodeSection.js';
 import { indexInSequence, sameCommit, type CommitOpen, type CommitRef } from './commitsMode.js';
 import { parseCommitNodeId } from '../board/boardActions.js';
 
-type SectionProps = Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast' | 'panelActions' | 'autoSelect' | 'onAskAI' | 'onToggleFullScreen' | 'requestId' | 'commitOpen' | 'onShownCommit'>;
+type SectionProps = Omit<ComponentProps<typeof CodeSection>, 'ws' | 'active' | 'showToast' | 'panelActions' | 'autoSelect' | 'onAskAI' | 'requestId' | 'commitOpen' | 'onShownCommit' | 'backAction' | 'breadcrumb' | 'area'>;
 
 export interface CodeWindowProps {
   workspaceFile?: WorkspaceFile;
   /** The commit the window was asked to open on (Commits mode), with the commits of the row it came from. */
   commitOpen?: CommitOpen;
   fileRequestId: number;
+  /** Area name shown in the Review breadcrumb when opened from an Area. */
+  area?: string;
   ws: Feature;
   open: boolean;
-  /** Where the keyboard returns on close; when it is gone, the Board's Code button. */
+  /** Where the keyboard returns on close; when it is gone, the Board's Review button. */
   opener: HTMLElement | null;
   openerTarget?: OpenerTarget | null;
   /** The workspace content the window covers: both panes in Split. */
@@ -51,13 +51,11 @@ const isField = (target: EventTarget | null) => target instanceof HTMLElement
 /** Anything open that takes Escape for itself: a menu, a dialog, the editor's find box, suggestions or context menu. */
 const OWNS_ESCAPE = '[data-slot="menu-popup"], [role="dialog"], [role="menu"], .find-widget.visible, .monaco-menu-container, .suggest-widget.visible, .parameter-hints-widget.visible';
 
-const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring';
-
 /**
- * The Code section in a large window over the whole workspace content, the way the Board's reader is a large window over the
- * board. It stays mounted once opened (hidden and inert while closed), so the chosen file and its scroll survive a close.
+ * The Review page over the workspace content (full-frame below WorkspaceHeader in Board, Split and phone widths).
+ * It stays mounted once opened (hidden and inert while closed), so the chosen file and its scroll survive a close.
  */
-export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
+export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, area, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
   const rect = useDockRect(cover);
   const panel = useRef<HTMLDivElement>(null);
   const skipFocusReturn = useRef(false);
@@ -66,37 +64,17 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, w
   const wasOpen = useRef(false);
   const workspace = ws.branchName;
 
-  const [maximized, setMaximized] = useState(false);
-  const fullscreenToggleRef = useRef<HTMLButtonElement>(null);
-  const pendingFullscreenFocus = useRef(false);
-
-  const toggleMaximized = useCallback(() => {
-    pendingFullscreenFocus.current = true;
-    setMaximized((prev) => !prev);
-  }, []);
-
-  useLayoutEffect(() => {
-    if (pendingFullscreenFocus.current) {
-      pendingFullscreenFocus.current = false;
-      fullscreenToggleRef.current?.focus({ preventScroll: true });
-    }
-  }, [maximized]);
-
   const handleClose = useCallback(() => {
-    setMaximized(false);
+    skipFocusReturn.current = false;
     onClose();
   }, [onClose]);
-
-  useEffect(() => {
-    if (!open) setMaximized(false);
-  }, [open]);
 
   useEffect(() => {
     setCodeWindowOpen(workspace, open);
     return () => setCodeWindowOpen(workspace, false);
   }, [workspace, open]);
 
-  // The keyboard goes into the window when it opens, and back to what opened it when it closes.
+  // The keyboard goes into Review when it opens, and back to what opened it when it closes.
   useEffect(() => {
     if (open) {
       wasOpen.current = true;
@@ -107,7 +85,7 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, w
     if (!wasOpen.current) return undefined;
     wasOpen.current = false;
     if (skipFocusReturn.current) return undefined;
-    // [ and ] may have moved to another commit of the row the window was opened from: the keyboard goes to that commit's card when it is drawn.
+    // [ and ] may have moved to another commit of the row Review was opened from: the keyboard goes to that commit's card when it is drawn.
     const shown = shownCommit.current;
     const sequence = commitOpen?.sequence;
     const shownCard = shown && sequence && indexInSequence(sequence, shown) >= 0 ? findCommitCard(shown) : null;
@@ -116,9 +94,7 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, w
     return undefined;
   }, [open, opener, openerTarget, commitOpen]);
 
-  // Escape when maximized steps back to the normal window first; otherwise it closes the window, unless something in the window has a use for it first.
-  // What was open is looked at before the key does its work: a menu or the find box is already closing by the time this runs.
-  // Whether another handler took the key is looked at after all of them have run (the filter field clears itself, the Ask AI form closes), so they never also close or exit full screen.
+  // Escape closes Review, unless a menu, dialog, editor widget, filter or form field inside Review has a use for it first.
   const blocked = useRef(false);
   useEffect(() => {
     if (!open) return undefined;
@@ -129,12 +105,7 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, w
       if (event.key !== 'Escape' || event.defaultPrevented || blocked.current) return;
       setTimeout(() => {
         if (!event.defaultPrevented) {
-          if (maximized) {
-            pendingFullscreenFocus.current = true;
-            setMaximized(false);
-          } else {
-            handleClose();
-          }
+          handleClose();
         }
       }, 0);
     };
@@ -144,27 +115,59 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, w
       window.removeEventListener('keydown', onCapture, true);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [open, maximized, handleClose]);
-
-  // A press outside the window closes it: it must begin and end on the dimmed area, so a selection dragged out of the window does not.
-  const pressedOutside = useRef(false);
+  }, [open, handleClose]);
 
   const ask = useCallback(async (message: string) => {
-    const sent = await askAI(message);
+    skipFocusReturn.current = true;
+    let sent = false;
+    try {
+      sent = await askAI(message);
+    } finally {
+      if (!sent) skipFocusReturn.current = false;
+    }
     if (sent) {
       // The person should see the terminal: the AI's reply is there, and the keyboard is in it
-      skipFocusReturn.current = true;
-      handleClose();
+      onClose();
     }
     return sent;
-  }, [askAI, handleClose]);
+  }, [askAI, onClose]);
 
-  const actions = <div className="flex items-center gap-1">
-    <button ref={fullscreenToggleRef} type="button" className={quiet} aria-label={maximized ? 'Exit full screen' : 'Full screen'} title={maximized ? 'Exit full screen (Esc)' : 'Full screen'} aria-pressed={maximized} onClick={toggleMaximized}>
-      {maximized ? <Minimize2 aria-hidden="true" className="size-4" /> : <Maximize2 aria-hidden="true" className="size-4" />}
+  const backAction = (
+    <button
+      type="button"
+      className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs font-medium text-foreground outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+      aria-label="Back to the Board"
+      title="Back to the Board (Esc)"
+      onClick={handleClose}
+    >
+      <span aria-hidden="true">← </span>
+      <span>Board</span>
+      <kbd
+        aria-hidden="true"
+        className="hidden @[34rem]:inline-flex items-center rounded border border-border bg-muted px-1 py-0.5 font-mono text-xs font-medium leading-none text-muted-foreground"
+      >
+        Esc
+      </kbd>
     </button>
-    <button type="button" className={quiet} aria-label="Close" title="Close" onClick={handleClose}><X aria-hidden="true" className="size-4" /></button>
-  </div>;
+  );
+
+  const breadcrumb = (
+    <nav
+      aria-label="Breadcrumb"
+      data-testid="review-breadcrumb"
+      className="hidden @[44rem]:flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground"
+    >
+      <span className="shrink-0">Board</span>
+      {area && (
+        <>
+          <span aria-hidden="true" className="shrink-0 text-muted-foreground/60">›</span>
+          <span className="min-w-0 truncate">{area}</span>
+        </>
+      )}
+      <span aria-hidden="true" className="shrink-0 text-muted-foreground/60">›</span>
+      <span className="shrink-0 font-medium text-foreground">Review</span>
+    </nav>
+  );
 
   if (typeof document === 'undefined') return null;
   return createPortal(
@@ -173,38 +176,20 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, w
       hidden={!open}
       inert={open ? undefined : true}
       className={cn(
-        'fixed flex items-center justify-center animate-fade-in',
-        maximized ? 'inset-0 z-40 bg-background' : 'z-30 bg-background/50',
-        !maximized && !rect && 'hidden',
+        'fixed z-30 flex bg-background animate-fade-in',
+        !rect && 'hidden',
       )}
-      style={maximized ? undefined : (rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : undefined)}
-      onPointerDown={(event) => {
-        if (maximized) return;
-        pressedOutside.current = event.target === event.currentTarget;
-      }}
-      onClick={(event) => {
-        if (maximized) return;
-        const outside = pressedOutside.current && event.target === event.currentTarget;
-        pressedOutside.current = false;
-        if (outside) handleClose();
-      }}
+      style={rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : undefined}
     >
       <div
         ref={panel}
         tabIndex={-1}
         role="region"
-        aria-label="Code window"
+        aria-label="Review"
         data-code-window=""
-        data-fullscreen={maximized ? 'true' : undefined}
-        className={cn(
-          '@container flex min-h-0 flex-col overflow-hidden bg-background outline-hidden',
-          maximized
-            ? 'h-full w-full rounded-none border-0'
-            : 'rounded-xl border border-border shadow-2xl',
-        )}
-        style={maximized ? undefined : { width: `${LARGE_WINDOW.width * 100}%`, height: `${LARGE_WINDOW.height * 100}%` }}
+        className="@container flex h-full w-full min-h-0 flex-col overflow-hidden rounded-none border-0 bg-background outline-hidden"
       >
-        {workspaceFile && open && <WorkspaceFileView file={workspaceFile} requestId={fileRequestId} actions={actions} />}
+        {workspaceFile && open && <WorkspaceFileView file={workspaceFile} requestId={fileRequestId} backAction={backAction} breadcrumb={breadcrumb} />}
         <div style={{ display: workspaceFile ? 'none' : 'contents' }} hidden={!!workspaceFile} inert={workspaceFile ? true : undefined}>
         <CodeSection
           {...sectionProps}
@@ -214,10 +199,11 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, w
           requestId={fileRequestId}
           onShownCommit={rememberShownCommit}
           commitOpen={commitOpen}
+          area={area}
+          backAction={backAction}
+          breadcrumb={breadcrumb}
           showToast={showToast}
           onAskAI={ask}
-          onToggleFullScreen={toggleMaximized}
-          panelActions={workspaceFile ? undefined : actions}
         />
         </div>
       </div>

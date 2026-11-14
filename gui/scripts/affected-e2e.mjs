@@ -168,20 +168,27 @@ export const FOLDER_SPECS = [
     safety: 'Pure math helper (revealViewport) for overview card positioning; verified by board-overview.spec.ts.',
   },
 
-  // Changes / Code Window
+  // Changes / Code Window / Review Page
   {
     folder: 'src/features/changes/CodeWindow',
     path: 'gui/src/features/changes/CodeWindow.tsx',
     bareNames: ['CodeWindow', 'CodeWindow.tsx'],
-    specs: ['e2e/board-code-window.spec.ts'],
-    safety: 'Diff viewer and code inspection window modal; verified by board-code-window.spec.ts.',
+    specs: ['e2e/board-code-window.spec.ts', 'e2e/board-review-page.spec.ts'],
+    safety: 'Full-frame Review page and keyboard/focus shell; verified by board-code-window.spec.ts and board-review-page.spec.ts.',
   },
   {
     folder: 'src/features/changes/CodeWindowSlot',
     path: 'gui/src/features/changes/CodeWindowSlot.tsx',
     bareNames: ['CodeWindowSlot', 'CodeWindowSlot.tsx'],
-    specs: ['e2e/board-code-window.spec.ts'],
-    safety: 'Mount slot for CodeWindow modal; verified by board-code-window.spec.ts.',
+    specs: ['e2e/board-code-window.spec.ts', 'e2e/board-review-page.spec.ts'],
+    safety: 'Mount slot and browser-history integration for Review page; verified by board-code-window.spec.ts and board-review-page.spec.ts.',
+  },
+  {
+    folder: 'src/features/changes/reviewHistory',
+    path: 'gui/src/features/changes/reviewHistory.ts',
+    bareNames: ['reviewHistory', 'reviewHistory.ts'],
+    specs: ['e2e/board-review-page.spec.ts'],
+    safety: 'Pure session-scoped Review history token state machine; verified by reviewHistory.test.ts and board-review-page.spec.ts.',
   },
 
   // Now line

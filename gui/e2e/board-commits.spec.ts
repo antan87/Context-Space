@@ -68,8 +68,8 @@ function makeCommitDetail(overrides: Partial<CommitDetail> = {}): CommitDetail {
 const board = (page: Page) => page.getByRole('region', { name: 'Board', exact: true });
 const reader = (page: Page) => board(page).getByRole('region', { name: 'Reader', exact: true });
 const menuCheckboxItem = (page: Page, name: string) => page.getByRole('menuitemcheckbox', { name, exact: true });
-/** Commits open in the Code window (its Commits mode), not in the reader. */
-const win = (page: Page) => page.getByRole('region', { name: 'Code window' });
+/** Commits open in Review (its Commits mode), not in the reader. */
+const win = (page: Page) => page.getByRole('region', { name: 'Review', exact: true });
 const commitHeader = (page: Page) => win(page).getByTestId('commit-header');
 const modeButton = (page: Page, name: string) => win(page).getByRole('group', { name: 'Show' }).getByRole('button', { name: new RegExp(`^${name}( \\d+)?$`) });
 const commitCardOf = (page: Page, subject: string) => board(page).locator('#board-area .react-flow__node-commit').filter({ hasText: subject });
@@ -374,7 +374,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(win(page)).toBeVisible();
     await expect(reader(page)).toHaveCount(0);
     await expect(modeButton(page, 'Commits')).toHaveAttribute('aria-pressed', 'true');
-    await expect(modeButton(page, 'Changes')).toHaveAttribute('aria-pressed', 'false');
+    await expect(modeButton(page, 'Not committed')).toHaveAttribute('aria-pressed', 'false');
     // Review & commit, Finish and Sync belong to uncommitted work, not to a past commit
     await expect(win(page).getByRole('button', { name: 'Review & commit' })).toHaveCount(0);
     await expect(win(page).getByRole('button', { name: 'Finish…' })).toHaveCount(0);
@@ -414,7 +414,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     expect(diffBox!.height).toBeGreaterThan(200);
   });
 
-  test('pointer and keyboard: Escape and an outside press return the keyboard to the card that opened it', async ({ page }) => {
+  test('pointer, keyboard and browser Back: Escape, Back to the Board and Back return the keyboard to the card that opened it', async ({ page }) => {
     await setupCommitBoard(page, makeCommitDetail());
     const button = commitButtonOf(page, 'Write the CSV writer');
 
@@ -428,13 +428,13 @@ test.describe('Commit cards open the Code window on that commit', () => {
 
     await button.click();
     await expect(win(page)).toBeVisible();
-    await win(page).getByRole('button', { name: 'Close', exact: true }).click();
+    await win(page).getByRole('button', { name: 'Back to the Board' }).click();
     await expect(win(page)).toBeHidden();
     await expect(button).toBeFocused();
 
     await button.click();
     await expect(win(page)).toBeVisible();
-    await page.locator('[data-code-window-backdrop]').click({ position: { x: 4, y: 4 } });
+    await page.goBack();
     await expect(win(page)).toBeHidden();
     await expect(button).toBeFocused();
   });
@@ -539,7 +539,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await page.getByTestId('board-code-button').click();
     await expect(win(page)).toBeVisible();
     // The Code button opens on the uncommitted work, as before
-    await expect(modeButton(page, 'Changes')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modeButton(page, 'Not committed')).toHaveAttribute('aria-pressed', 'true');
     await expect(modeButton(page, 'Commits')).toHaveAttribute('aria-pressed', 'false');
     await expect(win(page).getByRole('button', { name: 'Review & commit' })).toBeVisible();
     await expect(win(page).getByRole('tree', { name: 'billing changed files' })).toBeVisible();
@@ -550,19 +550,19 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await page.keyboard.press(']');
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Add CSV stream formatter');
 
-    // Back to Changes: the working tree and its actions
-    await modeButton(page, 'Changes').click();
+    // Back to Not committed: the working tree and its actions
+    await modeButton(page, 'Not committed').click();
     await expect(win(page).getByRole('button', { name: 'Review & commit' })).toBeVisible();
     await expect(win(page).getByRole('tree', { name: 'billing changed files' })).toBeVisible();
     // and Commits again finds the commit where it was left
     await modeButton(page, 'Commits').click();
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Add CSV stream formatter');
 
-    // Closing and pressing the Code button again opens the working tree, not the commit
+    // Closing and pressing the Review button again opens the working tree, not the commit
     await page.keyboard.press('Escape');
     await expect(win(page)).toBeHidden();
     await page.getByTestId('board-code-button').click();
-    await expect(modeButton(page, 'Changes')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modeButton(page, 'Not committed')).toHaveAttribute('aria-pressed', 'true');
     await expect(win(page).getByRole('button', { name: 'Review & commit' })).toBeVisible();
   });
 
@@ -620,7 +620,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await modeButton(page, 'Commits').click();
     await expect(commitHeader(page).getByTestId('commit-subject')).toBeVisible();
     await expect(win(page).locator('#finish-message')).toHaveCount(0);
-    await modeButton(page, 'Changes').click();
+    await modeButton(page, 'Not committed').click();
     await expect(win(page).locator('#finish-message')).toHaveValue('Ship the CSV export [] ok');
 
     // The commit message of the commit form is kept the same way
@@ -628,7 +628,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     const commitMessage = win(page).getByRole('textbox').first();
     await commitMessage.fill('feat: the writer');
     await modeButton(page, 'Commits').click();
-    await modeButton(page, 'Changes').click();
+    await modeButton(page, 'Not committed').click();
     await expect(win(page).getByRole('textbox').first()).toHaveValue('feat: the writer');
   });
 
@@ -659,7 +659,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
       else await expect(message).toHaveValue('');
       // and it is the same after a trip to Commits and back
       await modeButton(page, 'Commits').click();
-      await modeButton(page, 'Changes').click();
+      await modeButton(page, 'Not committed').click();
       await expect(win(page).locator('#finish-message')).toHaveValue(scenario.kept ? 'Ship the CSV export' : '');
     });
   }
@@ -675,7 +675,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     const pushed = makeCommitDetail({ pushed: true, forge: 'github', webUrl: `https://github.com/org/billing/commit/${FULL_SHA}` });
     await page.route('**/api/workspace/demo/commits/billing/*', (route) => (route.request().url().includes('/diff') ? route.fallback() : route.fulfill({ json: pushed })));
     await page.route('**/api/workspace/demo/finish', (route) => (route.request().method() === 'POST' ? route.fulfill({ json: finishReport({ repos: [billingRepo()] }) }) : route.fallback()));
-    await modeButton(page, 'Changes').click();
+    await modeButton(page, 'Not committed').click();
     await win(page).getByRole('button', { name: 'Finish…' }).click();
     await win(page).locator('#finish-message').fill('Ship it');
     const answered = page.waitForResponse((r) => r.url().endsWith('/finish') && r.request().method() === 'POST');
@@ -823,9 +823,9 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(alert).toContainText('Could not read this commit.');
     await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
     await expect(modeButton(page, 'Commits')).toHaveAttribute('aria-pressed', 'true');
-    await expect(win(page).getByRole('button', { name: 'Close', exact: true })).toBeVisible();
-    // The window is still usable: the Changes mode and the other commit
-    await modeButton(page, 'Changes').click();
+    await expect(win(page).getByRole('button', { name: 'Back to the Board' })).toBeVisible();
+    // Review is still usable: the Not committed mode and the other commit
+    await modeButton(page, 'Not committed').click();
     await expect(win(page).getByRole('tree', { name: 'billing changed files' })).toBeVisible();
   });
 
@@ -874,18 +874,19 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(win(page).getByRole('toolbar', { name: 'Diff' })).toHaveCount(0);
   });
 
-  test('Full screen in Commits mode keeps the commit and the file; Escape steps back out of it first', async ({ page }) => {
+  test('Commits mode fills the full frame with no Full screen button, and Escape returns to the commit card', async ({ page }) => {
     await setupCommitBoard(page, makeCommitDetail());
     await commitButtonOf(page, 'Write the CSV writer').click();
     await win(page).getByRole('treeitem', { name: /export\.ts/ }).click();
     await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
-    await win(page).getByRole('button', { name: 'Full screen', exact: true }).click();
-    await expect(win(page)).toHaveAttribute('data-fullscreen', 'true');
+    await expect(win(page).getByRole('button', { name: /Full screen|Exit full screen/i })).toHaveCount(0);
     await expect(commitHeader(page).getByTestId('commit-subject')).toBeInViewport();
-    await expect(win(page).getByTestId('commit-file-position')).toHaveText('2 / 4');
+    const coverBox = await page.locator('[data-code-window-backdrop]').boundingBox();
+    const winBox = await win(page).boundingBox();
+    expect(winBox!.width).toBeCloseTo(coverBox!.width, 0);
+    expect(winBox!.height).toBeCloseTo(coverBox!.height, 0);
     await page.keyboard.press('Escape');
-    await expect(win(page)).not.toHaveAttribute('data-fullscreen', 'true');
-    await expect(win(page)).toBeVisible();
-    await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Write the CSV writer');
+    await expect(win(page)).toBeHidden();
+    await expect(commitButtonOf(page, 'Write the CSV writer')).toBeFocused();
   });
 });

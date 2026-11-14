@@ -13,7 +13,7 @@ const ITEMS: Partial<Record<WorkspaceSection, RailItem>> = {
   plan: { label: 'Plan', purpose: 'The plan and its checkpoints, the brief the assistant works from, and the checks', icon: ListChecks },
   board: { label: 'Board', purpose: 'The plan, documents and the commits new since you last looked, laid out on a canvas you can pan and zoom', icon: Kanban },
   sessions: { label: 'Sessions', purpose: 'CLI sessions, conversation history, and usage logs', icon: Terminal },
-  changes: { label: 'Code', purpose: 'The code and its changes: read files, review, commit and finish the work', icon: FileCode },
+  changes: { label: 'Review', purpose: 'Read what changed, commit and finish the work', icon: FileCode },
   documents: { label: 'Docs', purpose: 'Documents in the workspace', icon: FileText },
   skills: { label: 'Skills', purpose: 'Assistant skills, tools, and playbooks configured for this workspace', icon: Boxes },
   services: { label: 'Services', purpose: "Your app's own processes, such as a dev server, and their logs", icon: Server },

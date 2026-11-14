@@ -27,7 +27,9 @@ import { cn } from './lib/utils.js';
 import { perfMark, perfMarkOnce } from './lib/perfMarks.js';
 import { changesFromResponse } from './features/changes/utils/changesResponse.js';
 import { knowledgeRedirect, parseSection, type WorkspaceSection } from './features/workspace-shell/destinations.js';
-import { documentRequests } from './features/workspace-shell/openRequests.js';
+import { closeCodeWindow, documentRequests } from './features/workspace-shell/openRequests.js';
+import { retireReviewIfWorkspaceChanged } from './features/changes/reviewHistory.js';
+import { parseWorkspacePath } from './features/chat/chatRoute.js';
 import { useWorkspaceShortcuts } from './features/workspace-shell/useWorkspaceShortcuts.js';
 
 // Route-level code splitting: each page (and its dependency subtree, e.g. the
@@ -120,6 +122,11 @@ type UiUpdateStatus = {
 function AppInner() {
   const navigate = useNavigate();
   const location = useLocation();
+  const currentWorkspace = parseWorkspacePath(location.pathname)?.workspace ?? null;
+  useEffect(() => {
+    const leftWorkspace = retireReviewIfWorkspaceChanged(currentWorkspace);
+    if (leftWorkspace) closeCodeWindow(leftWorkspace, null);
+  }, [currentWorkspace]);
 
   // Toast State
   const [toasts, setToasts] = useState<Toast[]>([]);
