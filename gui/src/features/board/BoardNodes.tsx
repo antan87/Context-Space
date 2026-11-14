@@ -1868,7 +1868,7 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
   return (
     <div
       className={cn(
-        'relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-lg bg-card px-3 text-left text-card-foreground transition-colors hover:bg-accent',
+        '@container relative flex h-full w-full items-center gap-2.5 overflow-hidden rounded-lg bg-card px-3 text-left text-card-foreground transition-colors hover:bg-accent',
         isNotStarted && 'opacity-85'
       )}
       onClick={(event) => {
@@ -1884,11 +1884,11 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
         aria-label={areaLabel(data)}
         className={cn(
           'board-area nodrag nopan flex items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded',
-          data.kind === 'files' ? 'shrink-0' : 'min-w-0 flex-1',
+          data.kind === 'files' ? 'min-w-0 shrink' : 'min-w-0 flex-1',
         )}
       >
         <AreaMark data={data} />
-        <span className={cn('text-sm font-medium leading-5 text-foreground', data.kind === 'files' ? 'whitespace-nowrap' : 'min-w-0 flex-1 truncate')} title={data.title}>
+        <span className={cn('text-sm font-medium leading-5 text-foreground', data.kind === 'files' ? 'truncate whitespace-nowrap' : 'min-w-0 flex-1 truncate')} title={data.title}>
           {data.fresh && !data.current && !data.done && (
             <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
           )}
@@ -1904,10 +1904,10 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
       )}
       {/* Tier 3: Moved since you looked, saying what ("2 commits, 1 picture") */}
       {data.tier === 3 && data.newsItems && data.newsItems.length > 0 ? (
-        <span className="flex shrink-0 items-center gap-1 text-xs" title={data.newsSummary}>
+        <span className="flex min-w-0 max-w-[45%] items-center gap-1 overflow-hidden text-xs" title={data.newsSummary}>
           {data.newsItems.map((item, idx) => (
             <Fragment key={item.kind}>
-              {idx > 0 && <span aria-hidden="true" className="-ml-1 select-none text-muted-foreground/60">,</span>}
+              {idx > 0 && <span aria-hidden="true" className="-ml-1 shrink-0 select-none text-muted-foreground/60">,</span>}
               <button
                 type="button"
                 aria-label={item.actionLabel}
@@ -1916,15 +1916,15 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
                   e.stopPropagation();
                   actions?.openCount?.(id, item.kind, e.currentTarget);
                 }}
-                className="nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+                className="nodrag nopan inline-flex min-h-[24px] min-w-0 items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
               >
-                {item.label}
+                <span className="truncate">{item.label}</span>
               </button>
             </Fragment>
           ))}
         </span>
       ) : data.tier === 3 && data.newsSummary ? (
-        <span className="shrink-0 text-xs text-muted-foreground" title={data.newsSummary}>
+        <span className="min-w-0 max-w-[45%] truncate text-xs text-muted-foreground" title={data.newsSummary}>
           {data.newsSummary}
         </span>
       ) : null}
@@ -1934,23 +1934,29 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
           {data.nextOpenStep}
         </span>
       )}
-      {!data.done && data.current && data.kind !== 'work' && data.kind !== 'files' && <span className={cn('shrink-0 text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
+      {!data.done && data.current && data.kind !== 'work' && data.kind !== 'files' && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
       {data.waitingCount > 0 && data.tier !== 2 && (
-        <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium text-state-needs">
-          <span className="size-1.5 rounded-full bg-state-needs" />Waiting
+        <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-state-needs">
+          <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />Waiting
         </span>
       )}
       {fileCounts && data.tier !== 2 && data.tier !== 3 && (
-        <span className="min-w-0 flex-1 text-right text-xs leading-4 text-muted-foreground break-words" title={fileFullCounts || fileCounts}>
+        <span className="min-w-0 flex-1 truncate text-right text-xs leading-4 text-muted-foreground" title={fileFullCounts || fileCounts}>
           {fileCounts}
         </span>
       )}
       {data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0 && (
         <>
-          <span className={cn('shrink-0 text-xs tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
+          <span className={cn('shrink-0 whitespace-nowrap text-xs tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
             {data.stepsDone} of {data.stepsTotal}
           </span>
-          <span aria-hidden="true" className={cn('h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20', (data.waitingCount > 0 || Boolean(data.nextOpenStep)) && 'hidden @[28rem]:block')}>
+          <span
+            aria-hidden="true"
+            className={cn(
+              'h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20',
+              (data.waitingCount > 0 || Boolean(data.nextOpenStep) || (data.tier === 3 && Boolean(data.newsSummary)) || (data.tier === 2 && Boolean(data.waitingQuestion)) || (!data.done && data.current)) && 'hidden @[28rem]:block'
+            )}
+          >
             <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
           </span>
         </>
@@ -1982,7 +1988,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const hasCountButtons = Boolean(data.tier === 3 && data.newsItems && data.newsItems.length > 0 && actions);
 
   const isTwoLineTitle = (data.title?.length ?? 0) > 25;
-  const [overlayPos, setOverlayPos] = useState<{ top: number; left: number }>({
+  const [overlayPos, setOverlayPos] = useState<{ top: number; left: number; maxWidth?: number }>({
     top: statusLine ? (isTwoLineTitle ? 52 : 34) : 48,
     left: statusLine ? 36 : 12,
   });
@@ -1992,13 +1998,33 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       const pRect = placeholderRef.current.getBoundingClientRect();
       const cardRect = cardRef.current.getBoundingClientRect();
       if (cardRect.width > 0 && pRect.width > 0) {
-        setOverlayPos({
-          top: Math.round(pRect.top - cardRect.top),
-          left: Math.round(pRect.left - cardRect.left),
-        });
+        const scale = cardRef.current.offsetWidth > 0 ? cardRect.width / cardRef.current.offsetWidth : 1;
+        const next = {
+          top: Math.round((pRect.top - cardRect.top) / scale),
+          left: Math.round((pRect.left - cardRect.left) / scale),
+          maxWidth: Number((pRect.width / scale).toFixed(2)),
+        };
+        setOverlayPos((prev) =>
+          prev.top === next.top && prev.left === next.left && prev.maxWidth === next.maxWidth ? prev : next,
+        );
       }
     }
-  }, [data.title, data.newsSummary, width, height, statusLine]);
+  }, [
+    data.title,
+    data.newsSummary,
+    data.newsItems,
+    data.stepsDone,
+    data.stepsTotal,
+    data.waitingCount,
+    data.nowSet,
+    data.done,
+    hasStatus,
+    showPicture,
+    hasCountButtons,
+    width,
+    height,
+    statusLine,
+  ]);
 
   if (data.kind === 'files') {
     const pics = data.pictures.filter((pic) => !failedPics.includes(pic.path)).slice(0, 3);
@@ -2077,30 +2103,44 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const status = (
     <>
       {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
-        <span aria-hidden="true" title={data.waitingQuestion ?? waitingText(data.waitingCount)} className="flex max-w-[22ch] shrink-0 items-center gap-1 truncate text-xs font-medium leading-4 text-state-needs">
-          <span className="size-1.5 rounded-full bg-state-needs" />{data.waitingQuestion ?? 'Waiting'}
+        <span aria-hidden="true" title={data.waitingQuestion ?? waitingText(data.waitingCount)} className="flex min-w-0 max-w-[22ch] items-center gap-1 text-xs font-medium leading-4 text-state-needs">
+          <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />
+          <span className="min-w-0 truncate">{data.waitingQuestion ?? 'Waiting'}</span>
         </span>
       )}
-      {data.tier === 3 && data.newsSummary && (
+      {data.tier === 3 && hasCountButtons && data.newsItems ? (
         <span
           ref={placeholderRef}
-          className={cn(
-            'flex shrink-0 items-center truncate text-xs leading-4 text-muted-foreground',
-            hasCountButtons ? 'h-6 invisible' : ''
-          )}
+          aria-hidden="true"
+          title={data.newsSummary}
+          className="invisible flex h-6 min-w-0 items-center gap-1 overflow-hidden text-xs leading-4"
+        >
+          {data.newsItems.map((item, idx) => (
+            <Fragment key={item.kind}>
+              {idx > 0 && <span className="-ml-1 shrink-0 select-none">,</span>}
+              <span className="inline-flex min-h-[24px] min-w-0 items-center px-1 text-xs">
+                <span className="truncate">{item.label}</span>
+              </span>
+            </Fragment>
+          ))}
+        </span>
+      ) : data.tier === 3 && data.newsSummary ? (
+        <span
+          ref={placeholderRef}
+          className="min-w-0 truncate text-xs leading-4 text-muted-foreground"
           title={data.newsSummary}
         >
           {data.newsSummary}
         </span>
-      )}
+      ) : null}
       {!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' && (
-        <span className={cn('shrink-0 text-xs font-medium leading-4', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>
+        <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium leading-4', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>
           {data.nowSet ? 'Now' : 'Next up'}
         </span>
       )}
       {data.tier !== 2 && data.waitingCount > 0 && (
-        <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 text-xs font-medium leading-4 text-state-needs">
-          <span className="size-1.5 rounded-full bg-state-needs" />Waiting
+        <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium leading-4 text-state-needs">
+          <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />Waiting
         </span>
       )}
     </>
@@ -2132,7 +2172,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
                 {data.title}
               </span>
             </span>
-            {statusLine && hasStatus && <span className="flex items-center gap-2 pl-6">{status}</span>}
+            {statusLine && hasStatus && <span className="flex min-w-0 items-center gap-2 pl-6">{status}</span>}
           </span>
           {(hasSteps || (!statusLine && hasStatus)) && (
             <span className="flex min-w-0 items-center gap-2">
@@ -2144,7 +2184,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
               )}
               {hasSteps && (
                 <>
-                  <span className={cn('shrink-0 text-xs leading-4 tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>{data.stepsDone} of {data.stepsTotal}</span>
+                  <span className={cn('shrink-0 whitespace-nowrap text-xs leading-4 tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>{data.stepsDone} of {data.stepsTotal}</span>
                   <span aria-hidden="true" className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted-foreground/20">
                     <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
                   </span>
@@ -2168,12 +2208,16 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       {/* Sibling count buttons for Tier 3, positioned over the status line */}
       {hasCountButtons && data.newsItems && (
         <span
-          className="nodrag nopan absolute z-10 flex items-center gap-1 text-xs leading-4"
-          style={{ top: `${overlayPos.top}px`, left: `${overlayPos.left}px` }}
+          className="nodrag nopan absolute z-10 flex items-center gap-1 overflow-hidden text-xs leading-4"
+          style={{
+            top: `${overlayPos.top}px`,
+            left: `${overlayPos.left}px`,
+            ...(overlayPos.maxWidth !== undefined ? { maxWidth: `${overlayPos.maxWidth}px` } : {}),
+          }}
         >
           {data.newsItems.map((item, idx) => (
             <Fragment key={item.kind}>
-              {idx > 0 && <span aria-hidden="true" className="-ml-1 select-none text-muted-foreground/60">,</span>}
+              {idx > 0 && <span aria-hidden="true" className="-ml-1 shrink-0 select-none text-muted-foreground/60">,</span>}
               <button
                 type="button"
                 aria-label={item.actionLabel}
@@ -2182,9 +2226,9 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
                   e.stopPropagation();
                   actions?.openCount?.(id, item.kind, e.currentTarget);
                 }}
-                className="nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+                className="nodrag nopan inline-flex min-h-[24px] min-w-0 items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
               >
-                {item.label}
+                <span className="truncate">{item.label}</span>
               </button>
             </Fragment>
           ))}

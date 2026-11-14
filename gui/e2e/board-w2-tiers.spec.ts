@@ -590,4 +590,145 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
     expect(bounds.overflowingBottom).toBe(0);
     expect(bounds.overflowingTop).toBe(0);
   });
+
+  test('narrow mini card and row bottom line never overlap with commits, updates and many steps', async ({ page }) => {
+    const LONG_TITLE = 'The Board is powerful enough to be where the work happens, and it replaces the Plan tab';
+    const commitSha = 'a1b2c3d4e5f6';
+    const targetSteps = Array.from({ length: 46 }, (_, i) =>
+      step(i === 0 ? `Ship board interaction (${commitSha.slice(0, 7)})` : `Area step ${i + 1}`, i < 40),
+    );
+    const planItems = targetSteps.slice(0, 10).map((s, i) => ({
+      key: s.key,
+      text: s.text,
+      at: minutesAgo(2 + i),
+    }));
+
+    await page.route('**/api/workspace/*/plan', (route) => route.fulfill({
+      json: planFile({
+        title: 'Overlap Regression Test',
+        now: { key: 'focus-step-1', by: 'claude', at: minutesAgo(1) },
+        checkpoints: [
+          checkpoint(TITLES[0]!, { done: false, steps: [step('Focus step 1', false), step('Focus step 2', false)] }),
+          checkpoint(LONG_TITLE, { done: false, steps: targetSteps }),
+          ...TITLES.slice(2).map((title) => checkpoint(title, { done: false, steps: [step(`Step of ${title}`, false)] })),
+          checkpoint('Fifteenth Area open step fifteen', { done: false, steps: [step('Step fifteen', false)] }),
+          checkpoint('Sixteenth Area open step sixteen', { done: false, steps: [step('Step sixteen', false)] }),
+        ],
+      }),
+    }));
+
+    await page.route('**/api/workspace/*/news', (route) => route.fulfill({
+      json: whatsNew({
+        empty: false,
+        commits: [{ repo: 'NexusFlow', more: 0, commits: [{ sha: commitSha, author: 'Dev', subject: 'feat: board layout', at: minutesAgo(5) }] }],
+        plan: { items: planItems, more: 0 },
+      }),
+    }));
+    await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [] }) }));
+
+    const assertNoBottomLineOverlap = async (cardSelector: string, label: string) => {
+      const card = page.locator(cardSelector).filter({ hasText: 'The Board is powerful' }).first();
+      await expect(card, `${label}: target card visible`).toBeVisible();
+
+      const facts = await card.evaluate((el) => {
+        const cardRect = el.getBoundingClientRect();
+        const stepsEl = Array.from(el.querySelectorAll<HTMLElement>('span')).find((s) => !s.querySelector('span') && /^\d+\s+of\s+\d+$/.test(s.textContent?.trim() ?? ''));
+        if (!stepsEl) return { error: 'missing steps text', cardWidth: cardRect.width };
+        const stepsRect = stepsEl.getBoundingClientRect();
+
+        // Visible interactive count buttons + steps count + any visible progress bar or status on the same line
+        const items: Array<{ kind: string; text: string; left: number; right: number; top: number; bottom: number; scrollW: number; clientW: number }> = [];
+        const addEl = (kind: string, node: HTMLElement) => {
+          const r = node.getBoundingClientRect();
+          if (r.width <= 0.5 || r.height <= 0.5) return;
+          if (getComputedStyle(node).visibility === 'hidden') return;
+          items.push({
+            kind,
+            text: (node.textContent ?? '').trim(),
+            left: r.left,
+            right: r.right,
+            top: r.top,
+            bottom: r.bottom,
+            scrollW: node.scrollWidth,
+            clientW: node.clientWidth,
+          });
+        };
+
+        addEl('steps', stepsEl);
+        for (const btn of Array.from(el.querySelectorAll<HTMLElement>('button:not(.board-area)'))) {
+          addEl('count-button', btn);
+        }
+        const bar = el.querySelector<HTMLElement>('.bg-muted-foreground\\/20');
+        if (bar) addEl('progress-bar', bar);
+
+        // Plain newsSummary span (when not overlaid by buttons)
+        for (const span of Array.from(el.querySelectorAll<HTMLElement>('span[title]'))) {
+          if (span.getAttribute('title') === '1 commit, 10 updates' && getComputedStyle(span).visibility !== 'hidden' && !span.querySelector('button')) {
+            addEl('news-summary', span);
+          }
+        }
+
+        // Check pairwise intersection for items on the same horizontal band as stepsEl
+        const sameLine = items.filter((item) => !(item.bottom <= stepsRect.top + 0.5 || stepsRect.bottom <= item.top + 0.5));
+        const overlaps: string[] = [];
+        for (let i = 0; i < sameLine.length; i++) {
+          for (let j = i + 1; j < sameLine.length; j++) {
+            const a = sameLine[i]!;
+            const b = sameLine[j]!;
+            const horizOverlap = !(a.right <= b.left + 0.5 || b.right <= a.left + 0.5);
+            if (horizOverlap) {
+              overlaps.push(`${a.kind}("${a.text}" ${Math.round(a.left)}..${Math.round(a.right)}) vs ${b.kind}("${b.text}" ${Math.round(b.left)}..${Math.round(b.right)})`);
+            }
+          }
+        }
+        const outOfCard = sameLine.filter((item) => item.left < cardRect.left - 0.5 || item.right > cardRect.right + 0.5)
+          .map((item) => `${item.kind}(${Math.round(item.left)}..${Math.round(item.right)} vs card ${Math.round(cardRect.left)}..${Math.round(cardRect.right)})`);
+
+        return {
+          cardWidth: Math.round(cardRect.width),
+          stepsText: stepsEl.textContent?.trim(),
+          stepsRect: { height: Math.round(stepsRect.height), scrollW: stepsEl.scrollWidth, clientW: stepsEl.clientWidth },
+          overlaps,
+          outOfCard,
+          itemCount: sameLine.length,
+        };
+      });
+
+      expect(facts.error, `${label}: ${facts.error}`).toBeUndefined();
+      expect(facts.stepsText).toBe('40 of 46');
+      expect(facts.stepsRect!.scrollW, `${label}: "40 of 46" clipped`).toBeLessThanOrEqual(facts.stepsRect!.clientW + 1);
+      expect(facts.stepsRect!.height, `${label}: "40 of 46" wrapped`).toBeLessThanOrEqual(22);
+      expect(facts.overlaps, `${label}: overlapping bottom-line items at width ${facts.cardWidth}px`).toEqual([]);
+      expect(facts.outOfCard, `${label}: items overflow card at width ${facts.cardWidth}px`).toEqual([]);
+      return facts;
+    };
+
+    // 1. Narrow mini cards (1440x900 Board with Board index open ~300px)
+    await page.addInitScript(() => {
+      try { window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); } catch { /* no storage */ }
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/#/workspaces/demo/board');
+    await atRest(page);
+    const miniFacts = await assertNoBottomLineOverlap('#board-overview .react-flow__node-areaMini', '1440x900 with index open');
+    expect(miniFacts.cardWidth).toBeLessThanOrEqual(300);
+
+    // 2. Narrow mini cards in Split mode (1280x800 Split)
+    await page.evaluate(() => {
+      try {
+        window.localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 }));
+        window.localStorage.setItem('contextspace_board_nav_open_v1', 'closed');
+      } catch { /* no storage */ }
+    });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.reload();
+    await atRest(page);
+    const splitFacts = await assertNoBottomLineOverlap('#board-overview .react-flow__node-areaMini', '1280x800 Split');
+    expect(splitFacts.cardWidth).toBeLessThanOrEqual(300);
+
+    // 3. Narrow Area row (420x700)
+    await page.setViewportSize({ width: 420, height: 700 });
+    await atRest(page);
+    await assertNoBottomLineOverlap('#board-overview .react-flow__node-areaRow', '420x700 row');
+  });
 });
