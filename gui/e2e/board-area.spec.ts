@@ -59,7 +59,10 @@ test.describe('Board cards', () => {
     await expect(note).toContainText('by claude');
     await expect(note.locator('time')).toHaveCount(0);
     await expect(note).toContainText('12 min ago');
-    await expect(note.getByRole('button')).toHaveCount(0);
+    expect(await note.getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')))).toEqual(['Edit Export leaks memory', 'Actions for Export leaks memory']);
+    await note.getByRole('button', { name: 'Actions for Export leaks memory' }).click();
+    await expect(page.getByRole('menuitem')).toHaveText(['Edit note', 'Pin note', 'Archive note', 'Ask in CLI']);
+    await page.keyboard.press('Escape');
     // A person's own note says "you".
     const mine = canvas.getByRole('article', { name: 'Ask finance about time zones' });
     await expect(mine).toContainText('by you');
@@ -735,7 +738,8 @@ test.describe('Board, rows by step', () => {
     const open = picture.getByRole('button', { name: 'Open Picture 0' });
     await expect(open).toHaveText('Picture 0');
     await expect(note.getByRole('button', { name: 'Read Newest on an open step' })).toHaveText('Newest on an open step');
-    await expect(inArea(page).getByRole('article', { name: 'Older on an open step' }).getByRole('button')).toHaveCount(0);
+    const shortNote = inArea(page).getByRole('article', { name: 'Older on an open step' });
+    expect(await shortNote.getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')))).toEqual(['Edit Older on an open step', 'Actions for Older on an open step']);
     // The keyboard reaches the title and opens the card with Enter; the card shows a ring all round it while the title has the keyboard
     const before = await picture.evaluate((element) => getComputedStyle(element).boxShadow);
     await open.focus();
@@ -743,8 +747,8 @@ test.describe('Board, rows by step', () => {
     await page.keyboard.press('Shift+Tab');
     await page.keyboard.press('Tab');
     await expect(open).toBeFocused();
-    const ring = await picture.evaluate((element) => getComputedStyle(element).boxShadow);
-    expect(ring, 'a ring round the whole card, that was not there before').not.toBe(before);
+    // The card eases its shadow in over 150 ms (transition-all), so wait for the ring to arrive rather than read its first frame.
+    await expect.poll(() => picture.evaluate((element) => getComputedStyle(element).boxShadow), { message: 'a ring round the whole card, that was not there before' }).not.toBe(before);
     expect(await open.evaluate((element) => getComputedStyle(element).outlineStyle), 'no second outline round the title').toBe('none');
     await page.keyboard.press('Enter');
     await expect(reading).toBeVisible();
@@ -757,6 +761,11 @@ test.describe('Board, rows by step', () => {
     await expect(page.getByRole('dialog', { name: 'Newest on an open step' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(read).toBeFocused();
+    // A note whose text is whole has no title button, so its Edit button (CN2) is the one way to open it.
+    // Last, so that the pointer press does not change which focus the keyboard steps above start from.
+    await shortNote.getByRole('button', { name: 'Edit Older on an open step', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Edit note' })).toBeVisible();
+    await page.keyboard.press('Escape');
   });
 
   test('says who made a card last with a small mark, "you" or "AI", and the whole byline is its description', async ({ page }) => {
@@ -838,7 +847,7 @@ test.describe('Board, rows by step', () => {
       });
       expect(fit.top, 'a band above the first block').toBeLessThanOrEqual(1);
       expect(fit.lines, 'two whole lines').toBeGreaterThanOrEqual(2);
-      await note.getByRole('heading', { name: title }).click();
+      await note.locator('.board-text-compact').click();
       await expect(page.getByRole('dialog', { name: title })).toBeVisible();
       await page.keyboard.press('Escape');
       await expect(page.getByRole('dialog')).toHaveCount(0);

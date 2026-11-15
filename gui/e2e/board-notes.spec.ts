@@ -411,7 +411,18 @@ test.describe('Canvas Note Creation & In-Place Editing (Milestone 2, Slice 2.1)'
     await expect(dialog.getByRole('heading', { name: 'Edit note' })).toBeVisible();
     await expect(dialog.getByPlaceholder('Note title...')).toHaveValue('Long Note Title That Is Very Descriptive');
 
-    // Dismiss with Escape key
+    // A body press still reads the whole note; edit must cancel a pending read.
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await card.locator('.board-text-compact').click();
+    await expect(page.getByRole('dialog', { name: 'Long Note Title That Is Very Descriptive', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.clock.install();
+    await card.locator('.board-text-compact').click();
+    await card.getByRole('button', { name: 'Edit Long Note Title That Is Very Descriptive', exact: true }).click();
+    await page.clock.fastForward(500);
+    await expect(dialog).toHaveCount(1);
+    await expect(dialog.getByRole('heading', { name: 'Edit note' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
   });

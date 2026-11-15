@@ -52,7 +52,7 @@ test.describe('Redesigned ContextSpace shell', () => {
     await expect.poll(() => asked).toContain('feature-x');
     const needs = page.getByRole('region', { name: /^Needs you/ });
     await expect(needs.getByRole('heading')).toHaveText('Needs you 3');
-    await expect(needs.getByRole('link', { name: 'Test feature workspace' })).toHaveAttribute('href', '#/workspaces/feature-x/plan');
+    await expect(needs.getByRole('link', { name: 'Test feature workspace' })).toHaveAttribute('href', '#/workspaces/feature-x/board');
     const chat = needs.getByRole('link', { name: /Which branch should I target\?/ });
     await expect(chat).toContainText('Claude asked in the chat 2 min ago');
     await expect(chat).toHaveAttribute('href', '#/workspaces/feature-x');
@@ -63,14 +63,14 @@ test.describe('Redesigned ContextSpace shell', () => {
     await expect(question.locator('strong')).toHaveText('archived');
     await expect(question).toContainText('Archived reports are a third of the rows.');
     await expect(question).not.toContainText('Suggested answers:');
-    await expect(question.getByRole('link', { name: 'Open in the plan' })).toHaveAttribute('href', '#/workspaces/feature-x/plan');
+    await expect(question.getByRole('link', { name: 'Open on the board' })).toHaveAttribute('href', '#/workspaces/feature-x/board');
     // A question nothing waits for is folded away and not counted.
     const aside = needs.getByText('1 question nothing waits for');
     await expect(aside).toBeVisible();
     await expect(needs.getByRole('group', { name: 'Keep the old PDF export?' })).toBeHidden();
     await aside.click();
     await expect(needs.getByRole('group', { name: 'Keep the old PDF export?' })).toContainText('Test feature workspace · Claude asked');
-    await expect(needs.getByRole('link', { name: /CSV export endpoint.*Its check failed/ })).toHaveAttribute('href', '#/workspaces/feature-x/plan');
+    await expect(needs.getByRole('link', { name: /CSV export endpoint.*Its check failed/ })).toHaveAttribute('href', '#/workspaces/feature-x/board');
     await expect(page.getByRole('region', { name: 'Finished by the AI lately' })).toContainText('Claude finished “Database query for report rows”: Tests pass');
 
     const review = page.getByRole('region', { name: 'Changes to review' });
@@ -91,7 +91,8 @@ test.describe('Redesigned ContextSpace shell', () => {
     await expect(question).toHaveCount(0);
     await expect(needs.getByRole('heading')).toHaveText('Needs you 2');
     await review.getByRole('link', { name: /Test feature workspace/ }).click();
-    await expect(page).toHaveURL(/#\/workspaces\/feature-x\/changes/);
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/#\/workspaces\/feature-x\/board/);
   });
 
   test('says so when nothing needs you, and offers another try when it cannot be read', async ({ page }) => {
@@ -117,8 +118,8 @@ test.describe('Redesigned ContextSpace shell', () => {
     await expect(page.getByRole('heading', { name: 'feature-x' })).toBeVisible();
     await expect(page.getByText('Test feature workspace', { exact: true }).first()).toBeVisible();
     // The overview keeps its address; the rail beside it opens the other parts.
-    await page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Plan' }).click();
-    await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Plan' })).toHaveAttribute('aria-current', 'page');
+    await page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Board' }).click();
+    await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
   });
 });
 
@@ -142,7 +143,8 @@ test.describe('Overview diffs', () => {
     await expect(review).not.toContainText('Clean workspace');
     await expect(page.getByRole('article')).toHaveCount(2);
     await review.getByRole('link', { name: /Test feature workspace/ }).click();
-    await expect(page).toHaveURL(/#\/workspaces\/feature-x\/changes/);
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/#\/workspaces\/feature-x\/board/);
   });
 });
 
@@ -212,7 +214,7 @@ test.describe('Narrow-screen navigation', () => {
     expect(main?.width).toBe(390);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     // Every destination and section stays reachable by keyboard without growing the page.
-    const services = page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Services/ });
+    const services = page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Skills/ });
     await services.focus();
     await page.keyboard.press('Enter');
     await expect(services).toHaveAttribute('aria-current', 'page');

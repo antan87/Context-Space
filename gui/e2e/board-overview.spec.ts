@@ -400,13 +400,17 @@ test.describe('Board', () => {
     await routeBoard(page);
     await page.goto('/#/workspaces/demo/board');
     await expect(board(page).locator('.board-overview-plane button.board-area').filter({ hasText: 'Reports export to CSV' })).toBeVisible();
-    await workspaceNav(page).getByRole('link', { name: 'Plan' }).click();
-    const notes = page.getByRole('region', { name: 'The plan' }).locator('details').filter({ hasText: 'Notes' });
-    await expect(notes).toBeVisible();
-    await expect(notes).not.toHaveAttribute('open', '');
-    await notes.locator('summary').focus();
+    await workspaceNav(page).getByRole('link', { name: 'Overview' }).click();
+    await expect(board(page)).toBeHidden();
+    // Space on a button in the current section must keep its native action.
+    const actions = page.getByRole('button', { name: 'Workspace actions', exact: true });
+    await actions.focus();
     await page.keyboard.press('Space');
-    await expect(notes).toHaveAttribute('open', '');
+    await expect(page.getByRole('menu')).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: /^Review/ })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(actions).toBeFocused();
   });
 
   test('says there is nothing to show when the workspace has no plan, documents or commits', async ({ page }) => {

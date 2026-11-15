@@ -45,11 +45,11 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(status).not.toContainText('Report the speed-up');
   await expect(status).not.toContainText('3 files');
   await expect(header.getByRole('link', { name: 'Checks passed' })).toBeVisible();
-  await expect(header.getByRole('link', { name: 'Checks passed' })).toHaveAttribute('href', /#?\/workspaces\/demo\/plan$/);
+  await expect(header.getByRole('link', { name: 'Checks passed' })).toHaveAttribute('href', /#?\/workspaces\/demo\/board$/);
   await header.getByRole('button', { name: 'Workspace actions' }).click();
   await expect(page.getByRole('menuitem', { name: /Next\s*Report the speed-up/ })).toBeVisible();
   await expect(page.getByRole('menu')).toContainText('Worktree · 2 repositories');
-  await expect(page.getByRole('menuitem', { name: /Changes\s*3 files/ })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: /Review\s*3 files/ })).toBeVisible();
   await expect(page.getByRole('menuitem', { name: 'Copy AI Context' })).toBeVisible();
   await page.keyboard.press('Escape');
   // One line, not two rows of chips: it leaves the board and the panes their room.
@@ -64,59 +64,60 @@ test('one header shows where the task stands and links to where to act', async (
     'Overview',
     'Board',
     'Sessions',
-    /^Code3$/,
-    'Docs',
     'Skills',
-    'Services',
   ]);
   await header.getByRole('button', { name: 'Workspace actions' }).click();
-  await page.getByRole('menuitem', { name: /Changes/ }).click();
-  await expect(page).toHaveURL(/#\/workspaces\/demo\/changes$/);
-  await expect(workspaceNav(page).getByRole('link', { name: /^Code/ })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('menuitem', { name: /^Review/ }).click();
+  await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
+  await expect(workspaceNav(page).getByRole('link', { name: 'Board', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
 });
 
 test('old section links still open, each marked on the rail when it has a place there, and back navigation works', async ({ page }) => {
   await mockWorkspace(page);
   for (const [section, item] of [
-    ['documents', 'Docs'],
-    ['services', 'Services'],
+    ['documents', 'Board'],
+    ['services', 'Board'],
     ['plan', 'Board'],
     ['board', 'Board'],
-    ['changes', 'Code'],
+    ['changes', 'Board'],
     ['overview', 'Overview'],
     ['skills', 'Skills'],
   ] as const) {
     await page.goto(`/#/workspaces/demo/${section}`);
+    if (section === 'changes') await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
     await expect(workspaceNav(page).getByRole('link', { name: new RegExp(`^${item}`) })).toHaveAttribute('aria-current', 'page');
   }
   // Knowledge keeps its address and opens, but has no link on the rail.
   await page.goto('/#/workspaces/demo/knowledge');
-  await expect(page.getByRole('region', { name: 'Knowledge', exact: true })).toBeVisible();
-  await expect(workspaceNav(page).locator('[aria-current="page"]')).toHaveCount(0);
+  await expect(page.locator('[data-board-reader]').getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
+  await expect(workspaceNav(page).getByRole('link', { name: 'Board', exact: true })).toHaveAttribute('aria-current', 'page');
   await page.goto('/#/workspaces/demo/sessions');
   await expect(page.getByRole('region', { name: 'Session history', exact: true })).toBeVisible();
   await expect(workspaceNav(page).getByRole('link', { name: /^Sessions/ })).toHaveAttribute('aria-current', 'page');
   await page.goto('/#/workspaces/demo/overview');
-  await workspaceNav(page).getByRole('link', { name: 'Services' }).click();
-  await expect(page).toHaveURL(/\/services$/);
+  await workspaceNav(page).getByRole('link', { name: 'Skills' }).click();
+  await expect(page).toHaveURL(/\/skills$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/overview$/);
   await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible();
 });
 
-test.skip('switching parts keeps an unsaved brief (Plan tab deprecated in favor of Board)', async ({ page }) => {
+test('switching parts keeps an unsaved Board assignment', async ({ page }) => {
   await mockWorkspace(page);
-  await page.goto('/#/workspaces/demo/plan');
-  await page.getByRole('button', { name: 'Edit the goal' }).click();
-  const objective = page.getByLabel('Current objective');
-  await expect(objective).toHaveValue('Find the bottleneck');
-  await objective.fill('Cache invoice lookups per customer');
-
-  await workspaceNav(page).getByRole('link', { name: 'Docs' }).click();
-  await expect(page.getByRole('region', { name: 'Documents', exact: true })).toBeVisible();
-  await workspaceNav(page).getByRole('link', { name: 'Plan' }).click();
-  // The draft was not saved, and it was not lost.
-  await expect(page.getByLabel('Current objective')).toHaveValue('Cache invoice lookups per customer');
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('assignment-card-main').click();
+  const panel = page.getByTestId('assignment-panel');
+  await panel.getByRole('button', { name: 'Edit', exact: true }).click();
+  const description = panel.getByRole('textbox', { name: 'Description', exact: true });
+  await expect(description).toHaveValue('Find the bottleneck');
+  await description.fill('Cache invoice lookups per customer');
+  await page.keyboard.press('Escape');
+  await workspaceNav(page).getByRole('link', { name: 'Overview', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible();
+  await workspaceNav(page).getByRole('link', { name: 'Board', exact: true }).click();
+  await page.getByTestId('assignment-card-main').click();
+  await expect(description).toHaveValue('Cache invoice lookups per customer');
 });
 
 test('the header is one 48 px line at laptop size, and the moved items are reached by keyboard', async ({ page }) => {
@@ -129,9 +130,9 @@ test('the header is one 48 px line at laptop size, and the moved items are reach
   // Now goes to the plan, opened with Enter on the focused chip.
   await header.getByRole('link', { name: /^Next up/ }).focus();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/#\/workspaces\/demo\/plan$/);
+  await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
   // Next and Changes are in the menu, each reached with the keyboard.
-  for (const [item, url] of [[/Next/, /plan$/], [/Changes\s*3 files/, /changes$/]] as const) {
+  for (const [item, url] of [[/Next/, /board$/], [/Review\s*3 files/, /board$/]] as const) {
     await page.goto('/#/workspaces/demo/overview');
     await header.getByRole('button', { name: 'Workspace actions' }).focus();
     await page.keyboard.press('Enter');
@@ -139,6 +140,7 @@ test('the header is one 48 px line at laptop size, and the moved items are reach
     await page.getByRole('menuitem', { name: item }).focus();
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(url);
+    if (item.source.startsWith('Review')) await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
   }
 });
 
@@ -162,14 +164,15 @@ test.describe('a long name, where the Now chip reaches its limit', () => {
 
   test('the Now chip and the menu item always agree, across the width where the chip goes, with a larger root font', async ({ page }) => {
     await mockWorkspace(page);
-    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.setViewportSize({ width: 1664, height: 800 });
     await page.goto('/#/workspaces/demo/overview');
     const header = page.locator('header').filter({ has: page.getByRole('heading', { level: 1, name: longName }) });
     await expect(header).toBeVisible();
     await page.evaluate(() => { document.documentElement.style.fontSize = '20px'; });
     const slotWidth = () => page.evaluate(() => (document.querySelector('header [aria-label="Task status"]') as HTMLElement | null)?.getBoundingClientRect().width ?? -1);
     const seen = new Set<boolean>();
-    for (let width = 1280; width >= 1100; width -= 8) {
+    // The view-mode control (96b3dd4) joined the header's right side, so the chip's limit now lies near 1550 px at this font size.
+    for (let width = 1664; width >= 1448; width -= 8) {
       await page.setViewportSize({ width, height: 800 });
       // Settle: the slot has the same width on two reads in a row.
       let last = -2;
@@ -177,7 +180,7 @@ test.describe('a long name, where the Now chip reaches its limit', () => {
       const chip = await header.getByRole('link', { name: /^Next up/ }).isVisible();
       seen.add(chip);
       await header.getByRole('button', { name: 'Workspace actions' }).click();
-      await expect(page.getByRole('menuitem', { name: /^Changes/ })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /^Review/ })).toBeVisible();
       const item = await page.getByRole('menuitem', { name: /^Next up ·/ }).count();
       await page.keyboard.press('Escape');
       await expect(page.getByRole('menu')).toHaveCount(0);
@@ -213,7 +216,7 @@ test.describe('a long name and a long branch', () => {
     await page.goto(`/#/workspaces/${encodeURIComponent(branch)}/overview`);
   }
 
-  test('keeps the title readable at 1100 px and the branch from shrinking to a sliver', async ({ page }) => {
+  test('keeps the title readable at 1100 px and the branch from shrinking to a sliver', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1100, height: 700 });
     await mockWorkspace(page);
     await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planFile({ checkpoints: [
@@ -226,10 +229,10 @@ test.describe('a long name and a long branch', () => {
     await expect(copy).toBeVisible();
     expect((await title.boundingBox())!.width).toBeGreaterThanOrEqual(240);
     expect((await copy.boundingBox())!.width).toBeGreaterThanOrEqual(50);
-    await page.screenshot({ path: process.env.SHOT_DIR ? `${process.env.SHOT_DIR}/header-1100.png` : 'test-results/header-1100.png' });
+    await page.screenshot({ path: testInfo.outputPath('header-1100.png') });
   });
 
-  test('a long title ends in an ellipsis, never cut mid-letter, and the chip gives way to a Now item in the menu', async ({ page }) => {
+  test('a long title ends in an ellipsis, never cut mid-letter, and the chip gives way to a Now item in the menu', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 820, height: 700 });
     await page.route(`**/api/workspace/${encodeURIComponent(branch)}/**`, (route) => route.fulfill({ json: {} }));
     await page.route(`**/api/workspace/${encodeURIComponent(branch)}/plan`, (route) => route.fulfill({ json: planFile({ checkpoints: [
@@ -249,7 +252,7 @@ test.describe('a long name and a long branch', () => {
     await expect(page.getByRole('menuitem', { name: /Next up ·\s*Cache invoice lookups/ })).toBeVisible();
     // The place is a menu item, so arrowing through the menu reads it.
     await expect(page.getByRole('menuitem', { name: 'Worktree · 1 repository' })).toHaveAttribute('aria-disabled', 'true');
-    await page.screenshot({ path: process.env.SHOT_DIR ? `${process.env.SHOT_DIR}/header-820.png` : 'test-results/header-820.png' });
+    await page.screenshot({ path: testInfo.outputPath('header-820.png') });
   });
 
   test('a long title on a phone leaves the menu button on screen', async ({ page }) => {

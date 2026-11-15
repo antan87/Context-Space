@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { planFile } from './planData';
+import { checkpoint, planFile, step } from './planData';
 
 /**
  * The primary journey — create → brief → verify → review — completed with the
@@ -79,7 +79,8 @@ test.describe('keyboard-only primary journey', () => {
     let report: unknown = null;
     const lifecycle = { workspaceId: 'demo', flowType: 'feature', revision: 0, updatedAt: '', fleet: [], steps: [] };
     const work = () => ({ guidance, lifecycle, sharedDocuments: [], assignment: '' });
-    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile() }));
+    let plan = planFile({ checkpoints: [checkpoint('Cache invoice lookups', { check: 'npm test', steps: [step('Cache the totals')] })] });
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: plan }));
     await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report } }));
     await page.route('**/api/workspace/demo/work', async (route) => {
       if (route.request().method() === 'PUT') {
@@ -88,9 +89,10 @@ test.describe('keyboard-only primary journey', () => {
       }
       await route.fulfill({ json: work() });
     });
-    await page.route('**/api/workspace/demo/verify', (route) => {
+    await page.route('**/api/workspace/demo/plan/checkpoints/cache-invoice-lookups/check', (route) => {
       report = { overallStatus: 'pass', canProgress: true, durationMs: 1500, repos: [{ repoName: 'api', status: 'pass', command: 'npm test', exitCode: 0 }] };
-      return route.fulfill({ json: { report } });
+      plan = { ...plan, checkpoints: plan.checkpoints.map((cp) => ({ ...cp, proof: { canProgress: true, lastVerificationStatus: 'pass', lastVerificationSha: 'abc1234' } })) };
+      return route.fulfill({ json: { plan, report } });
     });
     await page.route('**/api/workspace/demo/changes', (route) => route.fulfill({ json: { changes: [{ repoName: 'api', repoPath: '/ws/demo/api', files: [{ file: 'src/cache.ts', type: 'modified', additions: 4, deletions: 1 }] }] } }));
     await page.route('**/api/workspace/demo/changes/symbols', (route) => route.fulfill({ json: { symbols: [] } }));
@@ -111,24 +113,28 @@ test.describe('keyboard-only primary journey', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
     const destinations = page.getByRole('navigation', { name: 'Workspace' });
 
-    // Brief: reach the plan, edit the objective, save.
-    await activate(page, destinations.getByRole('link', { name: 'Plan' }));
-    await expect(page).toHaveURL(/\/plan$/);
-    await activate(page, page.getByRole('button', { name: 'Edit the goal' }));
-    const objective = page.getByLabel('Current objective');
+    // The assignment lives on the Board; reach its editor entirely by Tab.
+    await activate(page, destinations.getByRole('link', { name: 'Board', exact: true }));
+    await expect(page).toHaveURL(/\/board$/);
+    await activate(page, page.getByTestId('assignment-card-main'));
+    const assignment = page.getByTestId('assignment-panel');
+    await activate(page, assignment.getByRole('button', { name: 'Edit', exact: true }));
+    const objective = assignment.getByRole('textbox', { name: 'Description', exact: true });
     await tabTo(page, objective);
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.type('Cache invoice lookups per customer');
-    await activate(page, page.getByRole('button', { name: 'Save goal' }));
+    await activate(page, assignment.getByRole('button', { name: 'Save', exact: true }));
     await expect.poll(() => guidance.assignment.objective).toBe('Cache invoice lookups per customer');
+    await page.keyboard.press('Escape');
 
-    // Verify: run verification; the header reports the recorded result.
-    await activate(page, page.getByRole('button', { name: 'Run verification', exact: true }));
-    await expect(page.locator('header').filter({ has: page.getByRole('heading', { level: 1 }) }).getByRole('link', { name: 'Checks passed' })).toBeVisible();
+    // Check the checkpoint where work is shown; its proof must update.
+    await activate(page, page.locator('#board-overview button.board-area').filter({ hasText: 'Cache invoice lookups' }));
+    await activate(page, page.getByTestId('run-check-cache-invoice-lookups'));
+    await expect(page.locator('#board-area')).toContainText('Check passed on abc1234');
 
-    // Review: open Code, review the commit, commit by keyboard.
-    await activate(page, destinations.getByRole('link', { name: /^Code/ }));
-    await expect(page).toHaveURL(/\/changes$/);
+    // Review and commit retain the same payload and no-push guard.
+    await activate(page, page.locator('#board-area').getByRole('button', { name: /^Review/ }));
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
     await activate(page, page.getByRole('button', { name: 'Review & commit', exact: true }));
     const panel = page.getByRole('region', { name: 'Review commit' });
     await tabTo(page, panel.getByLabel('Commit message'));

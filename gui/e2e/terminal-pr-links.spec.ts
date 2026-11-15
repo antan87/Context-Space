@@ -97,5 +97,8 @@ test('a pull request link opens the browser and never the Code tree, also when t
   // A long path the CLI broke over two rows is one file reference: the second half asks for the whole path.
   await clickAt(5, 8, true);
   await expect.poll(() => resolved).toEqual([LONG_PATH]);
-  await expect(page).toHaveURL(/\/workspaces\/feature-x\/changes$/);
+  await expect(page).toHaveURL(/\/workspaces\/feature-x\/sessions$/);
+  const review = page.getByRole('region', { name: 'Review', exact: true });
+  await expect(review).toBeVisible();
+  await expect(review.getByTestId('code-reference-notice')).toContainText('not a file in this workspace');
 });

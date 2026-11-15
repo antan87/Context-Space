@@ -168,11 +168,12 @@ test.describe('Board Reader Fullscreen & Sequential Navigation', () => {
 
     // 6. Double click header to toggle full screen
     const header = reader(page).locator('header');
-    await header.dblclick();
+    // Aim at the title: the centre of the narrow header can now be a navigation button.
+    await header.getByRole('heading', { name: 'Overview Screenshot', exact: true }).dblclick();
     await expect(page.locator('[data-board-reader-fullscreen]')).toBeVisible();
 
     // 7. Click Exit full screen button to exit
-    await page.locator('[data-board-reader-fullscreen]').getByRole('button', { name: 'Exit full screen' }).click();
+    await page.locator('[data-board-reader-fullscreen]').getByRole('button', { name: 'Exit full screen', exact: true }).click();
     await expect(page.locator('[data-board-reader-fullscreen]')).toHaveCount(0);
     await expect(reader(page)).toBeVisible();
   });

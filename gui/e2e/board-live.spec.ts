@@ -92,13 +92,13 @@ test.describe('Board, live', () => {
     await expect(strip.getByRole('button', { name: /Next: Cover the cache/ })).toBeVisible();
   });
 
-  test('shows a long note that arrived while another part was on show, with its Read all button', async ({ page }) => {
+  test('shows a long note that arrived while another part was on show, with its title button', async ({ page }) => {
     await routeBoard(page);
     const body = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long note.`).join('\n');
     const state = await routeChanging(page, 2, boardNote(2, { title: 'A long note', body, at: minutesAgo(0), updatedAt: minutesAgo(0) }));
     const release = await liveBoard(page, state, boardEvent(2), 'beside');
-    // The chat stays beside Docs, so its strip keeps the connection while the board is out of sight.
-    await workspaceNav(page).getByRole('link', { name: 'Docs' }).click();
+    // The chat stays beside Overview, so its strip keeps the connection while the board is out of sight.
+    await workspaceNav(page).getByRole('link', { name: 'Overview' }).click();
     await expect(board(page)).toBeHidden();
     release();
     // It is drawn behind the part that is on show, where it has no size yet.
@@ -162,7 +162,7 @@ test.describe('Board, live', () => {
     await expect.poll(() => reads).toBeGreaterThan(opened);
     const polled = reads;
     // Hidden behind another part, it does not.
-    await workspaceNav(page).getByRole('link', { name: 'Plan' }).click();
+    await workspaceNav(page).getByRole('link', { name: 'Overview' }).click();
     await expect(board(page)).toBeHidden();
     await page.clock.fastForward(95_000);
     await afterSomeFrames(page);
@@ -200,8 +200,8 @@ test.describe('Board, live', () => {
     await expect(strip.getByRole('button', { name: /Next: Cover the cache/ })).toBeVisible();
     await reveal(page, board(page).getByRole('article', { name: 'Just added by claude' }));
     expect(await feed.open()).toBe(1);
-    // The board stops listening when another part is shown; the chat stays beside Docs, and its strip keeps the one connection.
-    await workspaceNav(page).getByRole('link', { name: 'Docs' }).click();
+    // The board stops listening when another part is shown; the chat stays beside Overview, and its strip keeps the one connection.
+    await workspaceNav(page).getByRole('link', { name: 'Overview' }).click();
     await expect(board(page)).toBeHidden();
     await expect(strip).toBeVisible();
     await afterSomeFrames(page);

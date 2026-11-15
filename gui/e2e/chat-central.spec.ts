@@ -4,7 +4,7 @@ import { planFile } from './planData';
 
 /**
  * The chat is the centre of the app. It takes most of the screen, the other parts of a workspace
- * (plan, changes, documents) open as a narrower panel beside it when asked for, workspaces are
+ * (Board, Overview, Sessions) open beside it when asked for, workspaces are
  * switched from inside the chat, and the app opens on the chat you were last in.
  */
 const workspace = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -91,41 +91,41 @@ test.describe('the app opens on the chat', () => {
 });
 
 test.describe('the chat is central, with other parts beside it', () => {
-  test('takes most of the width, with the part in a narrower panel beside it', async ({ page }) => {
-    await page.goto('/#/workspaces/alpha/plan');
+  test('keeps the chosen terminal share with the Board on the left', async ({ page }) => {
+    await page.goto('/#/workspaces/alpha/board');
     await expect(chatOf(page)).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Goal', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
     const chat = await boxOf(chatOf(page));
-    const panel = await boxOf(page.getByRole('region', { name: 'Goal', exact: true }));
+    const panel = await boxOf(page.getByRole('region', { name: 'Board', exact: true }));
     const body = 1440 - BODY_LEFT;
     expect(chat.width / body).toBeGreaterThan(0.55);
     expect(chat.width).toBeGreaterThan(panel.width);
-    // The chat is on the left of the part it is beside.
-    expect(chat.x + chat.width).toBeLessThanOrEqual(panel.x + 1);
-    await expect(page.getByRole('separator', { name: 'Resize the chat' })).toBeVisible();
+    // Board is on the left; the terminal keeps its chosen share.
+    expect(panel.x + panel.width).toBeLessThanOrEqual(chat.x + 1);
+    await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toBeVisible();
   });
 
   test('closing the part gives the chat the whole width back', async ({ page }) => {
-    await page.goto('/#/workspaces/alpha/plan');
+    await page.goto('/#/workspaces/alpha/board');
     await expect(chatOf(page)).toBeVisible();
     const beside = await boxOf(chatOf(page));
-    await page.getByRole('button', { name: 'Close this panel and give the chat the whole screen' }).click();
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
     await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeGreaterThan(beside.width + 100);
     // All of it, except the rail at the edge.
     expect((await boxOf(chatOf(page))).width).toBeGreaterThan(1440 - BODY_LEFT - RAIL - 4);
-    await expect(page.getByRole('separator', { name: 'Resize the chat' })).toHaveCount(0);
+    await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toHaveCount(0);
   });
 
   test('opens another part from the rail without the chat leaving', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
-    await destinations(page).getByRole('link', { name: /^Code/ }).click();
-    await expect(page).toHaveURL(/#\/workspaces\/alpha\/changes$/);
+    await destinations(page).getByRole('link', { name: 'Overview', exact: true }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/overview$/);
     await expect(chatOf(page)).toBeVisible();
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
-    await destinations(page).getByRole('link', { name: 'Docs' }).click();
-    await expect(page).toHaveURL(/#\/workspaces\/alpha\/documents$/);
+    await destinations(page).getByRole('link', { name: 'Skills' }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/skills$/);
     await expect(chatOf(page)).toBeVisible();
   });
 
@@ -140,25 +140,25 @@ test.describe('the chat is central, with other parts beside it', () => {
         socket.send(JSON.stringify({ type: 'replayed' }));
       });
     });
-    await page.goto('/#/workspaces/alpha/plan');
+    await page.goto('/#/workspaces/alpha/board');
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
-    await destinations(page).getByRole('link', { name: /^Code/ }).click();
-    await destinations(page).getByRole('link', { name: 'Services' }).click();
-    await expect(destinations(page).getByRole('link', { name: 'Services' })).toHaveAttribute('aria-current', 'page');
+    await destinations(page).getByRole('link', { name: 'Overview', exact: true }).click();
+    await destinations(page).getByRole('link', { name: 'Skills' }).click();
+    await expect(destinations(page).getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
     // Choosing the open part again closes it.
-    await destinations(page).getByRole('link', { name: 'Services' }).click();
+    await destinations(page).getByRole('link', { name: 'Skills' }).click();
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     expect(attaches).toBe(1);
   });
 
-  test('has no room for both on a narrow window, so the part gets the screen and the cross brings the chat back', async ({ page }) => {
-    await page.setViewportSize({ width: 1100, height: 800 });
-    await page.goto('/#/workspaces/alpha/plan');
-    await expect(page.getByRole('region', { name: 'Goal', exact: true })).toBeVisible();
+  test('has no room for both under 1000 px, and Terminal brings the chat back', async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    await page.goto('/#/workspaces/alpha/board');
+    await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
     await expect(chatOf(page)).toBeHidden();
-    await expect(page.getByRole('separator', { name: 'Resize the chat' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Close this panel and give the chat the whole screen' }).click();
+    await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
     await expect(chatOf(page)).toBeVisible();
   });
 
@@ -170,37 +170,37 @@ test.describe('the chat is central, with other parts beside it', () => {
 
 test.describe('the chat can be hidden for a while, and given more or less room', () => {
   test('hides and shows the chat beside a part, and remembers it', async ({ page }) => {
-    await page.goto('/#/workspaces/alpha/plan');
+    await page.goto('/#/workspaces/alpha/board');
     await expect(chatOf(page)).toBeVisible();
-    await page.getByRole('button', { name: 'Hide the chat and give this the whole width' }).click();
+    await page.getByRole('button', { name: 'Board', exact: true }).click();
     await expect(chatOf(page)).toBeHidden();
     await page.reload();
-    await expect(page.getByRole('region', { name: 'Goal', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
     await expect(chatOf(page)).toBeHidden();
-    await page.getByRole('button', { name: 'Show the chat beside this' }).click();
+    await page.getByRole('button', { name: 'Split', exact: true }).click();
     await expect(chatOf(page)).toBeVisible();
   });
 
   test('resizes with the arrow keys within limits, and remembers the width', async ({ page }) => {
-    await page.goto('/#/workspaces/alpha/plan');
-    const divider = page.getByRole('separator', { name: 'Resize the chat' });
+    await page.goto('/#/workspaces/alpha/board');
+    const divider = page.getByRole('separator', { name: 'Resize the workspace panes' });
     await expect(divider).toHaveAttribute('aria-valuenow', '62');
     // A terminal takes focus once it has attached, so let it, then move to the divider.
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     const initialWidth = (await boxOf(chatOf(page))).width;
     await divider.focus();
     await page.keyboard.press('ArrowLeft');
-    await expect(divider).toHaveAttribute('aria-valuenow', '59');
-    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeLessThan(initialWidth);
+    await expect(divider).toHaveAttribute('aria-valuenow', '65');
+    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeGreaterThan(initialWidth);
     const narrower = await boxOf(chatOf(page));
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowRight');
-    await expect(divider).toHaveAttribute('aria-valuenow', '65');
-    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeGreaterThan(narrower.width);
-    for (let i = 0; i < 10; i += 1) await page.keyboard.press('ArrowRight');
-    await expect(divider).toHaveAttribute('aria-valuenow', '80');
+    await expect(divider).toHaveAttribute('aria-valuenow', '59');
+    await expect.poll(async () => (await boxOf(chatOf(page))).width).toBeLessThan(narrower.width);
+    for (let i = 0; i < 20; i += 1) await page.keyboard.press('ArrowRight');
+    await expect(divider).toHaveAttribute('aria-valuenow', '25');
     await page.reload();
-    await expect(page.getByRole('separator', { name: 'Resize the chat' })).toHaveAttribute('aria-valuenow', '80');
+    await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toHaveAttribute('aria-valuenow', '25');
   });
 });
 
@@ -217,14 +217,14 @@ test.describe('workspaces are switched from inside the chat', () => {
   test('switching keeps the part you are reading, now for the other workspace', async ({ page }) => {
     await page.goto('/#/workspaces/beta/chat');
     await expect(session(page, 'beta')).toBeVisible();
-    await page.goto('/#/workspaces/alpha/plan');
+    await page.goto('/#/workspaces/alpha/board');
     await expect(chatOf(page)).toBeVisible();
     await session(page, 'beta').click();
-    await expect(page).toHaveURL(/#\/workspaces\/beta\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/beta\/board$/);
     await expect(session(page, 'beta')).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('region', { name: 'Goal', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
     await session(page, 'alpha').click();
-    await expect(page).toHaveURL(/#\/workspaces\/alpha\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/board$/);
     await expect(session(page, 'alpha')).toHaveAttribute('aria-current', 'page');
   });
 });
@@ -239,14 +239,14 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     expect(rail.x + rail.width).toBeGreaterThan(1440 - 2);
     expect(rail.width).toBeLessThanOrEqual(RAIL + 1);
     // What can open beside the chat: Overview, Plan, Board, Sessions, Code, Docs, Skills, Services.
-    await expect(destinations(page).getByRole('link')).toHaveText(['Overview', 'Plan', 'Board', /^Sessions/, 'Code', 'Docs', 'Skills', 'Services']);
+    await expect(destinations(page).getByRole('link')).toHaveText(['Overview', 'Board', /^Sessions/, 'Skills']);
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/workspace-chat.png` });
   });
 
   test('has items for sessions and skills on the rail so they are directly accessible', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
-    await expect(destinations(page).getByRole('link')).toHaveCount(8);
+    await expect(destinations(page).getByRole('link')).toHaveCount(4);
     await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toBeVisible();
     await expect(destinations(page).getByRole('link', { name: /^Skills/ })).toBeVisible();
     // The way in is also in the chat's own toolbar, named for what it opens.
@@ -262,9 +262,9 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/sessions$/);
     const panel = page.getByRole('region', { name: 'Session history', exact: true });
     await expect(panel.getByRole('heading', { name: 'AI Sessions & History' })).toBeVisible();
-    // The chat stays where it is, on the left, and the button says the history is open and keeps the keyboard.
+    // The chat stays where it is, on the right, and the button says the history is open and keeps the keyboard.
     const [chat, beside] = [await boxOf(chatOf(page)), await boxOf(panel)];
-    expect(chat.x + chat.width).toBeLessThanOrEqual(beside.x + 1);
+    expect(beside.x + beside.width).toBeLessThanOrEqual(chat.x + 1);
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     await expect(history).toHaveAttribute('aria-pressed', 'true');
     await expect(history).toBeFocused();
@@ -277,7 +277,7 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(history).toBeFocused();
   });
 
-  test('opens the session history by keyboard and closes it with the panel cross', async ({ page }) => {
+  test('opens the session history by keyboard and returns with Terminal', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
     // The terminal takes the keyboard when it connects, so the button is reached once it has.
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
@@ -286,7 +286,7 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     await expect(history).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('region', { name: 'Session history', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Close this panel and give the chat the whole screen' }).click();
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
   });
 
@@ -300,16 +300,16 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
 
   test('marks the part that is open, names it above the panel, and closes it when chosen again', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
-    await destinations(page).getByRole('link', { name: 'Docs' }).click();
-    await expect(page).toHaveURL(/#\/workspaces\/alpha\/documents$/);
-    await expect(destinations(page).getByRole('link', { name: 'Docs' })).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('region', { name: 'Documents', exact: true })).toBeVisible();
+    await destinations(page).getByRole('link', { name: 'Skills' }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/skills$/);
+    await expect(destinations(page).getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('region', { name: 'Skills', exact: true })).toBeVisible();
     const rail = await boxOf(destinations(page));
-    const panel = await boxOf(page.getByRole('region', { name: 'Documents', exact: true }));
+    const panel = await boxOf(page.getByRole('region', { name: 'Skills', exact: true }));
     expect(panel.x + panel.width).toBeLessThanOrEqual(rail.x + 1);
-    await destinations(page).getByRole('link', { name: 'Docs' }).click();
+    await destinations(page).getByRole('link', { name: 'Skills' }).click();
     await expect(page).toHaveURL(/#\/workspaces\/alpha\/chat$/);
-    await expect(destinations(page).getByRole('link', { name: 'Docs' })).not.toHaveAttribute('aria-current', 'page');
+    await expect(destinations(page).getByRole('link', { name: 'Skills' })).not.toHaveAttribute('aria-current', 'page');
   });
 
   test('opens the overview section with its rail destination marked', async ({ page }) => {

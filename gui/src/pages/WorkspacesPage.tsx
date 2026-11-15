@@ -764,7 +764,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     aria-pressed={currentMode === 'board'}
                     onClick={() => handleModeChange('board')}
                     className={cn(
-                      'inline-flex h-6 items-center gap-1 rounded-md px-2 transition-all cursor-pointer',
+                      'inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded-md px-1 sm:px-2 transition-all cursor-pointer',
                       currentMode === 'board'
                         ? 'bg-background text-foreground shadow-xs font-semibold'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
@@ -772,7 +772,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     title="Board (Ctrl+1)"
                   >
                     <span aria-hidden="true">◨</span>
-                    <span>Board</span>
+                    <span className="sr-only sm:not-sr-only">Board</span>
                   </button>
                   <button
                     type="button"
@@ -781,16 +781,17 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     disabled={!roomBeside}
                     onClick={() => handleModeChange('split')}
                     className={cn(
-                      'inline-flex h-6 items-center gap-1 rounded-md px-2 transition-all cursor-pointer',
+                      'inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded-md px-1 sm:px-2 transition-all cursor-pointer',
                       currentMode === 'split'
                         ? 'bg-background text-foreground shadow-xs font-semibold'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                      'max-sm:hidden',
                       !roomBeside && 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground'
                     )}
                     title={roomBeside ? 'Split (Ctrl+2)' : 'Split view requires at least 1000px screen width'}
                   >
                     <span aria-hidden="true">◫</span>
-                    <span>Split</span>
+                    <span className="sr-only sm:not-sr-only">Split</span>
                   </button>
                   <button
                     type="button"
@@ -798,7 +799,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     aria-pressed={currentMode === 'terminal'}
                     onClick={() => handleModeChange('terminal')}
                     className={cn(
-                      'inline-flex h-6 items-center gap-1 rounded-md px-2 transition-all cursor-pointer',
+                      'inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded-md px-1 sm:px-2 transition-all cursor-pointer',
                       currentMode === 'terminal'
                         ? 'bg-background text-foreground shadow-xs font-semibold'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
@@ -806,12 +807,13 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     title="Terminal (Ctrl+3)"
                   >
                     <span aria-hidden="true">◧</span>
-                    <span>Terminal</span>
+                    <span className="sr-only sm:not-sr-only">Terminal</span>
                   </button>
                 </div>
               )}
               {primaryEditor && !archived && (
-                availableEditors.length > 1 ? (
+                // On a phone the title and the menu need the room; the editor opens on the computer, not the phone.
+                <div className="hidden sm:contents">{availableEditors.length > 1 ? (
                   <div className="inline-flex h-7 items-center rounded-md border border-border/40 bg-muted/20 text-xs transition-colors">
                     <button
                       type="button"
@@ -858,7 +860,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                     onClick={() => void handleOpenEditor(primaryEditor.id)}
                     icon={openingEditor === primaryEditor.id ? <Spinner className="size-3.5" /> : renderEditorIcon(primaryEditor.id, primaryEditor.name)}
                   />
-                )
+                )}</div>
               )}
 
 

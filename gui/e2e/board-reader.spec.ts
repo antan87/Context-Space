@@ -630,7 +630,7 @@ test.describe('Board, reader', () => {
     await openBoard(page, FILE_CARDS);
     await opener(page, 'The CSV spec').click();
     await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
-    await workspaceNav(page).getByRole('link', { name: 'Plan' }).click();
+    await workspaceNav(page).getByRole('link', { name: 'Overview' }).click();
     await expect(board(page)).toBeHidden();
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('Escape');
@@ -958,7 +958,7 @@ test.describe('Board, reader', () => {
       await expectNoScriptWords(page);
     });
 
-    test('has one quiet header line: the title and its path, a menu and Close, and nothing else to press', async ({ page }) => {
+    test('has one quiet header line with title, path, navigation, Ask in CLI, full screen, menu and Close', async ({ page }) => {
       await openBoard(page, FILE_CARDS, FILE_PLACES, 'default');
       await opener(page, 'The CSV spec').click();
       await expect(readerTitle(page, 'The CSV spec')).toBeVisible();
@@ -966,7 +966,9 @@ test.describe('Board, reader', () => {
       await expect(header.getByRole('button', { name: 'More actions' })).toBeVisible();
       await expect(header.getByRole('button', { name: 'Close' })).toBeVisible();
       await expect(header.getByRole('button', { name: /Full screen/ })).toBeVisible();
-      await expect(header.getByRole('button')).toHaveCount(5);
+      await expect(header.getByRole('button', { name: /Ask in CLI/ })).toBeVisible();
+      await expect(header.getByRole('group', { name: 'Item navigation' }).getByRole('button')).toHaveCount(2);
+      await expect(header.getByRole('button')).toHaveCount(6);
       await expect(header.getByRole('link')).toHaveCount(0);
       await expect(header).toContainText('docs/spec.md');
       // Nothing of the viewer's own row is left in the window: no path row, no second pair of buttons.

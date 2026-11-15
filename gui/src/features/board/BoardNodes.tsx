@@ -1315,6 +1315,11 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
   const [editOpen, setEditOpen] = useState(false);
   const [titleRef, titleCut] = useCut<HTMLElement>(data.title);
   const [bodyRef, bodyCut] = useCut<HTMLDivElement>(data.text);
+  // A body press reads; a double press edits. Wait briefly for the second press
+  // before the modal can cover the card and swallow its double-click.
+  const readTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(readTimer.current), []);
+  useEffect(() => { if (editOpen) clearTimeout(readTimer.current); }, [editOpen]);
 
   const noteActionsMenu = actions && !actions.readOnly && (
     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity pointer-coarse:opacity-100">
@@ -1415,7 +1420,16 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           labelledBy={titleId}
           describedBy={markId}
           compact
+          onPress={cut ? (event) => {
+            clearTimeout(readTimer.current);
+            brickPress(event, (card) => {
+              const trigger = firstControl(card, '[data-card-main]');
+              readTimer.current = setTimeout(() => { if (trigger?.isConnected) trigger.click(); }, 250);
+              return null;
+            });
+          } : undefined}
           onDoubleClick={(event) => {
+            clearTimeout(readTimer.current);
             if (actions?.readOnly) return;
             event.stopPropagation();
             setEditOpen(true);

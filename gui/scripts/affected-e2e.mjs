@@ -346,7 +346,7 @@ export function getAffectedSpecs(changedFiles) {
     if (!file) continue;
 
     // Direct spec file change: if it exists, run it; if deleted, ignore it
-    const specMatch = file.match(/(?:^|\/)(e2e\/board[a-zA-Z0-9_-]*\.spec\.ts)$/);
+    const specMatch = file.match(/(?:^|\/)(e2e\/[a-zA-Z0-9_-]+\.spec\.ts)$/);
     if (specMatch) {
       const specPath = specMatch[1];
       if (fs.existsSync(specPath) || fs.existsSync(path.join('gui', specPath))) {

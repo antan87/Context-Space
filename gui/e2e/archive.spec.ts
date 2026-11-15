@@ -70,8 +70,7 @@ const workspaceNav = (page: Page) => page.getByRole('navigation', { name: 'Works
 test('archive previews what happens, parks unmerged work on request, and restores the workspace', async ({ page }) => {
   const calls = await mockArchiveBackend(page);
   await page.goto('/#/workspaces/demo');
-  // Overview, Plan, Board, Sessions, Code, Docs, Skills and Services.
-  await expect(workspaceNav(page).getByRole('link')).toHaveCount(8);
+  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Sessions', 'Skills']);
 
   await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Archive workspace…' }));
   await page.getByRole('menuitem', { name: 'Archive workspace…' }).click();
@@ -103,7 +102,7 @@ test('archive previews what happens, parks unmerged work on request, and restore
   // The record is read-only and shows what archive kept.
   await expect(page.getByRole('status').filter({ hasText: 'Archived on' })).toBeVisible();
   // The record and what it knew; nothing to act on.
-  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Record', 'Plan', 'Docs']);
+  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Record', 'Board']);
   const record = page.getByRole('table');
   await expect(record).toContainText('feat/speed');
   await expect(record).toContainText('1234567890');
@@ -118,29 +117,28 @@ test('archive previews what happens, parks unmerged work on request, and restore
   await expect(sidebar.getByRole('link', { name: /Invoice speed-up/ })).toBeVisible();
 
   // A deep link to a working section lands on the record; the plan cannot be edited.
-  await page.goto('/#/workspaces/demo/changes');
+  await page.goto('/#/workspaces/demo/sessions');
   await expect(page.getByRole('table')).toBeVisible();
   await page.goto('/#/workspaces/demo/plan');
-  // The record is read, not edited: the plan shows what it said, with no editors to open.
-  await expect(page.getByRole('region', { name: 'Goal', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Edit the goal' })).toHaveCount(0);
-  await expect(page.getByLabel('Current objective')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Save goal' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Edit sources' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Add document' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Run verification' })).toHaveCount(0);
+  // The archived Board keeps its assignment readable and offers no editing controls.
+  const board = page.getByRole('region', { name: 'Board', exact: true });
+  await expect(board).toBeVisible();
+  await expect(board).toContainText('Find the bottleneck');
+  await expect(board.getByRole('button', { name: /Edit assignment|Add spec|Note/ })).toHaveCount(0);
   await page.goto('/#/workspaces/demo/knowledge');
   // The Knowledge tab is gone: its address opens the Board with Knowledge in the reader, which has no editor
   await expect(page.locator('[data-board-reader]').getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Edit Knowledge/ })).toHaveCount(0);
-  await page.goto('/#/workspaces/demo/plan');
+  await page.getByRole('region', { name: 'Reader', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
+  await page.goto('/#/workspaces/demo/overview');
 
   await page.getByRole('button', { name: 'Restore workspace' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Archived on' })).toHaveCount(0);
-  // Overview, Plan, Board, Sessions, Code, Docs, Skills and Services.
-  await expect(workspaceNav(page).getByRole('link')).toHaveCount(8);
-  await page.getByRole('button', { name: 'Edit the goal' }).click();
-  await expect(page.getByLabel('Current objective')).toBeEnabled();
+  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Sessions', 'Skills']);
+  await workspaceNav(page).getByRole('link', { name: 'Board', exact: true }).click();
+  await page.getByRole('button', { name: 'Assignment: Find the bottleneck' }).click();
+  await page.getByTestId('assignment-panel').getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Description', exact: true })).toBeEnabled();
   expect(calls.at(-1)?.path).toBe('unarchive');
 });
 

@@ -85,12 +85,13 @@ async function checkChatBeside(page: Page, label: string) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/#/workspaces/demo/plan');
   await expect(page.getByRole('region', { name: 'Where are we', exact: true })).toContainText('Needs you');
-  await expect(page.getByRole('separator', { name: 'Resize the chat' })).toBeVisible();
+  await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
   await expectNoSeriousViolations(page, `${label} chat beside the plan`);
-  await page.goto('/#/workspaces/demo/changes');
-  await expect(page.getByRole('separator', { name: 'Resize the chat' })).toBeVisible();
-  await expectNoSeriousViolations(page, `${label} chat beside the changes`);
+  await page.getByRole('button', { name: 'Workspace actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^Review/ }).click();
+  await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
+  await expectNoSeriousViolations(page, `${label} Review`);
 }
 
 async function checkChatStrip(page: Page, label: string) {
@@ -196,11 +197,11 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
     test('workspace destinations', async ({ page }) => {
       await mockWorkspace(page);
-      for (const section of ['overview', 'plan', 'documents', 'changes']) {
+      for (const section of ['overview', 'board', 'sessions', 'skills']) {
         await page.goto(`/#/workspaces/demo/${section}`);
         await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
         await expect(page.locator('header').filter({ has: page.getByRole('heading', { level: 1 }) }).getByRole('link', { name: 'Checks failed' })).toBeVisible();
-        if (section === 'documents') await expect(page.getByText('No documents in the workspace root yet.', { exact: false })).toBeVisible();
+        await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${section[0].toUpperCase()}${section.slice(1)}`) })).toHaveAttribute('aria-current', 'page');
         await expectNoSeriousViolations(page, `workspace ${section}`);
       }
     });
@@ -287,7 +288,7 @@ test.describe('constrained windows', () => {
     const main = await page.getByRole('main').boundingBox();
     expect(main!.width).toBeGreaterThanOrEqual(800);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(900);
-    for (const name of ['Board', 'Code', 'Docs', 'Services']) {
+    for (const name of ['Overview', 'Board', 'Sessions', 'Skills']) {
       await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInViewport();
     }
     // The full list still opens on request, by keyboard.
@@ -313,9 +314,9 @@ test.describe('constrained windows', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(720);
     const nav = page.getByRole('navigation', { name: 'Workspace' });
-    await nav.getByRole('link', { name: 'Services' }).focus();
+    await nav.getByRole('link', { name: 'Skills' }).focus();
     await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(/\/services$/);
+    await expect(page).toHaveURL(/\/skills$/);
     await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible();
   });
 });
