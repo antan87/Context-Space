@@ -197,7 +197,7 @@ export function answerCounts(answer: Pick<AnswerView, 'parts'>): AnswerCounts {
       if (card.data.variant === 'picture') counts.pictures += 1;
       else if (card.data.variant === 'code') {
         counts.code += 1;
-        if (card.data.check.status === 'changed') counts.changed += 1;
+        if (card.data.check.status === 'changed' || card.data.check.status === 'gone') counts.changed += 1;
       }
     }
   }
@@ -210,8 +210,18 @@ export function answerCountWords(counts: AnswerCounts): Array<{ kind: 'parts' | 
   if (counts.parts > 0) out.push({ kind: 'parts', count: counts.parts, label: `${counts.parts} ${counts.parts === 1 ? 'part' : 'parts'}` });
   if (counts.code > 0) out.push({ kind: 'code', count: counts.code, label: `${counts.code} code ${counts.code === 1 ? 'block' : 'blocks'}` });
   if (counts.pictures > 0) out.push({ kind: 'pictures', count: counts.pictures, label: `${counts.pictures} ${counts.pictures === 1 ? 'picture' : 'pictures'}` });
-  if (counts.changed > 0) out.push({ kind: 'changed', count: counts.changed, label: `${counts.changed} changed since` });
+  if (counts.changed > 0) out.push({ kind: 'changed', count: counts.changed, label: `Out of date · ${counts.changed} ${counts.changed === 1 ? 'copy' : 'copies'}` });
   return out;
+}
+
+/** A request sent by the same terminal path as Ask in CLI. */
+export function refreshRequest(answer: AnswerView): string | null {
+  const copies = answer.parts.flatMap((part) => part.cards.flatMap(({ data }) => {
+    if (data.variant !== 'code' || (data.check.status !== 'changed' && data.check.status !== 'gone')) return [];
+    const range = data.start === undefined ? '' : `:${data.start}${data.end !== undefined && data.end !== data.start ? `-${data.end}` : ''}`;
+    return [`${data.where ?? ''}${range} (${data.check.status})`];
+  }));
+  return copies.length ? `Refresh the answer ${answer.path} ("${answer.question}"): these copies no longer match: ${copies.join(', ')}. Follow the contextspace-explain skill and run ctxspace explain until all copies match.` : null;
 }
 
 /** The answer as rows of cards, with the ids the Board draws them by. */

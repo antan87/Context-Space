@@ -7,7 +7,7 @@
 
 import { BRAND_NAME } from '../core/constants.js';
 import { ago } from '../core/plan-file-text.js';
-import { FIRST_LOOK_DAYS, formatCommitNoteNewsLine, formatIncomingNewsLine, newsReaderName, whatsNew, type NewsPlanChange, type WhatsNew } from '../core/whats-new.js';
+import { FIRST_LOOK_DAYS, formatAnswerNewsLine, formatCommitNoteNewsLine, formatIncomingNewsLine, newsReaderName, whatsNew, type NewsPlanChange, type WhatsNew } from '../core/whats-new.js';
 import { planChangeBy } from './plan.js';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 
@@ -84,6 +84,10 @@ export function renderNews(report: WhatsNew, now: Date = new Date()): string {
   section('Documents', [
     ...report.documents.items.map((document) => `${document.name} ${document.change} · ${when(document.at, now)}`),
     ...(report.documents.more ? [more(report.documents.more, 'more')] : []),
+  ]);
+  section('Answers', [
+    ...(report.answers?.items ?? []).map((answer) => `${formatAnswerNewsLine(answer)} · ${when(answer.at, now)}`),
+    ...(report.answers?.more ? [more(report.answers.more, 'more')] : []),
   ]);
   section('Knowledge', [
     ...report.knowledge.items.map((entry) => `${entry.type ?? 'note'} "${short(entry.title, 80)}"${entry.date ? ` · ${entry.date}` : ''}`),

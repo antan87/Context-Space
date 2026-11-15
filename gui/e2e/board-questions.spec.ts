@@ -155,11 +155,11 @@ test('each answer is an Area of its own, after the plan Areas and before Workspa
   await expect(area).toContainText('Every request is checked before it reaches a handler.');
   await expect(area).not.toContainText('**');
   // The counts, in words, with "changed since" in the warning colour apart from the others
-  await expect(area).toContainText('3 parts · 6 code blocks · 2 pictures · 1 changed since');
+  await expect(area).toContainText('3 parts · 6 code blocks · 2 pictures · Out of date · 2 copies');
   const colour = (locator: ReturnType<Page['locator']>) => locator.evaluate((el) => getComputedStyle(el).color);
-  expect(await colour(area.getByText(/1 changed since$/))).not.toBe(await colour(area.getByText(/^3 parts/)));
+  expect(await colour(area.getByText(/Out of date · 2 copies$/))).not.toBe(await colour(area.getByText(/^3 parts/)));
   // On one line: the counts are cut before "changed since" is
-  expect(await area.getByText(/1 changed since$/).evaluate((el) => (el as HTMLElement).getBoundingClientRect().height)).toBeLessThan(24);
+  expect(await area.getByText(/Out of date · 2 copies$/).evaluate((el) => (el as HTMLElement).getBoundingClientRect().height)).toBeLessThan(24);
   // The whole card steps into the answer
   await area.locator('button.board-area').click();
   await expect(board(page).getByRole('button', { name: 'Board ›' })).toBeVisible();
@@ -178,7 +178,7 @@ test('on the card, the count line is a button of its own for each count: it step
   await expect(area.getByRole('button', { name: 'Show the 3 parts', exact: true })).toBeVisible();
   await expect(area.getByRole('button', { name: 'Show the 6 code blocks', exact: true })).toBeVisible();
   await expect(area.getByRole('button', { name: 'Show the 2 pictures', exact: true })).toBeVisible();
-  const changed = area.getByRole('button', { name: 'Show the 1 changed since', exact: true });
+  const changed = area.getByRole('button', { name: 'Show the Out of date · 2 copies', exact: true });
   await expect(changed).toBeVisible();
   const colour = (locator: ReturnType<Page['locator']>) => locator.evaluate((el) => getComputedStyle(el).color);
   expect(await colour(changed)).not.toBe(await colour(area.getByRole('button', { name: 'Show the 3 parts', exact: true })));
@@ -456,7 +456,7 @@ test('the Board index lists answers under Questions in both modes, and in the 42
   await expect(nav.getByRole('heading', { name: /^Areas/ })).toBeVisible();
   const entry = nav.getByRole('button', { name: /How do we enforce security in this project\?/ }).first();
   await expect(entry).toBeVisible();
-  await expect(nav).toContainText('3 parts · 6 code blocks · 2 pictures · 1 changed since');
+  await expect(nav).toContainText('3 parts · 6 code blocks · 2 pictures · Out of date · 2 copies');
   // Search finds an answer by its words, and a part's name
   await nav.getByRole('searchbox').or(nav.getByPlaceholder(/search/i)).first().fill('secrets');
   await expect(nav.getByRole('button', { name: /How do we enforce security/ }).first()).toBeVisible();
@@ -816,4 +816,171 @@ test.describe('"1 question" among the buttons for what is new', () => {
       await expectWhole(page, '1100 Split');
     });
   });
+});
+
+
+test('out-of-date answer refreshes live and returns focus to its title', async ({ page }) => {
+  await stepIntoAnswer(page);
+  const area = board(page).locator('#board-area');
+  await expect(area.getByText('Out of date · 2 copies', { exact: true }).first()).toBeVisible();
+  const refresh = area.getByRole('button', { name: 'Refresh this answer' });
+  await expect(refresh).toBeVisible();
+  await refresh.focus();
+  answers = [OTHER];
+  const matching = structuredClone(SECURITY);
+  for (const part of matching.parts) for (const card of part.cards) {
+    if (card.kind === 'code' && (card.check.status === 'changed' || card.check.status === 'gone')) card.check = { status: 'matches' };
+  }
+  answers = [matching, OTHER];
+  const before = reads;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await expect(refresh).toHaveCount(0);
+  await expect(area.getByRole('heading', { name: SECURITY.question, exact: true })).toBeFocused();
+});
+
+test('answer news opens its Area and Escape returns to its line', async ({ page }) => {
+  await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ empty: false, answers: { items: [{ path: SECURITY.path, question: SECURITY.question, change: 'out-of-date', copies: 2, at: minutesAgo(1) }], more: 0 } }) }));
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('board-now-news').click();
+  const line = page.getByRole('button', { name: /Answer out of date: How do we enforce security/ });
+  await line.click();
+  await expect(board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(line).toBeFocused();
+});
+
+test('refresh sends the request through Ask in CLI without submitting', async ({ page }) => {
+  const typed: string[] = [];
+  await page.route('**/api/terminals/*/status', (route) => route.fulfill({ json: { available: true, sessions: [{ id: 'term-demo', workspace: 'demo', target: 'shell', label: 'bash', cwd: '/tmp/demo', state: 'running' }], targets: [{ id: 'shell', name: 'Shell', available: true, reason: null }] } }));
+  await page.routeWebSocket('**/ws/terminal', (socket) => {
+    socket.onMessage((message) => {
+      const parsed = JSON.parse(String(message));
+      if (parsed.type === 'input') typed.push(parsed.data);
+      if (parsed.type === 'attach') {
+        socket.send(JSON.stringify({ type: 'ready', terminal: { id: parsed.id, workspace: parsed.workspace, target: 'shell', label: 'bash', cwd: '/tmp/demo', state: 'running' }, truncated: false }));
+        socket.send(JSON.stringify({ type: 'replayed' }));
+      }
+    });
+  });
+  await stepIntoAnswer(page);
+  await board(page).getByRole('button', { name: 'Refresh this answer' }).click();
+  const request = 'Refresh the answer explain/how-do-we-enforce-security.md ("How do we enforce security in this project?"): these copies no longer match: NexusFlow/src/core/secrets.ts:3-4 (changed), NexusFlow/src/core/old.ts:1 (gone). Follow the contextspace-explain skill and run ctxspace explain until all copies match.';
+  await expect.poll(() => typed.at(-1)).toBe(`Regarding ${request}: `);
+  expect(typed.join('')).not.toContain('\r');
+});
+
+test('a matching answer has no refresh button', async ({ page }) => {
+  answers = [OTHER];
+  await stepIntoAnswer(page, /How are releases made/);
+  await expect(board(page).getByRole('button', { name: 'Refresh this answer' })).toHaveCount(0);
+});
+
+test('new answer news refetches questions immediately on a live event', async ({ page }) => {
+  answers = [OTHER];
+  let fresh = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/api/workspace/*/screen-events**', async (route) => {
+    await gate;
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `retry: 60000\n\nevent: plan\nid: p1\ndata: ${JSON.stringify({ type: 'plan', timestamp: new Date().toISOString() })}\n\n` });
+  });
+  await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: fresh ? whatsNew({ empty: false, answers: { items: [{ path: SECURITY.path, question: SECURITY.question, change: 'added', copies: 0, at: new Date().toISOString() }], more: 0 } }) : whatsNew() }));
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+  const before = reads;
+  answers = [SECURITY, OTHER]; fresh = true; release();
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await page.getByTestId('board-now-news').click();
+  await page.getByRole('button', { name: /New answer: How do we enforce security/ }).click();
+  await expect(board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question })).toBeVisible();
+});
+
+test('answer news returns focus after its age changes', async ({ page }) => {
+  await page.clock.install({ time: new Date() });
+  await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ empty: false, answers: { items: [{ path: OTHER.path, question: OTHER.question, change: 'added', copies: 0, at: new Date().toISOString() }, { path: SECURITY.path, question: SECURITY.question, change: 'out-of-date', copies: 2, at: new Date(Date.now() - 60_000).toISOString() }], more: 0 } }) }));
+  await page.goto('/#/workspaces/demo/board');
+  await page.getByTestId('board-now-news').click();
+  const line = page.getByRole('button', { name: /Answer out of date: How do we enforce security/ });
+  const oldText = await line.textContent();
+  await line.click();
+  await expect(board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question })).toBeVisible();
+  await page.clock.fastForward('02:00');
+  await page.keyboard.press('Escape');
+  await expect(line).not.toHaveText(oldText!);
+  await expect(line).toBeFocused();
+});
+
+const focusInfo = (page: Page) => page.evaluate(() => { const a = document.activeElement; return a ? `${a.tagName} ${(a.getAttribute('aria-label') || a.textContent || '').trim().slice(0, 70)}` : 'none'; });
+
+test('R2a stale origin: open from news, leave by Board ›, re-enter from the card, Escape', async ({ page }) => {
+  await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ empty: false, answers: { items: [{ path: SECURITY.path, question: SECURITY.question, change: 'out-of-date', copies: 2, at: minutesAgo(1) }], more: 0 } }) }));
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+  await page.getByTestId('board-now-news').click();
+  await page.getByRole('button', { name: /Answer out of date: How do we enforce security/ }).click();
+  await expect(board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question })).toBeVisible();
+  await board(page).getByRole('button', { name: 'Board ›' }).click();
+  await viewAtRest(page);
+  await stepIntoArea(page, /How do we enforce security/);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(800);
+  const listOpen = await page.getByTestId('board-news-list').isVisible().catch(() => false);
+  console.log('R2a newsListOpen=', listOpen, 'focus=', await focusInfo(page));
+  expect(listOpen).toBe(false);
+});
+
+test('R2b Escape after the answer line vanished: where is focus, and does the popover pop later?', async ({ page }) => {
+  test.setTimeout(120_000);
+  let phase = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let n = 0;
+  await page.route('**/api/workspace/*/screen-events**', async (route) => {
+    await gate;
+    n += 1;
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `retry: 1500\n\nevent: plan\nid: p${n}\ndata: ${JSON.stringify({ type: 'plan', timestamp: new Date().toISOString() })}\n\n` });
+  });
+  await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: phase === 0
+    ? whatsNew({ empty: false, answers: { items: [{ path: SECURITY.path, question: SECURITY.question, change: 'out-of-date', copies: 2, at: minutesAgo(1) }], more: 0 } })
+    : phase === 1 ? whatsNew() : whatsNew({ empty: false, answers: { items: [{ path: OTHER.path, question: OTHER.question, change: 'changed', copies: 0, at: minutesAgo(0) }], more: 0 } }) }));
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+  await page.getByTestId('board-now-news').click();
+  await page.getByRole('button', { name: /Answer out of date: How do we enforce security/ }).click();
+  await expect(board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question })).toBeVisible();
+  phase = 1; release();
+  await expect(page.getByTestId('board-now-news')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(800);
+  console.log('R2b after Escape focus=', await focusInfo(page));
+  phase = 2;
+  await expect(page.getByTestId('board-now-news')).toBeVisible({ timeout: 10_000 });
+  await page.waitForTimeout(800);
+  const listOpen = await page.getByTestId('board-news-list').isVisible().catch(() => false);
+  console.log('R2b later news: popover open by itself =', listOpen, 'focus=', await focusInfo(page));
+  expect(listOpen).toBe(false);
+});
+
+
+test('answer header shows one freshness warning', async ({ page }) => {
+  await stepIntoAnswer(page);
+  const header = board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question }).locator('..');
+  expect((await header.innerText()).match(/Out of date · 2 copies/g)).toHaveLength(1);
+});
+
+test('answer refresh control has readable text', async ({ page }) => {
+  await stepIntoAnswer(page);
+  const refresh = board(page).getByRole('button', { name: 'Refresh this answer' });
+  expect(await refresh.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12);
+});
+
+test('answer title stays in place and exposes the full question', async ({ page }) => {
+  await stepIntoAnswer(page);
+  const area = board(page).locator('#board-area');
+  const title = area.getByRole('heading', { name: SECURITY.question });
+  await expect(title).toHaveAttribute('title', SECURITY.question);
+  await title.click();
+  await expect(title).toBeVisible();
+  await expect(title.locator('button')).toHaveCount(0);
 });

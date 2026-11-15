@@ -18,12 +18,20 @@ export interface ExplainOptions {
   areas?: boolean;
 }
 
-export function formatExplain(answers: AnswerSummary[]): string {
+type ExplainAnswer = AnswerSummary & { refresh?: string };
+
+function withRefresh(answer: AnswerSummary): ExplainAnswer {
+  const broken = answer.notMatching.filter((copy) => copy.status === 'changed' || copy.status === 'gone');
+  return broken.length ? { ...answer, refresh: `Refresh the answer ${answer.path} ("${answer.question}"): these copies no longer match: ${broken.map((copy) => `${copy.where} (${copy.status})`).join(', ')}. Follow the contextspace-explain skill and run ctxspace explain until all copies match.` } : answer;
+}
+
+export function formatExplain(answers: ExplainAnswer[]): string {
   if (answers.length === 0) return 'No answers yet. Write one in explain/<topic>.md (skill contextspace-explain).';
   const lines: string[] = [];
   for (const answer of answers) {
     lines.push(answer.path, `  ${answer.question}`, `  area: ${answer.area ?? 'no area'}`);
     lines.push(`  parts: ${answer.parts.length > 0 ? answer.parts.join(' | ') : 'none'}`, `  code blocks: ${answer.codeBlocks}`);
+    if (answer.refresh) lines.push(`  refresh: ${answer.refresh}`);
     for (const copy of answer.notMatching) {
       lines.push(`  does not match: ${copy.where} ${copy.status}${copy.start !== undefined ? ` (now ${copy.start}-${copy.end}, write that in the fence)` : ''}`);
     }
@@ -49,7 +57,7 @@ export async function explainCommand(options: ExplainOptions = {}): Promise<bool
       else console.log(areas.items.length === 0 ? 'No Areas: the plan has no checkpoints.' : areas.items.map((item) => `${item.id}  ${item.title}${item.current ? '  (current)' : ''}`).join('\n'));
       return true;
     }
-    const answers = summarizeAnswers(await readQuestions(workspacePath));
+    const answers = summarizeAnswers(await readQuestions(workspacePath)).map(withRefresh);
     if (options.json) console.log(JSON.stringify({ answers, allMatch: answers.every((answer) => answer.notMatching.length === 0) }, null, 2));
     else console.log(formatExplain(answers));
     return true;

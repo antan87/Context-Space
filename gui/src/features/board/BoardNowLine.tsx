@@ -19,6 +19,7 @@ export interface BoardNowLineProps {
   onNow: () => void;
   onQuestion: () => void;
   onNewsLine: (line: NewsLine) => void;
+  returnNewsLine?: { key: string; sequence: number };
   onSearch: () => void;
 }
 
@@ -32,9 +33,22 @@ const PART = 'nodrag nopan inline-flex min-h-6 min-w-0 shrink-0 cursor-pointer i
  * search. Each part is a button that goes there. The step's words give way first, then the Area's name, then who and when; the question
  * count, the news count and search stay at any width.
  */
-export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, back, onNow, onQuestion, onNewsLine, onSearch }: BoardNowLineProps) {
+export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, back, onNow, onQuestion, onNewsLine, onSearch, returnNewsLine }: BoardNowLineProps) {
   const [newsOpen, setNewsOpen] = useState(false);
   const newsButton = useRef<HTMLButtonElement>(null);
+  const newsList = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (returnNewsLine) setNewsOpen(Boolean(newsButton.current && newsLines.some((line) => line.key === returnNewsLine.key && (line.jump || line.knowledge || line.reviewCommit))));
+    // A return request is handled once, using the news present at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returnNewsLine]);
+  useLayoutEffect(() => {
+    if (!newsOpen || !returnNewsLine) return;
+    const frame = requestAnimationFrame(() => {
+      Array.from(newsList.current?.querySelectorAll('button') ?? []).find((button) => button.dataset.newsKey === returnNewsLine.key)?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [newsOpen, returnNewsLine]);
   const isNow = parts.word === 'Now';
   // What shows beside the step: 0 the Area and who, 1 who only, 2 neither, 3 neither and the question as its count. Each is tried in turn until the step has its room.
   const [level, setLevel] = useState<0 | 1 | 2 | 3>(0);
@@ -100,13 +114,13 @@ export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, 
             {parts.news} new
           </button>
           <PopoverPopup anchor={newsButton} align="end" className="w-[min(26rem,calc(100vw-1.5rem))]" viewportClassName="py-2 [--viewport-inline-padding:--spacing(2)]">
-            <div role="dialog" aria-label="What is new" data-testid="board-news-list" className="w-full min-w-0">
+            <div ref={newsList} role="dialog" aria-label="What is new" data-testid="board-news-list" className="w-full min-w-0">
               <p className="px-2 pb-1 text-xs text-muted-foreground">{newsHeading(news)}</p>
               <ul className="max-h-[min(50vh,20rem)] space-y-0.5 overflow-y-auto">
                 {newsLines.map((line, index) => (
                   <li key={`${index}-${line.text}`}>
                     {line.jump || line.knowledge || line.reviewCommit ? (
-                      <button type="button" onClick={() => { setNewsOpen(false); onNewsLine(line); }} className="block min-h-6 w-full cursor-pointer rounded-md px-2 py-1 text-left text-[13px] leading-[18px] text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring">{line.text}</button>
+                      <button type="button" data-news-key={line.key} onClick={() => { setNewsOpen(false); onNewsLine(line); }} className="block min-h-6 w-full cursor-pointer rounded-md px-2 py-1 text-left text-[13px] leading-[18px] text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring">{line.text}</button>
                     ) : (
                       <span className="block min-h-6 px-2 py-1 text-[13px] leading-[18px] text-muted-foreground">{line.text}</span>
                     )}

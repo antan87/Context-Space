@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 import { readPlanFile } from './plan-file-store.js';
+import { renderNews } from '../commands/news.js';
 import { NEWS_LIMIT, NewsChangedError, markSeen, newsReaderName, recentCommits, whatsNew } from './whats-new.js';
 
 // Well in the past, so a time marked "now" is never in the future of the machine running the tests.
@@ -820,4 +821,109 @@ describe('incoming commits on remote-tracking refs', () => {
       vi.useRealTimers();
     }
   });
+});
+
+describe('answer freshness', () => {
+  it('reports new broken copies once, and again after a fix or another break, preserving a pending snapshot', async () => {
+    const answer = '# How?\n\n## Part\n\n```ts api/a.ts:1\none\n```\n\n```ts api/b.ts:1\ntwo\n```\n';
+    await write('api/a.ts', 'one\n');
+    await write('api/b.ts', 'two\n');
+    await write('explain/how.md', answer, ago(2));
+    await whatsNew(root, 'user', { now: ago(1), mark: true });
+    await write('api/a.ts', 'changed\n');
+    const first = await whatsNew(root, 'user', { now: NOW, pending: true });
+    expect(first.answers?.items).toMatchObject([{ path: 'explain/how.md', change: 'out-of-date', copies: 1 }]);
+    expect(first.documents.items.some((item) => item.name === 'explain/how.md')).toBe(false);
+    await write('api/b.ts', 'changed\n');
+    await markSeen(root, 'user', first.at);
+    expect((await whatsNew(root, 'user', { now: NOW, mark: true })).answers?.items).toMatchObject([{ copies: 2 }]);
+    expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toEqual([]);
+    await write('api/a.ts', 'one\n');
+    await write('api/b.ts', 'two\n');
+    await whatsNew(root, 'user', { now: NOW, mark: true });
+    await write('api/a.ts', 'changed\n');
+    expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ copies: 1 }]);
+  });
+});
+
+
+describe('answer files in news', () => {
+  it('replaces document lines with new and updated answer lines and prints Answers', async () => {
+    await whatsNew(root, 'user', { now: ago(2), mark: true });
+    await write('explain/new.md', '# How?\n', ago(1));
+    const added = await whatsNew(root, 'user', { now: NOW, mark: true });
+    expect(added.answers?.items).toMatchObject([{ path: 'explain/new.md', question: 'How?', change: 'added' }]);
+    expect(added.documents.items).toEqual([]);
+    expect(renderNews(added, NOW)).toContain('Answers\n  New answer: How?');
+    await write('explain/new.md', '# How again?\n', new Date(NOW.getTime() + 1000));
+    const updated = await whatsNew(root, 'user', { now: new Date(NOW.getTime() + 2000) });
+    expect(updated.answers?.items).toMatchObject([{ question: 'How again?', change: 'changed' }]);
+    expect(renderNews(updated, NOW)).toContain('Answer updated: How again?');
+  });
+});
+
+it('does not forget a broken copy while it cannot be checked', async () => {
+  await write('explain/how.md', '# How?\n\n```ts api/a.ts:1\none\n```\n', ago(2));
+  await write('api/a.ts', 'changed\n');
+  await whatsNew(root, 'user', { now: ago(1), mark: true });
+  await write('api/a.ts', '\0binary');
+  expect((await whatsNew(root, 'user', { now: NOW, mark: true })).answers?.items).toEqual([]);
+  await write('api/a.ts', 'changed\n');
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toEqual([]);
+});
+
+it('caps answer news and the saved snapshot', async () => {
+  await whatsNew(root, 'user', { now: ago(2), mark: true });
+  await Promise.all(Array.from({ length: 201 }, (_, i) => write(`explain/q${String(i).padStart(3, '0')}.md`, `# Question ${i}?\n`, ago(1))));
+  const report = await whatsNew(root, 'user', { now: NOW, mark: true });
+  expect(report.answers?.items).toHaveLength(NEWS_LIMIT);
+  expect(report.answers?.more).toBe(190);
+  expect((await readSeen()).readers.user.answers).toHaveLength(201); // The omitted file is retained as unavailable.
+});
+
+it('retains unavailable answer state and the unreported update through a mark', async () => {
+  const answer = '# How?\n\n```ts api/a.ts:1\none\n```\n';
+  await write('api/a.ts', 'changed\n');
+  await write('explain/how.md', answer, ago(4));
+  await whatsNew(root, 'user', { now: ago(3), mark: true });
+  await write('explain/how.md', 'x'.repeat(1024 * 1024 + 1), ago(2));
+  await whatsNew(root, 'user', { now: ago(1), mark: true });
+  await write('explain/how.md', answer, ago(2));
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ change: 'changed' }]);
+  await whatsNew(root, 'user', { now: NOW, mark: true });
+  await write('explain/how.md', 'x'.repeat(1024 * 1024 + 1), ago(2));
+  await whatsNew(root, 'user', { now: NOW, mark: true });
+  await write('explain/how.md', answer, ago(2));
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toEqual([]);
+});
+
+it('notices a second break after an unmarked empty repair report', async () => {
+  await write('explain/how.md', '# How?\n\n```ts api/a.ts:1\none\n```\n', ago(4));
+  await write('api/a.ts', 'changed\n');
+  await whatsNew(root, 'user', { now: ago(3), mark: true });
+  await write('api/a.ts', 'one\n');
+  expect((await whatsNew(root, 'user', { now: ago(2), pending: true })).answers?.items).toEqual([]);
+  await write('api/a.ts', 'changed\n');
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ change: 'out-of-date' }]);
+});
+
+it('does not announce old broken answers when upgrading a pre-E3 record', async () => {
+  await write('explain/how.md', '# How?\n\n```ts api/a.ts:1\none\n```\n', ago(4));
+  await write('api/a.ts', 'changed\n');
+  await write('.contextspace/seen.json', JSON.stringify({ version: 1, readers: { user: { at: ago(2).toISOString(), repos: {}, knowledge: [], documents: ['explain/how.md'] } }, pending: {} }));
+  expect((await whatsNew(root, 'user', { now: ago(1), pending: true })).answers?.items).toEqual([]);
+  await write('api/a.ts', 'one\n');
+  await whatsNew(root, 'user', { now: NOW, pending: true });
+  await write('api/a.ts', 'changed\n');
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ change: 'out-of-date' }]);
+});
+
+it('caps answer lists when reading both reader and pending records', async () => {
+  const answers = Array.from({ length: 520 }, (_, i) => ({ path: `explain/${i}.md`, broken: ['copy'] }));
+  const record = { at: ago(2).toISOString(), repos: {}, knowledge: [], documents: [], answers };
+  await write('.contextspace/seen.json', JSON.stringify({ version: 1, readers: { user: record, other: record }, pending: { other: record } }));
+  await whatsNew(root, 'user', { now: NOW, pending: true });
+  const seen = await readSeen();
+  expect(seen.readers.other.answers).toHaveLength(500);
+  expect(seen.pending.other.answers).toHaveLength(500);
 });

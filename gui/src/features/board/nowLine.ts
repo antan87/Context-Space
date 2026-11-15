@@ -64,6 +64,7 @@ export function firstWaiting(areas: BoardArea[]): NavItem | null {
 
 export interface NewsLine {
   text: string;
+  key?: string;
   /** Where the line goes: an Area (node null) or a card, commit or step in it. None: the line only shows its text. */
   jump?: { areaId: string; nodeId: string | null; readerTarget?: NavItem['readerTarget'] };
   /** A knowledge line: it opens Knowledge in the reader, on the entry (its key) or, when the line cannot name one, at the top. */
@@ -87,6 +88,10 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
     if (ref.kind === 'commit') {
       const item = items.find((candidate) => candidate.category === 'commits' && candidate.readerTarget?.commit?.sha.startsWith(ref.sha.slice(0, 7)) && candidate.readerTarget.commit.repo === ref.repo);
       return item?.nodeId ? { areaId: item.areaId, nodeId: item.nodeId } : undefined;
+    }
+    if (ref.kind === 'answer') {
+      const area = areas.find((candidate) => candidate.answer?.path === ref.path);
+      return area ? { areaId: area.id, nodeId: null } : undefined;
     }
     if (ref.kind === 'document') {
       const item = items.find((candidate) => (candidate.category === 'documents' || candidate.category === 'pictures') && (candidate.readerTarget?.path === ref.name || candidate.title === ref.name));
@@ -115,7 +120,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
     if (entry.ref?.kind === 'commitNote') return { text: entry.text, reviewCommit: { repo: entry.ref.repo, sha: entry.ref.sha }, notesInView: true };
     if (entry.ref?.kind === 'incoming') return { text: entry.text, reviewCommit: { repo: entry.ref.repo, sha: entry.ref.sha } };
     const jump = jumpOf(entry);
-    return { text: entry.text, ...(jump ? { jump } : {}) };
+    return { text: entry.text, ...(entry.ref?.kind === 'answer' ? { key: `answer:${entry.ref.path}:${news.answers?.items.find((item) => item.path === (entry.ref as { kind: 'answer'; path: string }).path)?.change ?? ''}` } : {}), ...(jump ? { jump } : {}) };
   });
   // The rest is said, not hidden: "and 11 more"
   const counted = shown.filter((entry) => !/^and \d/.test(entry.text))

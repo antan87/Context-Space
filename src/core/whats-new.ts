@@ -32,6 +32,7 @@ import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedComm
 import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from './incoming-commits.js';
 import { BoardWorkspaceError } from './board.js';
 import { listCommitNotes } from './commit-notes.js';
+import { readQuestions, type QuestionAnswer } from './questions.js';
 
 export { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit };
 
@@ -67,6 +68,7 @@ export interface SeenRecord {
   documents: string[];
   /** The ids of commit notes seen then. */
   notes?: string[];
+  answers?: Array<{ path: string; broken: string[]; at?: string }>;
 }
 
 /** `readers`: when each reader last looked. `pending`: what the report a screen showed them saw, until they say so. */
@@ -150,6 +152,13 @@ export interface NewsCommitNote {
   at: string;
 }
 
+export interface NewsAnswer { path: string; question: string; change: 'added' | 'changed' | 'out-of-date'; copies: number; at: string }
+
+export function formatAnswerNewsLine(answer: NewsAnswer): string {
+  if (answer.change === 'out-of-date') return `Answer out of date: ${answer.question} (${answer.copies} ${answer.copies === 1 ? 'copy' : 'copies'})`;
+  return `${answer.change === 'added' ? 'New answer' : 'Answer updated'}: ${answer.question}`;
+}
+
 export interface WhatsNew {
   reader: string;
   /** When this report was made; hand it to {@link markSeen} to say the reader has looked. */
@@ -166,6 +175,7 @@ export interface WhatsNew {
   knowledge: NewsSection<NewsKnowledge>;
   /** Newest first. */
   notes?: NewsSection<NewsCommitNote>;
+  answers?: NewsSection<NewsAnswer>;
   commits: NewsRepo[];
   /** Unseen commits sitting on local remote-tracking refs (never fetched during news). */
   incoming?: NewsIncomingRepo[];
@@ -208,6 +218,7 @@ function recordFrom(value: unknown): SeenRecord | null {
     knowledge: strings(value.knowledge, KEPT_KNOWLEDGE),
     documents: strings(value.documents, KEPT_DOCUMENTS),
     ...(notes !== undefined ? { notes } : {}),
+    ...(Array.isArray(value.answers) ? { answers: value.answers.slice(0, KEPT_NOTES).flatMap((entry) => isObject(entry) && typeof entry.path === 'string' ? [{ path: entry.path, broken: strings(entry.broken, 20000), ...(typeof entry.at === 'string' && !Number.isNaN(Date.parse(entry.at)) ? { at: entry.at } : {}) }] : []) } : {}),
   };
 }
 
@@ -271,11 +282,6 @@ const saveRecord = (root: string, reader: string, record: SeenRecord) => updateS
   return reader;
 });
 
-const savePending = (root: string, reader: string, record: SeenRecord) => updateSeenFile(root, (seen) => {
-  seen.pending[reader] = record;
-  return reader;
-});
-
 /** The reader's pending record becomes theirs, when it is the one made at `at`. */
 const promotePending = (root: string, reader: string, at: number) => updateSeenFile(root, (seen) => {
   const held = entryOf(seen.pending, reader);
@@ -296,6 +302,7 @@ interface Snapshot {
   documents: DocumentFile[];
   knowledge: NewsKnowledge[];
   notes: NewsCommitNote[];
+  answers: QuestionAnswer[];
   problems: string[];
 }
 
@@ -364,18 +371,19 @@ async function takeSnapshot(root: string): Promise<Snapshot> {
   };
   const repos = await getWorkspaceRepoPaths(root).catch(unreadable('The list of repositories', []));
   const readNotes = unreadable('Commit notes', [] as NewsCommitNote[]);
-  const [heads, documents, knowledge, notes] = await Promise.all([
+  const [heads, documents, knowledge, notes, answers] = await Promise.all([
     Promise.all(repos.map(repoHead)),
     readDocuments(root, repos).catch(unreadable('The documents', [])),
     readKnowledge(root).catch(unreadable('The knowledge', [])),
     listCommitNotes(root).then((items): NewsCommitNote[] =>
       items.map(({ id, repo, sha, shortSha, title, body, by, at }) => ({ id, repo, sha, shortSha, title, body, by, at })),
     ).catch((error) => (error instanceof BoardWorkspaceError ? [] : readNotes(error))),
+    readQuestions(root).catch(unreadable('Answers', [] as QuestionAnswer[])),
   ]);
-  return { heads, documents, knowledge, notes, problems };
+  return { heads, documents, knowledge, notes, answers, problems };
 }
 
-function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, string> = {}): SeenRecord {
+function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, string> = {}, previous: SeenRecord | null = null, unavailable: Set<string> = new Set()): SeenRecord {
   const incomingEntries = Object.entries(incomingRefs).filter(([, sha]) => SHA.test(sha));
   return {
     at,
@@ -384,6 +392,7 @@ function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, s
     knowledge: snapshot.knowledge.slice(0, KEPT_KNOWLEDGE).map((entry) => entry.id),
     documents: snapshot.documents.slice(0, KEPT_DOCUMENTS).map((document) => document.name),
     notes: snapshot.notes.slice(0, KEPT_NOTES).map((note) => note.id),
+    answers: [...snapshot.answers.map((answer) => ({ path: answer.path, broken: brokenCopies(answer, previous?.answers?.find((entry) => entry.path === answer.path)?.broken) })), ...[...unavailable].map((name) => { const old = previous?.answers?.find((entry) => entry.path === name); return { path: name, broken: old?.broken ?? [], at: old?.at ?? previous?.at ?? new Date(0).toISOString() }; })].slice(0, KEPT_NOTES),
   };
 }
 
@@ -419,6 +428,27 @@ function documentNews(files: DocumentFile[], record: SeenRecord | null, from: nu
   return capped(files.filter((file) => afterTime(file.modifiedAt, from)).map((file) => ({
     name: file.name, kind: file.kind, at: file.modifiedAt, change: complete && !known.has(file.name) ? 'added' as const : 'changed' as const,
   })), limit);
+}
+
+function brokenCopies(answer: QuestionAnswer, previous: string[] = []): string[] {
+  return answer.parts.flatMap((part, partIndex) => part.cards.flatMap((card, cardIndex) => {
+    if (card.kind !== 'code') return [];
+    const id = `${partIndex}:${cardIndex}:${card.where ?? ''}:${card.start ?? ''}:${card.end ?? ''}`;
+    const unknown = card.check.status === 'unreadable' || card.check.status === 'not-in-workspace';
+    return card.check.status === 'changed' || card.check.status === 'gone' || (unknown && previous.includes(id)) ? [id] : [];
+  }));
+}
+
+function answerNews(answers: QuestionAnswer[], record: SeenRecord | null, from: number, limit: number, at: string): NewsSection<NewsAnswer> {
+  const previous = new Map(record?.answers?.map((entry) => [entry.path, entry]) ?? []);
+  return capped(answers.flatMap((answer): NewsAnswer[] => {
+    const broken = brokenCopies(answer);
+    const old = previous.get(answer.path);
+    const changed = afterTime(answer.modifiedAt, old?.at ? Date.parse(old.at) : from);
+    const isNew = changed && (!record || !record.documents.includes(answer.path));
+    const change = isNew ? 'added' : changed ? 'changed' : !(record && record.answers === undefined && !afterTime(answer.modifiedAt, Date.parse(record.at))) && broken.some((copy) => !old?.broken.includes(copy)) ? 'out-of-date' : null;
+    return change ? [{ path: answer.path, question: answer.question, change, copies: broken.length, at: change === 'out-of-date' ? at : answer.modifiedAt }] : [];
+  }), limit);
 }
 
 /** Entries the record does not list; without a record, the entries dated since `from`. */
@@ -598,7 +628,8 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
       return { repo: repo.name, host: res.host, trackingRefOid: res.trackingRefOid, commits: filtered };
     })),
   ]);
-  const documents = documentNews(snapshot.documents, kept, fromMs, limit);
+  const documents = documentNews(snapshot.documents.filter((document) => !/^explain\/[^/]+\.md$/i.test(document.name)), kept, fromMs, limit);
+  const answers = answerNews(snapshot.answers, kept, fromMs, limit, now.toISOString());
   const knowledge = knowledgeNews(snapshot.knowledge, kept, fromMs, limit);
   const notes = commitNoteNews(snapshot.notes, kept, fromMs, limit);
   const incomingRefs = Object.fromEntries(
@@ -609,13 +640,42 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
     return groups.length > 0 ? [{ repo: entry.repo, host: entry.host, groups }] : [];
   });
 
-  const nextRecord = recordOf(snapshot, now.toISOString(), incomingRefs);
+  // Keep omitted files that still exist (or cannot be statted); only a confirmed deletion drops them.
+  const present = new Set(snapshot.answers.map((answer) => answer.path));
+  const candidates = new Set([...(record?.answers?.map((answer) => answer.path) ?? []), ...snapshot.documents.map((document) => document.name).filter((name) => /^explain\/[^/]+\.md$/i.test(name))]);
+  const unavailable = new Set<string>();
+  for (const candidate of candidates) {
+    if (present.has(candidate) || !/^explain\/[^/]+\.md$/i.test(candidate)) continue;
+    try { await fs.lstat(path.join(root, candidate)); unavailable.add(candidate); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unavailable.add(candidate); }
+  }
+  const nextRecord = recordOf(snapshot, now.toISOString(), incomingRefs, record, unavailable);
   if (options.mark) await saveRecord(root, name, nextRecord);
-  else if (options.pending) await savePending(root, name, nextRecord);
-  const empty = [plan, documents, knowledge, notes].every((section) => section.items.length === 0)
+  else if (options.pending) {
+    // Only remove repaired identities, under the lock and only if the reader has not changed since our snapshot.
+    await updateSeenFile(root, (seen) => {
+      const current = entryOf(seen.readers, name);
+      if (current && record && JSON.stringify(current) === JSON.stringify(record)) {
+        if (current.answers === undefined) {
+          current.answers = nextRecord.answers?.filter((entry) => {
+            const answer = snapshot.answers.find((item) => item.path === entry.path);
+            return !answer || !afterTime(answer.modifiedAt, Date.parse(current.at));
+          });
+        }
+        const observed = new Map(snapshot.answers.map((answer) => [answer.path, answer]));
+        current.answers = current.answers?.map((entry) => {
+          const answer = observed.get(entry.path);
+          return answer ? { ...entry, broken: entry.broken.filter((id) => brokenCopies(answer, entry.broken).includes(id)) } : entry;
+        });
+      }
+      seen.pending[name] = nextRecord;
+      return name;
+    });
+  }
+  const empty = [plan, documents, knowledge, notes, answers].every((section) => section.items.length === 0)
     && commits.every((repo) => repo.commits.length === 0)
     && incoming.length === 0;
-  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, notes, commits, incoming, problems, empty };
+  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, notes, answers, commits, incoming, problems, empty };
 }
 
 /**

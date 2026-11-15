@@ -28,7 +28,7 @@ import { BoardActionsContext, BoardReadingContext, firstControl, knowledgeTarget
 import { parseKnowledge } from '../knowledge/knowledgeEntries.js';
 import { knowledgeFileKey, useKnowledge } from '../knowledge/useKnowledge.js';
 import {
-  areaCounts,
+  areaCountItems,
   areaLayout,
   areaPlace,
   isStepless,
@@ -49,7 +49,7 @@ import {
 } from './boardAreas.js';
 import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard, useWorkspaceFiles, workspaceFilesKey } from './boardData.js';
 import { questionsKey, useQuestions } from './questionsData.js';
-import { isAnswerCardId } from './questionsArea.js';
+import { isAnswerCardId, refreshRequest } from './questionsArea.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { NoteDialog } from './NoteDialog.js';
 import { fileTitle, readerDock } from './boardDock.js';
@@ -254,7 +254,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const documents = guidance.data?.documents;
   const newsView = news.data;
   const docsNewsSig = newsView
-    ? `${newsView.documents.more}:${newsView.documents.items.map((item) => `${item.name}:${item.change}`).join(',')}`
+    ? `${newsView.documents.more}:${newsView.documents.items.map((item) => `${item.name}:${item.change}`).join(',')}:${newsView.answers?.more ?? 0}:${newsView.answers?.items.map((item) => `${item.path}:${item.change}:${item.at}`).join(',') ?? ''}`
     : '';
   const prevDocsNewsRef = useRef<{ workspaceId: string; sig: string | null }>({ workspaceId, sig: null });
   useEffect(() => {
@@ -266,7 +266,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     }
     if (docsNewsSig !== prev.sig) {
       prevDocsNewsRef.current = { workspaceId, sig: docsNewsSig };
-      if (newsView.documents.items.length > 0 || newsView.documents.more > 0) {
+      if (newsView.documents.items.length > 0 || newsView.documents.more > 0 || (newsView.answers?.items.length ?? 0) > 0 || (newsView.answers?.more ?? 0) > 0) {
         void queryClient.invalidateQueries({ queryKey: workspaceFilesKey(workspaceId) });
         void queryClient.invalidateQueries({ queryKey: questionsKey(workspaceId) });
       }
@@ -543,6 +543,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const focusing = useRef(false);
 
   const activeArea = areas.find((a) => a.id === stepped?.areaId);
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  const answerTitleRef = useRef<HTMLHeadingElement>(null);
+  const restoreAnswerTitle = useRef(false);
+  const refreshText = activeArea?.answer ? refreshRequest(activeArea.answer) : null;
+  useLayoutEffect(() => {
+    if (!refreshText && restoreAnswerTitle.current && active) answerTitleRef.current?.focus({ preventScroll: true });
+    if (!refreshText) restoreAnswerTitle.current = false;
+  }, [refreshText, active, activeArea?.id]);
   activeAreaTitleRef.current = stepped ? activeArea?.data.title : undefined;
   const [areaAddStepOpen, setAreaAddStepOpen] = useState(false);
   const [areaAddStepText, setAreaAddStepText] = useState('');
@@ -808,6 +816,18 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const nowParts = useMemo(() => nowLineParts({ focus, areas, news: newsView, now: new Date(clock) }), [focus, areas, newsView, clock]);
   const newsLines = useMemo(() => (newsView && !newsView.empty ? buildNewsLines(newsView, areas, new Date(clock), knowledgeEntries ?? []) : []), [newsView, areas, clock, knowledgeEntries]);
   const markSeen = useMarkNewsSeen(workspaceId);
+  const newsAnswerOrigin = useRef<{ areaId: string; key: string } | null>(null);
+  useEffect(() => {
+    if (!active || stepped?.phase !== 'open' || stepped.areaId !== newsAnswerOrigin.current?.areaId) newsAnswerOrigin.current = null;
+  }, [active, stepped]);
+  const [returnNewsLine, setReturnNewsLine] = useState<{ key: string; sequence: number }>();
+  const pendingNewsReturn = useRef<string | null>(null);
+  useEffect(() => {
+    if (stepped || !active || !pendingNewsReturn.current) return;
+    const key = pendingNewsReturn.current;
+    pendingNewsReturn.current = null;
+    setReturnNewsLine((previous) => ({ key, sequence: (previous?.sequence ?? 0) + 1 }));
+  }, [stepped, active]);
   const goToNow = useCallback(() => {
     const target = nowLineTarget(areas, focus);
     if (!target) return;
@@ -838,6 +858,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return;
     }
     if (!line.jump) return;
+    newsAnswerOrigin.current = line.jump.areaId.startsWith('question:') ? { areaId: line.jump.areaId, key: line.key! } : null;
     recordBoardJump(originBtn);
     if (line.jump.nodeId) jumpToItem({ areaId: line.jump.areaId, nodeId: line.jump.nodeId, readerTarget: line.jump.readerTarget }, false);
     else jumpToArea(line.jump.areaId);
@@ -1811,6 +1832,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         goBackOnBoard();
         return;
       }
+      if (newsAnswerOrigin.current?.areaId === stepped.areaId) {
+        const key = newsAnswerOrigin.current.key;
+        newsAnswerOrigin.current = null;
+        pendingNewsReturn.current = key;
+        stepOut();
+        return;
+      }
       stepOut();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -2516,7 +2544,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
             >
               <header className="@container shrink-0 border-b border-border/60">
               {/* One 48 px line from 22rem up; narrower than that (a phone) the title keeps 7rem and the buttons wrap under it, so that nothing is pushed out */}
-              <div className="flex min-h-12 flex-wrap items-center gap-x-1 gap-y-1 px-3 py-1.5 @[22rem]:flex-nowrap @[22rem]:gap-x-1.5 @[22rem]:py-0">
+              <div className={cn("flex min-h-12 flex-wrap items-center gap-x-1 gap-y-1 px-3 py-1.5 @[22rem]:flex-nowrap @[22rem]:gap-x-1.5 @[22rem]:py-0", activeArea.data.kind === 'questions' && "@[22rem]:flex-wrap @[22rem]:py-1.5")}>
                 {boardBackTarget && boardBackTarget.level !== 'overview' && (
                   <Button
                     type="button"
@@ -2543,17 +2571,24 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   Board ›
                 </Button>
                 <h2
+                  ref={activeArea.data.kind === 'questions' ? answerTitleRef : undefined}
+                  tabIndex={activeArea.data.kind === 'questions' ? -1 : undefined}
                   id={areaHeadingId}
                   className={cn(
                     'max-w-full truncate text-sm font-semibold text-foreground',
                     boardBackTarget && boardBackTarget.level !== 'overview'
                       ? 'min-w-[7.5rem] @[22rem]:min-w-[7.5rem]'
                       : 'min-w-[7rem] @[22rem]:min-w-[2rem]',
+                    activeArea.data.kind === 'questions' && 'min-w-[12rem] flex-1 @[22rem]:min-w-[12rem]',
                   )}
                   title={activeArea.data.title}
                 >
                   {activeArea.data.title}
                 </h2>
+                {refreshText && <div className="flex shrink-0 items-center gap-1.5">
+                  <span className="whitespace-nowrap text-xs font-medium text-warning-foreground">Out of date · {activeArea.data.answerCounts?.changed} {activeArea.data.answerCounts?.changed === 1 ? 'copy' : 'copies'}</span>
+                  {askInCLI && !readOnly && <Button ref={refreshButtonRef} type="button" size="xs" variant="outline" className="text-xs" onFocus={() => { restoreAnswerTitle.current = true; }} onBlur={(event) => { if (event.relatedTarget) restoreAnswerTitle.current = false; }} onClick={() => askInCLI(refreshText)}>Refresh this answer</Button>}
+                </div>}
                 {activeArea.data.kind === 'checkpoint' && activeArea.data.done && (
                   <span className="sr-only shrink-0 @[26rem]:not-sr-only"><Badge variant="success">Done</Badge></span>
                 )}
@@ -2566,7 +2601,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     {activeArea.data.kind === 'files'
                       ? formatWorkspaceFileCounts(activeArea.data).join(' · ')
                       : activeArea.data.kind === 'questions'
-                        ? areaCounts(activeArea.data).join(' · ')
+                        ? areaCountItems(activeArea.data).filter((item) => item.kind !== 'changed').map((item) => item.label).join(' · ')
                         : stepsText(activeArea.data)}
                   </span>
                 )}
@@ -2828,6 +2863,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
           onNow={goToNow}
           onQuestion={goToQuestion}
           onNewsLine={goToNews}
+          returnNewsLine={returnNewsLine}
           onSearch={openSearch}
         />
       )}

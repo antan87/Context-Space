@@ -75,7 +75,7 @@ describe('answers as Areas', () => {
   it('counts "N parts · N code blocks · N picture" and "N changed since", and opens the row of the first card counted', () => {
     const [area] = buildQuestionAreas([answer('a', 'Q?')]);
     expect(areaCountItems(area!.data).map((item) => [item.kind, item.label, Boolean(item.warn)])).toEqual([
-      ['parts', '2 parts', false], ['code', '2 code blocks', false], ['pictures', '1 picture', false], ['changed', '1 changed since', true],
+      ['parts', '2 parts', false], ['code', '2 code blocks', false], ['pictures', '1 picture', false], ['changed', 'Out of date · 1 copy', true],
     ]);
     expect(resolveCountTarget(area!, 'changed')).toEqual({ rowId: 'row:q:1', cardId: 'qcard:explain/a.md#4' });
     expect(resolveCountTarget(area!, 'pictures')).toEqual({ rowId: 'row:q:2', cardId: 'qcard:explain/a.md#5' });
@@ -233,7 +233,7 @@ describe('the index', () => {
     expect(sections.map((section) => section.title)).toEqual(['Areas', 'Questions']);
     const questions = sections.find((section) => section.title === 'Questions')!;
     expect(questions.items).toHaveLength(1);
-    expect(questions.items[0]).toMatchObject({ areaId: 'question:explain/a.md', title: 'How do we enforce security?', subtitle: '2 parts · 2 code blocks · 1 picture · 1 changed since' });
+    expect(questions.items[0]).toMatchObject({ areaId: 'question:explain/a.md', title: 'How do we enforce security?', subtitle: '2 parts · 2 code blocks · 1 picture · Out of date · 1 copy' });
     expect(sections.find((section) => section.title === 'Areas')!.items.map((item) => item.areaId)).toEqual(['checkpoint:cp']);
     // By the question, the short answer and the name of a part
     for (const query of ['security', 'checked first', 'sign-in']) {
@@ -288,5 +288,21 @@ describe('what a code card says', () => {
 
   it('shows text as plain words, with no marks of Markdown', () => {
     expect(readableText('**Bold** and `code` with [a link](http://x.y)\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |')).toBe('Bold and code with a link one two a · b 1 · 2');
+  });
+});
+
+describe('answer freshness', () => {
+  it('labels changed and gone copies and makes the refresh request', async () => {
+    const { answerCounts, answerView, answerCountWords, refreshRequest } = await import('./questionsArea.js');
+    const dto = answer('fresh', 'How?');
+    const codes = dto.parts.flatMap((part) => part.cards).filter((card) => card.kind === 'code');
+    if (codes[0]?.kind !== 'code' || codes[1]?.kind !== 'code') throw new Error('expected code');
+    codes[0].check = { status: 'changed' };
+    codes[1].check = { status: 'gone' };
+    const view = answerView(dto);
+    expect(answerCountWords(answerCounts(view)).at(-1)?.label).toBe('Out of date · 2 copies');
+    expect(refreshRequest(view)).toContain('Refresh the answer explain/fresh.md ("How?"): these copies no longer match:');
+    expect(refreshRequest(view)).toContain('(changed)');
+    expect(refreshRequest(view)).toContain('(gone)');
   });
 });

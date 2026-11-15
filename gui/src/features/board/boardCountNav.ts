@@ -152,7 +152,7 @@ export function resolveCountTarget(
     };
     const hit = kind === 'pictures' ? find((c) => c.data.variant === 'picture')
       : kind === 'code' ? find((c) => c.data.variant === 'code')
-        : kind === 'changed' ? find((c) => c.data.variant === 'code' && c.data.check?.status === 'changed')
+        : kind === 'changed' ? find((c) => c.data.variant === 'code' && (c.data.check?.status === 'changed' || c.data.check?.status === 'gone'))
           : null;
     return hit ?? { rowId: null };
   }

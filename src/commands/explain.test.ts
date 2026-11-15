@@ -63,6 +63,7 @@ describe('ctxspace explain', () => {
     expect(await explainCommand({ workspace: ws })).toBe(true);
     const text = out.join('\n');
     expect(text).toContain('area: no area');
+    expect(text).toContain('refresh: Refresh the answer explain/changed.md ("How does it work?"): these copies no longer match: Repo/src/a.ts:2-3 (changed). Follow the contextspace-explain skill and run ctxspace explain until all copies match.');
     expect(text).toContain('does not match: Repo/src/a.ts:2-3 changed');
     expect(text).toContain('does not match: Repo/src/a.ts:2-3 moved (now 3-4');
     expect(text).not.toContain('All copies match');
@@ -74,7 +75,8 @@ describe('ctxspace explain', () => {
     await explainCommand({ workspace: ws, json: true });
     expect(JSON.parse(out.join('\n'))).toEqual({
       allMatch: false,
-      answers: [{ path: 'explain/changed.md', question: 'How does it work?', area: 'checkpoint:first', parts: ['The part'], codeBlocks: 1, notMatching: [{ where: 'Repo/src/a.ts:2-3', status: 'changed' }] }],
+      answers: [{ path: 'explain/changed.md', question: 'How does it work?',
+        refresh: 'Refresh the answer explain/changed.md ("How does it work?"): these copies no longer match: Repo/src/a.ts:2-3 (changed). Follow the contextspace-explain skill and run ctxspace explain until all copies match.', area: 'checkpoint:first', parts: ['The part'], codeBlocks: 1, notMatching: [{ where: 'Repo/src/a.ts:2-3', status: 'changed' }] }],
     });
     out.length = 0;
     await put('explain/changed.md', answer(['two', 'three']));
