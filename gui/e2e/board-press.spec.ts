@@ -233,6 +233,26 @@ test.describe('Slice I1: Everything you see on the board can be pressed', () => 
     });
   });
 
+  test('1280x800 Board: pressing a focus card thumbnail docks the reader, the thumbnail stays, and Escape returns focus to it', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-board').click();
+    await atRest(page);
+    const heroNode = page.locator('#board-overview .react-flow__node-area');
+    const thumb = heroNode.locator('button[aria-label*="Picture"]').first();
+    await expect(thumb).toBeVisible();
+    await thumb.click();
+    const reader = page.locator('[data-board-reader]');
+    await expect(reader).toBeVisible();
+    // The reader docks beside the overview, which gets narrower than a Split stage: the card still has its thumbnails
+    await atRest(page);
+    expect((await page.locator('#board-overview .react-flow').boundingBox())!.width).toBeLessThan(700);
+    await expect(thumb).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(reader).toHaveCount(0);
+    await expect(thumb).toBeFocused();
+  });
+
   for (const mode of [
     { name: '1280x800 Split', width: 1280, height: 800, split: true },
     { name: '1440x900 Board', width: 1440, height: 900, split: false },
@@ -266,8 +286,15 @@ test.describe('Slice I1: Everything you see on the board can be pressed', () => 
         const heroNode = page.locator('#board-overview .react-flow__node-area');
         await expect(heroNode).toBeVisible();
 
-        // Thumbnail buttons on focus card
+        // Thumbnail buttons on the focus card. Beside the terminal the focus card is compact (FT1): it has no thumbnails, and the
+        // pictures stay one press away: the card's "N pictures" count steps into the Area on its Media tab
         const thumbButtons = heroNode.locator('button[aria-label*="Picture"]');
+        if (mode.split) {
+          await expect(thumbButtons).toHaveCount(0);
+          await heroNode.getByRole('button', { name: /^Show the \d+ pictures$/ }).click();
+          await expect(page.getByRole('tab', { name: /Media/i })).toHaveAttribute('aria-selected', 'true');
+          return;
+        }
         await expect(thumbButtons.first()).toBeVisible();
         const firstThumb = thumbButtons.first();
 
@@ -548,14 +575,21 @@ test.describe('Slice I1: Everything you see on the board can be pressed', () => 
         await atRest(page);
 
         const heroNode = page.locator('#board-overview .react-flow__node-area');
+        // Beside the terminal the compact focus card has no thumbnails (FT1; its pictures are the Media tab behind the "N pictures"
+        // count, tested above); the reader's card text, counter and keys are tested with the thumbnails of the whole card
+        if (mode.split) {
+          await expect(heroNode.locator('button[aria-label*="Picture"]')).toHaveCount(0);
+          await expect(heroNode.getByRole('button', { name: /^Show the \d+ pictures$/ })).toBeVisible();
+          return;
+        }
         const firstThumb = heroNode.locator('button[aria-label*="Picture"]').first();
+        const thumbTitle = await firstThumb.getAttribute('title') || 'Picture 37';
         await firstThumb.click();
 
         const reader = page.locator('[data-board-reader]');
         await expect(reader).toBeVisible();
 
         // 1. Has card description text matching the opened picture
-        const thumbTitle = await firstThumb.getAttribute('title') || 'Picture 37';
         const picNum = thumbTitle.replace(/\D+/g, '');
         await expect(reader.getByText(new RegExp(`Visual snapshot description for picture ${picNum}`, 'i'))).toBeVisible();
 

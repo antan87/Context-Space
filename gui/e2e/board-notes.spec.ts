@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { checkpoint, planFile, step } from './planData.js';
 
@@ -417,9 +417,12 @@ test.describe('Canvas Note Creation & In-Place Editing (Milestone 2, Slice 2.1)'
     await card.locator('.board-text-compact').click();
     await expect(page.getByRole('dialog', { name: 'Long Note Title That Is Very Descriptive', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
+    // Closed for good before the clock stops: a dialog still closing would stay on, and cover the card
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.clock.install();
-    await card.locator('.board-text-compact').click();
-    await card.getByRole('button', { name: 'Edit Long Note Title That Is Very Descriptive', exact: true }).click();
+    // Forced: with the fake clock installed the page's frames stop, and the checks that the card is still would sometimes hang
+    await card.locator('.board-text-compact').click({ force: true });
+    await card.getByRole('button', { name: 'Edit Long Note Title That Is Very Descriptive', exact: true }).click({ force: true });
     await page.clock.fastForward(500);
     await expect(dialog).toHaveCount(1);
     await expect(dialog.getByRole('heading', { name: 'Edit note' })).toBeVisible();
@@ -539,5 +542,120 @@ test.describe('what is typed in the note dialog survives the clock and the board
     await page.clock.fastForward('00:35');
     await expect(title).toHaveValue('Mid-sentence in an edit');
     await expect(dialog.getByPlaceholder('Write Markdown, lists, notes, or links...')).toHaveValue('Original markdown content');
+  });
+});
+
+test.describe('FT1: pressing a cut note is safe', () => {
+  const cutNote: MockCard = {
+    id: '33333333-4444-4000-8000-555555555599',
+    kind: 'note',
+    title: 'Long Note Title That Is Very Descriptive',
+    body: 'Line 1: Detailed specification requirements\n\nLine 2: Additional design considerations\n\nLine 3: Edge cases and failure modes\n\nLine 4: Implementation details',
+    pinned: false,
+    archived: false,
+    area: 'checkpoint:reports-export-to-csv',
+    by: 'user',
+    at: '2026-10-23T10:00:00.000Z',
+    updatedBy: 'user',
+    updatedAt: '2026-10-23T10:00:00.000Z',
+  };
+  const TITLE = 'Long Note Title That Is Very Descriptive';
+
+  async function openArea(page: Page) {
+    await setupBoardRoutes(page, [cutNote]);
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' }).click();
+    const card = page.locator('#board-area').locator('article').filter({ hasText: 'Long Note Title' });
+    await expect(card).toBeVisible();
+    return card;
+  }
+
+  test('a double click inside the open Read dialog does not open Edit on top of it', async ({ page }) => {
+    const card = await openArea(page);
+    await card.locator('.board-text-compact').click();
+    const read = page.getByRole('dialog', { name: TITLE, exact: true });
+    await expect(read).toBeVisible();
+    await read.getByText('Line 2: Additional design considerations').dblclick();
+    await page.waitForTimeout(400);
+    await expect(page.getByRole('heading', { name: 'Edit note' })).toHaveCount(0);
+    await expect(page.getByRole('dialog')).toHaveCount(1);
+    await expect(read).toBeVisible();
+  });
+
+  // Presses after the clock is installed are forced: the page's frames wait for the fake clock, and a check that the card is still would hang
+  const press = (card: Locator) => card.locator('.board-text-compact').click({ force: true });
+
+  test('leaving the Board within 250 ms of a press opens nothing on the next screen', async ({ page }) => {
+    await page.clock.install();
+    const card = await openArea(page);
+    await press(card);
+    await page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Overview' }).click({ force: true });
+    await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeHidden();
+    await page.clock.fastForward(1000);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  test('a card that is hidden but still mounted opens nothing when the 250 ms are over', async ({ page }) => {
+    await page.clock.install();
+    const card = await openArea(page);
+    await press(card);
+    // Hidden as the Board is when someone leaves it, but kept mounted, so nothing unmounts the card and clears its timer
+    await card.evaluate((article) => { article.style.display = 'none'; });
+    await page.clock.fastForward(1000);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  test('two quick presses give one dialog, not two', async ({ page }) => {
+    await page.clock.install();
+    const card = await openArea(page);
+    await press(card);
+    await page.clock.fastForward(100);
+    await press(card);
+    await page.clock.fastForward(100);
+    await press(card);
+    await page.clock.fastForward(1000);
+    await expect(page.getByRole('dialog')).toHaveCount(1);
+    await expect(page.getByRole('dialog', { name: TITLE, exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  test('a press followed quickly by the Actions menu does not open Read over the menu', async ({ page }) => {
+    await page.clock.install();
+    const card = await openArea(page);
+    await press(card);
+    // The trigger is faded in on hover, so it is hovered first (a plain move, no check that waits for a frame); then it is pressed once
+    const actionsButton = card.getByRole('button', { name: `Actions for ${TITLE}`, exact: true });
+    await expect(actionsButton).toBeVisible();
+    await expect(actionsButton).toBeEnabled();
+    await card.hover({ force: true });
+    await actionsButton.click({ force: true });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await page.clock.fastForward(1000);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByRole('menu')).toBeVisible();
+  });
+
+  test('a menu that was already open elsewhere (the terminal\'s Copy menu) does not stop a press from reading', async ({ page }) => {
+    await page.clock.install();
+    const card = await openArea(page);
+    await page.evaluate(() => {
+      const menu = document.createElement('div');
+      menu.setAttribute('role', 'menu');
+      menu.textContent = 'Copy / Paste';
+      menu.style.cssText = 'position:fixed;left:0;bottom:0;width:1px;height:1px;overflow:hidden';
+      document.body.append(menu);
+    });
+    await press(card);
+    await page.clock.fastForward(1000);
+    await expect(page.getByRole('dialog', { name: TITLE, exact: true })).toBeVisible();
+  });
+
+  test('a press on its own still reads the whole note after 250 ms', async ({ page }) => {
+    await page.clock.install();
+    const card = await openArea(page);
+    await card.locator('.board-text-compact').click();
+    await page.clock.fastForward(400);
+    await expect(page.getByRole('dialog', { name: TITLE, exact: true })).toBeVisible();
   });
 });

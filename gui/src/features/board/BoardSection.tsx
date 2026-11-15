@@ -39,6 +39,7 @@ import {
   buildBoardAreas,
   overviewEdges,
   OVERVIEW_INSET,
+  compactFocusCard,
   overviewPlan,
   resolveCountTarget,
   stepsText,
@@ -323,10 +324,38 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const takeOverview = useCallback(() => { overviewTaken.current = true; }, []);
   // The form the view was laid out for: a new form is a new layout, so the view goes back to the plan's
   const overviewForm = useRef<string | null>(null);
+  const [boardRow, setBoardRow] = useState<HTMLDivElement | null>(null);
+  const boardRowSize = useLayoutElementSize(boardRow);
+  const navDock = sidebarDock(boardRowSize.width);
+  // What the person chose (kept per device), else what suits the Areas: it starts closed when that gives a better form of the overview
+  // (cards over small cards over rows). That is decided once, when the Areas and the section's size are known and the index docks (where it overlays, it takes no
+  // room, so there is nothing to decide), and then left alone as the board changes. Until it is decided, and until the stage has the
+  // size it has with the index as decided, the board is laid out but not drawn: the index and the rows are not seen for a moment and
+  // then replaced by cards.
+  const [navChoice, setNavChoice] = useState(readNavChoice);
+  const [navAuto, setNavAuto] = useState<boolean | null>(null);
+  const [navShown, setNavShown] = useState(false);
+  const navOpen = navChoice ?? navAuto ?? false;
+  const navUndecided = navChoice === null && navAuto === null && !navDock.overlays;
+  // The plan, the documents and the notes make the Areas; the commits only add a line of counts to one, so the decision does not wait for them
+  const areasLoading = [plan, guidance, boardQuery].some((query) => !query.data && !query.isError);
+  useLayoutEffect(() => {
+    if (!navUndecided || areasLoading || areas.length === 0 || boardRowSize.width === 0) return;
+    setNavAuto(navStartsOpen(areas, boardRowSize));
+  }, [navUndecided, areasLoading, areas, boardRowSize]);
+  const stageWidth = boardRowSize.width - (navOpen ? SIDEBAR.width : SIDEBAR.railWidth);
+  const stageDock = readerDock(stageWidth);
+  // Reader and stepped state sit here: the focus card's form below depends on them
+  const [reader, setReader] = useState<{ target: ReaderTarget; request: number; trail: ReaderTrail } | null>(null);
+  const [layout, setLayout] = useReaderLayout();
+  const [stepped, setStepped] = useState<SteppedState>(null);
   // The Areas folded into the overview's last row, shown (not saved)
   const [foldOpen, setFoldOpen] = useState(false);
 
-  const overview = useMemo(() => overviewPlan(areas, stageSize, { expanded: foldOpen }), [areas, stageSize, foldOpen]);
+  // The focus card is compact or not by the stage with no reader docked beside it, so a reader opening or closing never changes the card
+  const readerBeside = !stepped && Boolean(reader) && layout === 'side' && !stageDock.covers && areas.length > 0;
+  const compactHero = compactFocusCard(stageSize, readerBeside ? Math.max(stageSize.width, stageWidth) : undefined);
+  const overview = useMemo(() => overviewPlan(areas, stageSize, { expanded: foldOpen, compact: compactHero }), [areas, stageSize, foldOpen, compactHero]);
   const toggleFold = useCallback(() => {
     // The rows are laid out again and the view follows them
     overviewTaken.current = false;
@@ -356,8 +385,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const totalArchived = board?.cards.filter((card) => card.archived).length ?? 0;
 
   // Reader state
-  const [reader, setReader] = useState<{ target: ReaderTarget; request: number; trail: ReaderTrail } | null>(null);
-  const [layout, setLayout] = useReaderLayout();
   const requests = useRef(0);
   const opener = useRef<HTMLElement | null>(null);
   /** Which node and control the opener was, to find it again when the rows were laid out again and its button was drawn anew. */
@@ -437,27 +464,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, [active, documentRequest, show, workspaceId]);
 
   // Board index sidebar state
-  const [boardRow, setBoardRow] = useState<HTMLDivElement | null>(null);
-  const boardRowSize = useLayoutElementSize(boardRow);
-  const navDock = sidebarDock(boardRowSize.width);
-  // What the person chose (kept per device), else what suits the Areas: it starts closed when that gives a better form of the overview
-  // (cards over small cards over rows). That is decided once, when the Areas and the section's size are known and the index docks (where it overlays, it takes no
-  // room, so there is nothing to decide), and then left alone as the board changes. Until it is decided, and until the stage has the
-  // size it has with the index as decided, the board is laid out but not drawn: the index and the rows are not seen for a moment and
-  // then replaced by cards.
-  const [navChoice, setNavChoice] = useState(readNavChoice);
-  const [navAuto, setNavAuto] = useState<boolean | null>(null);
-  const [navShown, setNavShown] = useState(false);
-  const navOpen = navChoice ?? navAuto ?? false;
-  const navUndecided = navChoice === null && navAuto === null && !navDock.overlays;
-  // The plan, the documents and the notes make the Areas; the commits only add a line of counts to one, so the decision does not wait for them
-  const areasLoading = [plan, guidance, boardQuery].some((query) => !query.data && !query.isError);
-  useLayoutEffect(() => {
-    if (!navUndecided || areasLoading || areas.length === 0 || boardRowSize.width === 0) return;
-    setNavAuto(navStartsOpen(areas, boardRowSize));
-  }, [navUndecided, areasLoading, areas, boardRowSize]);
-  const stageWidth = boardRowSize.width - (navOpen ? SIDEBAR.width : SIDEBAR.railWidth);
-  const stageDock = readerDock(stageWidth);
   const navSettling = navChoice === null && !navShown && !navDock.overlays;
   useLayoutEffect(() => {
     if (navSettling && !navUndecided && Math.abs(stageSize.width - stageWidth) <= 1 && stageSize.height > 0) setNavShown(true);
@@ -533,7 +539,6 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, [navExpanded, navDock.overlays, narrowNavOpen]);
 
   // Stepping In and Out state
-  const [stepped, setStepped] = useState<SteppedState>(null);
   const steppedRef = useRef<SteppedState>(null);
   useLayoutEffect(() => { steppedRef.current = stepped; }, [stepped]);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2426,6 +2431,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   <div className="absolute left-3 top-2 z-10">
                     <Button
                       size="xs"
+                      className="text-xs"
                       variant={showArchived ? 'secondary' : 'outline'}
                       aria-pressed={showArchived}
                       onClick={() => setShowArchived((s) => !s)}

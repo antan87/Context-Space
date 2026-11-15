@@ -20,7 +20,7 @@ import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } fr
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
-import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
@@ -1424,11 +1424,21 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
             clearTimeout(readTimer.current);
             brickPress(event, (card) => {
               const trigger = firstControl(card, '[data-card-main]');
-              readTimer.current = setTimeout(() => { if (trigger?.isConnected) trigger.click(); }, 250);
+              // Read opens only if the card is still shown and nothing else opened in the meantime (the Board left, a menu or a dialog)
+              // Only an overlay that opened after the press stops it: one already there (the terminal's Copy menu) does not
+              const overlays = '[role="dialog"], [role="menu"], [role="alertdialog"]';
+              const before = new Set(document.querySelectorAll(overlays));
+              readTimer.current = setTimeout(() => {
+                if (!trigger?.isConnected || trigger.offsetParent === null || trigger.getAttribute('aria-expanded') === 'true') return;
+                if ([...document.querySelectorAll(overlays)].some((overlay) => !before.has(overlay))) return;
+                trigger.click();
+              }, 250);
               return null;
             });
           } : undefined}
           onDoubleClick={(event) => {
+            // A double press inside a dialog the card opened bubbles up through React's tree, but is not on the card
+            if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
             clearTimeout(readTimer.current);
             if (actions?.readOnly) return;
             event.stopPropagation();
@@ -1457,6 +1467,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
         data={data}
         labelledBy={titleId}
         onDoubleClick={(event) => {
+          if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
           if (actions?.readOnly) return;
           event.stopPropagation();
           setEditOpen(true);
@@ -1933,7 +1944,7 @@ const areaSteps = (data: AreaData) => data.kind === 'plan'
   : stepsText(data);
 
 /** What names an Area to those who cannot see it: its title, its state, its steps, what waits, what it holds and any problem. */
-function areaLabel(data: AreaData): string {
+function areaLabel(data: AreaData, hiddenSubtitle?: string): string {
   const counts = areaCounts(data);
   return summaryLabel([
     data.title,
@@ -1942,6 +1953,7 @@ function areaLabel(data: AreaData): string {
     data.waitingCount > 0 ? (data.waitingCount === 1 ? 'waits for you' : `${data.waitingCount} wait for you`) : undefined,
     counts.length > 0 ? counts.join(', ') : undefined,
     data.warning?.toLowerCase(),
+    hiddenSubtitle,
   ]);
 }
 
@@ -2312,6 +2324,19 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const showQuestion = Boolean(data.questionItem && actions && !hasCountButtons);
   const questionRoom = data.questionItem ? Math.ceil(textEm(data.questionItem.label) * 12) + 16 : 0;
 
+  // The second line draws its subtitle with room for about 12 characters or not at all, and its bar only where it is 32 px or more
+  const subtitleText = !statusLine && data.tier === 2 ? data.waitingQuestion : data.tier === 4 ? data.nextOpenStep : undefined;
+  const otherPx = statusLine ? 0
+    : (data.tier === 3 ? Math.min(120, newsShown.length > 0 ? newsShown.reduce((sum, item) => sum + newsLabelWidth(item.label) + 4, 0) : Math.ceil(textEm(data.newsSummary ?? '') * 12)) : 0)
+      + (!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' ? Math.ceil(textEm(data.nowSet ? 'Now' : 'Next up') * 12) + 8 : 0)
+      + (data.tier !== 2 && data.waitingCount > 0 ? 72 : 0);
+  const secondLine = miniSecondLine({
+    room: (width ?? 240) - 24 - (showPicture ? 92 : 0) - (showQuestion ? questionRoom : 0) - (data.tier === 2 && subtitleText ? 10 : 0),
+    stepsPx: Math.ceil(textEm(`${data.stepsDone} of ${data.stepsTotal}`) * 12) + 4,
+    subtitle: subtitleText,
+    hasSteps,
+    other: otherPx,
+  });
   const isTwoLineTitle = (data.title?.length ?? 0) > 25;
   const [overlayPos, setOverlayPos] = useState<{ top: number; left: number; maxWidth?: number }>({
     top: statusLine ? (isTwoLineTitle ? 52 : 34) : 48,
@@ -2359,7 +2384,9 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
     // A question may run to two lines; the first line of its answer is then shown only where there is room for both
     const isQuestion = data.kind === 'questions';
     const twoLineTitle = isQuestion && textEm(data.title) * 14 * 1.08 > Math.max(60, (width ?? 240) - 24 - 24 - 12);
-    const showPreview = pics.length === 0 && Boolean(data.preview) && (!twoLineTitle || (height ?? 0) >= 100);
+    // What moved ("Answer updated") takes the place of the first line of the answer
+    const showNews = isQuestion && Boolean(data.newsSummary);
+    const showPreview = !showNews && pics.length === 0 && Boolean(data.preview) && (!twoLineTitle || (height ?? 0) >= 100);
     return (
       <div
         ref={cardRef}
@@ -2417,6 +2444,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
             ))}
           </div>
         )}
+        {showNews && <span className="line-clamp-1 text-xs font-medium leading-4 text-foreground" title={data.newsSummary}>{data.newsSummary}</span>}
         {showPreview && (
           <span className="line-clamp-1 text-xs leading-4 text-muted-foreground">{data.preview}</span>
         )}
@@ -2431,8 +2459,8 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
 
   const status = (
     <>
-      {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
-        <span aria-hidden="true" title={data.waitingQuestion ?? waitingText(data.waitingCount)} className="flex min-w-0 max-w-[22ch] items-center gap-1 text-xs font-medium leading-4 text-state-needs">
+      {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (statusLine || !data.waitingQuestion || secondLine.subtitle) && (
+        <span aria-hidden="true" data-area-subtitle={statusLine ? undefined : ''} title={data.waitingQuestion ?? waitingText(data.waitingCount)} style={!statusLine && data.waitingQuestion ? { maxWidth: secondLine.subtitleMax + 10 } : undefined} className="flex min-w-0 max-w-[22ch] items-center gap-1 text-xs font-medium leading-4 text-state-needs">
           <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />
           <span className="min-w-0 truncate">{data.waitingQuestion ?? 'Waiting'}</span>
         </span>
@@ -2482,7 +2510,8 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       <button
         type="button"
         onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
-        aria-label={areaLabel(data)}
+        aria-label={areaLabel(data, !secondLine.subtitle ? subtitleText : undefined)}
+        title={!secondLine.subtitle && subtitleText ? `${data.title}: ${subtitleText}` : undefined}
         className={cn(
           'board-area nodrag nopan relative flex h-full w-full items-stretch gap-3 overflow-hidden rounded-xl border bg-card px-3 py-2.5 text-left text-card-foreground shadow-xs',
           'transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md',
@@ -2506,17 +2535,19 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
           {(hasSteps || (!statusLine && hasStatus) || showQuestion) && (
             <span className="flex min-w-0 items-center gap-2" style={showQuestion ? { paddingRight: questionRoom } : undefined}>
               {!statusLine && status}
-              {data.tier === 4 && data.nextOpenStep && (
-                <span className="min-w-0 max-w-[22ch] truncate text-xs leading-4 text-muted-foreground" title={data.nextOpenStep}>
+              {data.tier === 4 && data.nextOpenStep && secondLine.subtitle && (
+                <span data-area-subtitle="" style={{ maxWidth: secondLine.subtitleMax }} className="min-w-0 max-w-[22ch] truncate text-xs leading-4 text-muted-foreground" title={data.nextOpenStep}>
                   {data.nextOpenStep}
                 </span>
               )}
               {hasSteps && (
                 <>
                   <span className={cn('shrink-0 whitespace-nowrap text-xs leading-4 tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>{data.stepsDone} of {data.stepsTotal}</span>
-                  <span aria-hidden="true" className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted-foreground/20">
-                    <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
-                  </span>
+                  {secondLine.bar && (
+                    <span aria-hidden="true" data-area-progress="" className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-muted-foreground/20">
+                      <span className={cn('block h-full rounded-full', data.done ? 'bg-success' : 'bg-primary')} style={{ width: `${progress}%` }} />
+                    </span>
+                  )}
                 </>
               )}
             </span>

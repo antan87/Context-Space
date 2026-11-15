@@ -296,8 +296,9 @@ test.describe('Board overview in Split mode: small cards', () => {
       const isFolded = await fold.isVisible();
       const cards = board.locator('#board-overview button.board-area');
       if (isFolded) {
-        await expect(fold).toHaveText('4 more');
-        await expect(cards).toHaveCount(7);
+        // The compact focus card leaves room for more cards (FT1): 8 cards and the focus card, 2 more folded
+        await expect(fold).toHaveText('2 more');
+        await expect(cards).toHaveCount(9);
       } else {
         await expect(cards).toHaveCount(11);
         await expect(board.locator('#board-overview .react-flow__node-area')).toHaveCount(1);
@@ -362,8 +363,8 @@ test.describe('Board overview in Split mode: small cards', () => {
     const board = await openSplit(page, { width: 1100, height: 700 });
     const fold = board.locator('#board-overview button.board-area-fold');
     const cards = board.locator('#board-overview button.board-area');
-    await expect(cards).toHaveCount(7);
-    await expect(fold).toHaveText('4 more');
+    await expect(cards).toHaveCount(9);
+    await expect(fold).toHaveText('2 more');
     const before = await overviewTransform(page);
     // An index jump to a visible Area and back
     await page.getByRole('button', { name: /^Board index/ }).click();
@@ -376,7 +377,7 @@ test.describe('Board overview in Split mode: small cards', () => {
     await expect(board.locator('#board-area')).toHaveCount(0);
     await atRest(page);
     expect(await overviewTransform(page), 'after an index jump and back').toBe(before);
-    expect(await cardBoxes(page)).toHaveLength(7);
+    expect(await cardBoxes(page)).toHaveLength(9);
 
     await expect(indexOrigin).toBeFocused();
     await nav.getByRole('button', { name: 'Board index', exact: true }).click();
@@ -391,7 +392,7 @@ test.describe('Board overview in Split mode: small cards', () => {
       await page.keyboard.press('Tab');
       await expect(heroSteps.nth(s)).toBeFocused();
     }
-    for (let i = 1; i < 7; i++) {
+    for (let i = 1; i < 9; i++) {
       await page.keyboard.press('Tab');
       await expect(cards.nth(i)).toBeFocused();
       await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -466,11 +467,13 @@ test.describe('Board overview in Split mode: small cards', () => {
     await expect(fold).toHaveText('Show fewer');
     const cards = overview.locator('button.board-area');
     await expect(cards).toHaveCount(25);
+    const hasPicture = (await overview.locator('button[aria-label="The overview"]').count()) > 0;
     await cards.last().focus();
     await atRest(page);
     for (let i = 24; i > 1; i--) {
       await page.keyboard.press('Shift+Tab');
-      if (i - 1 === 18) {
+      // The picture button of the card, where the cards are tall enough to draw it (here they are not: more of them fit, FT1)
+      if (hasPicture && i - 1 === 18) {
         await expect(overview.locator('button[aria-label="The overview"]')).toBeFocused();
         await page.keyboard.press('Shift+Tab');
       }
@@ -606,8 +609,8 @@ test.describe('Board overview in Split mode: small cards', () => {
   });
 
   test('a picture shows on a card with a status only where the status has a line of its own (240 x 96 and up)', async ({ page }) => {
-    // The picture is on an Area which also waits for an answer (status); stage gives small cards of about 93 px, then about 103 px
-    for (const { height, shows } of [{ height: 736, shows: false }, { height: 760, shows: true }]) {
+    // The picture is on an Area which also waits for an answer (status); stage gives small cards of about 92 px, then about 96 px (with the compact focus card of FT1)
+    for (const { height, shows } of [{ height: 704, shows: false }, { height: 720, shows: true }]) {
       const board = await openSplit(page, { width: 1280, height: height }, { count: 8, pictureOn: 2, questionOn: 2 });
       const card = board.locator('#board-overview button.board-area').filter({ hasText: TITLES[2]! });
       const box = (await card.boundingBox())!;

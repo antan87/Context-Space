@@ -79,17 +79,18 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
     await setupMocks(page);
   });
 
-  const checkFocusCardNoClipping = async (page: Page, label: string) => {
+  // Beside the terminal the focus card is compact (FT1): one line of steps and no thumbnails, so the Areas under it are in sight
+  const checkFocusCardNoClipping = async (page: Page, label: string, steps = 3) => {
     const heroNode = page.locator('#board-overview .react-flow__node-area');
     await expect(heroNode).toBeVisible();
 
     const heroBtn = heroNode.locator('button.board-area');
     await expect(heroBtn).toBeVisible();
 
-    // 1. Verify 3 step buttons are visible and whole
+    // 1. Verify the step buttons are visible and whole
     const stepButtons = heroNode.locator('button[data-step-key]');
-    await expect(stepButtons).toHaveCount(3);
-    for (let i = 0; i < 3; i++) {
+    await expect(stepButtons).toHaveCount(steps);
+    for (let i = 0; i < steps; i++) {
       const btn = stepButtons.nth(i);
       await expect(btn).toBeVisible();
       const text = await btn.textContent();
@@ -182,7 +183,7 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto('/#/workspaces/demo/board');
     await atRest(page);
-    await checkFocusCardNoClipping(page, '1280x800 Split');
+    await checkFocusCardNoClipping(page, '1280x800 Split', 1);
   });
 
   test('focus card never clips its own content at 1100x700 Split', async ({ page }) => {
@@ -193,7 +194,7 @@ test.describe('Slice W2: Focus card clipping & tier acceptance', () => {
     await page.setViewportSize({ width: 1100, height: 700 });
     await page.goto('/#/workspaces/demo/board');
     await atRest(page);
-    await checkFocusCardNoClipping(page, '1100x700 Split');
+    await checkFocusCardNoClipping(page, '1100x700 Split', 1);
   });
 
   test('Tier 3 Moved since you looked draws what moved and caps at at most 3 Areas', async ({ page }) => {

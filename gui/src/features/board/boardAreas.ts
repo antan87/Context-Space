@@ -377,7 +377,16 @@ export function buildBoardAreas({
     now,
   });
 
-  const questionAreas = buildQuestionAreas(questions);
+  // The unseen news about an answer (the news' Answers group, by the answer's path) is the news of its Area: a card that says what moved, and a place among the Areas that moved
+  // Once the news is marked seen ("Got it" sets `empty` and keeps the items until the next read) it is no news
+  const answerNews = new Map((news && !news.empty ? news.answers?.items ?? [] : []).map((item) => [item.path, item]));
+  const questionAreas = buildQuestionAreas(questions).map((area) => {
+    const item = area.answer ? answerNews.get(area.answer.path) : undefined;
+    if (!item) return area;
+    const label = item.change === 'added' ? 'New answer' : item.change === 'changed' ? 'Answer updated' : 'Answer out of date';
+    const at = Date.parse(item.at);
+    return { ...area, data: { ...area.data, newsSummary: label, ...(Number.isFinite(at) ? { newestChangeTime: at } : {}) } };
+  });
 
   if (drafts.length === 0) {
     const hasCards = areaCards.length > 0;
@@ -1037,11 +1046,14 @@ export function heroCardHeight(data: AreaData, options: HeroCardOptions | number
 }
 
 /** Computes what fits in the hero card whole without mid-line clipping. */
-export function fitHeroCard(data: AreaData, width: number, maxAvailableHeight: number): {
+export function fitHeroCard(data: AreaData, width: number, maxAvailableHeight: number, compact = false): {
   height: number;
   config: { heroShowPictures: boolean; heroShowPreview: boolean; heroShowFooter: boolean; heroOpenStepLimit: number };
 } {
-  let config = { heroShowPictures: true, heroShowPreview: true, heroShowFooter: true, heroOpenStepLimit: 3 };
+  // A compact hero (a short or narrow stage) starts without thumbnails and preview, and with one line of steps
+  let config = compact
+    ? { heroShowPictures: false, heroShowPreview: false, heroShowFooter: true, heroOpenStepLimit: 1 }
+    : { heroShowPictures: true, heroShowPreview: true, heroShowFooter: true, heroOpenStepLimit: 3 };
   let height = heroCardHeight(data, { width, showPictures: config.heroShowPictures, showPreview: config.heroShowPreview, showFooter: config.heroShowFooter, openStepLimit: config.heroOpenStepLimit });
   if (height <= maxAvailableHeight) {
     return { height, config };
@@ -1065,6 +1077,7 @@ export function fitHeroCard(data: AreaData, width: number, maxAvailableHeight: n
   const minLimit = (data.openSteps && data.openSteps.length > 0) ? 1 : 0;
   for (const limit of [2, 1]) {
     if (limit < minLimit) break;
+    if (limit > config.heroOpenStepLimit) continue;
     config = { ...config, heroOpenStepLimit: limit };
     height = heroCardHeight(data, { width, showPictures: config.heroShowPictures, showPreview: config.heroShowPreview, showFooter: config.heroShowFooter, openStepLimit: config.heroOpenStepLimit });
     if (height <= maxAvailableHeight || limit === minLimit) {
@@ -1160,7 +1173,20 @@ export function partitionOverviewTiers(areas: BoardArea[]): OverviewTiers {
   const beside = areas.filter((area) => area.data.about && ids.has(area.data.about.id));
   if (beside.length === 0) return partitionTiers(areas);
   const placed = new Set(beside.map((area) => area.id));
-  const tiers = partitionTiers(areas.filter((area) => !placed.has(area.id)));
+  // News on an answer moves its Area, with the answer, to "moved since you looked": it never stays behind plainer Areas
+  const answerNews = new Map<string, BoardArea['data']>();
+  for (const answer of beside) {
+    if (!answer.data.newsSummary && !answer.data.fresh) continue;
+    const host = answer.data.about!.id;
+    const held = answerNews.get(host);
+    // Answers come newest first: the group keeps the newest time of them, and the summary of the newest with one
+    if (!held || (answer.data.newestChangeTime ?? 0) > (held.newestChangeTime ?? 0)) answerNews.set(host, { ...answer.data, newestChangeTime: Math.max(answer.data.newestChangeTime ?? 0, held?.newestChangeTime ?? 0) });
+  }
+  const tiers = partitionTiers(areas.filter((area) => !placed.has(area.id)).map((area) => {
+    const news = answerNews.get(area.id);
+    if (!news || area.data.newsSummary) return area;
+    return { ...area, data: { ...area.data, newsSummary: news.newsSummary ?? '1 update', newestChangeTime: Math.max(area.data.newestChangeTime ?? 0, news.newestChangeTime ?? 0) || Date.now() } };
+  }));
   const answersOf = (host: BoardArea) => beside.filter((area) => area.data.about!.id === host.id);
   const withAnswers = (list: BoardArea[]) => list.flatMap((area) => [area, ...answersOf(area)]);
   return {
@@ -1196,6 +1222,22 @@ function cardLines(areas: BoardArea[], cols: number): number[] {
   return heights;
 }
 
+/**
+ * The stage is compact when it is narrow (the board beside the terminal) or short: the focus Area then has no thumbnails and
+ * one line of steps, and the Areas under it keep the room. A wide, tall stage keeps the whole focus card.
+ */
+export const COMPACT_STAGE = { width: 700, height: 560 } as const;
+export const isCompactStage = (room: { width: number; height: number }) => room.width < COMPACT_STAGE.width || room.height < COMPACT_STAGE.height;
+
+/**
+ * Whether the overview's focus card is compact, for a stage of this size. A reader docked beside the overview narrows the stage, but
+ * opening or closing it must never change the focus card (the thumbnail that was pressed would vanish), so the width is the one the stage
+ * has with no reader docked (`undockedWidth`) when there is one.
+ */
+export function compactFocusCard(stage: Size, undockedWidth?: number): boolean {
+  return isCompactStage(overviewRoom({ width: undockedWidth ?? stage.width, height: stage.height }));
+}
+
 /** The id of the overview's one last row of folded Areas. */
 export const OVERVIEW_FOLD = 'overview:fold';
 
@@ -1203,6 +1245,35 @@ export const OVERVIEW_FOLD = 'overview:fold';
 export const MINI_PICTURE = { minWidth: 240, minHeight: 92 } as const;
 /** From this height on, "Now" and "Waiting" get a line under the title; below it they share the line of the steps. */
 export const MINI_STATUS_LINE = 96;
+
+/** What a subtitle (the next step, the first words of a question) needs to be worth drawing: about 12 characters at 12 px, and the least a progress bar is drawn. */
+export const MINI_SUBTITLE_MIN = 80;
+export const MINI_BAR_MIN = 32;
+/** The widest a subtitle is drawn (22ch). */
+export const MINI_SUBTITLE_MAX = 160;
+
+/**
+ * What the second line of a small card draws: a subtitle, "5 of 12" and a bar. The words of "5 of 12" always stand. The subtitle is
+ * drawn with at least about 12 characters before its ellipsis or not at all (it stays in the card's title and description), and the
+ * bar only where it is at least 32 px wide ("5 of 12" already says it). `room` is what the line has, `other` what else shares it.
+ */
+export function miniSecondLine(input: { room: number; stepsPx: number; subtitle?: string; hasSteps: boolean; other?: number }): { subtitle: boolean; subtitleMax: number; bar: boolean } {
+  const gap = 8;
+  const other = input.other ?? 0;
+  let left = input.room - (other > 0 ? other + gap : 0) - (input.hasSteps ? input.stepsPx + gap : 0);
+  let subtitle = false;
+  let subtitleMax = 0;
+  if (input.subtitle) {
+    const natural = Math.min(MINI_SUBTITLE_MAX, Math.ceil(textEm(input.subtitle) * 12) + 2);
+    if (left >= Math.min(MINI_SUBTITLE_MIN, natural)) {
+      subtitle = true;
+      subtitleMax = Math.min(natural, left);
+      left -= subtitleMax + gap;
+    }
+  }
+  const bar = input.hasSteps && left >= MINI_BAR_MIN;
+  return { subtitle, subtitleMax, bar };
+}
 
 /**
  * Whether a small card of this size shows its picture. Not where "Now" and "Waiting" share the line of the steps (under
@@ -1224,7 +1295,7 @@ export function miniShowsPicture(width: number, height: number, hasStatus: boole
  * Rules: each Area appears once, in the first tier that fits it. Tier 4 preserves plan order.
  * Pure: the form and layout follow from the stage's size and the Areas.
  */
-export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded?: boolean } = {}): OverviewPlan {
+export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded?: boolean; compact?: boolean } = {}): OverviewPlan {
   if (areas.length === 0) return { form: 'cards', nodes: [], viewport: null };
   if (size.width <= 0 || size.height <= 0) {
     const cols = Math.min(areas.length, 3);
@@ -1287,8 +1358,8 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
 
       let rem = maxRowSlots;
       const shutTier1 = tiers.tier1[0] && rem > 0 ? (rem--, [tiers.tier1[0]]) : [];
-      const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length);
-      const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length);
+      const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length); if (shutTier2.length < tiers.tier2.length) rem = 0; // a group that overflows keeps its spare slots from the plainer ones
+      const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length); if (shutTier3.length < tiers.tier3.length) rem = 0; // a group that overflows keeps its spare slots from the plainer ones
       const shutTier4 = keepAnswersWithTheirArea(tiers.tier4, rem);
 
       const overflowWaiting = tiers.tier2.length - shutTier2.length;
@@ -1421,8 +1492,8 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     const maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
 
     let rem = maxRowSlots;
-    const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length);
-    const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length);
+    const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length); if (shutTier2.length < tiers.tier2.length) rem = 0; // a group that overflows keeps its spare slots from the plainer ones
+    const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length); if (shutTier3.length < tiers.tier3.length) rem = 0; // a group that overflows keeps its spare slots from the plainer ones
     const shutTier4 = keepAnswersWithTheirArea(tiers.tier4, rem);
 
     const overflowWaiting = tiers.tier2.length - shutTier2.length;
@@ -1622,9 +1693,12 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
   const allComfySpace = tierGapY + totalLowerLines * (AREA_MINI.comfyHeight + AREA_MINI.gap) + foldReserved;
   const allMinSpace = tierGapY + totalLowerLines * (AREA_MINI.minHeight + AREA_MINI.gap) + foldReserved;
 
-  const hero3Steps = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: false, showPreview: false, showFooter: false, openStepLimit: 3 });
-  const hero3StepsWithFooter = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: false, showPreview: false, showFooter: true, openStepLimit: 3 });
-  const heroFull = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: true, showPreview: true, showFooter: true, openStepLimit: 3 });
+  // On a short or narrow stage (the board beside the terminal) the focus Area is compact, so the Areas under it are not pushed out of sight
+  const compactHero = options.compact ?? isCompactStage(room);
+  const heroSteps = compactHero ? 1 : 3;
+  const hero3Steps = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: false, showPreview: false, showFooter: false, openStepLimit: heroSteps });
+  const hero3StepsWithFooter = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: false, showPreview: false, showFooter: true, openStepLimit: heroSteps });
+  const heroFull = heroCardHeight(focusArea.data, { width: heroWidth, showPictures: !compactHero, showPreview: !compactHero, showFooter: true, openStepLimit: heroSteps });
 
   let maxAvailableForHero: number;
   if (room.height - allComfySpace >= heroFull) {
@@ -1650,7 +1724,7 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     }
   }
 
-  const { height: heroHeight, config: heroConfig } = fitHeroCard(focusArea.data, heroWidth, maxAvailableForHero);
+  const { height: heroHeight, config: heroConfig } = fitHeroCard(focusArea.data, heroWidth, maxAvailableForHero, compactHero);
   const heroX = room.x + Math.floor((room.width - heroWidth) / 2);
   const heroY = 0;
 
@@ -1680,9 +1754,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
 
     for (let cols = 2; cols <= miniMaxCols; cols++) {
       const width = Math.min(AREA_MINI.maxWidth, Math.floor((room.width - (cols - 1) * AREA_MINI.gap) / cols));
-      const tier2Lines = tiers.tier2.length > 0 ? Math.ceil(tiers.tier2.length / cols) : 0;
-      const tier3Lines = tiers.tier3.length > 0 ? Math.ceil(tiers.tier3.length / cols) : 0;
-      const fixedLines = tier2Lines + tier3Lines;
+      // Tier 2 and 3 stand first, then the rest, as one run of cards: no card is left alone on a line with an empty half beside it
+      const lead = tiers.tier2.length + tiers.tier3.length;
+      const fixedLines = Math.ceil(lead / cols);
 
       let reservedBottom = hasDone ? (foldHeight + foldGap) : 0;
       let cardAreaHeight = availableHeight - reservedBottom;
@@ -1690,27 +1764,24 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
 
       if (maxCardLines < fixedLines) continue;
 
-      let availableLinesForTier4 = maxCardLines - fixedLines;
-      const tier4NeededLines = tiers.tier4.length > 0 ? Math.ceil(tiers.tier4.length / cols) : 0;
+      let availableSlotsForTier4 = maxCardLines * cols - lead;
+      const tier4NeededSlots = tiers.tier4.length;
 
       let shownTier4 = tiers.tier4;
       let overflowTier4: BoardArea[] = [];
 
-      if (tier4NeededLines > availableLinesForTier4) {
+      if (tier4NeededSlots > availableSlotsForTier4) {
         if (!hasDone) {
           reservedBottom = foldHeight + foldGap;
           cardAreaHeight = availableHeight - reservedBottom;
           maxCardLines = Math.max(0, Math.floor((cardAreaHeight + AREA_MINI.gap + 0.001) / (AREA_MINI.minHeight + AREA_MINI.gap)));
-          availableLinesForTier4 = Math.max(0, maxCardLines - fixedLines);
+          availableSlotsForTier4 = Math.max(0, maxCardLines * cols - lead);
         }
-        const shownLines = availableLinesForTier4;
-        const shownCount = Math.min(tiers.tier4.length, shownLines * cols);
-        shownTier4 = keepAnswersWithTheirArea(tiers.tier4, shownCount);
+        shownTier4 = keepAnswersWithTheirArea(tiers.tier4, Math.min(tiers.tier4.length, availableSlotsForTier4));
         overflowTier4 = tiers.tier4.slice(shownTier4.length);
       }
 
-      const shownTier4Lines = shownTier4.length > 0 ? Math.ceil(shownTier4.length / cols) : 0;
-      const linesForSizing = fixedLines + shownTier4Lines;
+      const linesForSizing = Math.ceil((lead + shownTier4.length) / cols);
       const effectiveCardHeight = availableHeight - ((hasDone || overflowTier4.length > 0) ? (foldHeight + foldGap) : 0);
 
       const height = linesForSizing > 0
@@ -1753,84 +1824,29 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
       const foldCount = moreCount + doneCount;
 
       const nodes: OverviewNode[] = [heroNode];
-      let tierY = startY;
-
-      // Tier 2: Waits for you (starts own line)
-      if (tiers.tier2.length > 0) {
-        tiers.tier2.forEach((area, index) => {
-          const c = index % cols;
-          const r = Math.floor(index / cols);
-          nodes.push({
-            id: area.id,
-            type: 'areaMini',
-            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
-            width,
-            height,
-            measured: { width, height },
-            data: { ...area.data, tier: 2 },
-            ...FIXED,
-          });
-        });
-        tierY += Math.ceil(tiers.tier2.length / cols) * (height + gap);
-      }
-
-      // Tier 3: Moved since you looked (starts own line)
-      if (tiers.tier3.length > 0) {
-        tiers.tier3.forEach((area, index) => {
-          const c = index % cols;
-          const r = Math.floor(index / cols);
-          nodes.push({
-            id: area.id,
-            type: 'areaMini',
-            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
-            width,
-            height,
-            measured: { width, height },
-            data: { ...area.data, tier: 3 },
-            ...FIXED,
-          });
-        });
-        tierY += Math.ceil(tiers.tier3.length / cols) * (height + gap);
-      }
-
-      // Tier 4: Everything else still open (starts own line)
+      // One run of cards, line by line: waiting first, then what moved, then the rest (and the finished ones when the fold is open)
       const tier4List = options.expanded ? tiers.tier4 : shownTier4;
-      if (tier4List.length > 0) {
-        tier4List.forEach((area, index) => {
-          const c = index % cols;
-          const r = Math.floor(index / cols);
-          nodes.push({
-            id: area.id,
-            type: 'areaMini',
-            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
-            width,
-            height,
-            measured: { width, height },
-            data: { ...area.data, tier: 4 },
-            ...FIXED,
-          });
+      const run: { area: BoardArea; tier: 2 | 3 | 4 | 5 }[] = [
+        ...tiers.tier2.map((area) => ({ area, tier: 2 as const })),
+        ...tiers.tier3.map((area) => ({ area, tier: 3 as const })),
+        ...tier4List.map((area) => ({ area, tier: 4 as const })),
+        ...(options.expanded && hasDone ? tiers.tier5.map((area) => ({ area, tier: 5 as const })) : []),
+      ];
+      run.forEach(({ area, tier }, index) => {
+        const c = index % cols;
+        const r = Math.floor(index / cols);
+        nodes.push({
+          id: area.id,
+          type: 'areaMini',
+          position: { x: startX + c * (width + gap), y: startY + r * (height + gap) },
+          width,
+          height,
+          measured: { width, height },
+          data: { ...area.data, tier },
+          ...FIXED,
         });
-        tierY += Math.ceil(tier4List.length / cols) * (height + gap);
-      }
-
-      // Tier 5: Done areas (when expanded)
-      if (options.expanded && hasDone) {
-        tiers.tier5.forEach((area, index) => {
-          const c = index % cols;
-          const r = Math.floor(index / cols);
-          nodes.push({
-            id: area.id,
-            type: 'areaMini',
-            position: { x: startX + c * (width + gap), y: tierY + r * (height + gap) },
-            width,
-            height,
-            measured: { width, height },
-            data: { ...area.data, tier: 5 },
-            ...FIXED,
-          });
-        });
-        tierY += Math.ceil(tiers.tier5.length / cols) * (height + gap);
-      }
+      });
+      const tierY = startY + Math.ceil(run.length / cols) * (height + gap);
 
       // Full-width fold line at bottom
       if (hasFold) {
@@ -1885,7 +1901,7 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     const neededLines = tier2NeededLines + (needFoldForTier2 ? 1 : 0);
     const neededLowerSpace = tierGapY + neededLines * step;
     const maxAvailableForHeroInRows = Math.max(100, room.height - neededLowerSpace);
-    const { height: newHeroHeight, config: newHeroConfig } = fitHeroCard(focusArea.data, heroWidth, maxAvailableForHeroInRows);
+    const { height: newHeroHeight, config: newHeroConfig } = fitHeroCard(focusArea.data, heroWidth, maxAvailableForHeroInRows, compactHero);
     if (newHeroHeight < currentHeroHeight) {
       currentHeroHeight = newHeroHeight;
       currentHeroNode = {
@@ -1904,8 +1920,8 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
   }
 
   let rem = maxRowSlots;
-  const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length);
-  const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length);
+  const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length); if (shutTier2.length < tiers.tier2.length) rem = 0; // a group that overflows keeps its spare slots from the plainer ones
+  const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length); if (shutTier3.length < tiers.tier3.length) rem = 0; // a group that overflows keeps its spare slots from the plainer ones
   const shutTier4 = keepAnswersWithTheirArea(tiers.tier4, rem);
 
   const overflowWaiting = tiers.tier2.length - shutTier2.length;

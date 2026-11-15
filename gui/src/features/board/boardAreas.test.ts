@@ -1743,15 +1743,16 @@ describe('boardAreas', () => {
       const shut533 = overviewPlan(areas533, { width: 560, height: 600 }, { expanded: false });
       const foldShut533 = shut533.nodes.find((n) => n.type === 'areaFold')!;
       expect(foldShut533).toBeDefined();
-      expect(foldLabel(foldShut533.data)).toBe('4 more · 3 done');
+      // One more card stands in the room that the compact focus Area leaves (FT1), so one fewer is folded
+      expect(foldLabel(foldShut533.data)).toBe('3 more · 3 done');
       expect(foldShut533.data.kind).toBe('more');
-      expect(foldShut533.data.count).toBe(7);
+      expect(foldShut533.data.count).toBe(6);
 
       const open533 = overviewPlan(areas533, { width: 560, height: 600 }, { expanded: true });
       const foldOpen533 = open533.nodes.find((n) => n.type === 'areaFold')!;
       expect(foldOpen533).toBeDefined();
       expect(foldOpen533.data.kind).toBe('more');
-      expect(foldOpen533.data.count).toBe(7);
+      expect(foldOpen533.data.count).toBe(6);
       expect(foldOpen533.data.expanded).toBe(true);
 
       // 2. 420 pane with no questions: 5 more · 3 done

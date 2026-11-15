@@ -179,7 +179,7 @@ export function BoardSidebar({
           <PanelLeftOpen className="size-4" aria-hidden="true" />
         </Button>
         {waitingCount > 0 && (
-          <Badge variant="warning" size="sm" aria-hidden="true" className="px-1 py-0 text-[10px]">
+          <Badge variant="warning" size="sm" aria-hidden="true" className="px-1 py-0 text-xs sm:text-xs">
             {waitingCount}
           </Badge>
         )}
