@@ -99,7 +99,7 @@ export async function stopOrchestrator(
   if (detection.mode === 'pm2') {
     const pm2Name = orchestratorPm2Name(workspacePath, detection);
     const pm2List = await getPm2List();
-    if (pm2List.some((app: any) => app.name === pm2Name)) {
+    if (pm2List.some((app) => app.name === pm2Name)) {
       await pm2Delete(pm2Name);
     }
   }

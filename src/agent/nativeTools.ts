@@ -65,13 +65,14 @@ async function resolveWithin(cwd: string, rel: unknown): Promise<string> {
  * unknown tool, a path-containment violation, or a filesystem error (callers
  * surface the message back to the model).
  */
-export async function executeNativeTool(cwd: string, name: string, args: any): Promise<string> {
+export async function executeNativeTool(cwd: string, name: string, args: unknown): Promise<string> {
+  const record = typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {};
   if (name === 'read_file') {
-    const abs = await resolveWithin(cwd, args?.filePath);
+    const abs = await resolveWithin(cwd, record.filePath);
     return await fs.readFile(abs, 'utf8');
   }
   if (name === 'list_directory') {
-    const abs = await resolveWithin(cwd, args?.dirPath);
+    const abs = await resolveWithin(cwd, record.dirPath);
     return (await fs.readdir(abs)).join('\n');
   }
   throw new Error(`Unknown tool: ${name}`);

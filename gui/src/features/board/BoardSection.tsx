@@ -118,10 +118,12 @@ const moveMs = (ms: number) => (window.matchMedia('(prefers-reduced-motion: redu
 /** Lines point from the thing that was linked to the thing it was linked to. */
 const EDGE_OPTIONS: DefaultEdgeOptions = { markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--muted-foreground)', width: 14, height: 14 } };
 
+type BoardFlowInstance = ReactFlowInstance<OverviewNode> | ReactFlowInstance<BoardNode>;
+
 /**
  * Arrow keys pan and zero puts the board back where it fits: the canvas is a keyboard stop of its own. Nothing zooms.
  */
-function navigate(flow: ReactFlowInstance<any> | null, event: KeyboardEvent<HTMLDivElement>, onMoved: () => void, onFit: () => void) {
+function navigate(flow: BoardFlowInstance | null, event: KeyboardEvent<HTMLDivElement>, onMoved: () => void, onFit: () => void) {
   const onNode = event.target instanceof HTMLElement && event.target.classList.contains('react-flow__node');
   if (!flow || (event.target !== event.currentTarget && !onNode) || event.altKey || event.ctrlKey || event.metaKey) return;
   const { x, y, zoom } = flow.getViewport();
@@ -150,7 +152,7 @@ function isViewGesture(container: HTMLElement | null, target: EventTarget): bool
 /**
  * A node that gets the keyboard's focus while out of view is brought into view.
  */
-function showFocused(flow: ReactFlowInstance<any> | null, event: FocusEvent<HTMLDivElement>, size: { width: number; height: number }, onMoved: () => void) {
+function showFocused(flow: BoardFlowInstance | null, event: FocusEvent<HTMLDivElement>, size: { width: number; height: number }, onMoved: () => void) {
   const target = event.target as HTMLElement;
   const id = target.closest<HTMLElement>('.react-flow__node')?.dataset.id;
   const node = id ? flow?.getInternalNode(id) : undefined;
@@ -166,7 +168,7 @@ function showFocused(flow: ReactFlowInstance<any> | null, event: FocusEvent<HTML
 }
 
 /** Brings an overview node whole into view, moving the least needed, and not at all when it already is. */
-function revealOverviewNode(flow: ReactFlowInstance<any> | null, node: { position: { x: number; y: number }; width?: number | null; height?: number | null }, size: { width: number; height: number }, onMoved: () => void, from?: { x: number; y: number; zoom: number }) {
+function revealOverviewNode(flow: ReactFlowInstance<OverviewNode> | null, node: { position: { x: number; y: number }; width?: number | null; height?: number | null }, size: { width: number; height: number }, onMoved: () => void, from?: { x: number; y: number; zoom: number }) {
   if (!flow) return;
   const next = revealViewport(from ?? flow.getViewport(), { x: node.position.x, y: node.position.y, width: node.width ?? 260, height: node.height ?? 160 }, size, REVEAL_MARGIN, OVERVIEW_INSET.top);
   if (!next) return;

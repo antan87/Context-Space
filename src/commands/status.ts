@@ -79,10 +79,11 @@ export async function statusCommand(workspaceArg?: string, options?: { json?: bo
             : '';
         let quotaStatus: string | undefined;
         if (sess.quota) {
+          const quotaObj = sess.quota as Record<string, unknown>;
           quotaStatus =
             sess.quota.tokens?.status ??
             sess.quota.requests?.status ??
-            (sess.quota as any).status ??
+            (typeof quotaObj.status === 'string' ? quotaObj.status : undefined) ??
             sess.quota.planType ??
             (sess.quota.label ? sess.quota.label.toLowerCase().replace(/\s+/g, '_') : 'ok');
         }

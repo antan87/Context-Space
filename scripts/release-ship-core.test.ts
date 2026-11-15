@@ -304,6 +304,13 @@ describe('decideNextStep', () => {
       it('replaces it when it conflicts', () => {
         expect(decideNextStep(facts({ releasePr: releasePr({ state: 'conflicting' }) }))).toMatchObject({ action: 'close-release-pr', number: 360 });
       });
+      it('replaces it when main moved after the release PR was opened', () => {
+        expect(decideNextStep(facts({ releasePr: releasePr({ baseSha: OLD }), tipSha: TIP }))).toMatchObject({
+          action: 'close-release-pr',
+          number: 360,
+          reason: expect.stringContaining('main moved'),
+        });
+      });
       it('stops when its checks failed or a rule blocks it', () => {
         expect(decideNextStep(facts({ releasePr: releasePr({ state: 'failing' }) }))).toMatchObject({ action: 'stop', code: 'release-pr-failing' });
         expect(decideNextStep(facts({ releasePr: releasePr({ state: 'blocked' }) }))).toMatchObject({ action: 'stop', code: 'release-pr-blocked' });

@@ -1,4 +1,11 @@
-import { GoogleGenAI } from '@google/genai';
+import {
+  GoogleGenAI,
+  Type,
+  type Content,
+  type FunctionCall,
+  type GenerateContentConfig,
+  type Part,
+} from '@google/genai';
 import { NativeAgentBase } from './NativeAgentBase.js';
 import {
   NATIVE_TOOLS,
@@ -7,15 +14,17 @@ import {
   buildSystemPrompt,
   executeNativeTool,
 } from './nativeTools.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export class NativeGoogleAgent extends NativeAgentBase {
   protected readonly label = 'NativeGoogleAgent';
   private ai: GoogleGenAI | null = null;
-  private history: any[] = [];
+  private history: Content[] = [];
   private modelName: string;
 
-  constructor() {
+  constructor(client?: GoogleGenAI) {
     super();
+    this.ai = client ?? null;
     // Allow users to override the model via env var, fallback to gemini-2.0-flash
     this.modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   }
@@ -25,6 +34,7 @@ export class NativeGoogleAgent extends NativeAgentBase {
   }
 
   protected configError(): string | null {
+    if (this.ai) return null;
     return process.env.GEMINI_API_KEY ? null : 'Google API key is not configured (set GEMINI_API_KEY).';
   }
 
@@ -35,7 +45,7 @@ export class NativeGoogleAgent extends NativeAgentBase {
   protected async runLoop(userInput: string, signal: AbortSignal) {
     this.history.push({ role: 'user', parts: [{ text: userInput }] });
 
-    const config: any = {
+    const config: GenerateContentConfig = {
       systemInstruction: buildSystemPrompt(this.cwd),
       // Cancels an in-flight request when stop() aborts the controller.
       abortSignal: signal,
@@ -44,8 +54,8 @@ export class NativeGoogleAgent extends NativeAgentBase {
           name: t.name,
           description: t.description,
           parameters: {
-            type: 'OBJECT',
-            properties: { [t.argName]: { type: 'STRING', description: t.argDescription } },
+            type: Type.OBJECT,
+            properties: { [t.argName]: { type: Type.STRING, description: t.argDescription } },
             required: [t.argName],
           },
         })),
@@ -64,7 +74,7 @@ export class NativeGoogleAgent extends NativeAgentBase {
       });
 
       let fullText = '';
-      const functionCalls: any[] = [];
+      const functionCalls: FunctionCall[] = [];
 
       for await (const chunk of responseStream) {
         if (chunk.text) {
@@ -76,7 +86,7 @@ export class NativeGoogleAgent extends NativeAgentBase {
         }
       }
 
-      const modelParts: any[] = [];
+      const modelParts: Part[] = [];
       if (fullText) modelParts.push({ text: fullText });
       if (functionCalls.length > 0) modelParts.push(...functionCalls.map((fc) => ({ functionCall: fc })));
       this.history.push({ role: 'model', parts: modelParts });
@@ -86,16 +96,22 @@ export class NativeGoogleAgent extends NativeAgentBase {
         break;
       }
 
-      const functionResponses: any[] = [];
+      const functionResponses: Part[] = [];
       for (const call of functionCalls) {
         this.emit('data', `\n\n*Running tool: ${call.name}*\n`);
         let result: string;
         try {
-          result = await executeNativeTool(this.cwd, call.name, call.args || {});
-        } catch (e: any) {
-          result = `Error: ${e.message}`;
+          result = await executeNativeTool(this.cwd, call.name || '', call.args || {});
+        } catch (e) {
+          result = `Error: ${toErrorMessage(e)}`;
         }
-        functionResponses.push({ functionResponse: { name: call.name, response: { result } } });
+        functionResponses.push({
+          functionResponse: {
+            name: call.name || '',
+            response: { result },
+            ...(call.id ? { id: call.id } : {}),
+          },
+        });
       }
 
       this.history.push({ role: 'user', parts: functionResponses });

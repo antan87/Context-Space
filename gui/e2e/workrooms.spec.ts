@@ -50,9 +50,14 @@ function hostStatus() {
   };
 }
 
+const tabTools = ['Project & privacy', 'Shared context', 'Resources', 'Workflow', 'People', 'Full activity log', 'Security & encrypted export'];
+
 async function openRoomTool(page: Page, name: string) {
   await page.getByRole('button', { name: 'Open room tools' }).click();
   await page.getByRole('menuitem', { name }).click();
+  if (tabTools.includes(name)) {
+    await expect(page.getByRole('tabpanel', { name })).toBeVisible();
+  }
 }
 
 test.describe('Workrooms', () => {
@@ -116,9 +121,11 @@ test.describe('Workrooms', () => {
 
     await page.goto('/#/workrooms');
     await openRoomTool(page, 'Shared context');
-    const plan = page.locator('textarea').first();
+    const panel = page.getByRole('tabpanel', { name: 'Shared context' });
+    await expect(panel).toBeVisible();
+    const plan = panel.locator('textarea').first();
     await plan.fill('# My preserved draft');
-    await page.getByRole('button', { name: 'Share revision' }).first().click();
+    await panel.getByRole('button', { name: 'Share revision' }).first().click();
     await expect(plan).toHaveValue('# My preserved draft');
     await expect(page.getByText(/draft is preserved/i)).toBeVisible();
   });

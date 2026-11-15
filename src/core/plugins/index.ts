@@ -1,3 +1,4 @@
+import type { Command } from 'commander';
 import type { StoragePort } from '../ports/storage.js';
 
 export type { StoragePort, StorageAdapterMeta, AdapterConfigField } from '../ports/storage.js';
@@ -7,7 +8,7 @@ export interface PluginRegistryContext {
   registerStorageProvider(name: string, provider: StoragePort): void;
 
   /** Registers a custom commander CLI subcommand. */
-  registerCommand(commandBuilder: (program: any) => void): void;
+  registerCommand(commandBuilder: (program: Command) => void): void;
 }
 
 export interface NexusFlowPlugin {

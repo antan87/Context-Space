@@ -53,12 +53,20 @@ export function terminatePty(pty: PtyProcess, platform = process.platform): void
   try { pty.kill(platform === 'win32' ? undefined : 'SIGKILL'); } catch { /* gone */ }
 }
 
+export type OwnerActiveChecker = (owner: string) => boolean;
+
 export class TerminalManager {
   private sessions = new Map<string, Session>();
   private pending = new Map<string, Promise<TerminalInfo>>();
   private closing = false;
   private resuming = new Set<string>();
-  constructor(private factory: PtyFactory = spawnNativePty, private terminate = terminatePty, private graceMs = 5 * 60_000) {}
+  private ownerActiveChecker?: OwnerActiveChecker;
+  constructor(private factory: PtyFactory = spawnNativePty, private terminate = terminatePty, private graceMs = 5 * 60_000, isOwnerActive?: OwnerActiveChecker) {
+    this.ownerActiveChecker = isOwnerActive;
+  }
+  setOwnerActiveChecker(checker: OwnerActiveChecker): void {
+    this.ownerActiveChecker = checker;
+  }
   private info(s: Session): TerminalInfo {
     const { id, workspace, target, label, cwd, sessionId, startedAt, state, exitCode, exitedAt } = s;
     return { id, workspace, target, label, cwd, sessionId, startedAt, state, exitCode, exitedAt };
@@ -74,6 +82,9 @@ export class TerminalManager {
       lastOutputAt: s.lastOutputMs === undefined ? undefined : new Date(s.lastOutputMs).toISOString(),
       stopsAt: s.client || s.stopsAtMs === undefined ? undefined : new Date(s.stopsAtMs).toISOString(),
     }));
+  }
+  hasAttached(owner: string): boolean {
+    return [...this.sessions.values()].some(s => s.owner === owner && Boolean(s.client));
   }
   private owned(owner: string, workspace: string, id: string): Session {
     const s = this.sessions.get(id);
@@ -143,6 +154,10 @@ export class TerminalManager {
     clearTimeout(s.timer);
     s.stopsAtMs = Date.now() + this.graceMs;
     s.timer = setTimeout(() => {
+      if (!this.closing && s.state === 'running' && this.ownerActiveChecker?.(s.owner)) {
+        this.expire(s);
+        return;
+      }
       if (s.state === 'running') this.terminate(s.pty);
       clearTimeout(s.stall);
       s.client?.close();

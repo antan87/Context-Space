@@ -169,11 +169,13 @@ export async function generateWorkspaceTools(root: string, assistants: AIAssista
   // Antigravity uses a user-level MCP configuration. Do not write its global config on refresh.
   for (const [relative, key] of configs) {
     await assertNoLinkedPathComponents(root, path.join(root, relative));
-    let config: Record<string, any> = {};
+    let config: Record<string, unknown> = {};
     try { config = JSON.parse(await fs.readFile(path.join(root, relative), 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    if (!config || Array.isArray(config) || typeof config !== 'object' || (config[key] && (Array.isArray(config[key]) || typeof config[key] !== 'object'))) throw new Error(`Invalid MCP configuration: ${relative}`);
-    config[key] = { ...config[key], [BRAND_CONFIG.mcp.serverName]: { ...(key === 'servers' ? { type: 'stdio' } : {}), ...server } };
+    const existingSection = config[key];
+    if (!config || Array.isArray(config) || typeof config !== 'object' || (existingSection && (Array.isArray(existingSection) || typeof existingSection !== 'object'))) throw new Error(`Invalid MCP configuration: ${relative}`);
+    const sectionObj = (existingSection && typeof existingSection === 'object' && !Array.isArray(existingSection)) ? (existingSection as Record<string, unknown>) : {};
+    config[key] = { ...sectionObj, [BRAND_CONFIG.mcp.serverName]: { ...(key === 'servers' ? { type: 'stdio' } : {}), ...server } };
     await write(relative, JSON.stringify(config, null, 2) + '\n');
   }
   // Remove only the exact Cursor server emitted unconditionally by older versions.
@@ -181,14 +183,14 @@ export async function generateWorkspaceTools(root: string, assistants: AIAssista
   if (!assistants.includes('cursor')) {
     const target = path.join(root, '.cursor/mcp.json');
     await assertNoLinkedPathComponents(root, target);
-    let old: Record<string, any> | undefined;
+    let old: { mcpServers?: Record<string, Record<string, unknown>>; [key: string]: unknown } | undefined;
     try { old = JSON.parse(await fs.readFile(target, 'utf8')); }
     catch (error) { if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const prior = old?.mcpServers?.[BRAND_CONFIG.mcp.serverName];
     if (prior?.command === 'npx' && Object.keys(prior).length === 2 &&
         JSON.stringify(prior.args) === JSON.stringify(['-y', BRAND_CONFIG.mcp.packageName, 'mcp', 'run'])) {
-      delete old!.mcpServers[BRAND_CONFIG.mcp.serverName];
-      if (Object.keys(old!.mcpServers).length === 0) delete old!.mcpServers;
+      delete old!.mcpServers![BRAND_CONFIG.mcp.serverName];
+      if (Object.keys(old!.mcpServers!).length === 0) delete old!.mcpServers;
       if (Object.keys(old!).length === 0) await fs.unlink(target);
       else await atomicWriteFile(target, JSON.stringify(old, null, 2) + '\n');
     }
@@ -201,7 +203,7 @@ export async function generateWorkspaceTools(root: string, assistants: AIAssista
   if (assistants.includes('claude')) {
     const relative = '.claude/settings.local.json';
     await assertNoLinkedPathComponents(root, path.join(root, relative));
-    let config: Record<string, any> = {};
+    let config: { permissions?: { allow?: unknown[]; [key: string]: unknown }; [key: string]: unknown } = {};
     try { config = JSON.parse(await fs.readFile(path.join(root, relative), 'utf8')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const permissions = config?.permissions ?? {};
@@ -219,7 +221,7 @@ export async function generateWorkspaceTools(root: string, assistants: AIAssista
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const existing = config.mcp_servers;
     if (existing && (typeof existing !== 'object' || Array.isArray(existing))) throw new Error('Invalid Codex mcp_servers table.');
-    config.mcp_servers = { ...(existing as Record<string, any>), [BRAND_CONFIG.mcp.serverName]: server };
+    config.mcp_servers = { ...(existing as TomlTable | undefined), [BRAND_CONFIG.mcp.serverName]: server as unknown as TomlTable };
     await write(relative, stringify(config));
   }
   return outputs;

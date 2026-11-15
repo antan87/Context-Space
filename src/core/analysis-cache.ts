@@ -16,7 +16,7 @@ import { execa } from 'execa';
 
 import type { ProjectAnalysis } from '../types.js';
 import { parsePorcelainZ } from '../utils/multi-git.js';
-import { resolveWorkspaceFilePath, resolveWorkspaceFilePathSync, BRAND_NAME, CLI_NAME } from './constants.js';
+import { resolveWorkspaceFilePath, resolveWorkspaceFilePathSync, BRAND_CONFIG, BRAND_NAME, CLI_NAME } from './constants.js';
 
 /** Memoised own version; resolved once per process. */
 let generatorVersion: string | undefined;
@@ -132,9 +132,22 @@ export async function saveAnalysisCache(
       }
     }
   }
-  const resolved = await resolveWorkspaceFilePath(workspacePath, 'analysisCache');
+  const primaryPath = path.join(workspacePath, BRAND_CONFIG.files.analysisCache.primary);
+  await fs.mkdir(path.dirname(primaryPath), { recursive: true });
   const data = JSON.stringify(cache, null, 2) + '\n';
-  await fs.writeFile(resolved.path, data, 'utf-8');
+  await fs.writeFile(primaryPath, data, 'utf-8');
+  const legacyFiles = [
+    BRAND_CONFIG.files.analysisCache.legacy,
+    ...(BRAND_CONFIG.files.analysisCache.fallbacks ?? []),
+  ];
+  for (const file of legacyFiles) {
+    const candidatePath = path.join(workspacePath, file);
+    if (candidatePath !== primaryPath) {
+      try {
+        await fs.unlink(candidatePath);
+      } catch {}
+    }
+  }
 }
 
 export interface RepoFingerprintOptions {

@@ -304,7 +304,23 @@ export function deactivate() {
     }
 }
 
-function getWorkspaceDetails(): any {
+export interface InactiveWorkspaceDetails {
+    hasWorkspace: false;
+}
+
+export interface ActiveWorkspaceDetails {
+    hasWorkspace: true;
+    rootPath: string;
+    id: string;
+    branchName?: string;
+    description: string;
+    repos: Array<{ name: string; path: string }>;
+    contextFiles: Array<{ name: string; path: string }>;
+}
+
+export type WorkspaceDetails = InactiveWorkspaceDetails | ActiveWorkspaceDetails;
+
+function getWorkspaceDetails(): WorkspaceDetails {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
         return { hasWorkspace: false };
@@ -370,18 +386,24 @@ class ContextSpaceSidebarProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-        webviewView.webview.onDidReceiveMessage((data: any) => {
-            switch (data.type) {
+        webviewView.webview.onDidReceiveMessage((data: unknown) => {
+            if (!data || typeof data !== 'object') return;
+            const message = data as { type?: unknown; workspacePath?: unknown; filePath?: unknown; command?: unknown };
+            switch (message.type) {
                 case 'openWorkspaceFolder': {
-                    const uri = vscode.Uri.file(data.workspacePath);
-                    vscode.commands.executeCommand('vscode.openFolder', uri, false);
+                    if (typeof message.workspacePath === 'string') {
+                        const uri = vscode.Uri.file(message.workspacePath);
+                        vscode.commands.executeCommand('vscode.openFolder', uri, false);
+                    }
                     break;
                 }
                 case 'openFile': {
-                    const uri = vscode.Uri.file(data.filePath);
-                    vscode.workspace.openTextDocument(uri).then((doc: vscode.TextDocument) => {
-                        vscode.window.showTextDocument(doc);
-                    });
+                    if (typeof message.filePath === 'string') {
+                        const uri = vscode.Uri.file(message.filePath);
+                        vscode.workspace.openTextDocument(uri).then((doc: vscode.TextDocument) => {
+                            vscode.window.showTextDocument(doc);
+                        });
+                    }
                     break;
                 }
                 case 'getWorkspaceStatus': {
@@ -390,13 +412,15 @@ class ContextSpaceSidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'runCommand': {
-                    if (['tui', 'sync', 'doctor', 'create'].includes(data.command)) {
-                        runContextSpaceCommand(this._context, [data.command]);
+                    if (typeof message.command === 'string' && ['tui', 'sync', 'doctor', 'create'].includes(message.command)) {
+                        runContextSpaceCommand(this._context, [message.command]);
                     }
                     break;
                 }
                 case 'triggerCommand': {
-                    vscode.commands.executeCommand(data.command);
+                    if (typeof message.command === 'string') {
+                        vscode.commands.executeCommand(message.command);
+                    }
                     break;
                 }
 

@@ -15,7 +15,7 @@ import { acquireLock, createMutationQueue } from './locks.js';
 import { atomicWriteJson } from '../resources/fs-safety.js';
 
 import type { RepoSyncState, SyncStatus, WorkspaceState, WorkspaceVerificationReport } from '../types.js';
-import { resolveWorkspaceFilePath, resolveWorkspaceFilePathSync } from './constants.js';
+import { BRAND_CONFIG, resolveWorkspaceFilePath, resolveWorkspaceFilePathSync } from './constants.js';
 
 /**
  * Returns the path to the workspace state file (primary or legacy fallback).
@@ -61,9 +61,21 @@ export async function loadWorkspaceState(
  * @param state - The state to persist. Its `updatedAt` is refreshed on write.
  */
 export async function saveWorkspaceState(state: WorkspaceState): Promise<void> {
-  const resolved = await resolveWorkspaceFilePath(state.workspacePath, 'state');
+  const primaryPath = path.join(state.workspacePath, BRAND_CONFIG.files.state.primary);
   const toWrite: WorkspaceState = { ...state, updatedAt: new Date().toISOString() };
-  await atomicWriteJson(resolved.path, toWrite);
+  await atomicWriteJson(primaryPath, toWrite);
+  const legacyFiles = [
+    BRAND_CONFIG.files.state.legacy,
+    ...(BRAND_CONFIG.files.state.fallbacks ?? []),
+  ];
+  for (const file of legacyFiles) {
+    const candidatePath = path.join(state.workspacePath, file);
+    if (candidatePath !== primaryPath) {
+      try {
+        await fs.unlink(candidatePath);
+      } catch {}
+    }
+  }
 }
 
 const runWorkspaceConfigMutation = createMutationQueue();
@@ -75,7 +87,9 @@ export async function mutateWorkspaceState<T>(
 ): Promise<T> {
   return runWorkspaceConfigMutation(async () => {
     const root = await fs.realpath(workspacePath);
-    const release = await acquireLock(path.join(root, '.contextspace-state.lock'), {
+    const lockPath = resolveWorkspaceFilePathSync(root, 'stateLock').path;
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    const release = await acquireLock(lockPath, {
       staleMs: 60_000,
       timeoutMs: 10_000,
       timeoutMessage: 'Workspace state is busy. Retry the operation.',

@@ -40,9 +40,10 @@ export function MonacoFileViewer({ filePath, repoName, repoPath, workspaceId, co
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const model = workspaceId
+    const ownedModel = workspaceId
       ? monaco.editor.createModel(content, getLanguageFromPath(filePath), monaco.Uri.from({ scheme: 'contextspace-workspace', authority: encodeURIComponent(workspaceId), path: `/${filePath}` }))
-      : getOrCreateTextModel(getModifiedFileUri(repoName!, filePath, monaco, repoPath), content, getLanguageFromPath(filePath), monaco);
+      : null;
+    const model = ownedModel ?? getOrCreateTextModel(getModifiedFileUri(repoName!, filePath, monaco, repoPath), content, getLanguageFromPath(filePath), monaco);
     const editor = monaco.editor.create(containerRef.current, {
       model,
       readOnly: true,
@@ -64,7 +65,7 @@ export function MonacoFileViewer({ filePath, repoName, repoPath, workspaceId, co
       stopWatchingTheme();
       opener?.dispose();
       editor.dispose();
-      if (workspaceId) model.dispose();
+      ownedModel?.dispose();
       editorRef.current = null;
       decorationsRef.current = null;
     };

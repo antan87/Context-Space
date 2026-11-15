@@ -8,15 +8,30 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { AISession, ChatMessage, NormalizedUsage, NormalizedRemainingQuota, SessionAssistant } from '../types.js';
 import type { SessionSource } from './cli-harnesses.js';
+import type { IDatabaseSync } from '../storage/db.js';
 import { MODULAR_SESSION_READERS, modularSessionReader } from './session-readers.js';
 export { SESSION_SOURCES } from './cli-harnesses.js';
 export type { SessionSource } from './cli-harnesses.js';
 
-export function extractRecordUsage(record: any): { usage?: NormalizedUsage; quota?: NormalizedRemainingQuota } {
-  if (!record || typeof record !== 'object') return {};
+function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null;
+}
 
-  const rawUsage = record.usage || record.message?.usage || record.payload?.usage;
-  const rawQuota = record.quota || record.payload?.quota || rawUsage?.remainingQuota;
+export function extractRecordUsage(record: unknown): { usage?: NormalizedUsage; quota?: NormalizedRemainingQuota } {
+  if (!isRecord(record)) return {};
+
+  const message = isRecord(record.message) ? record.message : undefined;
+  const payload = isRecord(record.payload) ? record.payload : undefined;
+  const rawUsage = isRecord(record.usage)
+    ? record.usage
+    : (message && isRecord(message.usage)
+        ? message.usage
+        : (payload && isRecord(payload.usage) ? payload.usage : undefined));
+  const rawQuota = isRecord(record.quota)
+    ? record.quota
+    : (payload && isRecord(payload.quota)
+        ? payload.quota
+        : (rawUsage && isRecord(rawUsage.remainingQuota) ? rawUsage.remainingQuota : undefined));
 
   let usage: NormalizedUsage | undefined;
 
@@ -54,7 +69,13 @@ export function extractRecordUsage(record: any): { usage?: NormalizedUsage; quot
       ? rawUsage.costUsdEstimate
       : (typeof rawUsage.cost_usd_estimate === 'number'
           ? rawUsage.cost_usd_estimate
-          : (typeof record.totalCostUsd === 'number' ? record.totalCostUsd : undefined));
+          : (typeof rawUsage.total_cost_usd === 'number'
+              ? rawUsage.total_cost_usd
+              : (typeof record.totalCostUsd === 'number'
+                  ? record.totalCostUsd
+                  : (typeof record.total_cost_usd === 'number'
+                      ? record.total_cost_usd
+                      : undefined))));
 
     if (input > 0 || output > 0 || (cached !== undefined && cached > 0) || cost !== undefined) {
       usage = {
@@ -68,18 +89,21 @@ export function extractRecordUsage(record: any): { usage?: NormalizedUsage; quot
         ...(cost !== undefined ? { costUsdEstimate: cost } : {}),
       };
     }
-  } else if (typeof record.totalCostUsd === 'number') {
+  } else if (typeof record.totalCostUsd === 'number' || typeof record.total_cost_usd === 'number') {
+    const cost = typeof record.totalCostUsd === 'number'
+      ? record.totalCostUsd
+      : (record.total_cost_usd as number);
     usage = {
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      costUsdEstimate: record.totalCostUsd,
+      costUsdEstimate: cost,
     };
   }
 
   let quota: NormalizedRemainingQuota | undefined;
   if (rawQuota && typeof rawQuota === 'object') {
-    quota = rawQuota;
+    quota = rawQuota as NormalizedRemainingQuota;
   }
 
   return { usage, quota };
@@ -159,11 +183,25 @@ export function getClaudeProjectFolderName(absolutePath: string): string {
 }
 
 /** Extract plain text from a Claude transcript record's message. */
-export function claudeRecordText(record: any): string {
-  const raw = record?.message?.text ?? record?.message?.content ?? record?.text ?? '';
+export function claudeRecordText(record: unknown): string {
+  const rec = isRecord(record) ? record : undefined;
+  const msg = isRecord(rec?.message) ? rec.message : undefined;
+  const raw = (typeof msg?.text === 'string' ? msg.text : undefined)
+    ?? msg?.content
+    ?? (typeof rec?.text === 'string' ? rec.text : undefined)
+    ?? '';
   if (typeof raw === 'string') return raw;
   if (Array.isArray(raw)) {
-    return raw.map((b: any) => (typeof b === 'string' ? b : b?.text || b?.content || '')).join(' ');
+    return raw
+      .map((b: unknown) => {
+        if (typeof b === 'string') return b;
+        if (isRecord(b)) {
+          if (typeof b.text === 'string') return b.text;
+          if (typeof b.content === 'string') return b.content;
+        }
+        return '';
+      })
+      .join(' ');
   }
   return '';
 }
@@ -173,11 +211,13 @@ export function claudeRecordText(record: any): string {
  * typed prompt: meta caveats, slash-command wrappers, command stdout, or a
  * tool-result payload. These pollute session titles and loaded transcripts.
  */
-export function isNoiseUserRecord(record: any, text: string): boolean {
-  if (record?.isMeta) return true;
+export function isNoiseUserRecord(record: unknown, text: string): boolean {
+  const rec = isRecord(record) ? record : undefined;
+  if (rec?.isMeta) return true;
   // Content that is only tool_result / non-text blocks isn't a real prompt.
-  const raw = record?.message?.content;
-  if (Array.isArray(raw) && !raw.some((b: any) => typeof b === 'string' || b?.type === 'text')) {
+  const msg = isRecord(rec?.message) ? rec.message : undefined;
+  const raw = msg?.content;
+  if (Array.isArray(raw) && !raw.some((b: unknown) => typeof b === 'string' || (isRecord(b) && b.type === 'text'))) {
     return true;
   }
   const t = text.trimStart();
@@ -186,18 +226,21 @@ export function isNoiseUserRecord(record: any, text: string): boolean {
 }
 
 /** Extract plain text from a Codex `response_item` message payload. */
-export function codexMessageText(payload: any): string {
-  const content = payload?.content;
+export function codexMessageText(payload: unknown): string {
+  const p = isRecord(payload) ? payload : undefined;
+  const content = p?.content;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    return content.map((c: any) => (typeof c === 'string' ? c : c?.text || '')).join('');
+    return content.map((c: unknown) => (typeof c === 'string' ? c : (isRecord(c) && typeof c.text === 'string' ? c.text : ''))).join('');
   }
   return '';
 }
 
 /** Extract the resumable thread UUID from a Codex `session_meta` record. */
-export function codexSessionId(record: any): string | null {
-  const id = record?.type === 'session_meta' ? record?.payload?.id : null;
+export function codexSessionId(record: unknown): string | null {
+  const rec = isRecord(record) ? record : undefined;
+  const payload = isRecord(rec?.payload) ? rec.payload : undefined;
+  const id = rec?.type === 'session_meta' ? payload?.id : null;
   return isCodexSessionId(id) ? id : null;
 }
 
@@ -224,15 +267,18 @@ function sessionTimes() {
   };
 }
 
-export function codexThreadIdentity(meta: any): Pick<AISession, 'threadKind' | 'parentSessionId'> {
-  const source = meta?.source;
-  if (source && typeof source === 'object' && Object.hasOwn(source, 'subagent')) {
-    const parent = source.subagent?.thread_spawn?.parent_thread_id;
+export function codexThreadIdentity(meta: unknown): Pick<AISession, 'threadKind' | 'parentSessionId'> {
+  const m = isRecord(meta) ? meta : undefined;
+  const source = m?.source;
+  if (isRecord(source) && Object.hasOwn(source, 'subagent')) {
+    const subagent = isRecord(source.subagent) ? source.subagent : undefined;
+    const threadSpawn = isRecord(subagent?.thread_spawn) ? subagent.thread_spawn : undefined;
+    const parent = threadSpawn?.parent_thread_id;
     return { threadKind: 'subagent', ...(isUuid(parent) ? { parentSessionId: parent } : {}) };
   }
   if (source === 'subagent') return { threadKind: 'subagent' };
   // forked_from_id is a user-created fork, not proof of a subagent.
-  return { threadKind: ['cli', 'vscode', 'exec', 'mcp'].includes(source) ? 'main' : 'unknown' };
+  return { threadKind: typeof source === 'string' && ['cli', 'vscode', 'exec', 'mcp'].includes(source) ? 'main' : 'unknown' };
 }
 
 /**
@@ -254,6 +300,32 @@ export function sanitizeSessionTitle(rawTitle: string, maxLength = 80): string {
   return singleLine.length > maxLength ? singleLine.slice(0, maxLength) + '...' : singleLine;
 }
 
+export interface CopilotSessionRow {
+  id: string;
+  cwd: string;
+  summary: string | null;
+  created_at: string | number | null;
+  updated_at: string | number | null;
+}
+
+export interface CopilotTurnCountRow {
+  n: number | null;
+}
+
+export interface CopilotFirstMessageRow {
+  user_message: string | null;
+}
+
+export interface CopilotCwdRow {
+  cwd: string | null;
+}
+
+export interface CopilotTranscriptTurnRow {
+  user_message: string | null;
+  assistant_response: string | null;
+  timestamp?: string | number | null;
+}
+
 /**
  * Opens GitHub Copilot's SQLite session store (`~/.copilot/session-store.db`)
  * read-only via Node's built-in `node:sqlite`. Returns null when the store is
@@ -261,16 +333,16 @@ export function sanitizeSessionTitle(rawTitle: string, maxLength = 80): string {
  * packaged Electron build) so Copilot support degrades gracefully instead of
  * throwing. Caller must close the returned handle.
  */
-async function openCopilotDb(): Promise<any | null> {
+export async function openCopilotDb(customPath?: string): Promise<IDatabaseSync | null> {
   try {
-    const dbPath = path.join(os.homedir(), '.copilot', 'session-store.db');
+    const dbPath = customPath || process.env.COPILOT_DB_PATH || path.join(os.homedir(), '.copilot', 'session-store.db');
     await fs.access(dbPath);
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       db.exec('PRAGMA busy_timeout = 3000;');
     } catch {}
-    return db;
+    return db as unknown as IDatabaseSync;
   } catch {
     return null;
   }
@@ -301,7 +373,7 @@ async function getFilesRecursively(dir: string, extension: string): Promise<stri
 const CODEX_HEADER_READS = [32 * 1024, 256 * 1024];
 
 /** Read the first Codex record without loading a potentially large rollout. */
-async function codexSessionHeader(filePath: string): Promise<any | null> {
+async function codexSessionHeader(filePath: string): Promise<Record<string, unknown> | null> {
   const file = await fs.open(filePath, 'r');
   try {
     for (const size of CODEX_HEADER_READS) {
@@ -309,7 +381,10 @@ async function codexSessionHeader(filePath: string): Promise<any | null> {
       const { bytesRead } = await file.read(buffer, 0, size, 0);
       const end = buffer.subarray(0, bytesRead).indexOf(10);
       if (end >= 0) {
-        try { return JSON.parse(buffer.toString('utf8', 0, end)); } catch { return null; }
+        try {
+          const parsed: unknown = JSON.parse(buffer.toString('utf8', 0, end));
+          return isRecord(parsed) ? parsed : null;
+        } catch { return null; }
       }
       if (bytesRead < size) return null; // the whole file had no line break
     }
@@ -362,12 +437,13 @@ function parseClaudeTranscript(content: string, sessionId: string, fileName: str
 
   for (const line of content.split('\n')) {
     if (!line) continue;
-    let record: any;
+    let record: unknown;
     try {
       record = JSON.parse(line);
     } catch {
       continue;
     }
+    if (!isRecord(record)) continue;
     times.add(record.timestamp);
 
     if (record.sessionId === sessionId && typeof record.cwd === 'string') recordedCwd ??= record.cwd;
@@ -429,20 +505,22 @@ function parseCodexRollout(content: string): CodexRollout {
 
   for (const line of content.split('\n')) {
     if (!line) continue;
-    let record: any;
+    let record: unknown;
     try { record = JSON.parse(line); } catch { continue; }
+    if (!isRecord(record)) continue;
+    const payload = isRecord(record.payload) ? record.payload : undefined;
 
     times.add(record.timestamp);
-    times.add(record.payload?.timestamp);
+    times.add(payload?.timestamp);
 
     if (record.type === 'session_meta') {
-      if (record.payload?.cwd) sessionCwd = record.payload.cwd;
+      if (typeof payload?.cwd === 'string') sessionCwd = payload.cwd;
       sessionId = codexSessionId(record) ?? sessionId;
-      identity = codexThreadIdentity(record.payload);
-    } else if (record.type === 'response_item' && record.payload?.type === 'message') {
-      const role = record.payload.role;
+      identity = codexThreadIdentity(payload);
+    } else if (record.type === 'response_item' && payload?.type === 'message') {
+      const role = payload.role;
       if (role !== 'user' && role !== 'assistant') continue;
-      const text = codexMessageText(record.payload).trim();
+      const text = codexMessageText(payload).trim();
       if (role === 'user' && (!text || isInjectedContextText(text))) continue;
       messageCount++;
       if (role === 'user' && title === 'Codex Session' && text) {
@@ -452,8 +530,9 @@ function parseCodexRollout(content: string): CodexRollout {
     // Interactive Codex writes cumulative totals in token_count events,
     // rather than a top-level usage field. Keep the latest total instead
     // of summing snapshots from each turn.
-    if (record.type === 'event_msg' && record.payload?.type === 'token_count') {
-      const total = record.payload.info?.total_token_usage;
+    if (record.type === 'event_msg' && payload?.type === 'token_count') {
+      const info = isRecord(payload.info) ? payload.info : undefined;
+      const total = isRecord(info?.total_token_usage) ? info.total_token_usage : undefined;
       if (total) {
         const parsed = extractRecordUsage({ usage: total }).usage;
         if (parsed) {
@@ -544,10 +623,12 @@ export async function canOpenCodexSessionInWorkspace(
     try {
       const content = await fs.readFile(file, 'utf-8');
       for (const line of content.split('\n').filter(Boolean)) {
-        let record: any;
+        let record: unknown;
         try { record = JSON.parse(line); } catch { continue; }
         if (codexSessionId(record) !== sessionId) continue;
-        const recordedCwd = record?.payload?.cwd;
+        if (!isRecord(record)) continue;
+        const payload = isRecord(record.payload) ? record.payload : undefined;
+        const recordedCwd = payload?.cwd;
         if (typeof recordedCwd !== 'string' || !pathApi.isAbsolute(recordedCwd)) continue;
 
         let canonicalCwd: string;
@@ -603,10 +684,11 @@ export async function canTransferClaudeSessionInWorkspace(
     try {
       const content = await fs.readFile(file, 'utf-8');
       for (const line of content.split('\n').filter(Boolean)) {
-        let record: any;
+        let record: unknown;
         try { record = JSON.parse(line); } catch { continue; }
-        if (record?.sessionId !== sessionId) continue;
-        const recordedCwd = record?.cwd;
+        if (!isRecord(record)) continue;
+        if (record.sessionId !== sessionId) continue;
+        const recordedCwd = record.cwd;
         if (typeof recordedCwd !== 'string' || !pathApi.isAbsolute(recordedCwd)) continue;
 
         let canonicalCwd: string;
@@ -697,16 +779,16 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
   try {
     const historyContent = await fs.readFile(agHistoryPath, 'utf-8');
     const lines = historyContent.split('\n').filter(Boolean);
-    const conversationsMap = new Map<string, { id: string; title: string; entries: any[] }>();
+    const conversationsMap = new Map<string, { id: string; title: string; entries: Record<string, unknown>[] }>();
 
     for (const line of lines) {
       try {
-        const entry = JSON.parse(line);
-        if (entry.conversationId && isPathMatch(entry.workspace)) {
+        const entry: unknown = JSON.parse(line);
+        if (isRecord(entry) && typeof entry.conversationId === 'string' && typeof entry.workspace === 'string' && isPathMatch(entry.workspace)) {
           if (!conversationsMap.has(entry.conversationId)) {
             conversationsMap.set(entry.conversationId, {
               id: entry.conversationId,
-              title: entry.display || 'Untitled Conversation',
+              title: typeof entry.display === 'string' ? entry.display : 'Untitled Conversation',
               entries: [],
             });
           }
@@ -727,21 +809,23 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
       try {
         const transcriptContent = await fs.readFile(transcriptPath, 'utf-8');
         const transcriptLines = transcriptContent.split('\n').filter(Boolean);
-        let firstUserMessage = null;
+        let firstUserMessage: string | null = null;
 
         for (const line of transcriptLines) {
           try {
-            const tObj = JSON.parse(line);
-            times.add(tObj.timestamp);
-            if (tObj.type === 'USER_INPUT' || tObj.type === 'PLANNER_RESPONSE') {
-              messageCount++;
-              if (tObj.type === 'USER_INPUT' && !firstUserMessage) {
-                firstUserMessage = tObj.content;
+            const tObj: unknown = JSON.parse(line);
+            if (isRecord(tObj)) {
+              times.add(tObj.timestamp);
+              if (tObj.type === 'USER_INPUT' || tObj.type === 'PLANNER_RESPONSE') {
+                messageCount++;
+                if (tObj.type === 'USER_INPUT' && !firstUserMessage && typeof tObj.content === 'string') {
+                  firstUserMessage = tObj.content;
+                }
               }
+              const { usage: turnUsage, quota: turnQuota } = extractRecordUsage(tObj);
+              if (turnUsage) sessionUsage = accumulateUsage(sessionUsage, turnUsage);
+              if (turnQuota) latestQuota = turnQuota;
             }
-            const { usage: turnUsage, quota: turnQuota } = extractRecordUsage(tObj);
-            if (turnUsage) sessionUsage = accumulateUsage(sessionUsage, turnUsage);
-            if (turnQuota) latestQuota = turnQuota;
           } catch {}
         }
 
@@ -759,8 +843,8 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
         title: sanitizeSessionTitle(title),
         ...times.values(),
         messageCount,
-        workspacePath: resolveTargetCwd(convData.entries[0]?.workspace),
-        recordedCwd: convData.entries[0]?.workspace,
+        workspacePath: resolveTargetCwd(typeof convData.entries[0]?.workspace === 'string' ? convData.entries[0].workspace : undefined),
+        recordedCwd: typeof convData.entries[0]?.workspace === 'string' ? convData.entries[0].workspace : undefined,
         threadKind: 'unknown',
         ...(sessionUsage ? { usage: sessionUsage } : {}),
         ...(latestQuota ? { quota: latestQuota } : {}),
@@ -824,7 +908,8 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
         let cwd = codexCwdCache.get(file)?.cwd ?? null;
         if (!cwd) {
           const header = await codexSessionHeader(file);
-          const headerCwd = header?.type === 'session_meta' ? header.payload?.cwd : undefined;
+          const payload = isRecord(header?.payload) ? header.payload : undefined;
+          const headerCwd = header?.type === 'session_meta' ? payload?.cwd : undefined;
           if (typeof headerCwd === 'string') {
             cwd = headerCwd;
             rememberCodexCwd(file, headerCwd);
@@ -871,28 +956,30 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
   const copilotDb = await openCopilotDb();
   if (copilotDb) {
     try {
-      const rows = copilotDb.prepare(
+      const rows = copilotDb.prepare<CopilotSessionRow>(
         'SELECT id, cwd, summary, created_at, updated_at FROM sessions'
-      ).all() as any[];
+      ).all();
+      const countStmt = copilotDb.prepare<CopilotTurnCountRow>(
+        `SELECT
+           SUM(CASE WHEN TRIM(COALESCE(user_message, '')) != '' THEN 1 ELSE 0 END)
+           + SUM(CASE WHEN TRIM(COALESCE(assistant_response, '')) != '' THEN 1 ELSE 0 END) AS n
+         FROM turns WHERE session_id = ?`
+      );
+      const firstStmt = copilotDb.prepare<CopilotFirstMessageRow>(
+        `SELECT user_message FROM turns
+         WHERE session_id = ? AND TRIM(COALESCE(user_message, '')) != ''
+           AND TRIM(user_message) NOT LIKE '<%'
+         ORDER BY turn_index LIMIT 1`
+      );
       for (const row of rows) {
         if (!isPathMatch(row.cwd)) continue;
 
-        const counted = copilotDb.prepare(
-          `SELECT
-             SUM(CASE WHEN TRIM(COALESCE(user_message, '')) != '' THEN 1 ELSE 0 END)
-             + SUM(CASE WHEN TRIM(COALESCE(assistant_response, '')) != '' THEN 1 ELSE 0 END) AS n
-           FROM turns WHERE session_id = ?`
-        ).get(row.id) as any;
+        const counted = countStmt.get(row.id);
         const messageCount = Number(counted?.n ?? 0);
 
         let title = (row.summary || '').trim();
         if (!title) {
-          const first = copilotDb.prepare(
-            `SELECT user_message FROM turns
-             WHERE session_id = ? AND TRIM(COALESCE(user_message, '')) != ''
-               AND TRIM(user_message) NOT LIKE '<%'
-             ORDER BY turn_index LIMIT 1`
-          ).get(row.id) as any;
+          const first = firstStmt.get(row.id);
           title = (first?.user_message || '').trim();
         }
         // Skip contentless sessions (no summary and no turns).
@@ -945,11 +1032,12 @@ export async function findSessions(workspacePath: string, repoPaths: string[] = 
         let latestQuota: NormalizedRemainingQuota | undefined;
 
         for (const line of lines) {
-          let record: any;
+          let record: unknown;
           try { record = JSON.parse(line); } catch { continue; }
+          if (!isRecord(record)) continue;
           times.add(record.timestamp);
 
-          if (record.sessionId) sessionId = record.sessionId;
+          if (typeof record.sessionId === 'string') sessionId = record.sessionId;
           if (record.provider) {
             const p = String(record.provider).toLowerCase();
             if (p.includes('claude')) assistant = 'claude';
@@ -1055,7 +1143,7 @@ async function getAntigravityWorkspaces(agDir: string): Promise<string[]> {
 }
 
 async function getCopilotCwds(): Promise<string[]> {
-  const dbPath = path.join(os.homedir(), '.copilot', 'session-store.db');
+  const dbPath = process.env.COPILOT_DB_PATH || path.join(os.homedir(), '.copilot', 'session-store.db');
   try {
     const stat = await fs.stat(dbPath);
     if (copilotSessionsCache && copilotSessionsCache.mtime === stat.mtimeMs) {
@@ -1064,7 +1152,7 @@ async function getCopilotCwds(): Promise<string[]> {
     const copilotDb = await openCopilotDb();
     if (!copilotDb) return [];
     try {
-      const rows = copilotDb.prepare('SELECT cwd FROM sessions').all() as any[];
+      const rows = copilotDb.prepare<CopilotCwdRow>('SELECT cwd FROM sessions').all();
       const cwds = rows.map((r) => r.cwd).filter((c): c is string => typeof c === 'string');
       copilotSessionsCache = { mtime: stat.mtimeMs, cwds };
       return cwds;
@@ -1080,16 +1168,20 @@ async function getCopilotCwds(): Promise<string[]> {
 /** Returns the cwd recorded by a rollout's session_meta record, if any. */
 async function readCodexRolloutCwd(file: string): Promise<string | null> {
   const header = await codexSessionHeader(file);
-  if (header?.type === 'session_meta' && typeof header.payload?.cwd === 'string') {
-    return header.payload.cwd;
+  const headerPayload = isRecord(header?.payload) ? header.payload : undefined;
+  if (header?.type === 'session_meta' && typeof headerPayload?.cwd === 'string') {
+    return headerPayload.cwd;
   }
   const content = await fs.readFile(file, 'utf-8');
   for (const line of content.split('\n')) {
     if (!line) continue;
     try {
-      const record = JSON.parse(line);
-      if (record.type === 'session_meta' && typeof record.payload?.cwd === 'string') {
-        return record.payload.cwd;
+      const record: unknown = JSON.parse(line);
+      if (isRecord(record) && record.type === 'session_meta') {
+        const payload = isRecord(record.payload) ? record.payload : undefined;
+        if (typeof payload?.cwd === 'string') {
+          return payload.cwd;
+        }
       }
     } catch {}
   }
@@ -1287,12 +1379,13 @@ export async function getSessionTranscript(assistant: string, sessionId: string)
     const lines = content.split('\n').filter(Boolean);
 
     for (const line of lines) {
-      let record: any;
+      let record: unknown;
       try {
         record = JSON.parse(line);
       } catch {
         continue;
       }
+      if (!isRecord(record)) continue;
       const isUser = record.type === 'user' || record.role === 'user';
       const isAssistant = record.type === 'assistant' || record.role === 'assistant';
       if (!isUser && !isAssistant) continue;
@@ -1302,18 +1395,21 @@ export async function getSessionTranscript(assistant: string, sessionId: string)
       if (isUser && isNoiseUserRecord(record, cleanText)) continue;
       if (!cleanText) continue;
 
+      const rawTs = record.timestamp || record.created_at;
+      const timestamp = sessionTimestamp(rawTs);
+
       if (isUser) {
         messages.push({
           role: 'user',
           content: cleanText,
-          timestamp: record.timestamp || record.created_at,
+          timestamp,
         });
       } else {
         const { usage } = extractRecordUsage(record);
         messages.push({
           role: 'assistant',
           content: cleanText,
-          timestamp: record.timestamp || record.created_at,
+          timestamp,
           ...(usage ? { usage } : {}),
         });
       }
@@ -1361,20 +1457,23 @@ export async function getSessionTranscript(assistant: string, sessionId: string)
     const lines = content.split('\n').filter(Boolean);
 
     for (const line of lines) {
-      let record: any;
+      let record: unknown;
       try { record = JSON.parse(line); } catch { continue; }
-      if (record.type !== 'response_item' || record.payload?.type !== 'message') continue;
-      const role = record.payload.role;
+      if (!isRecord(record)) continue;
+      const payload = isRecord(record.payload) ? record.payload : undefined;
+      if (record.type !== 'response_item' || payload?.type !== 'message') continue;
+      const role = payload.role;
       if (role === 'user' || role === 'assistant') {
-        const text = codexMessageText(record.payload).trim();
+        const text = codexMessageText(payload).trim();
         if (role === 'user' && isInjectedContextText(text)) continue;
         if (!text) continue;
-        const ts = record.timestamp || record.payload?.timestamp;
+        const rawTs = record.timestamp || payload.timestamp;
+        const timestamp = sessionTimestamp(rawTs);
         const { usage } = extractRecordUsage(record);
         messages.push({
           role: role as 'user' | 'assistant',
           content: text,
-          timestamp: ts ? new Date(ts).toISOString() : undefined,
+          timestamp,
           ...(role === 'assistant' && usage ? { usage } : {}),
         });
       }
@@ -1385,17 +1484,18 @@ export async function getSessionTranscript(assistant: string, sessionId: string)
       throw new Error('Copilot session store is unavailable in this runtime.');
     }
     try {
-      const turns = copilotDb.prepare(
+      const turns = copilotDb.prepare<CopilotTranscriptTurnRow>(
         'SELECT user_message, assistant_response, timestamp FROM turns WHERE session_id = ? ORDER BY turn_index'
-      ).all(sessionId) as any[];
+      ).all(sessionId);
       for (const t of turns) {
         const user = (t.user_message || '').trim();
         const assistantText = (t.assistant_response || '').trim();
+        const ts = t.timestamp ? String(t.timestamp) : undefined;
         // Skip Copilot's injected <system_reminder> pseudo-turns.
         if (user && !isInjectedContextText(user)) {
-          messages.push({ role: 'user', content: user, timestamp: t.timestamp });
+          messages.push({ role: 'user', content: user, timestamp: ts });
         }
-        if (assistantText) messages.push({ role: 'assistant', content: assistantText, timestamp: t.timestamp });
+        if (assistantText) messages.push({ role: 'assistant', content: assistantText, timestamp: ts });
       }
     } finally {
       try { copilotDb.close(); } catch {}

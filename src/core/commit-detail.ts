@@ -53,6 +53,10 @@ export class CommitTooLargeError extends Error {
   }
 }
 
+function isMaxBufferError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'isMaxBuffer' in error && Boolean(error.isMaxBuffer);
+}
+
 export type CommitFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'other';
 
 export interface CommitDetailFile {
@@ -363,8 +367,8 @@ export async function readCommit(
     ]);
     stdoutNumstat = numstatOut;
     stdoutNameStatus = nameStatusOut;
-  } catch (error: any) {
-    if (error?.isMaxBuffer) {
+  } catch (error: unknown) {
+    if (isMaxBufferError(error)) {
       throw new CommitTooLargeError();
     }
     throw error;
@@ -535,8 +539,8 @@ export async function readCommitFileDiff(
       { cwd: repoPath, maxBuffer: options?.maxCommitDiffBuffer ?? MAX_COMMIT_DIFF_BYTES },
     );
     stdoutNameStatus = res.stdout;
-  } catch (error: any) {
-    if (error?.isMaxBuffer) {
+  } catch (error: unknown) {
+    if (isMaxBufferError(error)) {
       throw new CommitTooLargeError();
     }
     throw error;
@@ -602,7 +606,7 @@ export async function readCommitFileDiff(
     throw new Error(`git diff exited with code ${diffRes.exitCode}`);
   }
 
-  function parseBlobResult(res: any): { text: string; omitted?: OmittedReason } {
+  function parseBlobResult(res: typeof fileRes): { text: string; omitted?: OmittedReason } {
     if (!res) {
       return { text: '' };
     }

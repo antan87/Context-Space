@@ -206,6 +206,9 @@ export function decideNextStep(facts) {
   if (releasePr) {
     const problems = releasePrProblems(releasePr, { latestVersion: latestTag.version });
     if (problems.length > 0) return stop('release-pr-unsafe', `Release PR #${releasePr.number} is not a plain version bump (${problems.join('; ')}). It was not merged. A person should look.`, { number: releasePr.number });
+    if (releasePr.isStale || (releasePr.baseSha && releasePr.baseSha !== tipSha)) {
+      return { action: 'close-release-pr', number: releasePr.number, reason: `main moved since release PR #${releasePr.number} was opened; closing it so a fresh one is made from the tip of main.` };
+    }
     if (releasePr.state === 'ready') return { action: 'merge-release-pr', number: releasePr.number, version: releasePr.version };
     if (releasePr.state === 'checks-pending') return wait('release-pr-checks', `Release PR #${releasePr.number} is waiting for its checks.`);
     if (releasePr.state === 'conflicting') return { action: 'close-release-pr', number: releasePr.number, reason: `Release PR #${releasePr.number} conflicts with main; closing it so a fresh one is made.` };

@@ -158,8 +158,8 @@ export function decodeClaudeLine(line: string): ClaudeOutputEvent[] {
       const totalCostUsd =
         typeof value.total_cost_usd === 'number'
           ? value.total_cost_usd
-          : typeof (value as any).totalCostUsd === 'number'
-            ? (value as any).totalCostUsd
+          : typeof value.totalCostUsd === 'number'
+            ? value.totalCostUsd
             : undefined;
 
       const completeEvent: ClaudeOutputEvent = {
@@ -351,7 +351,7 @@ export class ClaudeCliAdapter extends CliAdapterBase {
         }
 
         if (event.usage || event.totalCostUsd !== undefined) {
-          const u: any = event.usage;
+          const u = typeof event.usage === 'object' && event.usage !== null ? (event.usage as Record<string, unknown>) : undefined;
           const inputTokens = typeof u?.input_tokens === 'number' ? u.input_tokens : 0;
           const outputTokens = typeof u?.output_tokens === 'number' ? u.output_tokens : 0;
           const cacheRead = typeof u?.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : undefined;

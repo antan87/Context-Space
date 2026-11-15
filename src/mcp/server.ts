@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type ServerResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -12,6 +13,7 @@ import { loadConfig } from '../core/config.js';
 import type { NexusFlowConfig } from '../types.js';
 import { enabledTools, isAgentRole, type AgentRole, type ToolContext } from './tools.js';
 import { MCP_SERVER_NAME } from '../core/constants.js';
+import { toErrorMessage, getErrorCode } from '../utils/errors.js';
 
 export interface McpServerOptions {
   workspacePath?: string;
@@ -78,8 +80,8 @@ async function resolveWorkspaceId(workspaceId: string, config: NexusFlowConfig):
   let canonicalWorkspace: string;
   try {
     [canonicalBase, canonicalWorkspace] = await Promise.all([fs.realpath(base), fs.realpath(resolved)]);
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') throw new Error(`Workspace "${workspaceId}" was not found in the workspaces directory.`);
+  } catch (error) {
+    if (getErrorCode(error) === 'ENOENT') throw new Error(`Workspace "${workspaceId}" was not found in the workspaces directory.`);
     throw error;
   }
   const canonicalRel = path.relative(canonicalBase, canonicalWorkspace);
@@ -134,10 +136,7 @@ export async function startMcpServer(optionsOrWorkspacePath?: string | McpServer
     };
   });
 
-  // Return type is annotated `any` because the SDK's ServerResult union now
-  // includes a task-augmented variant; a plain `{ content, isError }` result is
-  // valid but does not narrow cleanly against it.
-  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<any> => {
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const config = await loadConfig();
 
@@ -153,15 +152,15 @@ export async function startMcpServer(optionsOrWorkspacePath?: string | McpServer
     let resolvedWorkspacePath: string;
     try {
       resolvedWorkspacePath = await resolveMcpWorkspacePath(workspacePath, config, args as Record<string, unknown> | undefined, role);
-    } catch (error: any) {
+    } catch (error) {
       return {
-        content: [{ type: 'text', text: error.message }],
+        content: [{ type: 'text', text: toErrorMessage(error) }],
         isError: true,
       };
     }
 
     const ctx: ToolContext = { config, workspacePath: resolvedWorkspacePath, ...(workspacePath ? { boundWorkspacePath: workspacePath } : {}) };
-    return tool.handler((args ?? {}) as Record<string, unknown>, ctx);
+    return tool.handler((args ?? {}) as Record<string, unknown>, ctx) as unknown as ServerResult;
   });
 
   const transport = new StdioServerTransport();

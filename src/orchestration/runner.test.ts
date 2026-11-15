@@ -83,6 +83,13 @@ describe('orchestration runner PM2 state handling', () => {
     it('returns an empty list for invalid output', () => {
       expect(parsePm2Json('not json')).toEqual([]);
     });
+
+    it('returns an empty list when JSON output is valid but not an array', () => {
+      expect(parsePm2Json('{"error":"PM2 daemon not running"}')).toEqual([]);
+      expect(parsePm2Json('null')).toEqual([]);
+      expect(parsePm2Json('123')).toEqual([]);
+      expect(parsePm2Json('"just a string"')).toEqual([]);
+    });
   });
 
 

@@ -7,15 +7,23 @@ import {
   buildSystemPrompt,
   executeNativeTool,
 } from './nativeTools.js';
+import { toErrorMessage } from '../utils/errors.js';
+
+interface PendingToolCall {
+  id: string;
+  name: string;
+  input: string;
+}
 
 export class NativeClaudeAgent extends NativeAgentBase {
   protected readonly label = 'NativeClaudeAgent';
   private anthropic: Anthropic | null = null;
-  private messages: any[] = [];
+  private messages: Anthropic.MessageParam[] = [];
   private modelName: string;
 
-  constructor() {
+  constructor(client?: Anthropic) {
     super();
+    this.anthropic = client ?? null;
     this.modelName = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
   }
 
@@ -24,6 +32,7 @@ export class NativeClaudeAgent extends NativeAgentBase {
   }
 
   protected configError(): string | null {
+    if (this.anthropic) return null;
     return process.env.ANTHROPIC_API_KEY ? null : 'Anthropic API key is not configured (set ANTHROPIC_API_KEY).';
   }
 
@@ -60,33 +69,47 @@ export class NativeClaudeAgent extends NativeAgentBase {
       }, { signal });
 
       let content = '';
-      const toolCalls: any[] = [];
-      let currentToolCall: any = null;
+      const toolCalls: PendingToolCall[] = [];
+      const pendingTools = new Map<number, PendingToolCall>();
 
       for await (const chunk of stream) {
         if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
           content += chunk.delta.text;
           this.emit('data', chunk.delta.text);
         } else if (chunk.type === 'content_block_start' && chunk.content_block.type === 'tool_use') {
-          currentToolCall = { id: chunk.content_block.id, name: chunk.content_block.name, input: '' };
-          this.emit('data', `\n\n*Running tool: ${currentToolCall.name}*\n`);
-        } else if (chunk.type === 'content_block_delta' && chunk.delta.type === 'input_json_delta' && currentToolCall) {
-          currentToolCall.input += chunk.delta.partial_json;
+          const call: PendingToolCall = {
+            id: chunk.content_block.id,
+            name: chunk.content_block.name,
+            input: '',
+          };
+          pendingTools.set(chunk.index, call);
+          this.emit('data', `\n\n*Running tool: ${call.name}*\n`);
+        } else if (chunk.type === 'content_block_delta' && chunk.delta.type === 'input_json_delta') {
+          const call = pendingTools.get(chunk.index);
+          if (call) {
+            call.input += chunk.delta.partial_json;
+          }
         } else if (chunk.type === 'content_block_stop') {
-          if (currentToolCall) {
-            toolCalls.push(currentToolCall);
-            currentToolCall = null;
+          const call = pendingTools.get(chunk.index);
+          if (call) {
+            toolCalls.push(call);
+            pendingTools.delete(chunk.index);
           }
         }
       }
+
+      for (const call of pendingTools.values()) {
+        toolCalls.push(call);
+      }
+      pendingTools.clear();
 
       // Parse tool inputs up front. A tool_use block and its later tool_result
       // must be paired: if the JSON is malformed we drop BOTH, otherwise the
       // Anthropic API rejects the next request with a dangling tool_result and
       // the whole session is wedged.
-      const assistantContent: any[] = [];
+      const assistantContent: Anthropic.ContentBlockParam[] = [];
       if (content) assistantContent.push({ type: 'text', text: content });
-      const validCalls: { id: string; name: string; args: any }[] = [];
+      const validCalls: { id: string; name: string; args: unknown }[] = [];
       for (const tc of toolCalls) {
         try {
           const args = JSON.parse(tc.input || '{}');
@@ -111,13 +134,13 @@ export class NativeClaudeAgent extends NativeAgentBase {
         break;
       }
 
-      const toolResultContent: any[] = [];
+      const toolResultContent: Anthropic.ToolResultBlockParam[] = [];
       for (const call of validCalls) {
         try {
           const result = await executeNativeTool(this.cwd, call.name, call.args);
           toolResultContent.push({ type: 'tool_result', tool_use_id: call.id, content: result });
-        } catch (err: any) {
-          toolResultContent.push({ type: 'tool_result', tool_use_id: call.id, content: `Error: ${err.message}`, is_error: true });
+        } catch (err) {
+          toolResultContent.push({ type: 'tool_result', tool_use_id: call.id, content: `Error: ${toErrorMessage(err)}`, is_error: true });
         }
       }
 

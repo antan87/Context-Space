@@ -17,5 +17,6 @@ export {
   getPm2List,
   readPm2List,
 } from './runner.js';
+export type { Pm2Process, Pm2Env } from './runner.js';
 export { tailLogFile } from './log-tail.js';
 export { startOrchestrator, stopOrchestrator, stopRecordedOrchestrator } from './orchestrator.js';

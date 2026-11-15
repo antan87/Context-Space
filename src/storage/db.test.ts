@@ -9,6 +9,10 @@ import {
   getPendingApprovals,
   FallbackDatabase,
   type StoredChatThread,
+  type ChatThreadRow,
+  type ChatTurnRow,
+  type ToolApprovalRow,
+  type IPreparedStatement,
 } from './db.js';
 
 describe('storage/db SQLite persistence', () => {
@@ -333,6 +337,162 @@ describe('storage/db SQLite persistence', () => {
       } finally {
         fsMod.rmSync(tempDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('strongly typed prepared statements and row interfaces', () => {
+    it('executes parameterized SELECT queries returning typed row interfaces', () => {
+      saveChatThread({
+        workspaceId: 'typed-ws-1',
+        providerId: 'codex-cli',
+        sessions: { 'codex-cli': { id: 's-typed', started: true } },
+        profilesByProvider: { 'codex-cli': 'coder' },
+        modelsByProvider: { 'codex-cli': 'gpt-5' },
+        effortsByProvider: { 'codex-cli': 'high' },
+        messages: [
+          { role: 'user', content: 'hello typed world', ts: 12345 },
+        ],
+      }, db);
+
+      const threadStmt: IPreparedStatement<ChatThreadRow> = db.prepare<ChatThreadRow>(
+        'SELECT * FROM chat_threads WHERE workspace_id = ?'
+      );
+      const threadRow = threadStmt.get('typed-ws-1');
+      expect(threadRow).toBeDefined();
+      expect(threadRow?.workspace_id).toBe('typed-ws-1');
+      expect(threadRow?.provider_id).toBe('codex-cli');
+      expect(JSON.parse(threadRow?.sessions_json ?? '{}')).toEqual({ 'codex-cli': { id: 's-typed', started: true } });
+
+      const turnsStmt: IPreparedStatement<ChatTurnRow> = db.prepare<ChatTurnRow>(
+        'SELECT * FROM chat_turns WHERE workspace_id = ? ORDER BY turn_index ASC'
+      );
+      const turnRows = turnsStmt.all('typed-ws-1');
+      expect(turnRows).toHaveLength(1);
+      expect(turnRows[0].role).toBe('user');
+      expect(turnRows[0].content).toBe('hello typed world');
+
+      recordApproval({
+        id: 'app-typed-1',
+        workspaceId: 'typed-ws-1',
+        tool: 'Terminal',
+        input: { cmd: 'ls' },
+        description: 'Directory listing',
+      }, db);
+
+      const appStmt: IPreparedStatement<ToolApprovalRow> = db.prepare<ToolApprovalRow>(
+        'SELECT * FROM tool_approvals WHERE workspace_id = ?'
+      );
+      const appRows = appStmt.all('typed-ws-1');
+      expect(appRows).toHaveLength(1);
+      expect(appRows[0].tool).toBe('Terminal');
+      expect(appRows[0].decision).toBe('pending');
+    });
+
+    it('executes parameterized SELECT queries on FallbackDatabase returning typed row interfaces', () => {
+      const fb = new FallbackDatabase(':memory:');
+      saveChatThread({
+        workspaceId: 'fb-typed-1',
+        providerId: 'claude-cli',
+        sessions: {},
+        profilesByProvider: {},
+        modelsByProvider: {},
+        effortsByProvider: {},
+        messages: [
+          { role: 'assistant', content: 'fallback typed turn', ts: 999 },
+        ],
+      }, fb);
+
+      const threadStmt: IPreparedStatement<ChatThreadRow> = fb.prepare<ChatThreadRow>(
+        'SELECT * FROM chat_threads WHERE workspace_id = ?'
+      );
+      const threadRow = threadStmt.get('fb-typed-1');
+      expect(threadRow?.workspace_id).toBe('fb-typed-1');
+
+      const turnsStmt: IPreparedStatement<ChatTurnRow> = fb.prepare<ChatTurnRow>(
+        'SELECT * FROM chat_turns WHERE workspace_id = ?'
+      );
+      const turnRows = turnsStmt.all('fb-typed-1');
+      expect(turnRows).toHaveLength(1);
+      expect(turnRows[0].content).toBe('fallback typed turn');
+    });
+
+    it('correctly maps columns for partial-column INSERT INTO chat_turns on FallbackDatabase', () => {
+      const fb = new FallbackDatabase(':memory:');
+      const ts = 1729790000000;
+      fb.prepare('INSERT INTO chat_turns (id, workspace_id, turn_index, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run('turn-partial', 'ws-partial', 0, 'user', 'partial turn msg', ts);
+
+      const turnsStmt: IPreparedStatement<ChatTurnRow> = fb.prepare<ChatTurnRow>(
+        'SELECT * FROM chat_turns WHERE workspace_id = ?'
+      );
+      const rows = turnsStmt.all('ws-partial');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe('turn-partial');
+      expect(rows[0].content).toBe('partial turn msg');
+      expect(rows[0].kind).toBeNull();
+      expect(rows[0].created_at).toBe(ts);
+    });
+
+    it('returns accurate changes count on FallbackDatabase for UPDATE and DELETE statements', () => {
+      const fb = new FallbackDatabase(':memory:');
+      recordApproval({
+        id: 'app-changes-1',
+        workspaceId: 'ws-changes',
+        tool: 'Terminal',
+        input: { cmd: 'echo 1' },
+      }, fb);
+
+      // Updating existing approval returns changes: 1
+      const updateRes = fb.prepare('UPDATE tool_approvals SET decision = ?, resolved_at = ? WHERE id = ?')
+        .run('allow', Date.now(), 'app-changes-1');
+      expect(updateRes.changes).toBe(1);
+
+      // Updating non-existent approval returns changes: 0
+      const updateNonExistent = fb.prepare('UPDATE tool_approvals SET decision = ?, resolved_at = ? WHERE id = ?')
+        .run('allow', Date.now(), 'non-existent-id');
+      expect(updateNonExistent.changes).toBe(0);
+
+      // Deleting existing thread returns changes: 1
+      saveChatThread({
+        workspaceId: 'ws-to-delete',
+        providerId: null,
+        sessions: {},
+        profilesByProvider: {},
+        modelsByProvider: {},
+        effortsByProvider: {},
+        messages: [{ role: 'user', content: 'hello' }],
+      }, fb);
+      const deleteThreadRes = fb.prepare('DELETE FROM chat_threads WHERE workspace_id = ?').run('ws-to-delete');
+      expect(deleteThreadRes.changes).toBe(1);
+
+      // Deleting non-existent thread returns changes: 0
+      const deleteNonExistent = fb.prepare('DELETE FROM chat_threads WHERE workspace_id = ?').run('no-such-ws');
+      expect(deleteNonExistent.changes).toBe(0);
+    });
+
+    it('supports general tool_approvals query (including resolved) and query by id on FallbackDatabase', () => {
+      const fb = new FallbackDatabase(':memory:');
+      recordApproval({ id: 'app-res-1', workspaceId: 'ws-app', tool: 'Bash', input: {} }, fb);
+      recordApproval({ id: 'app-res-2', workspaceId: 'ws-app', tool: 'Read', input: {} }, fb);
+      resolveApproval('app-res-1', 'allow', fb);
+
+      // Query without pending filter should return both allow and pending
+      const allStmt = fb.prepare<ToolApprovalRow>('SELECT * FROM tool_approvals WHERE workspace_id = ?');
+      const allRows = allStmt.all('ws-app');
+      expect(allRows).toHaveLength(2);
+
+      // Query with pending filter returns only the 1 pending approval
+      const pendingStmt = fb.prepare<ToolApprovalRow>(
+        "SELECT * FROM tool_approvals WHERE workspace_id = ? AND decision = 'pending'"
+      );
+      const pendingRows = pendingStmt.all('ws-app');
+      expect(pendingRows).toHaveLength(1);
+      expect(pendingRows[0].id).toBe('app-res-2');
+
+      // Query by id
+      const byIdStmt = fb.prepare<ToolApprovalRow>('SELECT * FROM tool_approvals WHERE id = ?');
+      const byIdRow = byIdStmt.get('app-res-1');
+      expect(byIdRow?.decision).toBe('allow');
     });
   });
 });

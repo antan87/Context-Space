@@ -72,26 +72,43 @@ export function cleanInputOptions(value: unknown): string[] | undefined {
   return options.length ? options : undefined;
 }
 
+export interface LedgerEntry {
+  id?: unknown;
+  timestamp?: unknown;
+  kind?: unknown;
+  harness?: unknown;
+  author?: unknown;
+  message?: unknown;
+  options?: unknown;
+  [key: string]: unknown;
+}
+
 type Candidate = InputRequest & { time: number };
 
 /** When a ledger entry says it was written, or null when that is missing, invalid or implausibly far ahead. */
-export function ledgerEntryTime(entry: any, now: number): number | null {
-  const time = typeof entry?.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN;
+export function ledgerEntryTime(entry: unknown, now: number): number | null {
+  const time =
+    typeof entry === 'object' && entry !== null && typeof (entry as LedgerEntry).timestamp === 'string'
+      ? Date.parse((entry as LedgerEntry).timestamp as string)
+      : NaN;
   // A timestamp from the future would stay "newest" and pin its alert.
   return Number.isFinite(time) && time <= now + CLOCK_SKEW_MS ? time : null;
 }
 
 /** The input request a ledger entry holds, or null when it is not one, is stale, or has no message. */
-export function parseInputRequestEntry(entry: any, sinceMs: number, now: number): Candidate | null {
-  if (!entry || typeof entry !== 'object' || entry.kind !== 'input_request') return null;
-  const time = ledgerEntryTime(entry, now);
-  const message = cleanInputRequestText(entry.message).slice(0, INPUT_REQUEST_DISPLAY_LIMIT);
+export function parseInputRequestEntry(entry: unknown, sinceMs: number, now: number): Candidate | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const raw = entry as LedgerEntry;
+  if (raw.kind !== 'input_request') return null;
+  const time = ledgerEntryTime(raw, now);
+  const message = cleanInputRequestText(raw.message).slice(0, INPUT_REQUEST_DISPLAY_LIMIT);
   if (time === null || time < sinceMs || !message) return null;
-  const options = cleanInputOptions(entry.options);
+  const options = cleanInputOptions(raw.options);
+  const timestamp = typeof raw.timestamp === 'string' ? raw.timestamp : `${raw.timestamp ?? ''}`;
   return {
-    id: typeof entry.id === 'string' && entry.id ? entry.id : `${entry.timestamp}`,
-    timestamp: entry.timestamp,
-    harness: cleanInputRequestText(entry.harness).slice(0, INPUT_REQUEST_HARNESS_LIMIT) || 'agent',
+    id: typeof raw.id === 'string' && raw.id ? raw.id : timestamp,
+    timestamp,
+    harness: cleanInputRequestText(raw.harness).slice(0, INPUT_REQUEST_HARNESS_LIMIT) || 'agent',
     message,
     ...(options ? { options } : {}),
     time,
@@ -99,8 +116,10 @@ export function parseInputRequestEntry(entry: any, sinceMs: number, now: number)
 }
 
 /** When an acknowledgement entry was written, or null when the entry is not one. */
-export function parseInputAckEntry(entry: any, now: number): number | null {
-  return entry && typeof entry === 'object' && entry.kind === 'input_ack' ? ledgerEntryTime(entry, now) : null;
+export function parseInputAckEntry(entry: unknown, now: number): number | null {
+  return entry && typeof entry === 'object' && (entry as LedgerEntry).kind === 'input_ack'
+    ? ledgerEntryTime(entry, now)
+    : null;
 }
 
 interface LedgerScan {
@@ -116,7 +135,7 @@ function scanLedger(lines: readonly string[], sinceMs: number, now: number): Led
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let entry: any;
+    let entry: unknown;
     try {
       entry = JSON.parse(trimmed);
     } catch {

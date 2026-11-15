@@ -101,6 +101,67 @@ describe('backend-owned terminals', () => {
     expect(f.terminate).toHaveBeenCalledOnce(); expect(f.manager.list('alice', 'workspace')).toEqual([]);
     await f.manager.create({ ...f.input, launchId: 'second' }); f.manager.dispose(); expect(f.terminate).toHaveBeenCalledTimes(2);
   });
+  it('renews expiration timer for running sessions while owner is active', async () => {
+    vi.useFakeTimers();
+    let ownerActive = true;
+    const f = fixture(1000);
+    f.manager.setOwnerActiveChecker((owner) => owner === 'alice' && ownerActive);
+    const { id } = await f.manager.create(f.input);
+    f.manager.attach('alice', 'workspace', id, f.client);
+    f.manager.detach('alice', 'workspace', id, f.client);
+    // After 1 grace period (1000ms), owner is still active, so session should NOT terminate
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(f.terminate).not.toHaveBeenCalled();
+    expect(f.manager.list('alice', 'workspace')).toHaveLength(1);
+
+    // After another grace period, still active
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(f.terminate).not.toHaveBeenCalled();
+    expect(f.manager.list('alice', 'workspace')).toHaveLength(1);
+
+    // Now owner becomes inactive
+    ownerActive = false;
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(f.terminate).toHaveBeenCalledOnce();
+    expect(f.manager.list('alice', 'workspace')).toEqual([]);
+    f.manager.dispose();
+  });
+  it('does not renew expiration for exited sessions even if owner is active', async () => {
+    vi.useFakeTimers();
+    const f = fixture(1000);
+    f.manager.setOwnerActiveChecker(() => true);
+    const { id } = await f.manager.create(f.input);
+    f.manager.attach('alice', 'workspace', id, f.client);
+    f.exit(0);
+    expect(f.manager.list('alice', 'workspace')[0]?.state).toBe('exited');
+    // After grace period, exited session should expire and be deleted despite active owner
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(f.manager.list('alice', 'workspace')).toEqual([]);
+    f.manager.dispose();
+  });
+  it('reports whether an owner has any attached terminal sessions', async () => {
+    const f = fixture();
+    expect(f.manager.hasAttached('alice')).toBe(false);
+    const { id } = await f.manager.create(f.input);
+    expect(f.manager.hasAttached('alice')).toBe(false);
+    f.manager.attach('alice', 'workspace', id, f.client);
+    expect(f.manager.hasAttached('alice')).toBe(true);
+    expect(f.manager.hasAttached('bob')).toBe(false);
+    f.manager.detach('alice', 'workspace', id, f.client);
+    expect(f.manager.hasAttached('alice')).toBe(false);
+    f.manager.dispose();
+  });
+  it('does not renew expiration when manager is closing', async () => {
+    vi.useFakeTimers();
+    const f = fixture(1000);
+    f.manager.setOwnerActiveChecker(() => true);
+    const { id } = await f.manager.create(f.input);
+    f.manager.attach('alice', 'workspace', id, f.client);
+    f.manager.detach('alice', 'workspace', id, f.client);
+    f.manager.dispose();
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(f.manager.list('alice', 'workspace')).toEqual([]);
+  });
   it('releases failed launches and rejects concurrent resumes by another owner', async () => {
     const f = fixture(); f.factory.mockRejectedValueOnce(new Error('native load failed'));
     await expect(f.manager.create(f.input)).rejects.toThrow('native load');

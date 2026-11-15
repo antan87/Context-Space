@@ -635,7 +635,7 @@ let providersRegistered = false;
 export function registerLightweightNavigationProviders(
   monacoApi?: typeof monaco
 ): monaco.IDisposable {
-  const m = monacoApi || (typeof window !== 'undefined' ? (window as any).monaco : undefined);
+  const m = monacoApi || (typeof window !== 'undefined' ? (window as unknown as { monaco?: typeof monaco }).monaco : undefined);
   if (!m || providersRegistered) {
     return { dispose: () => {} };
   }

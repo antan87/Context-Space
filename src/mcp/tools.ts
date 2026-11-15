@@ -46,6 +46,7 @@ import {
   type ParsedKnowledgeEntry,
 } from '../core/knowledge.js';
 import { loadPinnedWorkroomClientForWorkspace } from '../workrooms/manager.js';
+import type { WorkroomSnapshotV1 } from '../workrooms/contracts.js';
 import {
   INPUT_REQUEST_DISPLAY_LIMIT,
   INPUT_REQUEST_OPTIONS_MAX,
@@ -59,6 +60,7 @@ import {
   resolveWorkspaceChatLedger,
   readWorkspaceChatMessages,
 } from '../core/constants.js';
+import { toErrorMessage, getErrorCode } from '../utils/errors.js';
 
 /** Context passed to every tool handler. `workspacePath` is already resolved and validated. */
 export interface ToolContext {
@@ -228,8 +230,8 @@ export const tools: NexusFlowTool[] = [
           }
         }
         return text(allResults || 'No results found across the workspace repositories.');
-      } catch (error: any) {
-        return errorResult(`Error searching workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error searching workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -243,8 +245,8 @@ export const tools: NexusFlowTool[] = [
       try {
         await requireWorkspace(ctx);
         return json(await getWorkspaceStatusReport(ctx.workspacePath));
-      } catch (error: any) {
-        return errorResult(`Error getting workspace status: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error getting workspace status: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -265,8 +267,8 @@ export const tools: NexusFlowTool[] = [
         await requireWorkspace(ctx);
         const repos = Array.isArray(args.repos) ? (args.repos as string[]) : undefined;
         return json(await getWorkspaceDiffReport(ctx.workspacePath, repos));
-      } catch (error: any) {
-        return errorResult(`Error getting workspace diff: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error getting workspace diff: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -298,8 +300,8 @@ export const tools: NexusFlowTool[] = [
         const repos = Array.isArray(args.repos) ? (args.repos as string[]) : undefined;
         const files = parseFileSelection(args.files);
         return json(await commitWorkspace(ctx.workspacePath, message, { noPush: Boolean(args.noPush), repos, files }));
-      } catch (error: any) {
-        return errorResult(`Error committing workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error committing workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -313,8 +315,8 @@ export const tools: NexusFlowTool[] = [
       try {
         await requireWorkspace(ctx);
         return json(await syncWorkspace(ctx.workspacePath));
-      } catch (error: any) {
-        return errorResult(`Error syncing workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error syncing workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -337,8 +339,8 @@ export const tools: NexusFlowTool[] = [
         return json(
           await refreshWorkspace(ctx.workspacePath, { force: Boolean(args.force), check: Boolean(args.check) }),
         );
-      } catch (error: any) {
-        return errorResult(`Error refreshing context: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error refreshing context: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -352,8 +354,8 @@ export const tools: NexusFlowTool[] = [
       try {
         await requireWorkspace(ctx);
         return json(await runDoctor(ctx.workspacePath));
-      } catch (error: any) {
-        return errorResult(`Error running doctor: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error running doctor: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -392,8 +394,8 @@ export const tools: NexusFlowTool[] = [
           ? await addBaseKnowledge(ctx.workspacePath, String(args.repo), entry)
           : await addWorkspaceKnowledge(ctx.workspacePath, entry);
         return json(result);
-      } catch (error: any) {
-        return errorResult(`Error adding knowledge: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error adding knowledge: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -431,8 +433,8 @@ export const tools: NexusFlowTool[] = [
           title: String(args.title ?? ''),
         });
         return json(result);
-      } catch (error: any) {
-        return errorResult(`Error promoting knowledge: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error promoting knowledge: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -472,8 +474,8 @@ export const tools: NexusFlowTool[] = [
           limit,
         });
         return json(results);
-      } catch (error: any) {
-        return errorResult(`Error searching knowledge: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error searching knowledge: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -518,8 +520,8 @@ export const tools: NexusFlowTool[] = [
                 ? `Workspace is fully pushed. To remove it, run \`${CLI_NAME} finish --cleanup\` from outside the workspace.`
                 : 'Some repos are still dirty or unpushed — see the per-repo report. Re-run to resume.',
         });
-      } catch (error: any) {
-        return errorResult(`Error finishing workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error finishing workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -549,16 +551,16 @@ export const tools: NexusFlowTool[] = [
         let content: string;
         try {
           content = await fs.readFile(logFilePath, 'utf8');
-        } catch (err: any) {
-          if (err?.code === 'ENOENT') {
+        } catch (err) {
+          if (getErrorCode(err) === 'ENOENT') {
             return errorResult(`Log file for service "${serviceName}" not found. Ensure the service is running via "${CLI_NAME} start".`);
           }
           throw err;
         }
         const tail = content.split('\n').slice(-lines).join('\n');
         return text(tail || '(empty log)');
-      } catch (error: any) {
-        return errorResult(`Error reading logs: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error reading logs: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -609,8 +611,8 @@ export const tools: NexusFlowTool[] = [
           ...result,
           instruction: `Repository '${result.repoName}' is now isolated at '${result.worktreePath}' on branch '${result.branchName}'. ACTION REQUIRED: Direct all subsequent file edits, reads, and test executions for this repo to '${result.worktreePath}'. Do NOT edit files in '${result.sourcePath}'.`,
         });
-      } catch (error: any) {
-        return errorResult(`Error isolating repository: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error isolating repository: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -641,8 +643,8 @@ export const tools: NexusFlowTool[] = [
             ...(w.archivedAt ? { archivedAt: w.archivedAt } : {}),
           })),
         );
-      } catch (error: any) {
-        return errorResult(`Error listing workspaces: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error listing workspaces: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -671,8 +673,8 @@ export const tools: NexusFlowTool[] = [
               ? `Ready. Archive it with archive_workspace from another workspace's session, or ask the user to run \`${CLI_NAME} archive ${report.workspaceId}\` from outside it or use Archive in the app.`
               : 'Blocked; nothing would be removed. Resolve the blockers first.',
         });
-      } catch (error: any) {
-        return errorResult(`Error previewing archive: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error previewing archive: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -716,8 +718,8 @@ export const tools: NexusFlowTool[] = [
                   ? 'Stopped part-way; nothing is lost. Run archive_workspace again to resume.'
                   : `Archived. The record stays readable; unarchive_workspace restores it.`,
         });
-      } catch (error: any) {
-        return errorResult(`Error archiving workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error archiving workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -732,8 +734,8 @@ export const tools: NexusFlowTool[] = [
         await requireWorkspace(ctx);
         const report = await unarchiveWorkspace(ctx.workspacePath);
         return json({ ...report, note: report.restored ? 'Restored. Prepare a repository for editing with isolate_repo to work in it again.' : 'The workspace was not archived; nothing changed.' });
-      } catch (error: any) {
-        return errorResult(`Error restoring workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error restoring workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -766,8 +768,8 @@ export const tools: NexusFlowTool[] = [
           });
         }
         return json(reposInfo);
-      } catch (error: any) {
-        return errorResult(`Error listing repos: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error listing repos: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -863,8 +865,8 @@ export const tools: NexusFlowTool[] = [
           status: 'created',
           instruction: `Workspace created at '${workspacePath}'. Context files and MCP configs generated successfully.`,
         });
-      } catch (error: any) {
-        return errorResult(`Error creating workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error creating workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -887,8 +889,8 @@ export const tools: NexusFlowTool[] = [
           },
           workroomData: await client.snapshot(),
         });
-      } catch (error: any) {
-        return errorResult(`Error reading Workroom: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error reading Workroom: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -926,8 +928,8 @@ export const tools: NexusFlowTool[] = [
           ...result.step,
           note: 'Completion is proposed. A developer must confirm it in the Workroom GUI.',
         });
-      } catch (error: any) {
-        return errorResult(`Error proposing workflow completion: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error proposing workflow completion: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -958,28 +960,28 @@ export const tools: NexusFlowTool[] = [
         const { messages: localMessages, ledgerInfo } = await readWorkspaceChatMessages(ctx.workspacePath, limit);
 
         // 2. Check if a pinned remote Workroom is connected
-        let remoteSnapshot: any = null;
+        let remoteSnapshot: WorkroomSnapshotV1 | null = null;
         let remoteError: string | null = null;
         try {
           const client = await loadPinnedWorkroomClientForWorkspace(feature.id);
           remoteSnapshot = await client.snapshot();
-        } catch (err: any) {
-          const errMsg = String(err?.message ?? '');
+        } catch (err) {
+          const errMsg = toErrorMessage(err);
           if (!errMsg.includes('No active or paused Workroom') && !errMsg.includes('No pinned')) {
             remoteError = errMsg;
           }
         }
 
         if (remoteSnapshot) {
-          const stepMap = new Map<string, any>();
+          const stepMap = new Map<string, NonNullable<WorkroomSnapshotV1['workflowProgress']>['steps'][number]>();
           if (remoteSnapshot.workflowProgress?.steps) {
             for (const step of remoteSnapshot.workflowProgress.steps) {
               stepMap.set(step.stepId, step);
             }
           }
 
-          const reconciledMessages = localMessages.map((msg: any) => {
-            if (!msg.stepId) return msg;
+          const reconciledMessages = localMessages.map((msg) => {
+            if (!msg.stepId || typeof msg.stepId !== 'string') return msg;
             const liveStep = stepMap.get(msg.stepId);
             if (!liveStep) return msg;
             return {
@@ -990,8 +992,8 @@ export const tools: NexusFlowTool[] = [
 
           const activeStep =
             remoteSnapshot.workflowProgress?.steps.find(
-              (s: any) => s.status === 'in_progress' || s.status === 'completion_proposed',
-            ) ?? remoteSnapshot.workflowProgress?.steps.find((s: any) => s.status === 'pending');
+              (s) => s.status === 'in_progress' || s.status === 'completion_proposed',
+            ) ?? remoteSnapshot.workflowProgress?.steps.find((s) => s.status === 'pending');
 
           return json({
             status: 'connected',
@@ -1013,14 +1015,14 @@ export const tools: NexusFlowTool[] = [
                 }
               : null,
             latestHandoff: remoteSnapshot.documents?.handoff?.content ?? null,
-            recentActivity: remoteSnapshot.activity.slice(-limit).map((e: any) => ({
+            recentActivity: remoteSnapshot.activity.slice(-limit).map((e) => ({
               sequence: e.sequence,
               type: e.type,
               actorId: e.actorId,
               summary: e.summary,
               createdAt: e.createdAt,
             })),
-            remoteActivity: remoteSnapshot.activity.slice(-limit).map((e: any) => ({
+            remoteActivity: remoteSnapshot.activity.slice(-limit).map((e) => ({
               sequence: e.sequence,
               type: e.type,
               actorId: e.actorId,
@@ -1043,8 +1045,8 @@ export const tools: NexusFlowTool[] = [
               : `Operating in local workspace ledger mode (${relLedgerPath}).`,
           recentMessages: localMessages,
         });
-      } catch (error: any) {
-        return errorResult(`Error reading workroom stream: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error reading workroom stream: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -1093,9 +1095,9 @@ export const tools: NexusFlowTool[] = [
 
         // 1. If connected to a Workroom and stepId is provided, propose workflow step completion
         let workroomSynced = false;
-        let stepResult: any = null;
+        let stepResult: unknown = null;
         let syncError: string | null = null;
-        let client: any = null;
+        let client: Awaited<ReturnType<typeof loadPinnedWorkroomClientForWorkspace>> | null = null;
 
         try {
           client = await loadPinnedWorkroomClientForWorkspace(feature.id);
@@ -1111,7 +1113,7 @@ export const tools: NexusFlowTool[] = [
               if (!progress) {
                 syncError = 'Connected Workroom has no shared structured workflow selected.';
               } else {
-                const step = progress.steps.find((s: any) => s.stepId === stepId);
+                const step = progress.steps.find((s) => s.stepId === stepId);
                 if (!step) {
                   syncError = `Workflow step "${stepId}" was not found in the shared room workflow.`;
                 } else {
@@ -1121,8 +1123,8 @@ export const tools: NexusFlowTool[] = [
                   workroomSynced = true;
                 }
               }
-            } catch (err: any) {
-              syncError = err instanceof Error ? err.message : String(err);
+            } catch (err) {
+              syncError = toErrorMessage(err);
             }
           }
         }
@@ -1161,8 +1163,8 @@ export const tools: NexusFlowTool[] = [
             ? 'Handoff recorded locally and milestone proposal submitted to live Workroom.'
             : `Handoff recorded in local workspace chat ledger (${relLedgerPath}).`,
         });
-      } catch (error: any) {
-        return errorResult(`Error posting workroom handoff: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error posting workroom handoff: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -1195,10 +1197,10 @@ export const tools: NexusFlowTool[] = [
       try {
         await requireWorkspace(ctx);
         return json(await askUser(ctx.workspacePath, { message: args.message, options: args.options, harness: args.harness }));
-      } catch (error: any) {
+      } catch (error) {
         // A request the AI got wrong is told how to put it right, as it is.
         if (error instanceof AskUserError) return errorResult(error.message);
-        return errorResult(`Error requesting user input: ${error.message}`);
+        return errorResult(`Error requesting user input: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -1229,8 +1231,8 @@ export const tools: NexusFlowTool[] = [
           timeoutMs: typeof args.timeoutSeconds === 'number' ? args.timeoutSeconds * 1000 : undefined,
         });
         return json(report);
-      } catch (error: any) {
-        return errorResult(`Error verifying workspace: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error verifying workspace: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -1303,12 +1305,12 @@ export const tools: NexusFlowTool[] = [
             scope: saved.scope,
             description: saved.description,
             tags: saved.tags,
-            path: (saved as any).path,
+            path: saved.path,
           },
           message: `Skill "${saved.title || saved.id}" created successfully (${scope} scope).`,
         });
-      } catch (error: any) {
-        return errorResult(`Error creating skill: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error creating skill: ${toErrorMessage(error)}`);
       }
     },
   },
@@ -1349,8 +1351,8 @@ export const tools: NexusFlowTool[] = [
             source: s.source && { harness: s.source.harness, label: s.source.label },
           })),
         });
-      } catch (error: any) {
-        return errorResult(`Error listing skills: ${error.message}`);
+      } catch (error) {
+        return errorResult(`Error listing skills: ${toErrorMessage(error)}`);
       }
     },
   },

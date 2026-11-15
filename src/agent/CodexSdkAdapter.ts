@@ -7,6 +7,7 @@ import type { AgentExecutionProfile, AgentHarness } from './ProviderRegistry.js'
 import { isValidSessionUuid, type AgentSession } from './session.js';
 import { getLocalMcpServerConfig } from './mcp-config.js';
 import { MCP_ADAPTER_SERVER_NAME, LEGACY_MCP_ADAPTER_SERVER_NAME } from '../core/constants.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export class CodexSdkAdapter extends EventEmitter implements AgentHarness {
   private readonly adapter: HarnessAdapter;
@@ -65,8 +66,8 @@ export class CodexSdkAdapter extends EventEmitter implements AgentHarness {
         }
 
         this.bindEvents(this.handle);
-      } catch (err: any) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      } catch (err) {
+        this.emit('error', err instanceof Error ? err : new Error(toErrorMessage(err)));
         this.emit('idle');
       }
     } else {
@@ -142,8 +143,8 @@ export class CodexSdkAdapter extends EventEmitter implements AgentHarness {
               break;
           }
         }
-      } catch (err: any) {
-        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      } catch (err) {
+        this.emit('error', err instanceof Error ? err : new Error(toErrorMessage(err)));
       } finally {
         if (this.active) {
           this.emit('idle');

@@ -142,7 +142,7 @@ async function downloadToFile(response: Response, targetPath: string): Promise<s
   const hash = createHash('sha256');
 
   const nodeStream = response.body
-    ? Readable.fromWeb(response.body as any)
+    ? Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0])
     : Readable.from(Buffer.from(await response.arrayBuffer()));
 
   nodeStream.on('data', (chunk) => hash.update(chunk));

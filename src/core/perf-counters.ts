@@ -87,6 +87,20 @@ function countSpawn(command: unknown): void {
   }
 }
 
+type MonkeypatchedFn = (this: unknown, ...args: unknown[]) => unknown;
+
+interface PatchedFileHandle {
+  read: (this: unknown, ...args: unknown[]) => Promise<{ bytesRead?: number } | undefined>;
+  readFile: (this: unknown, ...args: unknown[]) => Promise<string | Buffer | { length?: number } | undefined>;
+  [key: string]: unknown;
+}
+
+interface PatchedFsPromises {
+  readFile: (this: unknown, ...args: unknown[]) => Promise<string | Buffer | { length?: number } | undefined>;
+  open: (this: unknown, ...args: unknown[]) => Promise<PatchedFileHandle>;
+  [key: string]: unknown;
+}
+
 /**
  * Wraps the process and file APIs once. Returns false (and does nothing)
  * unless the environment flag is set.
@@ -98,7 +112,7 @@ export function installPerfCounters(env: NodeJS.ProcessEnv = process.env): boole
 
   // ES namespace objects are frozen; patch the CommonJS exports and re-sync.
   const require = createRequire(import.meta.url);
-  const cp = require('node:child_process') as Record<string, (...args: any[]) => any>;
+  const cp = require('node:child_process') as Record<string, MonkeypatchedFn | undefined>;
   for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync'] as const) {
     const original = cp[name];
     if (typeof original !== 'function') continue;
@@ -108,7 +122,7 @@ export function installPerfCounters(env: NodeJS.ProcessEnv = process.env): boole
     };
   }
 
-  const fsp = require('node:fs/promises') as Record<string, (...args: any[]) => any>;
+  const fsp = require('node:fs/promises') as PatchedFsPromises;
   const originalReadFile = fsp.readFile;
   fsp.readFile = async function countedReadFile(this: unknown, target: unknown, ...rest: unknown[]) {
     const result = await originalReadFile.call(this, target, ...rest);

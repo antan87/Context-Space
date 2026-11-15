@@ -6,6 +6,7 @@ import {
   formatTerminalTitle,
   escapePsSingleQuote,
   escapePosixSingleQuote,
+  detachChild,
 } from './terminal-launch.js';
 import { execa, execaSync } from 'execa';
 import { TERMINAL_TITLE_PREFIX } from '../core/constants.js';
@@ -248,6 +249,32 @@ describe('terminal-launch utility', () => {
         expect.objectContaining({ detached: true, stdio: 'ignore' }),
       );
       expect(mockUnref).toHaveBeenCalled();
+    });
+  });
+
+  describe('detachChild', () => {
+    it('calls unref when available directly on child', () => {
+      const unref = vi.fn();
+      detachChild({ unref });
+      expect(unref).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls nodeChildProcess.unref when available (Execa 9 shape)', () => {
+      const nodeUnref = vi.fn();
+      detachChild({ nodeChildProcess: { unref: nodeUnref } });
+      expect(nodeUnref).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls catch to suppress unhandled promise rejection', () => {
+      const catchFn = vi.fn();
+      detachChild({ catch: catchFn });
+      expect(catchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('tolerates null, undefined, and objects without detachment methods', () => {
+      expect(() => detachChild(null)).not.toThrow();
+      expect(() => detachChild(undefined)).not.toThrow();
+      expect(() => detachChild({})).not.toThrow();
     });
   });
 });

@@ -118,7 +118,7 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
         return c.body(new Uint8Array(0));
       }
       const stream = createFileByteStream(doc.handle, 0, doc.size - 1, c.req.raw?.signal);
-      return c.body(stream as any);
+      return c.body(stream);
     } catch (error) {
       if (docHandle) {
         await docHandle.close().catch(() => {});

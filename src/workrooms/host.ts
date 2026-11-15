@@ -7,12 +7,13 @@ import * as path from 'node:path';
 
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { serve } from '@hono/node-server';
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { generate } from 'selfsigned';
 
 import { assertFileHandleMatchesPath, readFileHandleAtMost } from '../resources/fs-safety.js';
+import { getErrorCode } from '../utils/errors.js';
 
 import {
   WorkroomAuthorizationError,
@@ -64,7 +65,7 @@ function remoteSourceKey(c: Parameters<typeof getConnInfo>[0]): string {
   }
 }
 
-function workroomError(c: any, error: unknown) {
+function workroomError(c: Context, error: unknown) {
   if (error instanceof WorkroomAuthorizationError) return c.json({ error: error.message }, 401);
   if (error instanceof WorkroomRevisionError) {
     return c.json({ error: error.message, expectedRevision: error.expected, actualRevision: error.actual }, 409);
@@ -592,7 +593,7 @@ export async function commitHostedWorkroomCredentialRotation(roomDir: string): P
 
 export async function discardHostedWorkroomCredentialRotation(roomDir: string): Promise<void> {
   await fs.unlink(path.join(roomDir, PENDING_HOST_CREDENTIAL_FILE)).catch((error) => {
-    if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) throw error;
+    if (getErrorCode(error) !== 'ENOENT') throw error;
   });
 }
 
@@ -769,7 +770,7 @@ export async function resumeHostedWorkroom(homeDir: string, roomId: string, pass
       throw new WorkroomValidationError('This Workroom is quarantined because its import did not complete.');
     } catch (error) {
       if (error instanceof WorkroomValidationError) throw error;
-      if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) throw error;
+      if (getErrorCode(error) !== 'ENOENT') throw error;
     }
   }
   const store = new WorkroomSqliteStore(roomDir);

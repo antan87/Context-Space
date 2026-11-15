@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { resolveResourcePath } from './resources.js';
 import { slugify } from './slug.js';
+import { getErrorCode } from './errors.js';
 import { acquireLock, createMutationQueue } from '../core/locks.js';
 import { atomicWriteFile } from '../resources/fs-safety.js';
 import {
@@ -114,7 +115,7 @@ async function loadTemplatesFromDir(dirPath: string, custom: boolean): Promise<W
     }
   } catch (error) {
     // Only log if directory exists (ignoring non-existent custom folder log spam)
-    if ((error as any).code !== 'ENOENT') {
+    if (getErrorCode(error) !== 'ENOENT') {
       console.error(`Failed to read templates from ${dirPath}:`, error);
     }
   }
@@ -215,7 +216,7 @@ export async function deleteWorkflowTemplate(id: string): Promise<void> {
     try {
       await fs.unlink(filePath);
     } catch (error) {
-      if ((error as any).code !== 'ENOENT') {
+      if (getErrorCode(error) !== 'ENOENT') {
         throw error;
       }
     }

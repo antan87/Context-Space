@@ -27,6 +27,7 @@ import { Input } from '../components/ui/input.js';
 import { Label } from '../components/ui/label.js';
 import { Textarea } from '../components/ui/textarea.js';
 import { cn } from '../lib/utils.js';
+import { toErrorMessage } from '../lib/errors.js';
 import {
   useSkillCategories,
   useSaveSkillCategory,
@@ -211,8 +212,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
       showToast?.('Skill saved to My library', 'success');
       setSkillModalOpen(false);
       setEditingSkill(null);
-    } catch (err: any) {
-      showToast?.(err?.message || 'Failed to save skill', 'error');
+    } catch (err) {
+      showToast?.(toErrorMessage(err, 'Failed to save skill'), 'error');
       console.error(err);
     }
   };
@@ -235,8 +236,8 @@ export function SkillsPage({ showToast }: SkillsPageProps) {
       }
       setDeleteConfirmModalOpen(false);
       setDeleteTarget(null);
-    } catch (err: any) {
-      showToast?.(err?.message || 'Failed to delete item', 'error');
+    } catch (err) {
+      showToast?.(toErrorMessage(err, 'Failed to delete item'), 'error');
       console.error(err);
     }
   };

@@ -11,6 +11,9 @@ import {
   acknowledgeInputRequests,
   latestInputRequest,
   listOpenInputRequests,
+  ledgerEntryTime,
+  parseInputRequestEntry,
+  parseInputAckEntry,
 } from './attention.js';
 
 const cleanup: string[] = [];
@@ -358,5 +361,57 @@ describe('answer options on a request', () => {
     const { dir, ledger } = await workspace();
     await fs.writeFile(ledger, line(request({ id: 'a', options: ['Yes', 'No'] })), 'utf8');
     expect((await listOpenInputRequests(dir, NOW))[0]).toMatchObject({ id: 'a', options: ['Yes', 'No'] });
+  });
+});
+
+describe('typed ledger entry parsing', () => {
+  it('ledgerEntryTime safely handles non-objects and missing timestamp', () => {
+    expect(ledgerEntryTime(null, NOW)).toBeNull();
+    expect(ledgerEntryTime(undefined, NOW)).toBeNull();
+    expect(ledgerEntryTime(123, NOW)).toBeNull();
+    expect(ledgerEntryTime('string', NOW)).toBeNull();
+    expect(ledgerEntryTime({}, NOW)).toBeNull();
+    expect(ledgerEntryTime({ timestamp: 12345 }, NOW)).toBeNull();
+    expect(ledgerEntryTime({ timestamp: 'invalid-date' }, NOW)).toBeNull();
+  });
+
+  it('ledgerEntryTime parses valid ISO timestamp within skew', () => {
+    const iso = new Date(NOW).toISOString();
+    expect(ledgerEntryTime({ timestamp: iso }, NOW)).toBe(NOW);
+  });
+
+  it('parseInputRequestEntry returns Candidate for valid typed entry', () => {
+    const entry = {
+      id: 'req-1',
+      kind: 'input_request',
+      timestamp: new Date(NOW - 1000).toISOString(),
+      harness: 'claude',
+      message: 'Choose option',
+      options: ['A', 'B'],
+    };
+    const result = parseInputRequestEntry(entry, NOW - 60000, NOW);
+    expect(result).toEqual({
+      id: 'req-1',
+      timestamp: entry.timestamp,
+      harness: 'claude',
+      message: 'Choose option',
+      options: ['A', 'B'],
+      time: NOW - 1000,
+    });
+  });
+
+  it('parseInputRequestEntry rejects invalid entries or non-matching kinds', () => {
+    expect(parseInputRequestEntry(null, 0, NOW)).toBeNull();
+    expect(parseInputRequestEntry({ kind: 'other' }, 0, NOW)).toBeNull();
+    expect(parseInputRequestEntry({ kind: 'input_request', message: '' }, 0, NOW)).toBeNull();
+    expect(parseInputRequestEntry({ kind: 'input_request', message: 'test', timestamp: 'invalid' }, 0, NOW)).toBeNull();
+  });
+
+  it('parseInputAckEntry returns time for input_ack and null for others', () => {
+    const iso = new Date(NOW - 5000).toISOString();
+    expect(parseInputAckEntry({ kind: 'input_ack', timestamp: iso }, NOW)).toBe(NOW - 5000);
+    expect(parseInputAckEntry({ kind: 'input_request', timestamp: iso }, NOW)).toBeNull();
+    expect(parseInputAckEntry(null, NOW)).toBeNull();
+    expect(parseInputAckEntry({}, NOW)).toBeNull();
   });
 });

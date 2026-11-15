@@ -313,8 +313,9 @@ export class AcpCliAdapter extends EventEmitter implements AgentHarness {
     const update = params.update;
 
     if (update.sessionUpdate === 'usage_update') {
-      const rawUsed = (update as any).used;
-      const rawSize = (update as any).size;
+      const usageUpdate = update as { used?: unknown; size?: unknown };
+      const rawUsed = usageUpdate.used;
+      const rawSize = usageUpdate.size;
       const used = typeof rawUsed === 'number' && Number.isFinite(rawUsed) ? rawUsed : 0;
       const size = typeof rawSize === 'number' && Number.isFinite(rawSize) ? rawSize : 0;
       const quota: NormalizedRemainingQuota = {

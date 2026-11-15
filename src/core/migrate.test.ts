@@ -258,10 +258,10 @@ describe('core/migrate', () => {
       expect(existsSync(path.join(wsDir, 'contextspace.json'))).toBe(true);
 
       expect(existsSync(path.join(wsDir, '.nexusflow-state.json'))).toBe(false);
-      expect(existsSync(path.join(wsDir, '.contextspace-state.json'))).toBe(true);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'state.json'))).toBe(true);
 
       expect(existsSync(path.join(wsDir, '.nexusflow-analysis-cache.json'))).toBe(false);
-      expect(existsSync(path.join(wsDir, '.contextspace-analysis-cache.json'))).toBe(true);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'analysis-cache.json'))).toBe(true);
 
       expect(existsSync(path.join(wsDir, '.nexusflow'))).toBe(false);
       expect(existsSync(path.join(wsDir, '.contextspace'))).toBe(true);
@@ -282,8 +282,10 @@ describe('core/migrate', () => {
       };
       await saveWorkspaceState(loadedState);
 
-      // Verify that .nexusflow-state.json was NOT recreated and .contextspace-state.json was updated
+      // Verify that .nexusflow-state.json was NOT recreated and .contextspace/state.json was updated
       expect(existsSync(path.join(wsDir, '.nexusflow-state.json'))).toBe(false);
+      expect(existsSync(path.join(wsDir, '.contextspace-state.json'))).toBe(false);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'state.json'))).toBe(true);
       const reloadedState = await loadWorkspaceState(wsDir);
       expect(reloadedState.repos['repo-two']).toBeDefined();
       expect(reloadedState.repos['repo-two'].repoName).toBe('repo-two');
@@ -511,7 +513,7 @@ describe('core/migrate', () => {
       // Verify that ephemeral files ARE ignored
       const checkEphemeral = await execa(
         'git',
-        ['check-ignore', '.contextspace-analysis-cache.json', '.contextspace/workspace-state.json'],
+        ['check-ignore', '.contextspace-analysis-cache.json', '.contextspace/workspace-state.json', '.contextspace/state.json', '.contextspace-state.json'],
         { cwd: wsDir, reject: false },
       );
       expect(checkEphemeral.exitCode).toBe(0);
@@ -553,6 +555,48 @@ describe('core/migrate', () => {
       // Verify git working directory is clean
       const status = await execa('git', ['status', '--porcelain'], { cwd: wsDir });
       expect(status.stdout.trim()).toBe('');
+    });
+
+    it('migrates root machine files (.contextspace-state.json, running, cache, locks) into .contextspace/ and keeps state out of git status', async () => {
+      const wsDir = path.join(tempDir, 'root-machine-files-ws');
+      await fs.mkdir(wsDir, { recursive: true });
+      await execa('git', ['init'], { cwd: wsDir });
+      await execa('git', ['config', '--local', 'user.name', 'ContextSpace Test'], { cwd: wsDir });
+      await execa('git', ['config', '--local', 'user.email', 'test@contextspace.local'], { cwd: wsDir });
+
+      await fs.writeFile(path.join(wsDir, 'contextspace.json'), JSON.stringify({ id: 'test-mf', branchName: 'test-mf' }));
+      await fs.writeFile(path.join(wsDir, 'contextspace-knowledge.md'), '# Knowledge\n');
+      await fs.writeFile(path.join(wsDir, '.contextspace-state.json'), JSON.stringify({ workspacePath: wsDir, repos: { api: { repoName: 'api', lastSyncStatus: 'up-to-date' } } }));
+      await fs.writeFile(path.join(wsDir, '.contextspace-running.json'), JSON.stringify({ workspacePath: wsDir, services: [] }));
+      await fs.writeFile(path.join(wsDir, '.contextspace-analysis-cache.json'), JSON.stringify({ version: 1, repos: {} }));
+      await fs.writeFile(path.join(wsDir, '.contextspace-state.lock'), 'lock');
+      await fs.writeFile(path.join(wsDir, '.contextspace-mutation.lock'), 'lock');
+
+      expect(await isLegacyWorkspace(wsDir)).toBe(true);
+      const report = await migrateWorkspace(wsDir, { dryRun: false, refresh: false });
+      expect(report.isLegacy).toBe(true);
+
+      // Root machine files should be moved into .contextspace/
+      expect(existsSync(path.join(wsDir, '.contextspace-state.json'))).toBe(false);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'state.json'))).toBe(true);
+      expect(existsSync(path.join(wsDir, '.contextspace-running.json'))).toBe(false);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'running.json'))).toBe(true);
+      expect(existsSync(path.join(wsDir, '.contextspace-analysis-cache.json'))).toBe(false);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'analysis-cache.json'))).toBe(true);
+      expect(existsSync(path.join(wsDir, '.contextspace-state.lock'))).toBe(false);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'state.lock'))).toBe(true);
+      expect(existsSync(path.join(wsDir, '.contextspace-mutation.lock'))).toBe(false);
+      expect(existsSync(path.join(wsDir, '.contextspace', 'mutation.lock'))).toBe(true);
+
+      // State is loadable from .contextspace/state.json
+      const state = await loadWorkspaceState(wsDir);
+      expect(state.repos.api).toBeDefined();
+
+      // Ensure git status does not show state file
+      const gitignore = await fs.readFile(path.join(wsDir, '.gitignore'), 'utf-8');
+      expect(gitignore).toContain('/.contextspace/state.json');
+      const checkIgnore = await execa('git', ['check-ignore', '.contextspace/state.json', '.contextspace-state.json'], { cwd: wsDir });
+      expect(checkIgnore.exitCode).toBe(0);
     });
   });
 });

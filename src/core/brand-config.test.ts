@@ -184,6 +184,52 @@ describe('Brand Configuration System', () => {
     }
   });
 
+  it('resolves machine files into .contextspace/ with root fallback', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cs-test-machine-'));
+    try {
+      // 1. None exist -> canonical primary in .contextspace/
+      const missingState = await resolveWorkspaceFilePath(tempDir, 'state');
+      expect(missingState.path).toBe(path.join(tempDir, '.contextspace', 'state.json'));
+      expect(missingState.exists).toBe(false);
+
+      // 2. Fallback root file exists (.contextspace-state.json)
+      await fs.writeFile(path.join(tempDir, '.contextspace-state.json'), '{"v":"cs"}');
+      await fs.writeFile(path.join(tempDir, '.nexusflow-state.json'), '{"v":"nf"}');
+      const fallbackState = await resolveWorkspaceFilePath(tempDir, 'state');
+      // .contextspace-state.json takes precedence over .nexusflow-state.json
+      expect(fallbackState.path).toBe(path.join(tempDir, '.contextspace-state.json'));
+      expect(fallbackState.isLegacy).toBe(true);
+      expect(fallbackState.exists).toBe(true);
+
+      // 3. Primary exists (.contextspace/state.json takes precedence)
+      await fs.mkdir(path.join(tempDir, '.contextspace'), { recursive: true });
+      await fs.writeFile(path.join(tempDir, '.contextspace', 'state.json'), '{}');
+      const primaryState = await resolveWorkspaceFilePath(tempDir, 'state');
+      expect(primaryState.path).toBe(path.join(tempDir, '.contextspace', 'state.json'));
+      expect(primaryState.isLegacy).toBe(false);
+      expect(primaryState.exists).toBe(true);
+
+      // 4. Machine lock and state files resolve to .contextspace/
+      const lockRes = resolveWorkspaceFilePathSync(tempDir, 'stateLock');
+      expect(lockRes.path).toBe(path.join(tempDir, '.contextspace', 'state.lock'));
+      expect(lockRes.isLegacy).toBe(false);
+
+      const mutRes = resolveWorkspaceFilePathSync(tempDir, 'mutationLock');
+      expect(mutRes.path).toBe(path.join(tempDir, '.contextspace', 'mutation.lock'));
+      expect(mutRes.isLegacy).toBe(false);
+
+      const runRes = resolveWorkspaceFilePathSync(tempDir, 'runningState');
+      expect(runRes.path).toBe(path.join(tempDir, '.contextspace', 'running.json'));
+      expect(runRes.isLegacy).toBe(false);
+
+      const cacheRes = resolveWorkspaceFilePathSync(tempDir, 'analysisCache');
+      expect(cacheRes.path).toBe(path.join(tempDir, '.contextspace', 'analysis-cache.json'));
+      expect(cacheRes.isLegacy).toBe(false);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   describe('resolveWorkspaceChatLedger & readWorkspaceChatMessages', () => {
     it('resolves native workspace chat ledger (.contextspace)', async () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cs-chat-native-'));

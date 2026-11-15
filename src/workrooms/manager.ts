@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 import { getConfigDir } from '../core/config.js';
 import { acquireLock } from '../core/locks.js';
+import { getErrorCode } from '../utils/errors.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import {
   WORKROOM_MAX_DOCUMENT_BYTES,
@@ -122,7 +123,7 @@ function processIsAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EPERM';
+    return getErrorCode(error) === 'EPERM';
   }
 }
 

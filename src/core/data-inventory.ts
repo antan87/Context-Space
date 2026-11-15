@@ -53,7 +53,7 @@ export const DATA_INVENTORY: readonly DataClass[] = [
   },
   {
     id: 'lifecycle', title: 'Milestones and verification history', owner: 'ContextSpace',
-    storage: '.contextspace-state.json (or legacy state) holds lifecycle and verification state, including the last check of each checkpoint.',
+    storage: '.contextspace/state.json (or legacy state) holds lifecycle and verification state, including the last check of each checkpoint.',
     network: 'Stored locally. Verification executes your configured commands, which can access the network.',
     retention: 'No automatic expiry of stored state. New verification can replace prior evidence; workspace deletion removes the local file, archiving keeps it.',
     controls: 'Edit milestones through Plan or the lifecycle commands. Passing checks describe the tested code and must be rerun after changes.',

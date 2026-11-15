@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type { HarnessAdapter, SessionHandle } from '../harness/interface.js';
 import type { NormalizedUsage } from '../harness/types.js';
 import type { AgentExecutionProfile, AgentHarness } from './ProviderRegistry.js';
@@ -7,6 +9,7 @@ import { CodexSdkAdapter } from './CodexSdkAdapter.js';
 import { acquireLock, type ReleaseLock } from '../core/locks.js';
 import { checkGenerationLock } from '../core/generation-lock.js';
 import { resolveWorkspaceFilePath } from '../core/constants.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export interface TeamAgentSpec {
   id: string;
@@ -79,7 +82,7 @@ export interface TeamworkResult {
 export class MultiAgentOrchestrator extends EventEmitter {
   private readonly workspacePath: string;
   private readonly options?: MultiAgentOrchestratorOptions;
-  private readonly runningHandles: Map<string, SessionHandle | any> = new Map();
+  private readonly runningHandles: Map<string, SessionHandle | AgentHarness> = new Map();
   private isInterrupted = false;
 
   constructor(workspacePath: string, options?: MultiAgentOrchestratorOptions) {
@@ -136,13 +139,14 @@ export class MultiAgentOrchestrator extends EventEmitter {
     if (isSharedWorktree) {
       const lockRes = await resolveWorkspaceFilePath(this.workspacePath, 'mutationLock');
       const lockPath = lockRes.path;
+      await fs.mkdir(path.dirname(lockPath), { recursive: true });
       try {
         releaseMutationLock = await acquireLock(lockPath, {
           staleMs: 60_000,
           timeoutMs: 10_000,
           timeoutMessage: 'Could not acquire multi-agent workspace mutation lock.',
         });
-      } catch (err: any) {
+      } catch (err) {
         if (this.isInterrupted) {
           for (const status of statuses.values()) {
             status.status = 'cancelled';
@@ -225,10 +229,10 @@ export class MultiAgentOrchestrator extends EventEmitter {
     this.isInterrupted = true;
     const interrupts: Promise<void>[] = [];
     for (const handle of this.runningHandles.values()) {
-      if (typeof handle.interrupt === 'function') {
+      if ('interrupt' in handle && typeof handle.interrupt === 'function') {
         interrupts.push(handle.interrupt());
-      } else if (typeof handle.stop === 'function') {
-        handle.stop();
+      } else if ('stop' in handle && typeof handle.stop === 'function') {
+        interrupts.push(Promise.resolve(handle.stop()));
       }
     }
     await Promise.allSettled(interrupts);
@@ -297,16 +301,16 @@ export class MultiAgentOrchestrator extends EventEmitter {
           try {
             await adapter.start(targetCwd);
             await adapter.send(spec.prompt, spec.executionProfile ?? 'review');
-          } catch (err: any) {
+          } catch (err) {
             status.status = 'failed';
-            status.error = err.message;
+            status.error = toErrorMessage(err);
             reject(err);
           }
         })();
       });
-    } catch (err: any) {
+    } catch (err) {
       status.status = 'failed';
-      status.error = err.message;
+      status.error = toErrorMessage(err);
     } finally {
       this.runningHandles.delete(spec.id);
     }

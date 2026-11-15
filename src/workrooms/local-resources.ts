@@ -366,7 +366,7 @@ export async function applyCachedResource(
   const pkg = await readCachedPackage(roomId, digest);
   assertLocalResourceCompatibility(pkg.manifest);
   if (pkg.manifest.digest !== approvedDigest) throw new WorkroomValidationError('The cached resource changed after review. Download and review it again.');
-  const definition = parseResourceDefinition(pkg) as Record<string, any>;
+  const definition = parseResourceDefinition(pkg) as Record<string, unknown>;
   const assertLocalRevisionUnchanged = async () => {
     const current = await getLocalResourceDefinition(pkg.manifest.kind, pkg.manifest.id);
     if (digestLocalResourceDefinition(current) !== approvedLocalDigest) {
@@ -382,12 +382,12 @@ export async function applyCachedResource(
         title: typeof definition.title === 'string' ? definition.title : undefined,
         category: String(definition.category ?? 'general'),
         description: String(definition.description ?? ''),
-        tags: Array.isArray(definition.tags) ? definition.tags : [],
-        allowedTools: Array.isArray(definition.allowedTools) ? definition.allowedTools : undefined,
-        parameters: Array.isArray(definition.parameters) ? definition.parameters : undefined,
+        tags: Array.isArray(definition.tags) ? (definition.tags as string[]) : [],
+        allowedTools: Array.isArray(definition.allowedTools) ? (definition.allowedTools as string[]) : undefined,
+        parameters: Array.isArray(definition.parameters) ? (definition.parameters as never) : undefined,
         content: String(definition.content ?? ''),
-        references: Array.isArray(definition.references) ? definition.references : [],
-        scripts: Array.isArray(definition.scripts) ? definition.scripts : [],
+        references: Array.isArray(definition.references) ? (definition.references as never) : [],
+        scripts: Array.isArray(definition.scripts) ? (definition.scripts as never) : [],
         }, {
           beforeCommit: assertLocalRevisionUnchanged,
           supportFileModes: Object.fromEntries(pkg.files

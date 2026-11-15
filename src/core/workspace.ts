@@ -141,14 +141,26 @@ async function scaffoldWorkspaceDir(
     // analysis/runtime state from the workspace artifact repository.
     const gitignoreLines = [
       ...(!inPlace ? repos.map((repo) => `/${repo.name}/`) : []),
-      '/.contextspace-analysis-cache.json',
+      '/.contextspace/state.json',
       '/.contextspace/workspace-state.json',
+      '/.contextspace/running.json',
+      '/.contextspace/analysis-cache.json',
       '/.contextspace/*.lock',
+      '/.contextspace-state.json',
+      '/.contextspace-running.json',
+      '/.contextspace-analysis-cache.json',
+      '/.contextspace-*.lock',
       '/.contextspace/resource-staging-*',
       '/.contextspace/logs/',
-      '/.nexusflow-analysis-cache.json',
+      '/.nexusflow/state.json',
       '/.nexusflow/workspace-state.json',
+      '/.nexusflow/running.json',
+      '/.nexusflow/analysis-cache.json',
       '/.nexusflow/*.lock',
+      '/.nexusflow-state.json',
+      '/.nexusflow-running.json',
+      '/.nexusflow-analysis-cache.json',
+      '/.nexusflow-*.lock',
       '/.nexusflow/resource-staging-*',
       '/.nexusflow/logs/',
     ];
@@ -714,7 +726,16 @@ export async function addRepoToWorkspace(
     try {
       const workspaceName = path.basename(workspacePath);
       const codeWorkspacePath = path.join(workspacePath, `${workspaceName}.code-workspace`);
-      let codeWorkspace: any;
+      interface CodeWorkspaceFolder {
+        path: string;
+        name?: string;
+      }
+      interface CodeWorkspaceFile {
+        folders?: CodeWorkspaceFolder[];
+        settings?: Record<string, unknown>;
+        [key: string]: unknown;
+      }
+      let codeWorkspace: CodeWorkspaceFile;
       try {
         codeWorkspace = JSON.parse(await fs.readFile(codeWorkspacePath, 'utf-8'));
       } catch {
@@ -725,7 +746,7 @@ export async function addRepoToWorkspace(
       }
       const folderPath = inPlace ? newRepoInfo.path : newRepoInfo.name;
       const existingFolders = codeWorkspace.folders ?? [];
-      if (!existingFolders.some((f: any) => f.name === newRepoInfo.name || f.path === folderPath)) {
+      if (!existingFolders.some((f) => f.name === newRepoInfo.name || f.path === folderPath)) {
         codeWorkspace.folders = [
           ...existingFolders,
           { path: folderPath, name: newRepoInfo.name },
