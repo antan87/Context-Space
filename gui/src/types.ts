@@ -450,6 +450,8 @@ export interface SkillItem {
   references?: SkillSupportingFile[];
   scripts?: SkillSupportingFile[];
   scope?: 'workspace' | 'global';
+  /** Every workspace gets this skill unless it leaves it out. */
+  alwaysOn?: boolean;
   /** Set when a harness (Claude Code, Codex, ...) owns the skill; it is read-only here. */
   source?: { harness: string; label: string; root: string };
   organization?: string;

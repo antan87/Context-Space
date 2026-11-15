@@ -35,4 +35,18 @@ describe('GET /api/workspace/:id/questions', () => {
     expect(body.answers[0].parts.map((part: { title: string }) => part.title)).toEqual(['In short', 'Part']);
     expect(body.answers[0].parts[1].cards[0]).toMatchObject({ kind: 'code', where: 'nowhere/a.ts', check: { status: 'not-in-workspace' } });
   });
+
+  it('gives the area an answer is about when it is a checkpoint or the plan, and none otherwise', async () => {
+    await fs.mkdir(path.join(root, 'explain'));
+    const write = (name: string, area?: string) => fs.writeFile(path.join(root, 'explain', name), `${area === undefined ? '' : `---\narea: ${area}\n---\n`}# ${name}\n\nShort.\n`);
+    await write('a.md', 'checkpoint:the-board');
+    await write('b.md', 'plan:own');
+    await write('c.md');
+    await write('d.md', 'checkpoint:');
+    await write('e.md', 'somewhere else');
+    await write('f.md', 'checkpoint:användare-kan-logga-in');
+    const body = await (await app.request('/api/workspace/demo/questions')).json();
+    const areas = Object.fromEntries(body.answers.map((answer: { path: string; area?: string }) => [answer.path, answer.area ?? null]));
+    expect(areas).toEqual({ 'explain/a.md': 'checkpoint:the-board', 'explain/b.md': 'plan:own', 'explain/c.md': null, 'explain/d.md': null, 'explain/e.md': null, 'explain/f.md': 'checkpoint:användare-kan-logga-in' });
+  });
 });

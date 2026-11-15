@@ -7,6 +7,7 @@
  */
 import { plainText } from '../../lib/plainText.js';
 import type { AreaData, BoardArea } from './boardAreas.js';
+import type { AreaCountItem } from './boardCountNav.js';
 
 export type CodeCheckStatus = 'matches' | 'moved' | 'changed' | 'gone' | 'not-in-workspace' | 'unreadable' | 'none';
 export interface CodeCheck { status: CodeCheckStatus; start?: number; end?: number; current?: string }
@@ -17,7 +18,7 @@ export type QuestionCardDto =
   | { kind: 'picture'; alt: string; path: string; src: string | null }
   | { kind: 'diagram'; source: string };
 export interface QuestionPartDto { title: string; heading: string | null; cards: QuestionCardDto[] }
-export interface QuestionAnswerDto { path: string; question: string; summary: string; modifiedAt: string; parts: QuestionPartDto[] }
+export interface QuestionAnswerDto { path: string; question: string; summary: string; /** The Area it is about: `checkpoint:<plan key>` or `plan:own`. */ area?: string; modifiedAt: string; parts: QuestionPartDto[] }
 
 export const QUESTION_AREA_PREFIX = 'question:';
 export const ANSWER_CARD_PREFIX = 'qcard:';
@@ -53,7 +54,7 @@ export type AnswerCardData = CardBase & (
 
 export interface AnswerCardDef { id: string; data: AnswerCardData }
 export interface AnswerPartView { rowId: string; title: string; heading: string | null; cards: AnswerCardDef[] }
-export interface AnswerView { path: string; question: string; summary: string; modifiedAt: string; parts: AnswerPartView[] }
+export interface AnswerView { path: string; question: string; summary: string; area?: string; modifiedAt: string; parts: AnswerPartView[] }
 
 /** Text as one plain, readable run: no marks of Markdown, lists and tables as words. */
 export function readableText(text: string): string {
@@ -124,6 +125,8 @@ export function codeOpenLine(card: Extract<AnswerCardData, { variant: 'code' }>)
 const text = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const line = (value: unknown): number | undefined => (typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : undefined);
+/** What an answer may name as its Area: a plan checkpoint or the plan's own steps. */
+const AREA_ID = /^(?:plan:own|checkpoint:[\p{L}\p{N}][\p{L}\p{N}_-]{0,199})$/u;
 const STATUSES: ReadonlySet<string> = new Set(['matches', 'moved', 'changed', 'gone', 'not-in-workspace', 'unreadable', 'none']);
 
 function cleanCheck(raw: unknown): CodeCheck {
@@ -176,6 +179,7 @@ export function cleanAnswers(raw: unknown): QuestionAnswerDto[] {
     }
     answers.push({
       path: entry.path, question: text(entry.question, 400) || entry.path, summary: text(entry.summary, 1000),
+      ...(typeof entry.area === 'string' && AREA_ID.test(entry.area) ? { area: entry.area } : {}),
       modifiedAt: typeof entry.modifiedAt === 'string' ? entry.modifiedAt : '', parts,
     });
   }
@@ -227,7 +231,7 @@ export function answerView(answer: QuestionAnswerDto): AnswerView {
       return { id, data: { ...base, variant: 'code', title: codeHead(card, card.check), language: card.language, copy: card.copy, check: card.check, ...(card.where !== undefined ? { where: card.where } : {}), ...(card.repo !== undefined ? { repo: card.repo } : {}), ...(card.repoPath !== undefined ? { repoPath: card.repoPath } : {}), ...(card.file !== undefined ? { file: card.file } : {}), ...(card.start !== undefined ? { start: card.start } : {}), ...(card.end !== undefined ? { end: card.end } : {}) } };
     }),
   }));
-  return { path: answer.path, question: answer.question, summary: answer.summary, modifiedAt: answer.modifiedAt, parts };
+  return { path: answer.path, question: answer.question, summary: answer.summary, ...(answer.area ? { area: answer.area } : {}), modifiedAt: answer.modifiedAt, parts };
 }
 
 /** One Area for each answer, newest first (the order the backend sends them in). Nothing for no answers. */
@@ -296,4 +300,44 @@ export function differingLines(before: readonly string[], after: readonly string
     else j += 1;
   }
   return { before: left, after: right };
+}
+
+// ─── Beside its Area ────────────────────────────────────────────────────────
+
+/** "1 question", "2 questions": what an Area's card says of the answers about it. */
+export const questionWords = (count: number) => `${count} ${count === 1 ? 'question' : 'questions'}`;
+
+/**
+ * Puts each answer right after the Area it is about, when that Area is one of `areas` (a plan Area, not Workspace files or Current work),
+ * and says so on both: the Area's card gets "1 question" (its button opens the newest answer), the answer gets `about` (its header's
+ * "About: <Area>"). Answers whose Area is missing or not there stay in `rest`, in the order they came (newest first). Pure; the
+ * Areas and the answers it is given are not changed.
+ */
+export function placeQuestionAreas(areas: readonly BoardArea[], answers: readonly BoardArea[]): { areas: BoardArea[]; rest: BoardArea[] } {
+  const host = new Map<string, BoardArea>();
+  for (const area of areas) if (area.kind === 'checkpoint' || area.kind === 'plan') host.set(area.id, area);
+  const placed = new Map<string, BoardArea[]>();
+  const rest: BoardArea[] = [];
+  for (const answer of answers) {
+    const target = answer.answer?.area ? host.get(answer.answer.area) : undefined;
+    if (!target) { rest.push(answer); continue; }
+    placed.set(target.id, [...(placed.get(target.id) ?? []), { ...answer, data: { ...answer.data, about: { id: target.id, title: target.data.title } } }]);
+  }
+  const out: BoardArea[] = [];
+  for (const area of areas) {
+    const mine = placed.get(area.id);
+    if (!mine) { out.push(area); continue; }
+    const label = questionWords(mine.length);
+    const item: AreaCountItem = {
+      kind: 'question', count: mine.length, label,
+      actionLabel: mine.length === 1 ? `Open the answer: ${mine[0]!.data.title}` : `Open the newest of the ${label}: ${mine[0]!.data.title}`,
+    };
+    // Where the card already has buttons for what is new, "1 question" stands among them, before the updates
+    const news = area.data.newsItems;
+    const newsItems = news && news.length > 0
+      ? (() => { const at = news.findIndex((entry) => entry.kind === 'updates'); return at < 0 ? [...news, item] : [...news.slice(0, at), item, ...news.slice(at)]; })()
+      : undefined;
+    out.push({ ...area, data: { ...area.data, questionItem: item, questionTarget: mine[0]!.id, ...(newsItems ? { newsItems } : {}) } }, ...mine);
+  }
+  return { areas: out, rest };
 }

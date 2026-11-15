@@ -169,6 +169,19 @@ describe('working on the board', () => {
     await ok('board_link', { from: read.canLinkTo.checkpoints[0].id, to: read.canLinkTo.documents[0].id, label: 'built from' });
   });
 
+  it('lists the answers in explain/ as questions, with the area, the parts and the copies that do not match', async () => {
+    expect((await ok('board_read')).questions).toEqual([]);
+    await fs.mkdir(path.join(root, 'Repo'));
+    await fs.writeFile(path.join(root, 'Repo', 'a.ts'), 'one\ntwo\n');
+    await fs.writeFile(path.join(root, 'contextspace.json'), manifest({ repos: [path.join(root, 'Repo')] }));
+    await fs.mkdir(path.join(root, 'explain'));
+    await fs.writeFile(path.join(root, 'explain', 'how.md'), ['---', 'area: plan:own', '---', '# How?', '', 'Like this.', '', '## Part', '```ts Repo/a.ts:1-2', 'one', 'TWO', '```'].join('\n'));
+    const { questions } = await ok('board_read');
+    expect(questions).toEqual([{ path: 'explain/how.md', question: 'How?', area: 'plan:own', parts: ['Part'], codeBlocks: 1, notMatching: [{ where: 'Repo/a.ts:1-2', status: 'changed' }] }]);
+    expect(findTool('board_read')!.description).toMatch(/explain\/ as questions/);
+    expect(findTool('board_read')!.description).toMatch(/contextspace-explain/);
+  });
+
   it('answers in compact JSON, with long bodies and descriptions cut and marked, and one card in full on request', async () => {
     await fs.writeFile(path.join(root, 'docs', 'long.pdf'), 'pdf');
     const long = `${'word '.repeat(200)}end`;

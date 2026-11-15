@@ -13,6 +13,7 @@ import {
   BOARD_LIMITS, BOARD_NODE_ID_FORMATS, boardActorName, boardFields, changeBoard, isBoardStepKey, readBoard,
   type Board, type BoardCard, type BoardChange,
 } from '../core/board.js';
+import { readQuestions, summarizeAnswers } from '../core/questions.js';
 import { loadWorkGuidance } from '../core/work-guidance.js';
 import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
 import type { NexusFlowTool } from './tools.js';
@@ -202,7 +203,7 @@ export interface BoardAreas {
 }
 
 /** The areas cards can belong to, and the one under way: the first checkpoint not done, else the last, else the plan's own. */
-function areasOf(plan: PlanFile): BoardAreas {
+export function areasOf(plan: PlanFile): BoardAreas {
   const rawItems: Array<{ id: string; title: string; done: boolean }> = [];
   if (plan.steps.length > 0 || plan.decisions.some((decision) => !decision.done)) {
     rawItems.push({ id: 'plan:own', title: 'Plan', done: false });
@@ -240,7 +241,7 @@ async function linkTargets(root: string) {
 export const boardTools: NexusFlowTool[] = [
   boardTool(
     'board_read',
-    `Read the workspace board: the cards people and AIs put on it, the lines between things, where things were moved to, the board's revision, and the areas cards can belong to (checkpoint:<plan key> or plan:own, with areas.current showing the checkpoint under way). Also lists what a card or line can point at: the plan's checkpoints and the source documents, each with the node id to use, and the node id formats. Call it before you change the board, so you do not add what is already there. The board tab also draws the plan's checkpoints, the source documents and the new commits by itself; this lists only what was added or arranged by hand. To keep the answer small, a note's body and a file card's description longer than ${PREVIEW_CHARS} characters are cut and the card says "truncated": true; pass cardId to read that one card in full, with its lines and place.`,
+    `Read the workspace board: the cards people and AIs put on it, the lines between things, where things were moved to, the board's revision, and the areas cards can belong to (checkpoint:<plan key> or plan:own, with areas.current showing the checkpoint under way). Also lists the existing answers in explain/ as questions (path, question, area, parts, code blocks, and the copies that no longer match: read before you answer a question about how something works, fix what does not match, and see the skill contextspace-explain for the format). Also lists what a card or line can point at: the plan's checkpoints and the source documents, each with the node id to use, and the node id formats. Call it before you change the board, so you do not add what is already there. The board tab also draws the plan's checkpoints, the source documents and the new commits by itself; this lists only what was added or arranged by hand. To keep the answer small, a note's body and a file card's description longer than ${PREVIEW_CHARS} characters are cut and the card says "truncated": true; pass cardId to read that one card in full, with its lines and place.`,
     readSchema,
     async ({ cardId }, { root }) => {
       const board = await readBoard(root);
@@ -257,6 +258,7 @@ export const boardTools: NexusFlowTool[] = [
       return {
         board: { ...board, cards: board.cards.map(previewOf) },
         areas,
+        questions: summarizeAnswers(await readQuestions(root).catch(() => [])),
         canLinkTo: { ...canLinkTo, commits: `Not listed. Name one as ${BOARD_NODE_ID_FORMATS.commit}, with the hash as git log shows it (7 characters or more).` },
         nodeIds: BOARD_NODE_ID_FORMATS,
         limits: { cards: BOARD_LIMITS.cards, links: BOARD_LIMITS.links, positions: BOARD_LIMITS.positions },

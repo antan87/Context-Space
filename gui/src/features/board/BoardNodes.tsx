@@ -19,6 +19,7 @@ import { agoText } from '../plan/whatsNew.js';
 import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } from './commitNotes.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
+import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
 import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
@@ -2119,6 +2120,34 @@ function AnswerCountLine({ data }: { data: AreaData }) {
   );
 }
 
+/** How wide a count button's words are at 12 px, with its padding: a guess made without the browser. */
+const newsLabelWidth = (label: string) => Math.ceil(textEm(label) * 12) + 8;
+
+/**
+ * "1 question" on the card of an Area: the answers about it, as a button of its own that opens the newest answer. Not drawn where the card
+ * already has its buttons for what is new (`newsItems` of tier 3: it stands among them), nor for an Area without answers.
+ */
+function QuestionCount({ id, data, className }: { id: string; data: AreaData; className?: string }) {
+  const actions = useContext(BoardActionsContext);
+  const item = data.questionItem;
+  if (!item || (data.tier === 3 && (data.newsItems?.length ?? 0) > 0)) return null;
+  return (
+    <button
+      type="button"
+      data-count-kind="question"
+      aria-label={item.actionLabel}
+      title={item.actionLabel}
+      onClick={(e) => {
+        e.stopPropagation();
+        actions?.openCount?.(id, 'question', e.currentTarget);
+      }}
+      className={cn('nodrag nopan inline-flex min-h-[24px] shrink-0 items-center whitespace-nowrap rounded px-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer', className)}
+    >
+      {item.label}
+    </button>
+  );
+}
+
 /** Whether an Area is done, under way ("Now") or neither, as a mark that stays quiet: neither is the usual and says nothing. */
 function AreaMark({ data }: { data: AreaData }) {
   if (data.done) return <span className="inline-flex items-center"><CircleCheck aria-hidden="true" className="size-4 shrink-0 text-state-done" /><span className="sr-only">Done</span></span>;
@@ -2129,11 +2158,13 @@ function AreaMark({ data }: { data: AreaData }) {
 }
 
 /** An area at Level 0 as one line, where the cards would not be readable: its state, its title, how far it is, and a thin bar. A press steps into it, as on the card. */
-export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
+export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
   const actions = useContext(BoardActionsContext);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
   const isNotStarted = !isStepless(data.kind) && data.stepsTotal > 0 && data.stepsDone === 0;
   const listArea = data.kind === 'files' || data.kind === 'questions';
+  // The buttons for what is new stand in 45% of the row; one that cannot show its whole words is left out, with its comma
+  const newsShown = fitNewsItems(data.newsItems ?? [], (width ?? 400) * 0.45 * 0.92, newsLabelWidth);
   const fileCounts = data.kind === 'files' ? formatWorkspaceFileCounts(data, { compact: true }).join(' · ') : data.kind === 'questions' ? areaCounts(data).join(' · ') : '';
   const fileFullCounts = listArea ? areaCounts(data).join(' · ') : '';
 
@@ -2175,9 +2206,9 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
         </span>
       )}
       {/* Tier 3: Moved since you looked, saying what ("2 commits, 1 picture") */}
-      {data.tier === 3 && data.newsItems && data.newsItems.length > 0 ? (
+      {data.tier === 3 && newsShown.length > 0 ? (
         <span className="flex min-w-0 max-w-[45%] items-center gap-1 overflow-hidden text-xs" title={data.newsSummary}>
-          {data.newsItems.map((item, idx) => (
+          {newsShown.map((item, idx) => (
             <Fragment key={item.kind}>
               {idx > 0 && <span aria-hidden="true" className="-ml-1 shrink-0 select-none text-muted-foreground/60">,</span>}
               <button
@@ -2188,7 +2219,8 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
                   e.stopPropagation();
                   actions?.openCount?.(id, item.kind, e.currentTarget);
                 }}
-                className="nodrag nopan inline-flex min-h-[24px] min-w-0 items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+                data-count-kind={item.kind}
+                className={cn('nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer', newsButtonFit(data, item.kind))}
               >
                 <span className="truncate">{item.label}</span>
               </button>
@@ -2212,6 +2244,7 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
           <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />Waiting
         </span>
       )}
+      <QuestionCount id={id} data={data} />
       {fileCounts && data.tier !== 2 && data.tier !== 3 && (
         <span className="min-w-0 flex-1 truncate text-right text-xs leading-4 text-muted-foreground" title={fileFullCounts || fileCounts}>
           {data.kind === 'questions' ? <AnswerCountLine data={data} /> : fileCounts}
@@ -2258,6 +2291,12 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const isNotStarted = !isStepless(data.kind) && data.stepsTotal > 0 && data.stepsDone === 0;
 
   const hasCountButtons = Boolean(data.tier === 3 && data.newsItems && data.newsItems.length > 0 && actions);
+  const newsRoom = Math.max(0, ((width ?? 240) - 26 - (showPicture ? 92 : 0) - (statusLine ? 24 : hasSteps ? Math.ceil(textEm(`${data.stepsDone} of ${data.stepsTotal}`) * 12) + 10 : 0)) * 0.97);
+  const newsShown = fitNewsItems(data.newsItems ?? [], newsRoom, newsLabelWidth);
+  // "1 question" stands at the end of the card's last line, as a button of its own over room the line keeps free for it; where the card
+  // has its buttons for what is new it stands among them
+  const showQuestion = Boolean(data.questionItem && actions && !hasCountButtons);
+  const questionRoom = data.questionItem ? Math.ceil(textEm(data.questionItem.label) * 12) + 16 : 0;
 
   const isTwoLineTitle = (data.title?.length ?? 0) > 25;
   const [overlayPos, setOverlayPos] = useState<{ top: number; left: number; maxWidth?: number }>({
@@ -2384,17 +2423,17 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
           <span className="min-w-0 truncate">{data.waitingQuestion ?? 'Waiting'}</span>
         </span>
       )}
-      {data.tier === 3 && hasCountButtons && data.newsItems ? (
+      {data.tier === 3 && hasCountButtons && newsShown.length > 0 ? (
         <span
           ref={placeholderRef}
           aria-hidden="true"
           title={data.newsSummary}
           className="invisible flex h-6 min-w-0 items-center gap-1 overflow-hidden text-xs leading-4"
         >
-          {data.newsItems.map((item, idx) => (
+          {newsShown.map((item, idx) => (
             <Fragment key={item.kind}>
               {idx > 0 && <span className="-ml-1 shrink-0 select-none">,</span>}
-              <span className="inline-flex min-h-[24px] min-w-0 items-center px-1 text-xs">
+              <span className={cn('inline-flex min-h-[24px] items-center px-1 text-xs', newsButtonFit(data, item.kind))}>
                 <span className="truncate">{item.label}</span>
               </span>
             </Fragment>
@@ -2450,8 +2489,8 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
             </span>
             {statusLine && hasStatus && <span className="flex min-w-0 items-center gap-2 pl-6">{status}</span>}
           </span>
-          {(hasSteps || (!statusLine && hasStatus)) && (
-            <span className="flex min-w-0 items-center gap-2">
+          {(hasSteps || (!statusLine && hasStatus) || showQuestion) && (
+            <span className="flex min-w-0 items-center gap-2" style={showQuestion ? { paddingRight: questionRoom } : undefined}>
               {!statusLine && status}
               {data.tier === 4 && data.nextOpenStep && (
                 <span className="min-w-0 max-w-[22ch] truncate text-xs leading-4 text-muted-foreground" title={data.nextOpenStep}>
@@ -2482,7 +2521,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       </button>
 
       {/* Sibling count buttons for Tier 3, positioned over the status line */}
-      {hasCountButtons && data.newsItems && (
+      {hasCountButtons && newsShown.length > 0 && (
         <span
           className="nodrag nopan absolute z-10 flex items-center gap-1 overflow-hidden text-xs leading-4"
           style={{
@@ -2491,7 +2530,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
             ...(overlayPos.maxWidth !== undefined ? { maxWidth: `${overlayPos.maxWidth}px` } : {}),
           }}
         >
-          {data.newsItems.map((item, idx) => (
+          {newsShown.map((item, idx) => (
             <Fragment key={item.kind}>
               {idx > 0 && <span aria-hidden="true" className="-ml-1 shrink-0 select-none text-muted-foreground/60">,</span>}
               <button
@@ -2502,13 +2541,31 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
                   e.stopPropagation();
                   actions?.openCount?.(id, item.kind, e.currentTarget);
                 }}
-                className="nodrag nopan inline-flex min-h-[24px] min-w-0 items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+                data-count-kind={item.kind}
+                className={cn('nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer', newsButtonFit(data, item.kind))}
               >
                 <span className="truncate">{item.label}</span>
               </button>
             </Fragment>
           ))}
         </span>
+      )}
+
+      {showQuestion && data.questionItem && (
+        <button
+          type="button"
+          data-count-kind="question"
+          aria-label={data.questionItem.actionLabel}
+          title={data.questionItem.actionLabel}
+          onClick={(e) => {
+            e.stopPropagation();
+            actions?.openCount?.(id, 'question', e.currentTarget);
+          }}
+          style={{ right: showPicture ? 105 : 13 }}
+          className="nodrag nopan absolute bottom-[7px] z-10 inline-flex min-h-[24px] items-center whitespace-nowrap rounded px-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+        >
+          {data.questionItem.label}
+        </button>
       )}
 
       {/* Sibling thumbnail button over picture */}

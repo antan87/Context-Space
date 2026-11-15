@@ -174,6 +174,8 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
     pictures: NavItem[];
     notes: NavItem[];
     commits: NavItem[];
+    /** The answers about this Area, listed under it as well as under Questions. */
+    questions: NavItem[];
   }
 
   const areaBuckets: AreaBucket[] = [];
@@ -220,6 +222,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
       pictures: [],
       notes: [],
       commits: [],
+      questions: [],
     };
 
     (isQuestion ? questionItems : areaItems).push(bucket.areaEntry);
@@ -362,6 +365,13 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
     areaBuckets.push(bucket);
   }
 
+  // An answer about an Area is also listed under that Area (the same entry, so it opens the same way)
+  for (const bucket of areaBuckets) {
+    const about = bucket.area.data.about;
+    const host = about ? areaBuckets.find((other) => other.area.id === about.id) : undefined;
+    if (host) host.questions.push({ ...bucket.areaEntry, id: `about:${host.area.id}:${bucket.area.id}`, subtitle: questionCountLine(bucket.area) });
+  }
+
   if (mode === 'category') {
     const CATEGORIES: Array<{ category: NavCategory; title: string; items: NavItem[]; waiting?: boolean }> = [
       { category: 'waiting', title: 'Waiting for you', items: waitingItems, waiting: true },
@@ -391,7 +401,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
   // mode === 'area'
   const sections: NavSection[] = [];
   for (const b of areaBuckets) {
-    const rawChildItems = [...b.waiting, ...b.docs, ...b.pictures, ...b.notes, ...b.commits];
+    const rawChildItems = [...b.waiting, ...b.questions, ...b.docs, ...b.pictures, ...b.notes, ...b.commits];
     const filteredChildItems = rawChildItems.filter((item) => matches(item.searchText));
 
     let finalItems = filteredChildItems;

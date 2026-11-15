@@ -7,11 +7,14 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import fse from 'fs-extra';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 
 import { slugify } from './slug.js';
+import { resolveResourcePath } from './resources.js';
+import { ALWAYS_ON_SKILL_IDS } from '../resources/selection.js';
 import { findHarnessSkillDirs } from './harness-skill-sources.js';
 import { LOCAL_SKILLS_FOLDER, SKILL_FOLDER_ADAPTERS, workspaceSkillFolders } from '../harnesses/registry.js';
 import { acquireLock, createMutationQueue } from '../core/locks.js';
@@ -572,6 +575,18 @@ export async function getAllSkills(
     skillMap.set(s.id, { ...s, scope: 'global' });
   }
 
+  // 1b. Skills the product ships for every workspace (resources/skills/<id>); a copy in the user's library with the same id wins below.
+  for (const id of ALWAYS_ON_SKILL_IDS) {
+    try {
+      const base = await resolveResourcePath(path.dirname(fileURLToPath(import.meta.url)), 'skills');
+      if (!base) continue;
+      const loaded = await loadSkillFromDir(path.join(base, id), false, base);
+      if (loaded) skillMap.set(loaded.id, { ...loaded, scope: 'global' });
+    } catch (error) {
+      console.warn(`Skipping the shipped skill "${id}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   // 2. Skills the harnesses load from their own global folders (~/.claude/skills, ~/.codex/skills, ...).
   // Read first so the ContextSpace catalog below wins an id clash. An isolated custom home skips them
   // (like the user directory below), unless the caller names a home.
@@ -709,6 +724,10 @@ export async function getAllSkills(
     }
   }
 
+  for (const id of ALWAYS_ON_SKILL_IDS) {
+    const skill = skillMap.get(id);
+    if (skill && !skill.source) skill.alwaysOn = true;
+  }
   return Array.from(skillMap.values());
 }
 

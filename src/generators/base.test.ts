@@ -258,6 +258,30 @@ describe('buildContextContent', () => {
       );
     });
 
+    it('tells every AI to answer how-it-works questions in explain/ and keep the answer true', async () => {
+      const content = await buildContextContent(ctxFor({}));
+
+      expect(content).toContain(
+        'When someone asks how something works, answer in `explain/<topic>.md` so it shows on the Board as cards (skill `contextspace-explain`); when you change code an answer points at, update the answer.',
+      );
+    });
+
+    it('drops the explain line when the workspace left the explain skill out, and keeps it otherwise', async () => {
+      const ws = path.join(dir, 'ws');
+      await fs.mkdir(ws, { recursive: true });
+      const line = 'answer in `explain/<topic>.md`';
+      expect(await buildContextContent(ctxFor({}))).toContain(line);
+      await fs.mkdir(path.join(ws, '.contextspace'), { recursive: true });
+      const save = (config: object) => fs.writeFile(path.join(ws, '.contextspace', 'skills.json'), JSON.stringify({ schemaVersion: 2, revision: 3, enabledSkills: [], enabledCategories: [], ...config }));
+      await save({ disabledSkills: ['standup'] });
+      expect(await buildContextContent(ctxFor({}))).toContain(line);
+      await save({ disabledSkills: ['contextspace-explain'] });
+      const without = await buildContextContent(ctxFor({}));
+      expect(without).not.toContain(line);
+      expect(without).not.toContain('contextspace-explain');
+      expect(without).toContain('leave a note on it with');
+    });
+
     it('names repos that carry their own instructions, which override these', async () => {
       const ctx = ctxFor({});
       (ctx.analysis!.get(nodeRepo)! as { existingAIConfigs: unknown }).existingAIConfigs = [
@@ -441,9 +465,9 @@ describe('buildContextContent', () => {
       const lessons = renderLessonsSection(ctx.lessons);
       expect(content.split('\n').length - plan.split('\n').length - lessons.split('\n').length + 1).toBeLessThan(40);
       // 1600 until the request_user_input pointer was added, 1800 until the
-      // screen-tool pointer, then 2000 until the commit-note pointer. Agents
-      // need a short line each to know those tools exist.
-      expect(content.length - plan.length - lessons.length).toBeLessThan(2200);
+      // screen-tool pointer, then 2000 until the commit-note pointer, then 2200
+      // until the explain pointer. Agents need a short line each to know those tools exist.
+      expect(content.length - plan.length - lessons.length).toBeLessThan(2450);
       expect(plan.split('\n').length).toBeLessThan(10);
       expect(plan.length).toBeLessThan(1400);
     });

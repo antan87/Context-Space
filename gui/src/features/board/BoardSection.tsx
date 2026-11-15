@@ -573,6 +573,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const boardTrailRef = useRef<BoardTrail>(boardTrail);
   useLayoutEffect(() => { boardTrailRef.current = boardTrail; }, [boardTrail]);
   const boardBackFocus = useRef<BoardTrailFocus | null>(null);
+  /** The Area opened from "1 question" or "About: …": Escape in it goes back along the trail, so the keyboard returns to that button. */
+  const escapeBackFrom = useRef<string | null>(null);
 
   const recordBoardJump = useCallback((originEl?: HTMLElement | null, originAreaId?: string) => {
     const active = (originEl && originEl.isConnected)
@@ -1804,11 +1806,30 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         setOpenState(null);
         return;
       }
+      // Opened from "1 question" or "About: …": back along the trail, to the button it was opened with
+      if (escapeBackFrom.current === stepped.areaId && backBoardTarget(boardTrailRef.current)) {
+        goBackOnBoard();
+        return;
+      }
       stepOut();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [stepped, reader, active, stepOut, navDock.overlays, narrowNavOpen, keepFocusOn, threadSelectedId]);
+  }, [stepped, reader, active, stepOut, goBackOnBoard, navDock.overlays, narrowNavOpen, keepFocusOn, threadSelectedId]);
+
+  // The way back by Escape belongs to the Area it was opened for
+  useEffect(() => {
+    if (escapeBackFrom.current && stepped?.areaId !== escapeBackFrom.current) escapeBackFrom.current = null;
+  }, [stepped]);
+
+  /** "About: <Area>" in an answer's header: steps into that Area; the trail brings Escape and Back to this button. */
+  const goAbout = useCallback((from: HTMLElement) => {
+    const about = areas.find((a) => a.id === activeArea?.data.about?.id);
+    if (!about) return;
+    recordBoardJump(from);
+    stepInto(about.id, from);
+    escapeBackFrom.current = about.id;
+  }, [areas, activeArea, recordBoardJump, stepInto]);
 
   // Level 0 Escape clears thread selection
   useEffect(() => {
@@ -2062,6 +2083,17 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       recordBoardJump(buttonEl ?? (document.activeElement as HTMLElement), areaId);
       const area = areas.find((a) => a.id === areaId);
       if (!area) return;
+      if (kind === 'question') {
+        // The newest answer about this Area opens, and Escape comes back to this button
+        const answerId = area.data.questionTarget;
+        if (!answerId || !areas.some((a) => a.id === answerId)) return;
+        clearJump();
+        setThreadSelectedId(null);
+        const nodeEl = stageContainer?.querySelector<HTMLElement>(`.react-flow__node[data-id="${areaId}"]`);
+        stepInto(answerId, buttonEl ?? nodeEl ?? document.body);
+        escapeBackFrom.current = answerId;
+        return;
+      }
       const target = resolveCountTarget(area, kind);
       clearJump();
       setThreadSelectedId(null);
@@ -2537,6 +2569,20 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                         ? areaCounts(activeArea.data).join(' · ')
                         : stepsText(activeArea.data)}
                   </span>
+                )}
+                {activeArea.data.about && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    className="nodrag nopan min-h-[24px] max-w-[14rem] min-w-0 shrink gap-1 text-[12.5px] font-medium"
+                    data-testid="board-about-button"
+                    aria-label={`About: ${activeArea.data.about.title}`}
+                    title={`About: ${activeArea.data.about.title}`}
+                    onClick={(event) => goAbout(event.currentTarget)}
+                  >
+                    <span className="truncate">About: {activeArea.data.about.title}</span>
+                  </Button>
                 )}
                 <div className="ml-auto flex shrink-0 items-center gap-0.5 @[34rem]:gap-1">
                   {!isStepless(activeArea.data.kind) && !readOnly && (

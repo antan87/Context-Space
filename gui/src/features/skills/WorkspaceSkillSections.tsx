@@ -51,6 +51,7 @@ export function SectionHeader({ id, title, hint, action }: { id: string; title: 
 }
 
 function WhyChip({ status, categoryName }: { status: SkillStatus; categoryName?: string }) {
+  if (status.why === 'default') return <Badge variant="secondary" size="sm" className="font-normal">On by default</Badge>;
   if (status.why === 'left-out') return <Badge variant="outline" size="sm" className="font-normal">Left out</Badge>;
   if (status.why === 'category' && categoryName) return <Badge variant="secondary" size="sm" className="font-normal">From {categoryName}</Badge>;
   return null;

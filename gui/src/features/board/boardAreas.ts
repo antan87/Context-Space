@@ -26,7 +26,7 @@ import {
   type GroupedWorkspaceFile,
   type GroupedWorkspaceFiles,
 } from './workspaceFilesArea.js';
-import { buildQuestionAreas, type AnswerCounts, type AnswerView, type QuestionAnswerDto } from './questionsArea.js';
+import { buildQuestionAreas, placeQuestionAreas, type AnswerCounts, type AnswerView, type QuestionAnswerDto } from './questionsArea.js';
 import { resolveCommitContext } from './commitContext.js';
 import {
   areaCountItems,
@@ -145,6 +145,11 @@ export type AreaData = {
   updateCount?: number;
   /** Items of fresh updates and changes for Tier 3, each an interactive count. */
   newsItems?: AreaCountItem[];
+  /** "1 question": the answers placed beside this Area, as a count of its own; its button opens `questionTarget`, the newest. */
+  questionItem?: AreaCountItem;
+  questionTarget?: string;
+  /** For an answer placed beside an Area: the Area it is about, which its header names and steps into. */
+  about?: { id: string; title: string };
 };
 
 export type AreaNode = Node<AreaData, 'area'>;
@@ -929,7 +934,9 @@ export function buildBoardAreas({
     });
   }
 
-  result.push(...questionAreas);
+  // An answer about an Area stands right after it; the others follow the plan's Areas, newest first
+  const placement = placeQuestionAreas(result, questionAreas);
+  result.splice(0, result.length, ...placement.areas, ...placement.rest);
   if (filesArea) {
     result.push(filesArea);
   }
@@ -1086,7 +1093,7 @@ export interface OverviewTiers {
  *
  * Rules: each Area appears once, in the first tier that fits it. Tier 4 preserves plan order.
  */
-export function partitionOverviewTiers(areas: BoardArea[]): OverviewTiers {
+function partitionTiers(areas: BoardArea[]): OverviewTiers {
   if (areas.length === 0) {
     return { tier1: [], tier2: [], tier3: [], tier4: [], tier5: [] };
   }
@@ -1123,6 +1130,46 @@ export function partitionOverviewTiers(areas: BoardArea[]): OverviewTiers {
   const tier4 = remaining.filter((a) => !a.data.done);
 
   return { tier1, tier2, tier3, tier4, tier5 };
+}
+
+/** How many of these are Areas: an answer standing beside its Area is not counted, so a label never says "2 done" for one Area and its answer. */
+const areasIn = (list: readonly BoardArea[]) => list.filter((area) => !area.data.about).length;
+
+/**
+ * The first `count` of a list of Areas, except that an answer never ends up on the other side of the cut from the Area it is about:
+ * when the cut would fall between them, the Area goes too (with its answers), unless that would show nothing.
+ */
+export function keepAnswersWithTheirArea(list: readonly BoardArea[], count: number): BoardArea[] {
+  let n = Math.max(0, Math.min(count, list.length));
+  const wanted = n;
+  while (n > 0 && n < list.length) {
+    const about = list[n]!.data.about?.id;
+    if (!about || !list.slice(0, n).some((area) => area.id === about)) break;
+    n -= 1;
+  }
+  return list.slice(0, n > 0 ? n : wanted);
+}
+
+/**
+ * Partitions the Areas into the 5 tiers (see `partitionTiers`), with each answer placed beside its Area (`data.about`) standing right
+ * after that Area in the same tier. The answers of the focus Area, which stands alone in tier 1, lead tier 4. An answer never changes
+ * which Area is the focus or whether everything is done.
+ */
+export function partitionOverviewTiers(areas: BoardArea[]): OverviewTiers {
+  const ids = new Set(areas.map((area) => area.id));
+  const beside = areas.filter((area) => area.data.about && ids.has(area.data.about.id));
+  if (beside.length === 0) return partitionTiers(areas);
+  const placed = new Set(beside.map((area) => area.id));
+  const tiers = partitionTiers(areas.filter((area) => !placed.has(area.id)));
+  const answersOf = (host: BoardArea) => beside.filter((area) => area.data.about!.id === host.id);
+  const withAnswers = (list: BoardArea[]) => list.flatMap((area) => [area, ...answersOf(area)]);
+  return {
+    tier1: tiers.tier1,
+    tier2: withAnswers(tiers.tier2),
+    tier3: withAnswers(tiers.tier3),
+    tier4: [...tiers.tier1.flatMap(answersOf), ...withAnswers(tiers.tier4)],
+    tier5: withAnswers(tiers.tier5),
+  };
 }
 
 /** The room the overview's Areas have, in px of the stage: the stage less its insets. */
@@ -1240,9 +1287,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
 
       let rem = maxRowSlots;
       const shutTier1 = tiers.tier1[0] && rem > 0 ? (rem--, [tiers.tier1[0]]) : [];
-      const shutTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shutTier2.length);
-      const shutTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shutTier3.length);
-      const shutTier4 = tiers.tier4.slice(0, rem);
+      const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length);
+      const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length);
+      const shutTier4 = keepAnswersWithTheirArea(tiers.tier4, rem);
 
       const overflowWaiting = tiers.tier2.length - shutTier2.length;
       const overflowTier3 = tiers.tier3.length - shutTier3.length;
@@ -1253,9 +1300,11 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
       const overflowDone = hasDone ? tiers.tier5.length : 0;
       const hasFold = overflowOpen + overflowDone > 0;
       const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
-      const moreCount = overflowOtherOpen;
-      const doneCount = overflowDone;
-      const foldDisplayCount = overflowOpen + overflowDone;
+      // The labels count Areas: an answer standing beside its Area is not one
+      const waitingAreas = areasIn(tiers.tier2.slice(shutTier2.length));
+      const moreCount = areasIn(tiers.tier3.slice(shutTier3.length)) + areasIn(tiers.tier4.slice(shutTier4.length)) + overflowTier1;
+      const doneCount = hasDone ? areasIn(tiers.tier5) : 0;
+      const foldDisplayCount = waitingAreas + moreCount + doneCount || overflowOpen + overflowDone;
 
       const rowItems: { area: BoardArea; tier: 1 | 2 | 3 | 4 | 5 }[] = options.expanded
         ? [
@@ -1308,9 +1357,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
           data: {
             count: foldDisplayCount,
             kind: foldKind,
-            ...(overflowWaiting > 0
+            ...(waitingAreas > 0
               ? {
-                  waitingCount: overflowWaiting,
+                  waitingCount: waitingAreas,
                   ...(moreCount > 0 ? { moreCount } : {}),
                   ...(doneCount > 0 ? { doneCount } : {}),
                 }
@@ -1372,9 +1421,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     const maxRowSlots = needFold ? Math.max(0, totalSlots - 1) : totalSlots;
 
     let rem = maxRowSlots;
-    const shutTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shutTier2.length);
-    const shutTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shutTier3.length);
-    const shutTier4 = tiers.tier4.slice(0, rem);
+    const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length);
+    const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length);
+    const shutTier4 = keepAnswersWithTheirArea(tiers.tier4, rem);
 
     const overflowWaiting = tiers.tier2.length - shutTier2.length;
     const overflowTier3 = tiers.tier3.length - shutTier3.length;
@@ -1384,9 +1433,11 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
     const overflowDone = hasDone ? tiers.tier5.length : 0;
     const hasFold = overflowOpen + overflowDone > 0;
     const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
-    const moreCount = overflowOtherOpen;
-    const doneCount = overflowDone;
-    const foldDisplayCount = overflowOpen + overflowDone;
+    // The labels count Areas: an answer standing beside its Area is not one
+    const waitingAreas = areasIn(tiers.tier2.slice(shutTier2.length));
+    const moreCount = areasIn(tiers.tier3.slice(shutTier3.length)) + areasIn(tiers.tier4.slice(shutTier4.length));
+    const doneCount = hasDone ? areasIn(tiers.tier5) : 0;
+    const foldDisplayCount = waitingAreas + moreCount + doneCount || overflowOpen + overflowDone;
 
     const colWidth = Math.min(AREA_ROW.maxWidth, room.width);
     const startX = room.x + Math.floor((room.width - colWidth) / 2);
@@ -1429,9 +1480,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
         data: {
           count: foldDisplayCount,
           kind: foldKind,
-          ...(overflowWaiting > 0
+          ...(waitingAreas > 0
             ? {
-                waitingCount: overflowWaiting,
+                waitingCount: waitingAreas,
                 ...(moreCount > 0 ? { moreCount } : {}),
                 ...(doneCount > 0 ? { doneCount } : {}),
               }
@@ -1448,7 +1499,7 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
   // Case: All areas are Done (tier1 is empty)
   if (tiers.tier1.length === 0) {
     const doneAreas = tiers.tier5;
-    const totalCount = doneAreas.length;
+    const totalCount = areasIn(doneAreas) || doneAreas.length;
     if (!options.expanded) {
       const foldWidth = Math.min(room.width, 560);
       const foldX = room.x + Math.floor((room.width - foldWidth) / 2);
@@ -1654,8 +1705,8 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
         }
         const shownLines = availableLinesForTier4;
         const shownCount = Math.min(tiers.tier4.length, shownLines * cols);
-        shownTier4 = tiers.tier4.slice(0, shownCount);
-        overflowTier4 = tiers.tier4.slice(shownCount);
+        shownTier4 = keepAnswersWithTheirArea(tiers.tier4, shownCount);
+        overflowTier4 = tiers.tier4.slice(shownTier4.length);
       }
 
       const shownTier4Lines = shownTier4.length > 0 ? Math.ceil(shownTier4.length / cols) : 0;
@@ -1697,9 +1748,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
 
       const hasFold = hasDone || overflowTier4.length > 0;
       const foldKind: 'done' | 'more' = (overflowTier4.length === 0 && hasDone) ? 'done' : 'more';
-      const foldCount = overflowTier4.length + (hasDone ? tiers.tier5.length : 0);
-      const moreCount = overflowTier4.length;
-      const doneCount = hasDone ? tiers.tier5.length : 0;
+      const doneCount = hasDone ? areasIn(tiers.tier5) : 0;
+      const moreCount = areasIn(overflowTier4) || overflowTier4.length;
+      const foldCount = moreCount + doneCount;
 
       const nodes: OverviewNode[] = [heroNode];
       let tierY = startY;
@@ -1853,9 +1904,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
   }
 
   let rem = maxRowSlots;
-  const shutTier2 = tiers.tier2.slice(0, rem); rem = Math.max(0, rem - shutTier2.length);
-  const shutTier3 = tiers.tier3.slice(0, rem); rem = Math.max(0, rem - shutTier3.length);
-  const shutTier4 = tiers.tier4.slice(0, rem);
+  const shutTier2 = keepAnswersWithTheirArea(tiers.tier2, rem); rem = Math.max(0, rem - shutTier2.length);
+  const shutTier3 = keepAnswersWithTheirArea(tiers.tier3, rem); rem = Math.max(0, rem - shutTier3.length);
+  const shutTier4 = keepAnswersWithTheirArea(tiers.tier4, rem);
 
   const overflowWaiting = tiers.tier2.length - shutTier2.length;
   const overflowTier3 = tiers.tier3.length - shutTier3.length;
@@ -1865,9 +1916,11 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
   const overflowDone = hasDone ? tiers.tier5.length : 0;
   const hasFold = overflowOpen + overflowDone > 0;
   const foldKind: 'done' | 'more' = (overflowOpen === 0 && hasDone) ? 'done' : 'more';
-  const moreCount = overflowOtherOpen;
-  const doneCount = overflowDone;
-  const foldDisplayCount = overflowOpen + overflowDone;
+  // The labels count Areas: an answer standing beside its Area is not one
+  const waitingAreas = areasIn(tiers.tier2.slice(shutTier2.length));
+  const moreCount = areasIn(tiers.tier3.slice(shutTier3.length)) + areasIn(tiers.tier4.slice(shutTier4.length));
+  const doneCount = hasDone ? areasIn(tiers.tier5) : 0;
+  const foldDisplayCount = waitingAreas + moreCount + doneCount || overflowOpen + overflowDone;
 
   const rowItems: { area: BoardArea; tier: 2 | 3 | 4 | 5 }[] = options.expanded
     ? [
@@ -1912,9 +1965,9 @@ export function overviewPlan(areas: BoardArea[], size: Size, options: { expanded
       data: {
         count: foldDisplayCount,
         kind: foldKind,
-        ...(overflowWaiting > 0
+        ...(waitingAreas > 0
           ? {
-              waitingCount: overflowWaiting,
+              waitingCount: waitingAreas,
               ...(moreCount > 0 ? { moreCount } : {}),
               ...(doneCount > 0 ? { doneCount } : {}),
             }

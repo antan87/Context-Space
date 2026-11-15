@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { MAX_ANSWER_BYTES, MAX_CHECKED_FILE_BYTES, parseAnswer, parseWhere, readQuestions, type QuestionCard } from './questions.js';
+import { MAX_ANSWER_BYTES, MAX_CHECKED_FILE_BYTES, parseAnswer, parseArea, parseWhere, readQuestions, summarizeAnswers, type QuestionCard } from './questions.js';
 
 describe('parseAnswer', () => {
   it('reads the question, the short answer and the parts in order', () => {
@@ -52,6 +52,46 @@ describe('parseAnswer', () => {
       { kind: 'text', text: '### Sub\n> quote\n| a | b |' },
       { kind: 'code', language: 'ts', info: 'x.ts:1', copy: 'unclosed' },
     ]);
+  });
+});
+
+describe('the Area an answer is about', () => {
+  const front = (...lines: string[]) => ['---', ...lines, '---', '# Q?', '', 'Short.'].join('\n');
+
+  it('reads a checkpoint or the plan from the front matter, quoted or not, and still skips the front matter', () => {
+    expect(parseArea(front('area: checkpoint:the-board-is-powerful'))).toBe('checkpoint:the-board-is-powerful');
+    expect(parseArea(front('owner: ai', 'area: "plan:own"'))).toBe('plan:own');
+    expect(parseArea(front("area: 'checkpoint:a_b-1'"))).toBe('checkpoint:a_b-1');
+    expect(parseAnswer(front('area: plan:own'), 'q.md')).toMatchObject({ question: 'Q?', summary: 'Short.', area: 'plan:own' });
+  });
+
+  it('has none when it is missing or malformed, and never reads a line of the body as front matter', () => {
+    for (const value of ['', 'checkpoint:', 'checkpoint:has space', 'plan:other', 'document:abc', 'checkpoint:../x', 'Plan:own', '[plan:own]']) {
+      expect(parseArea(front(`area: ${value}`)), value).toBeNull();
+    }
+    expect(parseArea('# Q?\n\narea: plan:own')).toBeNull();
+    expect(parseArea('---\narea: plan:own\n# never closed')).toBeNull();
+    expect(parseArea(front('owner: ai'))).toBeNull();
+    expect(parseAnswer('# Q', 'q.md').area).toBeNull();
+  });
+
+  it('reads a long run of spaces in an area line in linear time', () => {
+    const started = Date.now();
+    for (const tail of [' '.repeat(40_000), ` plan:own${' '.repeat(40_000)}x`, `${' '.repeat(40_000)}plan:own${' '.repeat(40_000)}`]) {
+      parseArea(front(`area:${tail}`));
+    }
+    expect(parseArea(front(`area:${' '.repeat(40_000)}plan:own${' '.repeat(40_000)}`))).toBe('plan:own');
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('accepts what a plan key can be: letters and digits of any language, as `ctxspace explain --areas` offers them', () => {
+    for (const key of ['användare-kan-logga-in', 'café-menu-shows-prices', '日本語-計画', 'phase-2']) {
+      expect(parseArea(front(`area: checkpoint:${key}`)), key).toBe(`checkpoint:${key}`);
+      expect(parseArea(front(`area: "checkpoint:${key}"`)), key).toBe(`checkpoint:${key}`);
+    }
+    expect(parseArea('---\r\narea: "checkpoint:användare-kan-logga-in"\r\n---\r\n# Q')).toBe('checkpoint:användare-kan-logga-in');
+    expect(parseArea(front('area: checkpoint:-leading'))).toBeNull();
+    expect(parseArea(front('area: checkpoint:has space'))).toBeNull();
   });
 });
 
@@ -272,5 +312,44 @@ describe('readQuestions', () => {
     const before = await fs.readdir(root, { recursive: true });
     await readQuestions(root);
     expect(await fs.readdir(root, { recursive: true })).toEqual(before);
+  });
+});
+
+describe('answers with an area, and the short list of them', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'questions-area-')));
+    await fs.mkdir(path.join(root, 'Repo/src'), { recursive: true });
+    await fs.mkdir(path.join(root, 'explain'));
+    await fs.writeFile(path.join(root, 'Repo/src/a.ts'), 'one\ntwo\nthree\nfour\n');
+    await fs.writeFile(path.join(root, 'contextspace.json'), JSON.stringify({ repos: [path.join(root, 'Repo')], mode: 'in-place' }));
+  });
+  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  it('carries the area of each answer, and none for a file that names none or a bad one', async () => {
+    await fs.writeFile(path.join(root, 'explain/a.md'), '---\narea: checkpoint:first-step\n---\n# A\n\nShort.');
+    await fs.writeFile(path.join(root, 'explain/b.md'), '# B\n\nShort.');
+    await fs.writeFile(path.join(root, 'explain/c.md'), '---\narea: nonsense\n---\n# C\n\nShort.');
+    const found = Object.fromEntries((await readQuestions(root)).map((entry) => [entry.path, entry.area]));
+    expect(found).toEqual({ 'explain/a.md': 'checkpoint:first-step', 'explain/b.md': undefined, 'explain/c.md': undefined });
+  });
+
+  it('lists the path, question, area, parts, code blocks and each copy that does not match', async () => {
+    await fs.writeFile(path.join(root, 'explain/ok.md'), ['---', 'area: plan:own', '---', '# All good?', '', 'Yes.', '', '## One', '```ts Repo/src/a.ts:2-3', 'two', 'three', '```', '```text', 'plain', '```'].join('\n'));
+    await fs.writeFile(path.join(root, 'explain/bad.md'), ['# Some wrong', '', 'Mostly.', '', '## Moved', '```ts Repo/src/a.ts:1-2', 'two', 'three', '```', '## Changed', '```ts Repo/src/a.ts:3-4', 'x', 'y', '```', '## Gone', '```ts Repo/nope.ts:1-1', 'z', '```'].join('\n'));
+    const list = summarizeAnswers(await readQuestions(root));
+    const ok = list.find((entry) => entry.path === 'explain/ok.md')!;
+    const bad = list.find((entry) => entry.path === 'explain/bad.md')!;
+    expect(ok).toEqual({ path: 'explain/ok.md', question: 'All good?', area: 'plan:own', parts: ['One'], codeBlocks: 2, notMatching: [] });
+    expect(bad).toMatchObject({ question: 'Some wrong', area: null, parts: ['Moved', 'Changed', 'Gone'], codeBlocks: 3 });
+    expect(bad.notMatching).toEqual([
+      { where: 'Repo/src/a.ts:1-2', status: 'moved', start: 2, end: 3 },
+      { where: 'Repo/src/a.ts:3-4', status: 'changed' },
+      { where: 'Repo/nope.ts:1', status: 'gone' },
+    ]);
+  });
+
+  it('is an empty list for no answers', () => {
+    expect(summarizeAnswers([])).toEqual([]);
   });
 });

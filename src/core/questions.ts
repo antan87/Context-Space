@@ -3,7 +3,8 @@
  * checked against the real file it points at. Nothing here writes; the files are written by an AI (or a person).
  *
  * Format (plain Markdown, one answer per file):
- * - the first `# ` line is the question (else the file name, made readable); an optional YAML front matter block is skipped;
+ * - the first `# ` line is the question (else the file name, made readable); an optional YAML front matter block is skipped,
+ *   except its `area: checkpoint:<plan key>` (or `plan:own`; the key is a plan key, so letters of any language), which says what Area the answer is about;
  * - what stands before the first `## ` is the short answer ("In short");
  * - each `## ` starts a part; inside a part, text is one card until a code fence, a diagram or a picture;
  * - a code fence whose info string is `<language> <where>:<start>-<end>` is checked against that place;
@@ -65,6 +66,8 @@ export interface QuestionAnswer {
   question: string;
   /** The first line of the short answer, as written. */
   summary: string;
+  /** The Area it is about (`checkpoint:<plan key>` or `plan:own`), from the front matter; missing when the file names none. */
+  area?: string;
   modifiedAt: string;
   parts: QuestionPart[];
 }
@@ -77,7 +80,7 @@ type RawCard =
   | { kind: 'picture'; alt: string; path: string }
   | { kind: 'diagram'; source: string };
 interface RawPart { title: string; heading: string | null; cards: RawCard[] }
-interface RawAnswer { question: string; summary: string; parts: RawPart[] }
+interface RawAnswer { question: string; summary: string; area: string | null; parts: RawPart[] }
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 const PICTURE_LINE = /^!\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)\s*$/;
@@ -93,6 +96,22 @@ function skipFrontMatter(lines: string[]): string[] {
     if (lines[i]!.trim() === '---' || lines[i]!.trim() === '...') return lines.slice(i + 1);
   }
   return lines;
+}
+
+/** The Area an answer is about, from its front matter `area:`: `checkpoint:<plan key>` or `plan:own`; null for anything else. */
+export function parseArea(markdown: string): string | null {
+  const lines = markdown.replace(/^\uFEFF/, '').split(/\r\n|\r|\n/);
+  if (lines[0]?.trim() !== '---') return null;
+  const end = lines.findIndex((line, index) => index > 0 && (line.trim() === '---' || line.trim() === '...'));
+  // A block that never closes is not front matter (the parser does not skip it either)
+  if (end < 0) return null;
+  for (const line of lines.slice(1, end)) {
+    const match = /^area\s*:(.*)$/.exec(line);
+    if (!match) continue;
+    const value = match[1]!.trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+    return value === 'plan:own' || /^checkpoint:[\p{L}\p{N}][\p{L}\p{N}_-]{0,199}$/u.test(value) ? value : null;
+  }
+  return null;
 }
 
 /** Parses one answer file. Pure: no file is read. */
@@ -154,7 +173,7 @@ export function parseAnswer(markdown: string, fileName: string): RawAnswer {
   if (short.cards.length === 0) parts.shift();
   const firstText = short.cards.find((card): card is { kind: 'text'; text: string } => card.kind === 'text');
   const summary = firstText?.text.split('\n').find((line) => line.trim())?.trim() ?? '';
-  return { question: question || readableName(fileName), summary, parts };
+  return { question: question || readableName(fileName), summary, area: parseArea(markdown), parts };
 }
 
 /** `<where>:<start>-<end>` or `<where>:<line>`; null when the info string names no place. */
@@ -367,7 +386,46 @@ export async function readQuestions(workspacePath: string): Promise<QuestionAnsw
       }
       parts.push({ title: part.title, heading: part.heading, cards });
     }
-    answers.push({ path: answerPath, question: raw.question, summary: raw.summary, modifiedAt: new Date(entry.mtimeMs).toISOString(), parts });
+    answers.push({ path: answerPath, question: raw.question, summary: raw.summary, ...(raw.area ? { area: raw.area } : {}), modifiedAt: new Date(entry.mtimeMs).toISOString(), parts });
   }
   return answers;
+}
+
+// ─── A short list, for the CLI and the board tool ───────────────────────────
+
+export interface AnswerSummary {
+  path: string;
+  question: string;
+  /** `checkpoint:<plan key>` or `plan:own`; null when the answer names no Area. */
+  area: string | null;
+  /** The `##` parts, in order. */
+  parts: string[];
+  codeBlocks: number;
+  /** Every copy that does not say Matches (a plain code block with no place is not a copy). `moved` carries the lines it is at now. */
+  notMatching: Array<{ where: string; status: CodeCheckStatus; start?: number; end?: number }>;
+}
+
+/** What an AI needs to know about the existing answers: where they are, what they cover and which copies to fix. Pure. */
+export function summarizeAnswers(answers: readonly QuestionAnswer[]): AnswerSummary[] {
+  return answers.map((answer) => {
+    let codeBlocks = 0;
+    const notMatching: AnswerSummary['notMatching'] = [];
+    for (const part of answer.parts) {
+      for (const card of part.cards) {
+        if (card.kind !== 'code') continue;
+        codeBlocks += 1;
+        const { status } = card.check;
+        if (status === 'matches' || status === 'none') continue;
+        notMatching.push({
+          where: `${card.where ?? ''}:${card.start ?? ''}${card.end !== undefined && card.end !== card.start ? `-${card.end}` : ''}`,
+          status,
+          ...(status === 'moved' && card.check.start !== undefined ? { start: card.check.start, end: card.check.end } : {}),
+        });
+      }
+    }
+    return {
+      path: answer.path, question: answer.question, area: answer.area ?? null,
+      parts: answer.parts.filter((part) => part.heading !== null).map((part) => part.title), codeBlocks, notMatching,
+    };
+  });
 }

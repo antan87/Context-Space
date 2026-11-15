@@ -4,7 +4,7 @@ import { fileTypeOf, type BoardCard } from './boardLayout.js';
 import { stepWorkspaceFileNodeId, type GroupedWorkspaceFile } from './workspaceFilesArea.js';
 import { answerCountWords } from './questionsArea.js';
 
-export type AreaCountKind = 'notes' | 'pictures' | 'files' | 'documents' | 'pages' | 'commits' | 'updates' | 'parts' | 'code' | 'changed';
+export type AreaCountKind = 'question' | 'notes' | 'pictures' | 'files' | 'documents' | 'pages' | 'commits' | 'updates' | 'parts' | 'code' | 'changed';
 
 export interface AreaCountTarget {
   rowId: string | null;
@@ -90,6 +90,8 @@ export function areaCountItems(data: AreaData): AreaCountItem[] {
     const label = plural(data.commitCount, 'commit', 'commits');
     items.push({ kind: 'commits', count: data.commitCount, label, actionLabel: `Show the ${label}` });
   }
+  // The answers about this Area: before the updates, so that where the line is short the updates give way first
+  if (data.questionItem) items.push(data.questionItem);
   if (data.updateCount && data.updateCount > 0) {
     const label = plural(data.updateCount, 'update', 'updates');
     items.push({ kind: 'updates', count: data.updateCount, label, actionLabel: `Show the ${label}` });
@@ -197,6 +199,7 @@ export function resolveCountTarget(
     }
     case 'documents':
       return { rowId: 'lane:documents' };
+    case 'question':
     case 'pages':
     case 'parts':
     case 'code':
@@ -250,4 +253,30 @@ export function resolveCountTarget(
       return { rowId: null };
     }
   }
+}
+
+/**
+ * How a button for what is new may shrink on an Area's card. As before: every one shrinks with the line. Only where the card also has
+ * "1 question" do the others keep their words, so that the updates give way first and the question is never cut.
+ */
+export function newsButtonFit(data: Pick<AreaData, 'questionItem'>, kind: AreaCountKind): string {
+  return data.questionItem && kind !== 'updates' ? 'min-w-fit shrink-0' : 'min-w-0';
+}
+
+/**
+ * The buttons for what is new that a card has room to show whole. A button that cannot show its whole words is not drawn, with its
+ * separator: never a sliver, never a cut number. The updates give way first, then the others from the end; "1 question" stays, and a
+ * card with no "1 question" is left exactly as it was (its buttons shrink with the line). `measure` is a label's width in px.
+ */
+export function fitNewsItems(items: readonly AreaCountItem[], room: number, measure: (label: string) => number): AreaCountItem[] {
+  if (!items.some((item) => item.kind === 'question')) return [...items];
+  const kept = [...items];
+  const width = () => kept.reduce((sum, item, index) => sum + measure(item.label) + (index > 0 ? 8 : 0), 0);
+  while (width() > room) {
+    const at = kept.map((item) => item.kind).lastIndexOf('updates');
+    const drop = at >= 0 ? at : kept.map((item) => item.kind !== 'question').lastIndexOf(true);
+    if (drop < 0) break;
+    kept.splice(drop, 1);
+  }
+  return kept;
 }

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from './fixtures';
 import { board, minutesAgo, node, PICTURE, routeBoard, routeCards, stepIntoArea, viewAtRest, workspace } from './boardHelpers';
-import { boardFile, planFile, whatsNew } from './planData';
+import { boardFile, checkpoint, planFile, step, whatsNew } from './planData';
 
 /**
  * The Questions space: each `explain/*.md` answer is an Area of text, code, picture and diagram cards, with each copied code block
@@ -585,5 +585,235 @@ test.describe('in a Split', () => {
     const box = await code.boundingBox();
     expect(box!.y + box!.height).toBeLessThanOrEqual(view.height);
     await expect(board(page).locator('#board-area button[data-row-control]', { hasText: /more/ })).toHaveCount(0);
+  });
+});
+
+// ─── E2: an answer beside the Area it is about, linked both ways ───────────────────────────────────────────────────────────────
+
+const HOST = 'checkpoint:reports-export-to-csv';
+const HOST_TITLE = 'Reports export to CSV';
+const about = (entry: typeof SECURITY, area: string, extra: Record<string, unknown> = {}) => ({ ...entry, area, ...extra });
+const focusKind = (page: Page) => page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute('data-count-kind') ?? '');
+const focusTest = (page: Page) => page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute('data-testid') ?? '');
+const questionButton = (page: Page, id = HOST) => node(page, id).getByRole('button', { name: /^Open (the answer|the newest of the)/ });
+const noSideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+test.describe('beside its Area, at 1440 Board', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('an answer about an Area stands right after it, with "1 question" on the Area card, and the others stay where they were', async ({ page }) => {
+    answers = [about(SECURITY, HOST), OTHER];
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    const ids = (await nodeIds(page)).filter((id): id is string => Boolean(id));
+    expect(ids.indexOf(SECURITY_AREA)).toBe(ids.indexOf(HOST) + 1);
+    // The answer with no Area is where it was: after the plan's Areas, before Workspace files
+    expect(ids.indexOf('question:explain/how-are-releases-made.md')).toBeGreaterThan(ids.indexOf(SECURITY_AREA));
+    expect(ids.indexOf('files:workspace')).toBeGreaterThan(ids.indexOf('question:explain/how-are-releases-made.md'));
+    const button = questionButton(page);
+    await expect(button).toBeVisible();
+    await expect(button).toHaveText('1 question');
+    expect(await button.evaluate((el) => (el as HTMLElement).offsetHeight)).toBeGreaterThanOrEqual(24);
+    expect(await button.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12);
+    await expect(questionButton(page, 'plan:own')).toHaveCount(0);
+    expect(await noSideways(page)).toBe(true);
+  });
+
+  test('"1 question" opens the answer, which says what it is about; Escape puts the keyboard back on "1 question"', async ({ page }) => {
+    answers = [about(SECURITY, HOST), OTHER];
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    await questionButton(page).click();
+    const area = board(page).locator('#board-area');
+    await expect(area.getByRole('heading', { name: 'How do we enforce security in this project?' })).toBeVisible();
+    await expect(area.getByTestId('board-about-button')).toHaveText(`About: ${HOST_TITLE}`);
+    await viewAtRest(page);
+    await page.keyboard.press('Escape');
+    await expect(board(page).locator('#board-area')).toHaveCount(0);
+    await viewAtRest(page);
+    await expect(questionButton(page)).toBeFocused();
+    expect(await focusKind(page)).toBe('question');
+  });
+
+  test('"About: …" steps into the Area; Escape returns the keyboard to the answer\'s header button; Back says where it goes', async ({ page }) => {
+    answers = [about(SECURITY, HOST), OTHER];
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    await questionButton(page).click();
+    await viewAtRest(page);
+    await board(page).locator('#board-area').getByTestId('board-about-button').click();
+    await expect(board(page).locator('#board-area').getByRole('heading', { name: HOST_TITLE })).toBeVisible();
+    await expect(board(page).getByTestId('board-back-button')).toContainText('How do we enforce security');
+    await viewAtRest(page);
+    await page.keyboard.press('Escape');
+    await expect(board(page).locator('#board-area').getByRole('heading', { name: 'How do we enforce security in this project?' })).toBeVisible();
+    await viewAtRest(page);
+    await expect(board(page).getByTestId('board-about-button')).toBeFocused();
+    expect(await focusTest(page)).toBe('board-about-button');
+  });
+
+  test('an answer whose Area does not exist stays where it was, with no "question" button and no "About"', async ({ page }) => {
+    answers = [about(SECURITY, 'checkpoint:no-longer-in-the-plan'), OTHER];
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    const ids = (await nodeIds(page)).filter((id): id is string => Boolean(id));
+    expect(ids.indexOf(SECURITY_AREA)).toBeGreaterThan(ids.indexOf('plan:own'));
+    expect(ids.indexOf(SECURITY_AREA)).toBeGreaterThan(ids.indexOf(HOST) + 1);
+    await expect(board(page).locator('button[data-count-kind="question"]')).toHaveCount(0);
+    await stepIntoArea(page, /How do we enforce security/);
+    await expect(board(page).getByTestId('board-about-button')).toHaveCount(0);
+  });
+
+  test('an answer that names plan:own sits beside the Plan Area', async ({ page }) => {
+    answers = [about(OTHER, 'plan:own')];
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    const ids = (await nodeIds(page)).filter((id): id is string => Boolean(id));
+    expect(ids.indexOf('question:explain/how-are-releases-made.md')).toBe(ids.indexOf('plan:own') + 1);
+    await expect(questionButton(page, 'plan:own')).toHaveText('1 question');
+  });
+
+  test('two answers about one Area: "2 questions" opens the newest, and the index lists both under the Area and under Questions', async ({ page }) => {
+    answers = [about(SECURITY, HOST), about(OTHER, HOST)];
+    await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); });
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    const ids = (await nodeIds(page)).filter((id): id is string => Boolean(id));
+    expect(ids.slice(ids.indexOf(HOST), ids.indexOf(HOST) + 3)).toEqual([HOST, SECURITY_AREA, 'question:explain/how-are-releases-made.md']);
+    await expect(questionButton(page)).toHaveText('2 questions');
+
+    const nav = page.getByRole('navigation', { name: 'Board index' });
+    await nav.getByRole('button', { name: 'Area', exact: true }).click();
+    // Under the Area: one entry for each answer, in the list that follows the Area's own heading
+    const under = nav.getByRole('listitem').filter({ hasText: /(How do we enforce security in this project\?|How are releases made\?)\s*\d+ parts?/ });
+    await expect(under).toHaveCount(2);
+    // And each answer has its own section under the Questions heading
+    await expect(nav.getByRole('heading', { name: /^How do we enforce security in this project\? \(1\)/ })).toBeVisible();
+    await expect(nav.getByRole('heading', { name: /^How are releases made\? \(1\)/ })).toBeVisible();
+    await expect(nav).toContainText('Questions');
+
+    await questionButton(page).click();
+    await expect(board(page).locator('#board-area').getByRole('heading', { name: 'How do we enforce security in this project?' })).toBeVisible();
+    await expect(board(page).locator('#board-area').getByRole('heading', { name: 'How are releases made?' })).toHaveCount(0);
+  });
+
+  test('a questions refresh that adds an answer for the Area does not leave the Area, move the keyboard or reset anything', async ({ page }) => {
+    answers = [about(SECURITY, HOST)];
+    await page.goto('/#/workspaces/demo/board');
+    await stepIntoArea(page, HOST_TITLE);
+    const heading = board(page).locator('#board-area').getByRole('heading', { name: HOST_TITLE });
+    await expect(heading).toBeVisible();
+    const focused = await page.evaluate(() => document.activeElement?.textContent ?? '');
+    answers = [about(OTHER, HOST), about(SECURITY, HOST)];
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect.poll(() => reads).toBeGreaterThan(1);
+    await expect(heading).toBeVisible();
+    expect(await page.evaluate(() => document.activeElement?.textContent ?? '')).toBe(focused);
+  });
+});
+
+test.describe('beside its Area, in a Split at 1280', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+  test('the answer is on show next to its Area wherever the Area is, and "1 question" fits on the card', async ({ page }) => {
+    answers = [about(SECURITY, HOST), OTHER];
+    await page.addInitScript(() => { if (window === window.top) localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 })); });
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-split').click();
+    await expect(page.getByTestId('view-mode-split')).toHaveAttribute('aria-pressed', 'true');
+    await viewAtRest(page);
+    await expect(node(page, HOST)).toBeVisible();
+    await expect(node(page, SECURITY_AREA)).toBeVisible();
+    const button = questionButton(page);
+    await expect(button).toBeVisible();
+    const card = (await node(page, HOST).boundingBox())!;
+    const b = (await button.boundingBox())!;
+    expect(b.x + b.width).toBeLessThanOrEqual(card.x + card.width + 1);
+    expect(await noSideways(page)).toBe(true);
+    await button.click();
+    await expect(board(page).locator('#board-area').getByTestId('board-about-button')).toBeVisible();
+  });
+});
+
+// ─── The buttons for what is new beside "1 question": whole or not drawn ──────────────────────────────────────────────────────────
+
+test.describe('"1 question" among the buttons for what is new', () => {
+  const LONG_TITLE = 'The Board is powerful enough to be where the work happens, and it replaces the Plan tab';
+  const HOST_LONG = `checkpoint:${checkpoint(LONG_TITLE).key}`;
+  const shaOf = (n: number) => `${n + 1}a1b2c3d4e5f`;
+
+  async function realShaped(page: Page) {
+    const steps = Array.from({ length: 47 }, (_, i) => step(i < 4 ? `Ship board interaction ${i} (${shaOf(i).slice(0, 7)})` : `Area step ${i + 1}`, i < 44));
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({
+      json: planFile({
+        title: 'Overlap', now: { key: 'focus-step-1', by: 'claude', at: minutesAgo(1) },
+        checkpoints: [
+          checkpoint('First Focus Area', { done: false, steps: [step('Focus step 1', false), step('Focus step 2', false)] }),
+          checkpoint(LONG_TITLE, { done: false, steps: steps }),
+          ...['Second Area', 'Third Area', 'Fourth Area', 'Fifth Area', 'Sixth Area', 'Seventh Area', 'Eighth Area', 'Ninth Area', 'Tenth Area', 'Eleventh Area'].map((title) => checkpoint(title, { done: false, steps: [step(`Step of ${title}`, false)] })),
+        ],
+      }),
+    }));
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({
+      json: whatsNew({
+        empty: false,
+        commits: [{ repo: 'NexusFlow', more: 0, commits: [0, 1, 2, 3].map((n) => ({ sha: shaOf(n), author: 'Dev', subject: `feat: board layout ${n}`, at: minutesAgo(5 + n) })) }],
+        plan: { items: steps.slice(0, 4).map((s, i) => ({ key: s.key, text: s.text, at: minutesAgo(2 + i) })), more: 0 },
+      }),
+    }));
+    await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: boardFile({ cards: [] }) }));
+    answers = [about(SECURITY, HOST_LONG)];
+  }
+
+  /** Every count button on the card is whole, and the line has no sliver, no cut number and no stray comma. */
+  async function expectWhole(page: Page, label: string) {
+    const card = node(page, HOST_LONG);
+    await expect(card, label).toBeVisible();
+    const facts = await card.evaluate((el) => {
+      const buttons = Array.from(el.querySelectorAll<HTMLElement>('button:not(.board-area)')).filter((b) => b.getBoundingClientRect().width > 0.5 && getComputedStyle(b).visibility !== 'hidden');
+      const bad: string[] = [];
+      for (const b of buttons) {
+        const r = b.getBoundingClientRect();
+        const text = b.querySelector<HTMLElement>('span') ?? b;
+        if (text.scrollWidth > text.clientWidth + 1 || b.scrollWidth > b.clientWidth + 1) bad.push(`cut: "${b.textContent?.trim()}"`);
+        if (r.height < 23.5) bad.push(`short: "${b.textContent?.trim()}" ${r.height}`);
+        if (r.width < 20) bad.push(`sliver: "${b.textContent?.trim()}" ${Math.round(r.width)}px`);
+      }
+      // The line of buttons: separators only between two buttons
+      const lines = new Set(buttons.map((b) => b.parentElement!).filter((parent) => !parent.classList.contains('board-area')));
+      const stray: string[] = [];
+      for (const line of lines) {
+        const kids = Array.from(line.children) as HTMLElement[];
+        kids.forEach((kid, i) => {
+          const isSep = kid.tagName === 'SPAN' && /^[,·]$/.test(kid.textContent?.trim() ?? '');
+          if (isSep && (i === 0 || i === kids.length - 1 || kids[i - 1]!.tagName !== 'BUTTON' || kids[i + 1]?.tagName !== 'BUTTON')) stray.push(`separator at ${i} of ${kids.length}`);
+        });
+      }
+      return { texts: buttons.map((b) => b.textContent?.trim()), bad, stray };
+    });
+    expect(facts.bad, `${label} ${JSON.stringify(facts.texts)}`).toEqual([]);
+    expect(facts.stray, `${label} ${JSON.stringify(facts.texts)}`).toEqual([]);
+    expect(facts.texts.some((t) => t === '1 question'), `${label}: "1 question" stays ${JSON.stringify(facts.texts)}`).toBe(true);
+  }
+
+  test.describe('1440 Board', () => {
+    test.use({ viewport: { width: 1440, height: 900 } });
+    test('no count button is cut or squeezed and no comma hangs', async ({ page }) => {
+      await realShaped(page);
+      await page.goto('/#/workspaces/demo/board');
+      await viewAtRest(page);
+      await expectWhole(page, '1440 Board');
+    });
+  });
+
+  test.describe('1100 Split', () => {
+    test.use({ viewport: { width: 1100, height: 700 } });
+    test('no count button is cut or squeezed and no comma hangs', async ({ page }) => {
+      await realShaped(page);
+      await page.addInitScript(() => { if (window === window.top) localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 })); });
+      await page.goto('/#/workspaces/demo/board');
+      await page.getByTestId('view-mode-split').click();
+      await viewAtRest(page);
+      await expectWhole(page, '1100 Split');
+    });
   });
 });
