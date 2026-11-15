@@ -316,6 +316,22 @@ export const FOLDER_SPECS = [
     specs: ['e2e/board-knowledge.spec.ts'],
     safety: 'Reads the knowledge file for the Board; verified by board-knowledge.spec.ts.',
   },
+
+  // Questions space (answers from explain/*.md as Areas of cards)
+  {
+    folder: 'src/features/board/questionsArea',
+    path: 'gui/src/features/board/questionsArea.ts',
+    bareNames: ['questionsArea', 'questionsArea.ts'],
+    specs: ['e2e/board-questions.spec.ts'],
+    safety: 'Pure mapping of answers to Areas, rows, cards, counts and index lines, never written to the board file; unit tested and verified by board-questions.spec.ts.',
+  },
+  {
+    folder: 'src/features/board/questionsData',
+    path: 'gui/src/features/board/questionsData.ts',
+    bareNames: ['questionsData', 'questionsData.ts'],
+    specs: ['e2e/board-questions.spec.ts'],
+    safety: 'Reads the answers (GET /questions) for the Board with its own refresh rules; verified by board-questions.spec.ts.',
+  },
 ];
 
 export function getAffectedSpecs(changedFiles) {

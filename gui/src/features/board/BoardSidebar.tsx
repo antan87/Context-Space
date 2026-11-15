@@ -350,6 +350,10 @@ export function BoardSidebar({
 
           return (
             <div key={section.id} className="rounded-lg">
+              {/* A heading over the first of several sections of one kind ("Questions") */}
+              {section.group && sections[index - 1]?.group !== section.group && (
+                <div role="presentation" className="px-1.5 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">{section.group}</div>
+              )}
               {/* Disclosure header with h3 button */}
               <div className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-muted/50">
                 <h3 className="min-w-0 flex-1 text-xs font-semibold">

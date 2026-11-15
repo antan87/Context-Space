@@ -20,6 +20,7 @@ import type { WorkDocument } from '../../types.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardPoint, BoardView } from './boardData.js';
+import type { AnswerCardData } from './questionsArea.js';
 export type { BoardCard, BoardLink, BoardPoint, BoardView };
 import { groupOpen, type Folds } from './boardFolds.js';
 
@@ -211,6 +212,8 @@ export type PlaceholderNode = Node<PlaceholderData, 'placeholder'>;
 export type UncommittedNode = Node<UncommittedData, 'uncommitted'>;
 export type NoteNode = Node<NoteData, 'note'>;
 export type FileNode = Node<FileCardData, 'file'>;
+/** A card of an answer in the Questions space: read-only and generated, never saved. */
+export type AnswerNode = Node<AnswerCardData, 'answer'>;
 /** The tile at the left of a row inside an Area: a plan step, or the name of a group of things. Pressing it opens the row. */
 export type RowHeadData = {
   rowId: string;
@@ -247,7 +250,7 @@ export type RowHeadNode = Node<RowHeadData, 'step'>;
 export type PagerNode = Node<PagerData, 'pager'>;
 export type FoldNode = Node<FoldData, 'fold'>;
 export type MoreNode = Node<MoreData, 'more'>;
-export type BoardNode = LaneNode | CheckpointNode | DocumentNode | CommitNode | UncommittedNode | PlaceholderNode | NoteNode | FileNode | RowHeadNode | FoldNode | MoreNode | PagerNode;
+export type BoardNode = LaneNode | CheckpointNode | DocumentNode | CommitNode | UncommittedNode | PlaceholderNode | NoteNode | FileNode | AnswerNode | RowHeadNode | FoldNode | MoreNode | PagerNode;
 
 export interface BoardSources {
   /** A source that is missing (still loading, or it failed) leaves its part of the board out. */
@@ -362,7 +365,7 @@ export function cardPlan(card: BoardCard, now: number): CardPlan {
 
 // ─── Lanes ──────────────────────────────────────────────────────────────────
 
-export type LaneCard = { id: string; type: 'document' | 'commit' | 'uncommitted' | 'placeholder' | 'note' | 'file'; height: number; data: DocumentData | CommitData | UncommittedData | PlaceholderData | NoteData | FileCardData };
+export type LaneCard = { id: string; type: 'document' | 'commit' | 'uncommitted' | 'placeholder' | 'note' | 'file' | 'answer'; height: number; data: DocumentData | CommitData | UncommittedData | PlaceholderData | NoteData | FileCardData | AnswerCardData };
 
 /**
  * A lane and its cards, one under the other, or in rows of `columns` when it is wider than one column, filled from the

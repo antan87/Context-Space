@@ -22,6 +22,8 @@ export interface ReaderTarget {
   byline?: string;
   /** When set, this is a repository commit: it opens in the Code window's Commits mode (GET /api/workspace/:id/commits/:repo/:sha), not in the reader. */
   commit?: { repo: string; sha: string };
+  /** The part of the document to scroll to: the text of its heading. Used by the answers, which open their file at the part a card is from. */
+  heading?: string;
   /** The workspace's knowledge, read as entries (KnowledgeView) and not as a document. `entry` is the one to open it on (its `entryKey`); none opens it at the top. */
   knowledge?: { entry?: string };
 }
@@ -45,6 +47,8 @@ export interface BoardActions {
   workspacePath?: string;
   /** Shows a file of the workspace in the reader beside the board. `opener` is what the keyboard goes back to when the reader closes; without one, the link that was just pressed. */
   openInReader: (target: ReaderTarget, opener: HTMLElement | null) => void;
+  /** Opens a file in the Code window at a line: a repository's file (`repo`) or one of the workspace's own. `opener` is where the keyboard goes back to. */
+  openCode?: (target: { repo?: { name: string; path: string }; file: string; line?: number }, opener: HTMLElement | null) => void;
   /** Opens (`true`) or folds (`false`) a group: a checkpoint frame, the plan's own frame, the documents or a repository's commits. */
   toggleGroup: (id: string, open: boolean) => void;
   /** A button of a group that has just opened or folded, to put the keyboard on when it was on the one that was pressed. */

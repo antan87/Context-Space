@@ -201,6 +201,34 @@ export function BoardReader({
     return () => { stop(); body.removeEventListener('wheel', stop); body.removeEventListener('pointerdown', stop); body.removeEventListener('keydown', stop); };
   }, [scrollId]);
 
+  // An answer opens its file at the part a card is from: once the text is drawn, the heading of that part is scrolled to the top.
+  // It waits a moment for the page to settle, and stops as soon as the person scrolls.
+  const wantedHeading = target.heading;
+  const loaded = Boolean(data);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!wantedHeading || !loaded || !body) return undefined;
+    const want = wantedHeading.trim();
+    let frame = 0;
+    let tries = 0;
+    let done = false;
+    const stop = () => { done = true; cancelAnimationFrame(frame); };
+    const step = () => {
+      if (done) return;
+      const heading = Array.from(body.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')).find((el) => el.textContent?.trim() === want);
+      if (heading) {
+        heading.scrollIntoView({ block: 'start' });
+        if (tries >= 3) return;
+      }
+      if (tries++ < FOCUS_FRAMES) frame = requestAnimationFrame(step);
+    };
+    body.addEventListener('wheel', stop, { passive: true });
+    body.addEventListener('pointerdown', stop);
+    body.addEventListener('keydown', stop);
+    step();
+    return () => { stop(); body.removeEventListener('wheel', stop); body.removeEventListener('pointerdown', stop); body.removeEventListener('keydown', stop); };
+  }, [wantedHeading, loaded, open, request]);
+
   const toggleMaximized = useCallback(() => {
     pendingFullscreenFocus.current = true;
     setMaximized((prev) => !prev);

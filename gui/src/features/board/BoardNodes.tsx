@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Archive, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, StickyNote, Terminal, type LucideIcon } from 'lucide-react';
+import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, StickyNote, Terminal, TriangleAlert, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
@@ -19,10 +19,11 @@ import { agoText } from '../plan/whatsNew.js';
 import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } from './commitNotes.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
-import { areaCountItems, areaCounts, foldLabel, MINI_STATUS_LINE, miniShowsPicture, stepsText, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
+import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
 import { answersThatFit, ROW_SIZE } from './boardRows.js';
-import { BOARD_SIZE, imageAlt, moreText, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
+import { BOARD_SIZE, imageAlt, moreText, type AnswerNode, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
@@ -1693,6 +1694,224 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   </CardFrame>;
 }
 
+const ANSWER_CARD = 'group relative flex h-full w-full flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80';
+const ANSWER_MAIN = 'nodrag nopan flex h-full w-full min-w-0 flex-col gap-1 px-3 py-2 text-left outline-hidden cursor-pointer';
+
+/** The status line of a code card: what the check found, with a mark that does not rely on colour. */
+function CodeStatusLine({ data, id }: { data: Extract<AnswerCardData, { variant: 'code' }>; id: string }) {
+  const status = codeStatus(data.check, data.where);
+  if (!status) return null;
+  const Mark = status.tone === 'ok' ? Check : status.tone === 'warn' ? TriangleAlert : CircleHelp;
+  return (
+    <span className="flex shrink-0 flex-col">
+      <span id={id} data-status={data.check.status} className={cn('flex h-[18px] items-center gap-1 text-[12px] font-medium leading-4', status.tone === 'ok' ? 'text-state-done' : status.tone === 'warn' ? 'text-warning-foreground' : 'text-muted-foreground')}>
+        <Mark aria-hidden="true" className="size-3.5 shrink-0" />
+        {status.label}
+      </span>
+      {status.hint && <span className="truncate text-[12px] leading-4 text-muted-foreground" title={status.hint}>{status.hint}</span>}
+    </span>
+  );
+}
+
+/** What the compare view says when a refresh has turned the check into something else, by what it now is. */
+function compareWords(status: string): string {
+  switch (status) {
+    case 'gone': return 'The file is gone.';
+    case 'unreadable': return 'The file can no longer be read.';
+    case 'not-in-workspace': return 'The file is no longer in this workspace.';
+    default: return 'The copy matches the file again.';
+  }
+}
+
+/** The file a code card opens in the Code window, and at which line; null when it names none. */
+function codeTarget(data: Extract<AnswerCardData, { variant: 'code' }>) {
+  const line = codeOpenLine(data);
+  return data.file ? { ...(data.repo && data.repoPath ? { repo: { name: data.repo, path: data.repoPath } } : {}), file: data.file, ...(line ? { line } : {}) } : null;
+}
+
+/** The copy as the answer has it beside the same lines now, with the lines that differ marked. */
+function CompareCode({ data }: { data: Extract<AnswerCardData, { variant: 'code' }> }) {
+  const before = data.copy.split('\n');
+  if (data.check.status !== 'changed') return <p className="text-sm text-muted-foreground">{compareWords(data.check.status)}</p>;
+  const nowText = data.check.current ?? '';
+  const after = nowText === '' ? [] : nowText.split('\n');
+  const marks = differingLines(before, after);
+  const start = data.start ?? 1;
+  const column = (title: string, lines: string[], differs: boolean[], sign: string, empty: string) => (
+    <section className="min-w-0 flex-1" aria-label={title}>
+      <h3 className="mb-1 text-[12px] font-semibold text-muted-foreground">{title}</h3>
+      <div className="max-h-[50vh] overflow-auto rounded-md border border-border bg-muted/30 py-1 font-mono text-[12px] leading-4">
+        {lines.length === 0 && <p className="px-2 font-sans text-muted-foreground">{empty}</p>}
+        {lines.map((line, index) => (
+          <div key={index} data-differs={differs[index] ? 'true' : undefined} className={cn('flex gap-2 px-2', differs[index] && (sign === '-' ? 'bg-destructive/10' : 'bg-success/10'))}>
+            <span aria-hidden="true" className="w-8 shrink-0 select-none text-right text-muted-foreground tabular-nums">{start + index}</span>
+            <span aria-hidden="true" className="w-3 shrink-0 select-none text-muted-foreground">{differs[index] ? sign : ''}</span>
+            <span className="min-w-0 whitespace-pre-wrap break-all">{line === '' ? ' ' : line}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+  return (
+    <div className="@container">
+    <div className="flex flex-col gap-3 @[44rem]:flex-row">
+      {column('In the answer', before, marks.before, '-', 'Nothing')}
+      {column('Now', after, marks.after, '+', 'Those lines are no longer in the file.')}
+    </div>
+    </div>
+  );
+}
+
+/**
+ * A card of an answer in the Questions space: text, a copied block of code with the check of its place, a picture, or a diagram.
+ * The whole card is its one button, named by what it opens: the reader (at the part's heading), the picture, the real file in the
+ * Code window, or, when the copy no longer matches, a view that shows the copy beside the lines now.
+ */
+export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
+  const actions = useContext(BoardActionsContext);
+  const reading = useContext(BoardReadingContext) === id;
+  const titleId = useId();
+  const statusId = useId();
+  const main = useRef<HTMLButtonElement>(null);
+  const [broken, setBroken] = useState<string | null>(null);
+  const [compare, setCompare] = useState(false);
+  // The view closed on a card that no longer says "Changed since": its button is a new one, so the keyboard is given to it
+  const compareWasOpen = useRef(false);
+  const stillChanged = data.variant === 'code' && data.check.status === 'changed';
+  // "Open the file" from a view that no longer shows a change: the Code window is opened once the card's new button is there, so that is its opener
+  const openAfter = useRef(false);
+  useEffect(() => {
+    if (compareWasOpen.current && !compare && !stillChanged) {
+      main.current?.focus();
+      if (openAfter.current && data.variant === 'code') {
+        openAfter.current = false;
+        const again = codeTarget(data);
+        if (again) actions?.openCode?.(again, main.current);
+      }
+    }
+    compareWasOpen.current = compare;
+  }, [compare, stillChanged, data, actions]);
+  const readAnswer = (event: MouseEvent<HTMLElement>) => actions?.openInReader({ path: data.path, title: data.question, card: id, ...(data.heading ? { heading: data.heading } : {}) }, event.currentTarget);
+  const frame = (label: string, describedBy: string | undefined, content: ReactNode, press: ((event: MouseEvent<HTMLElement>) => void) | null, extra?: ReactNode) => (
+    <article
+      aria-labelledby={titleId}
+      aria-describedby={describedBy}
+      aria-current={reading ? 'true' : undefined}
+      data-answer-card={data.variant}
+      onClick={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}
+      className={cn(ANSWER_CARD, CARD_FOCUS, actions && BRICK, reading && 'ring-2 ring-primary')}
+    >
+      <Anchors />
+      {actions && press ? (
+        <button ref={main} type="button" data-card-main aria-label={label} onClick={press} className={ANSWER_MAIN}>{content}</button>
+      ) : (
+        <div className={ANSWER_MAIN}>{content}</div>
+      )}
+      {extra}
+    </article>
+  );
+
+  if (data.variant === 'text') {
+    return frame(`Read ${data.title}`, undefined, <>
+      <span id={titleId} className="sr-only">{data.title}</span>
+      <span className="line-clamp-5 break-words text-[13px] leading-[18px] text-foreground">{readableText(data.text)}</span>
+    </>, readAnswer);
+  }
+
+  if (data.variant === 'diagram') {
+    return frame('Read the diagram', undefined, <>
+      <span id={titleId} className="truncate text-[12px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground">Diagram</span>
+      <pre className="h-12 overflow-hidden whitespace-pre font-mono text-[12px] leading-4 text-foreground">{data.source.split('\n').slice(0, 3).join('\n')}</pre>
+    </>, readAnswer);
+  }
+
+  if (data.variant === 'picture') {
+    const shown = data.src && broken !== data.src && actions;
+    if (!shown) {
+      return frame(`Read ${data.title}`, undefined, <>
+        <span id={titleId} className="truncate text-[12px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground">Picture</span>
+        <span role="status" className="flex flex-1 items-center break-all text-[13px] leading-[18px] text-muted-foreground">Picture not found: {data.rawPath}</span>
+      </>, readAnswer);
+    }
+    return frame(`Open ${data.title}`, undefined, <>
+      <span className="relative min-h-0 w-full flex-1 overflow-hidden rounded-md border border-border/60 bg-black/40">
+        <img
+          src={documentFileUrl(actions.workspaceId, data.src!)}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onError={() => setBroken(data.src)}
+          className="size-full object-cover"
+        />
+      </span>
+      <span id={titleId} className="truncate text-[12.5px] leading-4 text-foreground">{data.title}</span>
+    </>, (event) => actions.openInReader({ path: data.src!, title: data.title, card: id }, event.currentTarget));
+  }
+
+  // Code
+  const status = codeStatus(data.check, data.where);
+  const head = codeHeadParts(data, data.check);
+  const lines = data.copy.split('\n').slice(0, status?.hint ? 2 : 3).join('\n');
+  const content = (
+    <>
+      <span id={titleId} className="flex min-w-0 font-mono text-[12px] font-medium leading-[18px] text-foreground" title={data.title}>
+        {/* A long place is cut at its start, so the file's name and the lines always show */}
+        <span className="min-w-0 truncate" style={{ direction: 'rtl', textAlign: 'left' }}>{head.name}</span>
+        <span className="shrink-0 whitespace-pre">{head.lines}</span>
+      </span>
+      <pre className={cn('overflow-hidden whitespace-pre font-mono text-[12px] leading-4 text-muted-foreground', status?.hint ? 'h-8' : 'h-12')}>{lines === '' ? ' ' : lines}</pre>
+      <CodeStatusLine data={data} id={statusId} />
+    </>
+  );
+  const label = `${data.title}${status ? `, ${status.label}` : ''}`;
+  const target = codeTarget(data);
+  // Drawn while the view is open, whatever the check now says: a refresh must not close it or drop the keyboard
+  if ((data.check.status === 'changed' || compare) && target && actions) {
+    return (
+      <article
+        aria-labelledby={titleId}
+        aria-describedby={statusId}
+        data-answer-card="code"
+        onClick={(event) => brickPress(event, (card) => firstControl(card, '[data-card-main]'))}
+        className={cn(ANSWER_CARD, CARD_FOCUS, BRICK, 'border-warning/50')}
+      >
+        <Anchors />
+        <Dialog open={compare} onOpenChange={setCompare}>
+          <DialogTrigger render={<button ref={main} type="button" data-card-main aria-label={`Compare ${label}`} className={ANSWER_MAIN} onClick={(event) => event.stopPropagation()} />}>
+            {content}
+          </DialogTrigger>
+          <DialogPopup className="max-w-5xl" data-testid="answer-compare">
+            <DialogHeader>
+              <DialogTitle className="font-mono text-sm font-semibold">{data.title}</DialogTitle>
+              <DialogDescription>{data.check.status === 'changed' ? 'The copy in the answer no longer matches the file. Lines that differ are marked.' : 'The file has changed since this view was opened.'}</DialogDescription>
+            </DialogHeader>
+            <DialogPanel><CompareCode data={data} /></DialogPanel>
+            <DialogFooter variant="bare">
+              {(data.check.status === 'changed' || data.check.status === 'matches' || data.check.status === 'moved') && (
+                <Button
+                  type="button" size="sm" variant="outline" data-testid="answer-open-file"
+                  onClick={() => {
+                    if (data.check.status === 'changed') { setCompare(false); actions.openCode?.(target, main.current); } else { openAfter.current = true; setCompare(false); }
+                  }}
+                >Open the file</Button>
+              )}
+              <DialogClose render={<Button type="button" variant="ghost" size="sm" />}>Close</DialogClose>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
+      </article>
+    );
+  }
+  const opens = (data.check.status === 'matches' || data.check.status === 'moved') && target;
+  return frame(
+    opens ? `Open ${label}` : `Read ${label}`,
+    status ? statusId : undefined,
+    content,
+    opens ? (event) => actions?.openCode?.(target, event.currentTarget) : readAnswer,
+  );
+}
+
 /** How far an Area is, as words. */
 const areaSteps = (data: AreaData) => data.kind === 'plan'
   ? (data.stepsTotal ? `${data.stepsTotal} ${data.stepsTotal === 1 ? 'step' : 'steps'} outside the checkpoints` : 'Steps outside the checkpoints')
@@ -1704,7 +1923,7 @@ function areaLabel(data: AreaData): string {
   return summaryLabel([
     data.title,
     data.done ? 'done' : data.nowSet ? 'now' : data.current ? 'next up' : data.kind === 'checkpoint' ? 'not done' : undefined,
-    data.kind !== 'work' && data.kind !== 'files' ? areaSteps(data).toLowerCase() : undefined,
+    !isStepless(data.kind) ? areaSteps(data).toLowerCase() : undefined,
     data.waitingCount > 0 ? (data.waitingCount === 1 ? 'waits for you' : `${data.waitingCount} wait for you`) : undefined,
     counts.length > 0 ? counts.join(', ') : undefined,
     data.warning?.toLowerCase(),
@@ -1770,7 +1989,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
             {data.title}
           </span>
 
-          {data.kind !== 'work' && data.kind !== 'files' && (
+          {!isStepless(data.kind) && (
             <span className="mt-1 block shrink-0 w-full">
               <span className={cn('block truncate', AREA_TEXT)}>{stepsLabel}</span>
               <span aria-hidden="true" className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted">
@@ -1869,7 +2088,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                       e.stopPropagation();
                       actions?.openCount?.(id, item.kind, e.currentTarget);
                     }}
-                    className="nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+                    className={cn('nodrag nopan inline-flex min-h-[24px] items-center rounded px-1 text-[12px] leading-4 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring cursor-pointer', item.warn && 'font-medium text-warning-foreground')}
                   >
                     {item.label}
                   </button>
@@ -1884,10 +2103,27 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
   );
 }
 
+/**
+ * The count line of an answer in the overview, on one line: the counts are cut at their end when the card is narrow, and
+ * "N changed since" stays whole, in the warning colour, because it is the one that wants a look.
+ */
+function AnswerCountLine({ data }: { data: AreaData }) {
+  const words = answerCountWords(data.answerCounts ?? { parts: 0, code: 0, pictures: 0, changed: 0 });
+  const changed = words.find((word) => word.kind === 'changed');
+  const rest = words.filter((word) => word.kind !== 'changed').map((word) => word.label).join(' · ');
+  return (
+    <span className="flex min-w-0 whitespace-nowrap">
+      <span className="min-w-0 truncate">{rest}</span>
+      {changed && <span className="shrink-0 whitespace-pre font-medium text-warning-foreground">{rest ? ' · ' : ''}{changed.label}</span>}
+    </span>
+  );
+}
+
 /** Whether an Area is done, under way ("Now") or neither, as a mark that stays quiet: neither is the usual and says nothing. */
 function AreaMark({ data }: { data: AreaData }) {
   if (data.done) return <span className="inline-flex items-center"><CircleCheck aria-hidden="true" className="size-4 shrink-0 text-state-done" /><span className="sr-only">Done</span></span>;
   if (data.nowSet) return <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center"><span className="board-now-dot size-2 rounded-full bg-state-now" /></span>;
+  if (data.kind === 'questions') return <CircleHelp aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />;
   if (data.kind === 'files') return <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />;
   return <Circle aria-hidden="true" className="size-4 shrink-0 text-muted-foreground/50" />;
 }
@@ -1896,9 +2132,10 @@ function AreaMark({ data }: { data: AreaData }) {
 export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
   const actions = useContext(BoardActionsContext);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
-  const isNotStarted = data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0 && data.stepsDone === 0;
-  const fileCounts = data.kind === 'files' ? formatWorkspaceFileCounts(data, { compact: true }).join(' · ') : '';
-  const fileFullCounts = data.kind === 'files' ? areaCounts(data).join(' · ') : '';
+  const isNotStarted = !isStepless(data.kind) && data.stepsTotal > 0 && data.stepsDone === 0;
+  const listArea = data.kind === 'files' || data.kind === 'questions';
+  const fileCounts = data.kind === 'files' ? formatWorkspaceFileCounts(data, { compact: true }).join(' · ') : data.kind === 'questions' ? areaCounts(data).join(' · ') : '';
+  const fileFullCounts = listArea ? areaCounts(data).join(' · ') : '';
 
   return (
     <div
@@ -1919,11 +2156,11 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
         aria-label={areaLabel(data)}
         className={cn(
           'board-area nodrag nopan flex items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded',
-          data.kind === 'files' ? 'min-w-0 shrink' : 'min-w-0 flex-1',
+          listArea ? 'min-w-0 shrink' : 'min-w-0 flex-1',
         )}
       >
         <AreaMark data={data} />
-        <span className={cn('text-sm font-medium leading-5 text-foreground', data.kind === 'files' ? 'truncate whitespace-nowrap' : 'min-w-0 flex-1 truncate')} title={data.title}>
+        <span className={cn('text-sm font-medium leading-5 text-foreground', listArea ? 'truncate whitespace-nowrap' : 'min-w-0 flex-1 truncate')} title={data.title}>
           {data.fresh && !data.current && !data.done && (
             <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
           )}
@@ -1969,7 +2206,7 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
           {data.nextOpenStep}
         </span>
       )}
-      {!data.done && data.current && data.kind !== 'work' && data.kind !== 'files' && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
+      {!data.done && data.current && !isStepless(data.kind) && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
       {data.waitingCount > 0 && data.tier !== 2 && (
         <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-state-needs">
           <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />Waiting
@@ -1977,10 +2214,10 @@ export function BoardAreaRow({ id, data }: NodeProps<AreaRowNode>) {
       )}
       {fileCounts && data.tier !== 2 && data.tier !== 3 && (
         <span className="min-w-0 flex-1 truncate text-right text-xs leading-4 text-muted-foreground" title={fileFullCounts || fileCounts}>
-          {fileCounts}
+          {data.kind === 'questions' ? <AnswerCountLine data={data} /> : fileCounts}
         </span>
       )}
-      {data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0 && (
+      {!isStepless(data.kind) && data.stepsTotal > 0 && (
         <>
           <span className={cn('shrink-0 whitespace-nowrap text-xs tabular-nums', isNotStarted ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
             {data.stepsDone} of {data.stepsTotal}
@@ -2010,15 +2247,15 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const placeholderRef = useRef<HTMLSpanElement>(null);
   const [failedPics, setFailedPics] = useState<string[]>([]);
   const picture = data.pictures.find((pic) => !failedPics.includes(pic.path));
-  const hasStatus = (data.current && data.kind !== 'work' && data.kind !== 'files') ||
+  const hasStatus = (data.current && !isStepless(data.kind)) ||
     data.waitingCount > 0 ||
     Boolean(data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0)) ||
     Boolean(data.tier === 3 && (data.newsItems?.length || data.newsSummary));
   const showPicture = Boolean(picture && actions && miniShowsPicture(width ?? 0, height ?? 0, hasStatus));
   const statusLine = (height ?? 0) >= MINI_STATUS_LINE;
-  const hasSteps = data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0;
+  const hasSteps = !isStepless(data.kind) && data.stepsTotal > 0;
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
-  const isNotStarted = data.kind !== 'work' && data.kind !== 'files' && data.stepsTotal > 0 && data.stepsDone === 0;
+  const isNotStarted = !isStepless(data.kind) && data.stepsTotal > 0 && data.stepsDone === 0;
 
   const hasCountButtons = Boolean(data.tier === 3 && data.newsItems && data.newsItems.length > 0 && actions);
 
@@ -2061,11 +2298,15 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
     statusLine,
   ]);
 
-  if (data.kind === 'files') {
+  if (data.kind === 'files' || data.kind === 'questions') {
     const pics = data.pictures.filter((pic) => !failedPics.includes(pic.path)).slice(0, 3);
     const fullCounts = areaCounts(data).join(' · ');
-    const fileCounts = formatWorkspaceFileCounts(data, { compact: true }).join(' · ');
+    const fileCounts = data.kind === 'questions' ? areaCounts(data).join(' · ') : formatWorkspaceFileCounts(data, { compact: true }).join(' · ');
     const thumbSize = (height ?? 0) >= 108 ? 'h-9 w-14' : (height ?? 0) >= 90 ? 'h-7 w-12' : 'h-6 w-10';
+    // A question may run to two lines; the first line of its answer is then shown only where there is room for both
+    const isQuestion = data.kind === 'questions';
+    const twoLineTitle = isQuestion && textEm(data.title) * 14 * 1.08 > Math.max(60, (width ?? 240) - 24 - 24 - 12);
+    const showPreview = pics.length === 0 && Boolean(data.preview) && (!twoLineTitle || (height ?? 0) >= 100);
     return (
       <div
         ref={cardRef}
@@ -2086,10 +2327,10 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
           type="button"
           onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
           aria-label={areaLabel(data)}
-          className="board-area nodrag nopan flex w-full min-w-0 items-center gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-ring cursor-pointer"
+          className={cn('board-area nodrag nopan flex w-full min-w-0 gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-ring cursor-pointer', isQuestion ? 'items-start' : 'items-center')}
         >
-          <AreaMark data={data} />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5 text-foreground" title={data.title}>
+          <span className={cn(isQuestion && 'mt-0.5')}><AreaMark data={data} /></span>
+          <span className={cn('min-w-0 flex-1 text-sm font-medium leading-5 text-foreground', isQuestion ? 'line-clamp-2' : 'truncate')} title={data.title}>
             {data.title}
           </span>
         </button>
@@ -2123,12 +2364,12 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
             ))}
           </div>
         )}
-        {pics.length === 0 && data.preview && (
+        {showPreview && (
           <span className="line-clamp-1 text-xs leading-4 text-muted-foreground">{data.preview}</span>
         )}
         {fileCounts && (
-          <span className="min-w-0 text-xs leading-4 text-muted-foreground break-words" title={fullCounts}>
-            {fileCounts}
+          <span className={cn('min-w-0 text-xs leading-4 text-muted-foreground', data.kind !== 'questions' && 'break-words')} title={fullCounts}>
+            {data.kind === 'questions' ? <AnswerCountLine data={data} /> : fileCounts}
           </span>
         )}
       </div>
@@ -2710,7 +2951,7 @@ export function BoardFoldRow({ data }: NodeProps<FoldNode>) {
         data.current ? 'border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent border-l-4 border-l-state-now' : 'border-border/60 bg-card/50')}
     >
       <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[14px] font-semibold text-foreground" title={data.title}>{data.title}</span>
-      {data.summary && !(tail && NOTHING.test(data.summary)) && <span className="shrink-0 whitespace-nowrap text-[13px] text-muted-foreground">{data.summary}</span>}
+      {data.summary && !(tail && NOTHING.test(data.summary)) && <span className="shrink-0 whitespace-nowrap text-[13px] text-muted-foreground">{data.summary.split(/(\d+ changed since)/).map((part, index) => (index % 2 === 1 ? <span key={index} className="font-medium text-warning-foreground">{part}</span> : part))}</span>}
       {tail && <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground" title={tail}>{tail}</span>}
       {data.warning && <span className="min-w-0 max-w-[40%] truncate text-[13px] text-destructive-foreground" title={data.warning}>{data.warning}</span>}
       {!tail && <span className="flex-1" />}

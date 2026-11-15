@@ -8,9 +8,10 @@
 import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
 import { stepsText, waitingText, type BoardArea, type Size } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
+import { answerCountWords, QUESTIONS_GROUP } from './questionsArea.js';
 import { cardOrder, fileTypeOf, uniqueId, type FileType } from './boardLayout.js';
 
-export type NavCategory = 'waiting' | 'areas' | 'pictures' | 'documents' | 'notes' | 'commits';
+export type NavCategory = 'waiting' | 'areas' | 'questions' | 'pictures' | 'documents' | 'notes' | 'commits';
 export type NavMode = 'category' | 'area';
 
 export const SIDEBAR = { width: 248, railWidth: 40, minStage: 712 } as const;
@@ -113,6 +114,8 @@ export interface NavSection {
   items: NavItem[];
   areaId?: string;
   waiting?: boolean;
+  /** A heading the section stands under, when sections of one kind are listed together ("Questions"). */
+  group?: string;
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -128,6 +131,12 @@ function noteSnippet(body?: string): string {
   const collapsed = firstLine.trim().replace(/\s+/g, ' ');
   if (!collapsed) return 'Note';
   return collapsed.length > 60 ? `${collapsed.slice(0, 57)}…` : collapsed;
+}
+
+/** "5 parts · 7 code blocks · 1 picture", for an answer's line in the index. */
+function questionCountLine(area: BoardArea): string {
+  const counts = area.data.answerCounts;
+  return counts ? answerCountWords(counts).map((word) => word.label).join(' · ') || 'Answer' : 'Answer';
 }
 
 export interface BuildBoardNavOptions {
@@ -151,6 +160,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
   // Collect items per category or per area
   const waitingItems: NavItem[] = [];
   const areaItems: NavItem[] = [];
+  const questionItems: NavItem[] = [];
   const pictureItems: NavItem[] = [];
   const docItems: NavItem[] = [];
   const noteItems: NavItem[] = [];
@@ -178,13 +188,16 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
           ? 'Current work'
           : area.data.kind === 'files'
             ? formatWorkspaceFileCounts(area.data).join(' · ') || 'Workspace files'
-            : stepsText(area.data);
+            : area.data.kind === 'questions'
+              ? questionCountLine(area)
+              : stepsText(area.data);
 
+    const isQuestion = area.data.kind === 'questions';
     const bucket: AreaBucket = {
       area,
       areaEntry: {
         id: `area:${area.id}`,
-        category: 'areas',
+        category: isQuestion ? 'questions' : 'areas',
         areaId: area.id,
         areaTitle: area.data.title,
         nodeId: null,
@@ -200,7 +213,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
                 : area.data.kind === 'plan'
                   ? { text: 'Plan', variant: 'outline' }
                   : undefined,
-        searchText: [area.data.title, ...(area.planItems?.steps ?? []).map((s) => s.text)].join(' ').toLowerCase(),
+        searchText: [area.data.title, ...(area.data.kind === 'questions' ? [area.data.preview ?? ''] : []), ...(area.answer?.parts ?? []).map((part) => part.title), ...(area.planItems?.steps ?? []).map((s) => s.text)].join(' ').toLowerCase(),
       },
       waiting: [],
       docs: [],
@@ -209,7 +222,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
       commits: [],
     };
 
-    areaItems.push(bucket.areaEntry);
+    (isQuestion ? questionItems : areaItems).push(bucket.areaEntry);
 
     // 1. Waiting decisions
     const waitingSet = new Set(area.planItems?.waitingKeys ?? []);
@@ -353,6 +366,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
     const CATEGORIES: Array<{ category: NavCategory; title: string; items: NavItem[]; waiting?: boolean }> = [
       { category: 'waiting', title: 'Waiting for you', items: waitingItems, waiting: true },
       { category: 'areas', title: 'Areas', items: areaItems },
+      { category: 'questions', title: QUESTIONS_GROUP, items: questionItems },
       { category: 'pictures', title: 'Pictures & pages', items: pictureItems },
       { category: 'documents', title: 'Documents', items: docItems },
       { category: 'notes', title: 'Notes', items: noteItems },
@@ -394,7 +408,9 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
               ? 'Current work'
               : b.area.data.kind === 'files'
                 ? formatWorkspaceFileCounts(b.area.data).join(' · ') || 'Workspace files'
-                : stepsText(b.area.data),
+                : b.area.data.kind === 'questions'
+                  ? questionCountLine(b.area)
+                  : stepsText(b.area.data),
           subtitle: 'Step into area',
           searchText: b.areaEntry.searchText,
         },
@@ -409,7 +425,9 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
             ? 'Current work'
             : b.area.data.kind === 'files'
               ? formatWorkspaceFileCounts(b.area.data).join(' · ') || 'Workspace files'
-              : stepsText(b.area.data);
+              : b.area.data.kind === 'questions'
+                ? questionCountLine(b.area)
+                : stepsText(b.area.data);
         const itemSubtitle = matchedStep
           ? 'Matched step · Step into area'
           : areaTitleMatches
@@ -438,6 +456,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
         areaId: b.area.id,
         items: finalItems,
         waiting: (b.area.data.waitingCount ?? 0) > 0,
+        ...(b.area.data.kind === 'questions' ? { group: QUESTIONS_GROUP } : {}),
       });
     }
   }

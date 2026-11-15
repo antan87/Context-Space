@@ -28,8 +28,10 @@ import { BoardActionsContext, BoardReadingContext, firstControl, knowledgeTarget
 import { parseKnowledge } from '../knowledge/knowledgeEntries.js';
 import { knowledgeFileKey, useKnowledge } from '../knowledge/useKnowledge.js';
 import {
+  areaCounts,
   areaLayout,
   areaPlace,
+  isStepless,
   areaRows,
   areaRowIds,
   areaView,
@@ -46,6 +48,8 @@ import {
   type OverviewNode,
 } from './boardAreas.js';
 import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard, useWorkspaceFiles, workspaceFilesKey } from './boardData.js';
+import { questionsKey, useQuestions } from './questionsData.js';
+import { isAnswerCardId } from './questionsArea.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { NoteDialog } from './NoteDialog.js';
 import { fileTitle, readerDock } from './boardDock.js';
@@ -63,7 +67,7 @@ import {
   type NavItem,
   type NavMode,
 } from './boardNav.js';
-import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead, BoardUncommitted } from './BoardNodes.js';
+import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardAnswerCard, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead, BoardUncommitted } from './BoardNodes.js';
 import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
 import { commitOpenFor } from './commitSequence.js';
@@ -98,6 +102,7 @@ const AREA_NODE_TYPES: NodeTypes = {
   uncommitted: BoardUncommitted,
   note: BoardNote,
   file: BoardFile,
+  answer: BoardAnswerCard,
   step: BoardRowHead,
   fold: BoardFoldRow,
   more: BoardMoreTile,
@@ -236,6 +241,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const boardQuery = useBoard(workspaceId, { poll: listening && !connected });
   const queryClient = useQueryClient();
   const workspaceFilesQuery = useWorkspaceFiles(workspaceId, { active: listening });
+  const questionsQuery = useQuestions(workspaceId, { active: listening });
   const root = useRef<HTMLDivElement>(null);
 
   const planView = plan.data;
@@ -262,6 +268,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       prevDocsNewsRef.current = { workspaceId, sig: docsNewsSig };
       if (newsView.documents.items.length > 0 || newsView.documents.more > 0) {
         void queryClient.invalidateQueries({ queryKey: workspaceFilesKey(workspaceId) });
+        void queryClient.invalidateQueries({ queryKey: questionsKey(workspaceId) });
       }
     }
   }, [workspaceId, newsView, docsNewsSig, queryClient]);
@@ -283,6 +290,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const board = boardQuery.data;
   const commitNotes = useMemo(() => commitNotesOf(board?.cards), [board?.cards]);
   const workspaceFiles = workspaceFilesQuery.data?.files;
+  const questions = questionsQuery.data;
   const [showArchived, setShowArchived] = useState(false);
 
   // Source loading & error indicators
@@ -301,8 +309,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const codeOpen = useCodeWindowOpen(workspaceId);
   const { summary: changes } = useRepoChanges(workspaceId, { enabled: listening && !readOnly, paused: codeOpen });
   const areas = useMemo(
-    () => buildBoardAreas({ plan: planView, documents, news: boardNewsView, board, workspaceFiles, showArchived, focusNow: built.at }).map((area) => (area.data.current && changes.repos.length > 0 ? { ...area, uncommitted: changes.repos } : area)),
-    [planView, documents, boardNewsView, board, workspaceFiles, showArchived, changes.repos, built.at],
+    () => buildBoardAreas({ plan: planView, documents, news: boardNewsView, board, workspaceFiles, questions, showArchived, focusNow: built.at }).map((area) => (area.data.current && changes.repos.length > 0 ? { ...area, uncommitted: changes.repos } : area)),
+    [planView, documents, boardNewsView, board, workspaceFiles, questions, showArchived, changes.repos, built.at],
   );
 
   // Plane 0 (Overview) elements
@@ -370,7 +378,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     openerWas.current = node && label ? { node, label } : null;
     requests.current += 1;
     const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
-    const matching = allTargets.find((t) => isSameReaderTarget(t, target) || (!t.source && !target.source && !t.repo && !target.repo && !t.commit && !target.commit && t.path === target.path));
+    const matching = allTargets.find((t) => isSameReaderTarget(t, target) || (!t.source && !target.source && !t.repo && !target.repo && !t.commit && !target.commit && !isAnswerCardId(t.card) && t.path === target.path));
     const resolved: ReaderTarget = matching
       ? { ...matching, ...target, ...(matching.card ? { card: matching.card } : {}), ...(matching.text ? { text: matching.text } : {}), ...(matching.byline ? { byline: matching.byline } : {}) }
       : target;
@@ -401,7 +409,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       setReader((current) => {
         if (!current || !referenceIntentIsCurrent(intent)) return current;
         const repo = resolved.origin.kind === 'repository' ? { name: resolved.origin.repoName, path: resolved.origin.repoPath } : undefined;
-        const target = (!repo ? allTargets.find((t) => !t.source && !t.repo && !t.commit && t.path === resolved.file) : undefined)
+        const target = (!repo ? allTargets.find((t) => !t.source && !t.repo && !t.commit && !isAnswerCardId(t.card) && t.path === resolved.file) : undefined)
           ?? { path: resolved.file, title: fileTitle(resolved.file), ...(repo ? { repo } : {}) };
         const trail = pushTrail(current.trail, target);
         return trail === current.trail ? { ...current, request } : { target, request, trail };
@@ -2122,12 +2130,20 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     askInCLI,
   }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, clearJump, openInReader, chooseTab, setOpenState, stageContainer, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize, recordBoardJump]);
 
+  // A copied code block opens the real file in the Code window, at the lines it is now; the keyboard goes back to the card.
+  const openCode = useCallback<NonNullable<BoardActions['openCode']>>((target, from) => {
+    const area = activeAreaTitleRef.current;
+    if (target.repo) openCodeWindow(workspaceId, { opener: from, area, file: { repoName: target.repo.name, repoPath: target.repo.path, file: target.file, ...(target.line ? { line: target.line } : {}) } });
+    else openCodeWindow(workspaceId, { opener: from, area, workspaceFile: { workspaceId, file: target.file, ...(target.line ? { line: target.line } : {}) } });
+  }, [workspaceId]);
+
   const areaActions = useMemo<BoardActions>(() => ({
     workspaceId,
     workspacePath,
     readOnly,
     activeAreaTitle: activeArea?.data.title,
     openInReader,
+    openCode,
     toggleGroup: () => {},
     keepFocus: () => {},
     toggleRow,
@@ -2148,7 +2164,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, activeArea?.data.title, openInReader, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
+  }), [workspaceId, workspacePath, readOnly, activeArea?.data.title, openInReader, openCode, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const backdropPress = useRef({ down: false, up: false });
 
@@ -2517,11 +2533,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                   <span className="sr-only shrink-0 whitespace-nowrap text-[12.5px] text-muted-foreground @[34rem]:not-sr-only @[34rem]:inline">
                     {activeArea.data.kind === 'files'
                       ? formatWorkspaceFileCounts(activeArea.data).join(' · ')
-                      : stepsText(activeArea.data)}
+                      : activeArea.data.kind === 'questions'
+                        ? areaCounts(activeArea.data).join(' · ')
+                        : stepsText(activeArea.data)}
                   </span>
                 )}
                 <div className="ml-auto flex shrink-0 items-center gap-0.5 @[34rem]:gap-1">
-                  {activeArea.data.kind !== 'work' && activeArea.data.kind !== 'files' && !readOnly && (
+                  {!isStepless(activeArea.data.kind) && !readOnly && (
                     <>
                       <IconButton
                         label="Add a step"
@@ -2554,7 +2572,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     </>
                   )}
                   {codeButton(true)}
-                  {activeArea.data.kind !== 'files' && noteButton(activeArea.id, true)}
+                  {activeArea.data.kind !== 'files' && activeArea.data.kind !== 'questions' && noteButton(activeArea.id, true)}
                   {activeArea.archivedCount > 0 && (
                     <Button
                       size="xs"

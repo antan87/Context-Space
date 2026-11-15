@@ -24,6 +24,7 @@ import {
   workspaceFileToLaneCard,
   type WorkspaceFileGroup,
 } from './workspaceFilesArea.js';
+import { ANSWER_CARD_HEIGHT, checkSummary, codeHead, readableText, type AnswerCardData } from './questionsArea.js';
 import { filesChangedText, plusMinusText, type RepoChangeSummary } from '../changes/changeSummary.js';
 import { extractFreshSets, textEm, type BoardArea, type Size, type Viewport } from './boardAreas.js';
 import {
@@ -157,7 +158,7 @@ export interface AreaBoardLayoutOptions {
 export type LooseTab = 'media' | 'notes';
 export interface LooseTabs { media: LaneCard[]; notes: LaneCard[]; /** The tab that holds the newest card. */ first: LooseTab }
 
-export type AreaRowKind = 'step' | 'loose' | 'documents' | 'pages' | 'pictures' | 'commits' | 'more-steps' | 'done';
+export type AreaRowKind = 'step' | 'loose' | 'documents' | 'pages' | 'pictures' | 'commits' | 'more-steps' | 'done' | 'answer';
 
 export interface StepGroup { key: string; text: string; items: LaneCard[] }
 
@@ -349,6 +350,18 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
         summary: `${files.length} ${files.length === 1 ? entry.singular : entry.plural}`,
       });
     }
+    return { waiting: null, rows };
+  }
+  if (area.kind === 'questions') {
+    // The answer as rows: the short answer, then one row for each part, each holding its cards in order
+    const rows: AreaRow[] = (area.answer?.parts ?? []).map((part) => ({
+      id: part.rowId,
+      kind: 'answer',
+      title: part.title,
+      state: 'plain',
+      items: part.cards.map((card): LaneCard => ({ id: card.id, type: 'answer', height: ANSWER_CARD_HEIGHT, data: { ...card.data, compact: true } })),
+      summary: [part.cards.length === 1 ? '1 card' : `${part.cards.length} cards`, checkSummary(part.cards)].filter(Boolean).join(' · '),
+    }));
     return { waiting: null, rows };
   }
   const taken = new Set<string>();
@@ -654,6 +667,14 @@ function headNode(row: AreaRow, y: number, width: number, expanded: boolean, emp
 
 /** The first things a row holds, in words, for its folded line: the steps of a line of steps, the shas of commits, else the titles of the cards. */
 function previewOf(row: AreaRow): string {
+  if (row.kind === 'answer') {
+    // The part's own words: the start of its first text card, else the place of its first code; never its title again
+    const cards = row.items.map((item) => item.data as AnswerCardData);
+    const text = cards.find((card) => card.variant === 'text');
+    if (text && text.variant === 'text') return readableText(text.text);
+    const code = cards.find((card) => card.variant === 'code');
+    return code && code.variant === 'code' ? codeHead(code, code.check) : '';
+  }
   const parts = row.groups
     ? row.groups.map((group) => plainText(group.text))
     : row.items.filter((item) => item.type !== 'uncommitted').map((item) => (item.type === 'commit' ? (item.data as { sha: string }).sha : (item.data as { title?: string }).title ?? ''));
@@ -831,7 +852,7 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
   if (openRow || waitingOpen) {
     const target = openRow ? rows.find((row) => row.id === openRow)! : null;
     // The comfortable and the compact sizing are both tried, and the one that shows more things on its page wins (the comfortable one on a tie)
-    const thingsOf = (nodes: BoardNode[]) => nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'uncommitted' || entry.type === 'placeholder').length;
+    const thingsOf = (nodes: BoardNode[]) => nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'answer' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'uncommitted' || entry.type === 'placeholder').length;
     const attempt = (sizing: Sizing, page: number): { result: LayoutResult; score: number } | null => {
       const last = sizing === COMPACT;
       // Everything but the opened row: the waiting decisions folded to one line (unless they are the opened row), the current step as one line, the other rows folded
@@ -888,6 +909,7 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
     /** Lines shown by each row; -1 is folded. */
     const modes = new Map<string, number>();
     const isFilesArea = area.kind === 'files' || area.id === FILES_AREA_ID;
+    const isAnswerArea = area.kind === 'questions';
     const pieceOf = (row: AreaRow): Piece => {
       const mode = modes.get(row.id)!;
       return mode < 0 ? foldPiece(row, stage, sizing.fold) : linesPiece(row, stage, mode);
@@ -928,6 +950,33 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
       return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'file').length };
     }
 
+    if (isAnswerArea) {
+      // A part is shown whole (its cards wrap onto as many lines as they need) or folded to one line, never cut by "+N more". The parts with
+      // code are taken first, in order, since the code is what is checked; then the others; each that does not fit stays folded. The parts
+      // keep their order on the screen. Only when nothing fits whole does the first part with code show what fits.
+      for (const row of rows) modes.set(row.id, -1);
+      if (!fits() && !last) return null;
+      const hasCode = (row: AreaRow) => row.items.some((item) => (item.data as { variant?: string }).variant === 'code');
+      // "In short" is the first thing read and is never folded: it comes first in the priority, whatever the room
+      const short = area.answer?.parts[0]?.heading === null ? rows[0] : undefined;
+      const priority = [...(short ? [short] : []), ...rows.filter((row) => row !== short && hasCode(row)), ...rows.filter((row) => row !== short && !hasCode(row))];
+      let opened = 0;
+      for (const row of priority) {
+        modes.set(row.id, linesNeeded(row, stage));
+        if (fits()) opened += 1; else modes.set(row.id, -1);
+      }
+      if (short && modes.get(short.id)! < 0) modes.set(short.id, 1);
+      if (opened === 0 && priority[0] && priority[0] !== short) {
+        const row = priority[0];
+        for (let lines = 1; lines < linesNeeded(row, stage); lines += 1) {
+          modes.set(row.id, lines);
+          if (!fits()) { modes.set(row.id, lines - 1 || -1); break; }
+        }
+      }
+      const nodes = assemble(pieces(), sizing.gap);
+      return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'answer').length };
+    }
+
     for (const row of rows) modes.set(row.id, row === head ? 1 : -1);
     if (!fits()) {
       if (!last) return null;
@@ -952,7 +1001,7 @@ export function areaLayout(area: BoardArea, options: AreaBoardLayoutOptions = {}
       if (!fits()) waitingShown = was;
     }
     const nodes = assemble(pieces(), sizing.gap);
-    return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'uncommitted' || entry.type === 'placeholder').length };
+    return { nodes, fits: fits(), score: nodes.filter((entry) => entry.type === 'note' || entry.type === 'file' || entry.type === 'answer' || entry.type === 'document' || entry.type === 'commit' || entry.type === 'uncommitted' || entry.type === 'placeholder').length };
   };
   const comfy = defaultLayout(COMFY);
   const small = defaultLayout(COMPACT);

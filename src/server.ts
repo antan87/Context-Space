@@ -9,6 +9,7 @@ import { registerNewsRoutes } from './http/news-routes.js';
 import { registerIncomingRoutes } from './http/incoming-routes.js';
 import { registerCommitRoutes } from './http/commit-routes.js';
 import { registerCommitNotesRoutes } from './http/commit-notes-routes.js';
+import { registerQuestionsRoutes } from './http/questions-routes.js';
 import { registerViewRoutes } from './http/view-routes.js';
 import { registerBoardRoutes } from './http/board-routes.js';
 import { registerNeedsYouRoute } from './http/needs-you-routes.js';
@@ -2658,6 +2659,10 @@ registerCommitRoutes(app, async (id) => {
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
 registerCommitNotesRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerQuestionsRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

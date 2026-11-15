@@ -161,6 +161,18 @@ export function collectAreaReaderTargets(area: BoardArea): ReaderTarget[] {
     }
   }
 
+  // 2c. The text, picture and diagram cards of an answer open its file (a picture opens itself), at the part's heading
+  for (const part of area.answer?.parts ?? []) {
+    for (const card of part.cards) {
+      const data = card.data;
+      if (data.variant === 'picture') {
+        if (data.src) add({ path: data.src, title: data.title, card: card.id });
+      } else if (data.variant === 'text' || data.variant === 'diagram') {
+        add({ path: data.path, title: data.question, card: card.id, ...(data.heading ? { heading: data.heading } : {}) });
+      }
+    }
+  }
+
   return targets;
 }
 

@@ -2,8 +2,9 @@ import type { LooseTab } from './boardRows.js';
 import type { AreaData, BoardArea, BoardAreaRepo } from './boardAreas.js';
 import { fileTypeOf, type BoardCard } from './boardLayout.js';
 import { stepWorkspaceFileNodeId, type GroupedWorkspaceFile } from './workspaceFilesArea.js';
+import { answerCountWords } from './questionsArea.js';
 
-export type AreaCountKind = 'notes' | 'pictures' | 'files' | 'documents' | 'pages' | 'commits' | 'updates';
+export type AreaCountKind = 'notes' | 'pictures' | 'files' | 'documents' | 'pages' | 'commits' | 'updates' | 'parts' | 'code' | 'changed';
 
 export interface AreaCountTarget {
   rowId: string | null;
@@ -18,6 +19,8 @@ export interface AreaCountItem {
   count: number;
   label: string;
   actionLabel: string;
+  /** Drawn in the warning colour: something wants a look (a copy that no longer matches). */
+  warn?: boolean;
 }
 
 export type CountNavRepo = BoardAreaRepo | {
@@ -34,6 +37,7 @@ export interface CountNavArea {
   planItems?: { steps?: Array<{ key: string; done: boolean }>; decisions?: Array<{ key: string }> };
   steps?: Array<{ key: string; done: boolean }>;
   data?: Partial<AreaData>;
+  answer?: BoardArea['answer'];
 }
 
 export type ResolvableArea = BoardArea | CountNavArea;
@@ -45,6 +49,11 @@ export type ResolvableArea = BoardArea | CountNavArea;
 export function areaCountItems(data: AreaData): AreaCountItem[] {
   const items: AreaCountItem[] = [];
   const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  if (data.kind === 'questions') {
+    return answerCountWords(data.answerCounts ?? { parts: 0, code: 0, pictures: 0, changed: 0 }).map((word) => ({
+      kind: word.kind, count: word.count, label: word.label, actionLabel: `Show the ${word.label}`, ...(word.kind === 'changed' ? { warn: true } : {}),
+    }));
+  }
   if (data.kind === 'files') {
     if (data.documentCount > 0) {
       const label = plural(data.documentCount, 'document', 'documents');
@@ -132,6 +141,19 @@ export function resolveCountTarget(
   area: ResolvableArea,
   kind: AreaCountKind
 ): AreaCountTarget {
+  if (area.data?.kind === 'questions' || ('kind' in area && area.kind === 'questions')) {
+    // Each count opens the row of the first card it counts; the parts just step into the Area
+    const parts = area.answer?.parts ?? [];
+    const find = (match: (card: { data: { variant: string; check?: { status: string } } }) => boolean) => {
+      for (const part of parts) for (const card of part.cards) if (match(card)) return { rowId: part.rowId, cardId: card.id };
+      return null;
+    };
+    const hit = kind === 'pictures' ? find((c) => c.data.variant === 'picture')
+      : kind === 'code' ? find((c) => c.data.variant === 'code')
+        : kind === 'changed' ? find((c) => c.data.variant === 'code' && c.data.check?.status === 'changed')
+          : null;
+    return hit ?? { rowId: null };
+  }
   const isFilesArea = area.data?.kind === 'files' || ('kind' in area && area.kind === 'files');
   if (isFilesArea) {
     if (kind === 'documents') return { rowId: 'row:ws:documents' };
@@ -176,6 +198,9 @@ export function resolveCountTarget(
     case 'documents':
       return { rowId: 'lane:documents' };
     case 'pages':
+    case 'parts':
+    case 'code':
+    case 'changed':
       return { rowId: null };
     case 'commits': {
       const repoWithCommits =

@@ -2,6 +2,7 @@ import { agoText } from '../plan/whatsNew.js';
 import type { AreaData, AreaPicture, BoardArea } from './boardAreas.js';
 import type { BoardCard, WorkspaceFileEntry } from './boardData.js';
 import { imageAlt, type FileType, type LaneCard } from './boardLayout.js';
+import { isQuestionFile } from './questionsArea.js';
 
 export const FILES_AREA_ID = 'files:workspace';
 
@@ -272,7 +273,8 @@ export function groupWorkspaceFiles(
 
   for (const entry of files) {
     const item = toGroupedWorkspaceFile(entry);
-    if (!item || seen.has(item.path) || excluded.has(item.path)) continue;
+    // The answers (`explain/*.md`) are shown as answers in their own Areas, never twice
+    if (!item || seen.has(item.path) || excluded.has(item.path) || isQuestionFile(item.path)) continue;
     seen.add(item.path);
 
     if (item.group === 'documents') documents.push(item);
