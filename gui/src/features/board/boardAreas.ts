@@ -1283,6 +1283,67 @@ export function miniSecondLine(input: { room: number; stepsPx: number; subtitle?
 }
 
 /**
+ * What the secondary words of a one-line overview row (`BoardAreaRow`) have room to draw.
+ * The Area's title and fixed status/counts ("1 question", "7 of 28", focus word, Waiting) claim their room first;
+ * secondary words (next step, waiting question, news summary/items, file/answer counts) only show when at least
+ * `MINI_SUBTITLE_MIN` (~12 characters) or their full natural width fits without squeezing the title.
+ */
+export function areaRowSecondaryRoom(
+  data: AreaData,
+  width: number,
+  options: { fileCounts?: string } = {},
+): { room: number; showSecondary: boolean } {
+  const rowWidth = width > 0 ? width : AREA_ROW.minWidth;
+  const inner = Math.max(0, rowWidth - 24);
+  const gap = 10;
+
+  const hasFreshDot = Boolean(data.fresh && !data.current && !data.done);
+  const titleTextPx = Math.ceil(textEm(data.title) * 14.5) + 4;
+  const titlePx = 16 + gap + (hasFreshDot ? 12 : 0) + titleTextPx;
+
+  const hasFocus = !data.done && data.current && !isStepless(data.kind);
+  const hasWaitingBadge = data.waitingCount > 0 && data.tier !== 2;
+  const hasSteps = !isStepless(data.kind) && data.stepsTotal > 0;
+  const barAlways = !(
+    data.waitingCount > 0 ||
+    Boolean(data.nextOpenStep) ||
+    (data.tier === 3 && Boolean(data.newsSummary)) ||
+    (data.tier === 2 && Boolean(data.waitingQuestion)) ||
+    (!data.done && data.current)
+  );
+  const hasBar = hasSteps && (barAlways || rowWidth >= 448);
+
+  let fixedPx = 0;
+  if (hasFocus) fixedPx += Math.ceil(textEm(areaFocusWord(data)) * 12) + 2 + gap;
+  if (hasWaitingBadge) fixedPx += 62 + gap;
+  if (data.questionItem) fixedPx += Math.ceil(textEm(data.questionItem.label) * 12) + 8 + gap;
+  if (hasSteps) fixedPx += Math.ceil(textEm(`${data.stepsDone} of ${data.stepsTotal}`) * 12) + 4 + gap;
+  if (hasBar) fixedPx += 48 + gap;
+
+  const room = Math.max(0, inner - titlePx - fixedPx - gap);
+
+  let naturalSecondary = 0;
+  if (data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0)) {
+    const text = data.waitingQuestion ?? waitingText(data.waitingCount);
+    naturalSecondary = 10 + Math.ceil(textEm(text) * 12) + 2;
+  } else if (data.tier === 3) {
+    const firstNews = data.newsItems?.find((item) => item.kind !== 'question');
+    if (firstNews) {
+      naturalSecondary = Math.ceil(textEm(firstNews.label) * 12) + 8;
+    } else if (!data.newsItems?.length && data.newsSummary) {
+      naturalSecondary = Math.ceil(textEm(data.newsSummary) * 12) + 2;
+    }
+  } else if (data.tier === 4 && data.nextOpenStep) {
+    naturalSecondary = Math.ceil(textEm(data.nextOpenStep) * 12) + 2;
+  } else if (options.fileCounts) {
+    naturalSecondary = Math.ceil(textEm(options.fileCounts) * 12) + 2;
+  }
+
+  const showSecondary = naturalSecondary > 0 && room >= Math.min(MINI_SUBTITLE_MIN, naturalSecondary);
+  return { room, showSecondary };
+}
+
+/**
  * Whether a small card of this size shows its picture. Not where "Now" and "Waiting" share the line of the steps (under
  * MINI_STATUS_LINE): that line and the picture would not both fit beside each other.
  */

@@ -1299,6 +1299,292 @@ test.describe('Board, a quiet frame and a readable overview', () => {
     });
   });
 
+  test('in the 420 px pane every Area row title shows whole words first (at least 12 chars or whole title) while 1280 Split keeps next-step words', async ({ page }) => {
+    const LONG_NEXT = 'After the merge: update the installed ContextSpace from main, then run the next slice';
+    const TIER3_QUESTION_TITLE = 'The Board is powerful enough to be where the work happens, and it replaces the Plan tab now.';
+    const LONG_TIERS = [
+      'Only what matters now is in front of you',
+      'The Board is powerful enough to be where the work happens, and it replaces the Plan tab',
+      'The plan is the first thing a person reads when opening a workspace',
+      'You and the AI work on the board together, live',
+      'You can inspect any change: what changed, the code, the pictures and the reviews',
+      'Pictures, pages and decks the AI makes sit on the board and open in place',
+    ];
+    const QUESTION_TITLE = 'How does the Board learn about commits others pushed, without ever asking for a password?';
+
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({
+      json: planFile({
+        title: 'Narrow pane row titles',
+        now: { key: 'focus-step', by: 'claude', at: minutesAgo(2) },
+        steps: [step(LONG_NEXT, false)],
+        checkpoints: [
+          checkpoint(LONG_TIERS[0]!, { steps: [step('Focus step', false)] }),
+          checkpoint(LONG_TIERS[2]!, {
+            steps: [step('Step of tier 2', false)],
+            decisions: [decision('Which layout style is preferred?')],
+          }),
+          checkpoint(LONG_TIERS[3]!, { steps: [step('New commits and documents the AI makes show up (a1b2c3d)', false)] }),
+          checkpoint(TIER3_QUESTION_TITLE, { steps: [step('Tier 3 step with fresh commit (b2c3d4e)', false)] }),
+          checkpoint(LONG_TIERS[1]!, { steps: [...Array.from({ length: 46 }, (_, i) => step(`Done ${i}`, true)), ...Array.from({ length: 5 }, (_, i) => step(`Order, from your answer: (${i + 1}) big picture first`, false))] }),
+          checkpoint(LONG_TIERS[4]!, { steps: [step('The AI writes what was done, in plain words, when it commits', false)] }),
+          checkpoint(LONG_TIERS[5]!, { steps: [step('The AI takes pictures of plans, concepts and the running app', false)] }),
+          checkpoint('Finished old area with a long title too', { done: true, steps: [step('Already shipped', true)] }),
+        ],
+      }),
+    }));
+    await routeWork(page, []);
+    await page.route('**/api/workspace/demo/files', (route) => route.fulfill({
+      json: {
+        files: [
+          { path: 'PLAN.md', modifiedAt: minutesAgo(30), size: 120 },
+          { path: 'board-pictures/overview.png', modifiedAt: minutesAgo(30), size: 420 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }));
+    await page.route('**/api/workspace/demo/news', (route) => route.fulfill({
+      json: whatsNew({
+        commits: [{
+          repo: 'NexusFlow',
+          more: 0,
+          commits: [
+            { sha: 'a1b2c3d4e5f6', author: 'Anna', subject: 'feat(board): update row', at: minutesAgo(10) },
+            { sha: 'b2c3d4e5f6a7', author: 'Anna', subject: 'feat(board): tier 3 with question', at: minutesAgo(8) },
+          ],
+        }],
+      }),
+    }));
+    await routeCards(page, boardFile({ cards: [] }));
+    await page.route('**/api/workspace/demo/questions', (route) => route.fulfill({
+      json: {
+        answers: [
+          {
+            path: 'explain/board-learn.md',
+            question: QUESTION_TITLE,
+            summary: 'It reads commits.',
+            modifiedAt: minutesAgo(4),
+            parts: [{ title: 'In short', heading: null, cards: [{ kind: 'text', text: 'It reads commits.' }, { kind: 'code', text: 'const x = 1;' }] }],
+          },
+          {
+            path: 'explain/about-area.md',
+            question: 'Why does this area have 1 question?',
+            summary: 'Because of the answer.',
+            modifiedAt: minutesAgo(3),
+            area: 'checkpoint:the-board-is-powerful-enough-to-be-where-the-work-happens-and-it-replaces-the-plan-tab',
+            parts: [{ title: 'In short', heading: null, cards: [{ kind: 'text', text: 'Because of the answer.' }] }],
+          },
+          {
+            path: 'explain/tier3-question.md',
+            question: 'Why does this Tier 3 area have 1 question?',
+            summary: 'Fresh commit plus linked answer.',
+            modifiedAt: minutesAgo(2),
+            area: 'checkpoint:the-board-is-powerful-enough-to-be-where-the-work-happens-and-it-replaces-the-plan-tab-now',
+            parts: [{ title: 'In short', heading: null, cards: [{ kind: 'text', text: 'Fresh commit plus linked answer.' }] }],
+          },
+        ],
+      },
+    }));
+
+    // 1. Narrow 420 px pane
+    await page.setViewportSize({ width: 420, height: 800 });
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+
+    const overview = board(page).locator('#board-overview');
+    const rowCount = await overview.locator('.react-flow__node-areaRow').count();
+    expect(rowCount).toBeGreaterThanOrEqual(5);
+
+    const measureRows = () => overview.locator('.react-flow__node-areaRow').evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const nodeRect = node.getBoundingClientRect();
+        const titleBtn = node.querySelector<HTMLElement>('button.board-area');
+        const titleSpan = node.querySelector<HTMLElement>('button.board-area span[title]');
+        const fullTitle = titleSpan?.getAttribute('title') ?? '';
+        let first12Px = 0;
+        let visibleTextPx = 0;
+        if (titleSpan) {
+          const textNode = Array.from(titleSpan.childNodes).find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+          if (textNode && textNode.textContent) {
+            const r = document.createRange();
+            r.setStart(textNode, 0);
+            r.setEnd(textNode, Math.min(12, textNode.textContent.length));
+            first12Px = r.getBoundingClientRect().width;
+          }
+          const spanRect = titleSpan.getBoundingClientRect();
+          const dot = titleSpan.querySelector<HTMLElement>('span');
+          const dotPx = dot ? dot.getBoundingClientRect().width + 6 : 0;
+          visibleTextPx = Math.max(0, spanRect.width - dotPx);
+        }
+        const stepsSpan = Array.from(node.querySelectorAll<HTMLElement>('span')).find(
+          (s) => !s.querySelector('span') && /^\d+\s+of\s+\d+$/.test(s.textContent?.trim() ?? ''),
+        );
+        const questionBtn = node.querySelector<HTMLElement>('button[data-count-kind="question"]');
+        let questionClippedByAncestor = false;
+        let questionBox = { width: 0, height: 0, centerHit: false };
+        if (questionBtn) {
+          const qr = questionBtn.getBoundingClientRect();
+          let cur: HTMLElement | null = questionBtn.parentElement;
+          while (cur && cur !== node.parentElement) {
+            const cr = cur.getBoundingClientRect();
+            const style = getComputedStyle(cur);
+            if (style.overflow !== 'visible' || style.overflowX !== 'visible') {
+              if (qr.left < cr.left - 0.5 || qr.right > cr.right + 0.5 || qr.top < cr.top - 0.5 || qr.bottom > cr.bottom + 0.5) {
+                questionClippedByAncestor = true;
+              }
+            }
+            cur = cur.parentElement;
+          }
+          const hit = qr.width >= 1 && qr.height >= 1 ? document.elementFromPoint(qr.left + qr.width / 2, qr.top + qr.height / 2) : null;
+          questionBox = {
+            width: qr.width,
+            height: qr.height,
+            centerHit: Boolean(hit && (hit === questionBtn || questionBtn.contains(hit))),
+          };
+        }
+        const siblings = Array.from(node.querySelector<HTMLElement>('div')?.children ?? [])
+          .filter((el) => el instanceof HTMLElement && !el.classList.contains('react-flow__handle') && !el.classList.contains('board-fresh') && !el.classList.contains('sr-only'))
+          .map((el) => {
+            const rect = el.getBoundingClientRect();
+            return { tag: el.tagName, text: (el.textContent ?? '').trim(), left: rect.left, right: rect.right, width: rect.width };
+          })
+          .filter((item) => item.width > 0.5);
+        const overlaps: string[] = [];
+        for (let i = 0; i < siblings.length; i++) {
+          for (let j = i + 1; j < siblings.length; j++) {
+            const a = siblings[i]!;
+            const b = siblings[j]!;
+            if (!(a.right <= b.left + 0.5 || b.right <= a.left + 0.5)) {
+              overlaps.push(`${a.text.slice(0, 12)} overlaps ${b.text.slice(0, 12)}`);
+            }
+          }
+        }
+        return {
+          id: node.getAttribute('data-id') ?? '',
+          height: Math.round(nodeRect.height),
+          fullTitle,
+          first12Px,
+          visibleTextPx,
+          scrollWidth: titleSpan?.scrollWidth ?? 0,
+          clientWidth: titleSpan?.clientWidth ?? 0,
+          btnWidth: titleBtn?.getBoundingClientRect().width ?? 0,
+          stepsClipped: stepsSpan ? stepsSpan.scrollWidth > stepsSpan.clientWidth + 1 : false,
+          stepsText: stepsSpan?.textContent?.trim() ?? null,
+          hasQuestionBtn: Boolean(questionBtn),
+          questionClipped: questionBtn ? questionBtn.scrollWidth > questionBtn.clientWidth + 1 : false,
+          questionClippedByAncestor,
+          questionBox,
+          overlaps,
+          visibleTexts: siblings.map((s) => s.text),
+        };
+      }),
+    );
+
+    const rowFacts = await measureRows();
+
+    const assertRowsOk = (rows: typeof rowFacts) => {
+      for (const row of rows) {
+        expect(row.height, `${row.fullTitle} height`).toBeGreaterThanOrEqual(38);
+        expect(row.height, `${row.fullTitle} height`).toBeLessThanOrEqual(42);
+        expect(row.overlaps, `${row.fullTitle} overlaps`).toEqual([]);
+        expect(row.stepsClipped, `${row.fullTitle} steps clipped`).toBe(false);
+        expect(row.questionClipped, `${row.fullTitle} question button clipped`).toBe(false);
+        if (row.hasQuestionBtn) {
+          expect(row.questionClippedByAncestor, `${row.fullTitle} question clipped by ancestor`).toBe(false);
+          expect(row.questionBox.width, `${row.fullTitle} question width >= 24`).toBeGreaterThanOrEqual(24);
+          expect(row.questionBox.height, `${row.fullTitle} question height >= 24`).toBeGreaterThanOrEqual(24);
+          expect(row.questionBox.centerHit, `${row.fullTitle} question center hit`).toBe(true);
+        }
+        if (row.fullTitle.length <= 12) {
+          expect(row.scrollWidth, `${row.fullTitle} whole title fits`).toBeLessThanOrEqual(row.clientWidth + 1);
+          expect(row.visibleTextPx, `${row.fullTitle} whole title unclipped subpixel`).toBeGreaterThanOrEqual(row.first12Px - 0.001);
+        } else {
+          expect(row.visibleTextPx, `${row.fullTitle} shows at least 12 chars`).toBeGreaterThanOrEqual(row.first12Px - 1);
+        }
+      }
+    };
+
+    assertRowsOk(rowFacts);
+
+    const planRow = rowFacts.find((r) => r.fullTitle === 'Plan');
+    expect(planRow).toBeDefined();
+    expect(planRow!.visibleTexts.some((t) => t.startsWith('After the merge'))).toBe(true);
+
+    // On a long-titled Tier 3 row with fresh commit AND linked answer, "1 question" stays whole, unclipped, and opens the question
+    const tier3QuestionRow = rowFacts.find((r) => r.fullTitle === TIER3_QUESTION_TITLE);
+    expect(tier3QuestionRow).toBeDefined();
+    expect(tier3QuestionRow!.hasQuestionBtn).toBe(true);
+    const tier3QuestionNode = overview.locator(`.react-flow__node-areaRow[data-id="${tier3QuestionRow!.id}"]`);
+    await tier3QuestionNode.locator('button[data-count-kind="question"]').click();
+    await expect(board(page).locator('#board-area')).toContainText('Why does this Tier 3 area have 1 question?');
+    await page.keyboard.press('Escape');
+    await viewAtRest(page);
+
+    // Unfold if folded so we also verify long Tier 4, Files, and Done rows
+    const narrowFold = overview.locator('button.board-area-fold');
+    let allRows = rowFacts;
+    if (await narrowFold.isVisible()) {
+      await narrowFold.click();
+      await viewAtRest(page);
+      allRows = await measureRows();
+      assertRowsOk(allRows);
+    }
+
+    // On a long-titled Tier 4 row, nextOpenStep hides cleanly instead of leaving a tiny sliver
+    const longTier4Row = allRows.find((r) => r.fullTitle === LONG_TIERS[4]!);
+    expect(longTier4Row).toBeDefined();
+    expect(longTier4Row!.visibleTexts.some((t) => t.startsWith('The AI writes'))).toBe(false);
+    expect(allRows.some((r) => r.id === 'files:workspace')).toBe(true);
+    expect(allRows.some((r) => r.fullTitle === 'Finished old area with a long title too')).toBe(true);
+    if (await narrowFold.isVisible()) {
+      await narrowFold.click();
+      await viewAtRest(page);
+    }
+
+    // 2. 1280x800 Split keeps the next-step words (both in minis and when rows are forced)
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const collapseSidebar = page.getByRole('button', { name: /^Collapse/ });
+    if (await collapseSidebar.isVisible()) await collapseSidebar.click();
+    await page.evaluate(() => {
+      try { window.localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 })); } catch { /* no storage */ }
+    });
+    await page.reload();
+    await viewAtRest(page);
+    await expect(overview.locator('.react-flow__node-areaMini', { hasText: 'After the merge' })).toBeVisible();
+    const splitFold = overview.locator('button.board-area-fold');
+    if (!(await overview.locator('.react-flow__node-areaMini', { hasText: 'Order, from your answer' }).isVisible()) && await splitFold.isVisible()) {
+      await splitFold.click();
+      await viewAtRest(page);
+    }
+    await expect(overview.locator('.react-flow__node-areaMini', { hasText: 'Order, from your answer' })).toBeVisible();
+
+    // Short Split height forces areaRow at 1280 width (row width ~552 px): both title and next step still show
+    await page.setViewportSize({ width: 1280, height: 340 });
+    await viewAtRest(page);
+    const fold = overview.locator('button.board-area-fold');
+    if (await fold.isVisible()) await fold.click();
+    const wideRows = overview.locator('.react-flow__node-areaRow');
+    expect(await wideRows.count()).toBeGreaterThan(0);
+    await expect(overview.locator('.react-flow__node-areaRow[data-id="plan:own"]')).toContainText('After the merge');
+
+    // 3. Work row (area:work) as an areaRow in a short 420 px pane when there are no plan checkpoints/steps
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({
+      json: planFile({ title: 'Work area only', checkpoints: [], steps: [] }),
+    }));
+    await page.route('**/api/workspace/demo/questions', (route) => route.fulfill({ json: { answers: [] } }));
+    await page.getByTestId('view-mode-board').click();
+    await page.setViewportSize({ width: 420, height: 400 });
+    await page.reload();
+    await viewAtRest(page);
+    const workFold = overview.locator('button.board-area-fold');
+    if (await workFold.isVisible()) {
+      await workFold.click();
+      await viewAtRest(page);
+    }
+    await expect(overview.locator('.react-flow__node-areaRow[data-id="area:work"]')).toBeVisible();
+    assertRowsOk(await measureRows());
+  });
+
   test('has no serious accessibility violations in the overview, as cards and as rows, in light and dark', async ({ page }) => {
     await routeAreas(page);
     await page.goto('/#/workspaces/demo/board');

@@ -21,7 +21,7 @@ import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } fr
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
-import { areaCountItems, areaCounts, areaFocusWord, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { AREA_ROW, areaCountItems, areaCounts, areaFocusWord, areaRowSecondaryRoom, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
@@ -2194,13 +2194,13 @@ function AnswerCountLine({ data }: { data: AreaData }) {
 const newsLabelWidth = (label: string) => Math.ceil(textEm(label) * 12) + 8;
 
 /**
- * "1 question" on the card of an Area: the answers about it, as a button of its own that opens the newest answer. Not drawn where the card
- * already has its buttons for what is new (`newsItems` of tier 3: it stands among them), nor for an Area without answers.
+ * "1 question" on a row or card of an Area: the answers about it, as a button of its own that opens the newest answer.
+ * On `BoardAreaRow`, this always renders as its own non-shrinking button so disposable secondary news never clips it.
  */
 function QuestionCount({ id, data, className }: { id: string; data: AreaData; className?: string }) {
   const actions = useContext(BoardActionsContext);
   const item = data.questionItem;
-  if (!item || (data.tier === 3 && (data.newsItems?.length ?? 0) > 0)) return null;
+  if (!item) return null;
   return (
     <button
       type="button"
@@ -2233,10 +2233,34 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
   const isNotStarted = !isStepless(data.kind) && data.stepsTotal > 0 && data.stepsDone === 0;
   const listArea = data.kind === 'files' || data.kind === 'questions';
-  // The buttons for what is new stand in 45% of the row; one that cannot show its whole words is left out, with its comma
-  const newsShown = fitNewsItems(data.newsItems ?? [], (width ?? 400) * 0.45 * 0.92, newsLabelWidth);
   const fileCounts = data.kind === 'files' ? formatWorkspaceFileCounts(data, { compact: true }).join(' · ') : data.kind === 'questions' ? areaCounts(data).join(' · ') : '';
   const fileFullCounts = listArea ? areaCounts(data).join(' · ') : '';
+  const rowWidth = width ?? AREA_ROW.minWidth;
+  const rowLayout = areaRowSecondaryRoom(data, rowWidth, { fileCounts });
+
+  // Disposable news buttons stand in at most 45% of the row and never squeeze the title or "1 question" (rendered separately via QuestionCount)
+  const rawNewsItems = data.newsItems ?? [];
+  const disposableNews = rawNewsItems.filter((item) => item.kind !== 'question');
+  const newsBudget = Math.max(0, Math.min(rowWidth * 0.45 * 0.92, rowLayout.room));
+  let newsShown: typeof rawNewsItems = [];
+  if (rowLayout.showSecondary && disposableNews.length > 0) {
+    const hasQuestionNews = rawNewsItems.some((item) => item.kind === 'question');
+    const questionNewsReserve = hasQuestionNews && data.questionItem ? newsLabelWidth(data.questionItem.label) + 10 : 0;
+    newsShown = hasQuestionNews
+      ? fitNewsItems(rawNewsItems, newsBudget + questionNewsReserve, newsLabelWidth).filter((item) => item.kind !== 'question')
+      : [...disposableNews];
+    while (newsShown.length > 0) {
+      const used = newsShown.reduce((sum, item, idx) => sum + newsLabelWidth(item.label) + (idx > 0 ? 8 : 0), 0);
+      if (used <= newsBudget) break;
+      newsShown = newsShown.slice(0, -1);
+    }
+  }
+
+  const waitingTextValue = data.waitingQuestion ?? (data.waitingCount > 0 ? waitingText(data.waitingCount) : undefined);
+  const hiddenSubtitle =
+    !rowLayout.showSecondary && data.tier === 2 ? waitingTextValue
+      : !rowLayout.showSecondary && data.tier === 4 ? data.nextOpenStep
+        : undefined;
 
   return (
     <div
@@ -2254,14 +2278,16 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
       <button
         type="button"
         onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
-        aria-label={areaLabel(data)}
+        aria-label={areaLabel(data, hiddenSubtitle)}
         className={cn(
           'board-area nodrag nopan flex items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded',
-          listArea ? 'min-w-0 shrink' : 'min-w-0 flex-1',
+          listArea
+            ? (rowLayout.showSecondary ? 'shrink-0' : 'min-w-0 shrink')
+            : (rowLayout.showSecondary ? 'grow shrink-0' : 'min-w-0 flex-auto'),
         )}
       >
         <AreaMark data={data} />
-        <span className={cn('text-sm font-medium leading-5 text-foreground', listArea ? 'truncate whitespace-nowrap' : 'min-w-0 flex-1 truncate')} title={data.title}>
+        <span className={cn('text-sm font-medium leading-5 text-foreground', listArea ? 'min-w-0 truncate whitespace-nowrap' : 'min-w-0 flex-auto truncate')} title={data.title}>
           {data.fresh && !data.current && !data.done && (
             <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
           )}
@@ -2269,15 +2295,19 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
         </span>
       </button>
       {/* Tier 2: Waits for you, with the question's first words */}
-      {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
-        <span className="min-w-0 max-w-[24ch] truncate text-xs font-medium text-state-needs" title={data.waitingQuestion ?? waitingText(data.waitingCount)}>
-          <span aria-hidden="true" className="mr-1 inline-block size-1.5 rounded-full bg-state-needs" />
-          {data.waitingQuestion ?? waitingText(data.waitingCount)}
-        </span>
+      {data.tier === 2 && waitingTextValue && (
+        rowLayout.showSecondary ? (
+          <span className="min-w-0 max-w-[24ch] shrink-[100] truncate text-xs font-medium text-state-needs" title={waitingTextValue}>
+            <span aria-hidden="true" className="mr-1 inline-block size-1.5 rounded-full bg-state-needs" />
+            {waitingTextValue}
+          </span>
+        ) : (
+          <span className="sr-only">{waitingTextValue}</span>
+        )
       )}
       {/* Tier 3: Moved since you looked, saying what ("2 commits, 1 picture") */}
       {data.tier === 3 && newsShown.length > 0 ? (
-        <span className="flex min-w-0 max-w-[45%] items-center gap-1 overflow-hidden text-xs" title={data.newsSummary}>
+        <span className="flex min-w-0 max-w-[45%] shrink-[100] items-center gap-1 overflow-hidden text-xs" title={data.newsSummary}>
           {newsShown.map((item, idx) => (
             <Fragment key={item.kind}>
               {idx > 0 && <span aria-hidden="true" className="-ml-1 shrink-0 select-none text-muted-foreground/60">,</span>}
@@ -2297,26 +2327,26 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
             </Fragment>
           ))}
         </span>
-      ) : data.tier === 3 && data.newsSummary ? (
-        <span className="min-w-0 max-w-[45%] truncate text-xs text-muted-foreground" title={data.newsSummary}>
+      ) : data.tier === 3 && rawNewsItems.length === 0 && data.newsSummary && rowLayout.showSecondary ? (
+        <span className="min-w-0 max-w-[45%] shrink-[100] truncate text-xs text-muted-foreground" title={data.newsSummary}>
           {data.newsSummary}
         </span>
       ) : null}
       {/* Tier 4: its next open step in place of a bare count, and 0 of 4 quietly at the end */}
-      {data.tier === 4 && data.nextOpenStep && (
-        <span className="min-w-0 max-w-[28ch] truncate text-xs text-muted-foreground" title={data.nextOpenStep}>
+      {data.tier === 4 && data.nextOpenStep && rowLayout.showSecondary && (
+        <span className="min-w-0 max-w-[28ch] shrink-[100] truncate text-xs text-muted-foreground" title={data.nextOpenStep}>
           {data.nextOpenStep}
         </span>
       )}
       {!data.done && data.current && !isStepless(data.kind) && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{areaFocusWord(data)}</span>}
-      {data.waitingCount > 0 && data.tier !== 2 && (
+      {data.waitingCount > 0 && (data.tier !== 2 || !rowLayout.showSecondary) && (
         <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-state-needs">
           <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />Waiting
         </span>
       )}
       <QuestionCount id={id} data={data} />
-      {fileCounts && data.tier !== 2 && data.tier !== 3 && (
-        <span className="min-w-0 flex-1 truncate text-right text-xs leading-4 text-muted-foreground" title={fileFullCounts || fileCounts}>
+      {fileCounts && data.tier !== 2 && data.tier !== 3 && rowLayout.showSecondary && (
+        <span className="min-w-0 flex-1 shrink-[100] truncate text-right text-xs leading-4 text-muted-foreground" title={fileFullCounts || fileCounts}>
           {data.kind === 'questions' ? <AnswerCountLine data={data} /> : fileCounts}
         </span>
       )}

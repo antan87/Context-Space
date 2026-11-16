@@ -6,7 +6,7 @@ import type { WhatsNewView } from '../plan/whatsNew.js';
 import type { QuestionAnswerDto } from './questionsArea.js';
 import { partitionOverviewTiers } from './boardAreas.js';
 import { readerDock } from './boardDock.js';
-import { compactFocusCard, COMPACT_STAGE, MINI_BAR_MIN, MINI_SUBTITLE_MIN, isCompactStage, miniSecondLine, overviewPlan, type AreaData, type BoardArea } from './boardAreas.js';
+import { areaRowSecondaryRoom, compactFocusCard, COMPACT_STAGE, MINI_BAR_MIN, MINI_SUBTITLE_MIN, isCompactStage, miniSecondLine, overviewPlan, type AreaData, type BoardArea } from './boardAreas.js';
 
 /** FT1: what the overview shows of a realistic workspace on the stages the board is used on (the same sizes as the e2e). */
 const stages = { split1100: { width: 482, height: 656 }, split1280: { width: 572, height: 756 }, board1440: { width: 1320, height: 800 }, board1280: { width: 1160, height: 720 } };
@@ -232,5 +232,98 @@ describe('FT1 fix 1: answer news and the waiting group', () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe('P1: overview row secondary room', () => {
+  it('hides secondary text when a narrow row has no room after the title and counts, and keeps it when the title is short or the row is wide', () => {
+    const longTitle: AreaData = {
+      ...base,
+      tier: 4,
+      title: 'You can inspect any change: what changed, the code, the pictures and the reviews',
+      nextOpenStep: 'The AI writes what was done, in plain words, when it commits',
+      stepsDone: 0,
+      stepsTotal: 5,
+    };
+    const shortTitle: AreaData = {
+      ...longTitle,
+      title: 'Plan',
+    };
+    const withQuestion: AreaData = {
+      ...longTitle,
+      title: 'The Board is powerful enough to be where the work happens',
+      questionItem: { kind: 'question', count: 1, label: '1 question', actionLabel: 'Show 1 question' },
+      stepsDone: 46,
+      stepsTotal: 51,
+    };
+
+    expect(areaRowSecondaryRoom(longTitle, 340).showSecondary).toBe(false);
+    expect(areaRowSecondaryRoom(shortTitle, 340).showSecondary).toBe(true);
+    expect(areaRowSecondaryRoom(shortTitle, 340).room).toBeGreaterThanOrEqual(MINI_SUBTITLE_MIN);
+    expect(areaRowSecondaryRoom(withQuestion, 340).showSecondary).toBe(false);
+    expect(areaRowSecondaryRoom(shortTitle, 552).showSecondary).toBe(true);
+  });
+
+  it('handles Tier 2 waiting questions, Tier 3 news, and listArea file counts', () => {
+    const tier2Medium: AreaData = {
+      ...base,
+      tier: 2,
+      title: 'The plan is the first thing to read',
+      waitingCount: 1,
+      waitingQuestion: 'Which layout style is preferred?',
+      stepsDone: 0,
+      stepsTotal: 1,
+    };
+    const tier3Short: AreaData = {
+      ...base,
+      tier: 3,
+      title: 'Plan',
+      newsItems: [{ kind: 'commits', count: 1, label: '1 commit', actionLabel: 'Show the 1 commit' }],
+      newsSummary: '1 commit',
+      stepsDone: 1,
+      stepsTotal: 3,
+    };
+    const tier3LongWithQuestion: AreaData = {
+      ...base,
+      tier: 3,
+      title: 'The Board is powerful enough to be where the work happens, and it replaces the Plan tab.',
+      questionItem: { kind: 'question', count: 1, label: '1 question', actionLabel: 'Open the answer' },
+      newsItems: [
+        { kind: 'commits', count: 1, label: '1 commit', actionLabel: 'Show the 1 commit' },
+        { kind: 'question', count: 1, label: '1 question', actionLabel: 'Open the answer' },
+      ],
+      newsSummary: '1 commit',
+      stepsDone: 1,
+      stepsTotal: 3,
+    };
+    const tier3QuestionAndUpdates: AreaData = {
+      ...base,
+      tier: 3,
+      title: 'Plan',
+      questionItem: { kind: 'question', count: 1, label: '1 question', actionLabel: 'Open the answer' },
+      newsItems: [
+        { kind: 'question', count: 1, label: '1 question', actionLabel: 'Open the answer' },
+        { kind: 'updates', count: 2, label: '2 updates', actionLabel: 'Show the 2 updates' },
+      ],
+      newsSummary: '2 updates',
+      stepsDone: 1,
+      stepsTotal: 3,
+    };
+    const questionsLong: AreaData = {
+      ...base,
+      kind: 'questions',
+      tier: 4,
+      title: 'How does the Board learn about commits others pushed, without ever asking for a password?',
+      stepsDone: 0,
+      stepsTotal: 0,
+    };
+
+    expect(areaRowSecondaryRoom(tier2Medium, 340).showSecondary).toBe(false);
+    expect(areaRowSecondaryRoom(tier2Medium, 552).showSecondary).toBe(true);
+    expect(areaRowSecondaryRoom(tier3Short, 340).showSecondary).toBe(true);
+    expect(areaRowSecondaryRoom(tier3LongWithQuestion, 340)).toEqual({ room: 0, showSecondary: false });
+    expect(areaRowSecondaryRoom(tier3LongWithQuestion, 552).showSecondary).toBe(false);
+    expect(areaRowSecondaryRoom(tier3QuestionAndUpdates, 340).showSecondary).toBe(true);
+    expect(areaRowSecondaryRoom(questionsLong, 340, { fileCounts: '5 parts · 5 code blocks · 1 picture' }).showSecondary).toBe(false);
   });
 });
