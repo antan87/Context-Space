@@ -15,7 +15,7 @@ export const UNIX_SOCKET_PATH_LIMIT = 107;
 
 /** PM2 home as PM2 resolves it: `PM2_HOME`, else `~/.pm2`. */
 export function resolvePm2Home(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PM2_HOME || path.join(env.HOME || os.homedir(), '.pm2');
+  return env.PM2_HOME || path.join(os.homedir(), '.pm2');
 }
 
 /** The socket path that is too long for a Unix socket, or null when both fit. Not applicable on Windows (named pipes). */
@@ -43,8 +43,7 @@ export function assertPm2HomeUsable(home: string = resolvePm2Home()): void {
  * process and `rpc.sock` exists. EPERM from the signal probe means the process
  * exists. On Windows the sockets are named pipes, so this is not checked.
  */
-export function isPm2DaemonAlive(home: string = resolvePm2Home()): boolean {
-  if (process.platform === 'win32') return true;
+export function isPm2DaemonAlive(home: string = resolvePm2Home(), platform: NodeJS.Platform = process.platform): boolean {
   try {
     const pid = Number.parseInt(fs.readFileSync(path.join(home, 'pm2.pid'), 'utf-8').trim(), 10);
     if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -53,7 +52,9 @@ export function isPm2DaemonAlive(home: string = resolvePm2Home()): boolean {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EPERM') return false;
     }
-    fs.accessSync(path.join(home, 'rpc.sock'));
+    // Windows uses named pipes rather than a socket file, but still writes
+    // pm2.pid. An absent/dead pid must never trigger a daemon-starting CLI read.
+    if (platform !== 'win32') fs.accessSync(path.join(home, 'rpc.sock'));
     return true;
   } catch {
     return false;

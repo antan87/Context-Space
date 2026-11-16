@@ -48,6 +48,7 @@ function inspectInChild(): void {
   const samePath = (left: string, right: string): boolean => path.relative(left, right) === '';
   for (const file of input.files) {
     let fd: number | undefined;
+    let parentFd: number | undefined;
     try {
       if (path.isAbsolute(file)) continue;
       const target = path.resolve(root, file);
@@ -72,8 +73,15 @@ function inspectInChild(): void {
       fd = fs.openSync(name, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
       const opened = fs.fstatSync(fd, { bigint: true });
       const entry = fs.lstatSync(name, { bigint: true });
-      const directory = fs.statSync('.', { bigint: true });
-      if (!opened.isFile() || !entry.isFile() || entry.isSymbolicLink()
+      // Node 22 Windows needs a handle for the volume identity. On POSIX,
+      // stat preserves access to searchable directories without read permission.
+      if (process.platform === 'win32') {
+        parentFd = fs.openSync('.', fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0));
+      }
+      const directory = parentFd === undefined
+        ? fs.statSync('.', { bigint: true })
+        : fs.fstatSync(parentFd, { bigint: true });
+      if (!directory.isDirectory() || !opened.isFile() || !entry.isFile() || entry.isSymbolicLink()
         || opened.ino !== entry.ino || opened.dev !== directory.dev
         || (entry.dev !== 0n && opened.dev !== entry.dev)) continue;
       const stat = fs.fstatSync(fd);
@@ -98,7 +106,11 @@ function inspectInChild(): void {
     } catch {
       // Deleted, linked, replaced or nonregular data has no safe metadata/count.
     } finally {
-      if (fd !== undefined) fs.closeSync(fd);
+      try {
+        if (parentFd !== undefined) fs.closeSync(parentFd);
+      } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+      }
     }
   }
   process.stdout.write(JSON.stringify(rows));

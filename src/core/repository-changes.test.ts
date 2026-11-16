@@ -140,7 +140,12 @@ describe('safe legacy listing filesystem access', () => {
     await rm(path.join(repo, 'nested'), { recursive: true });
     await fs.symlink(outside, path.join(repo, 'nested'), process.platform === 'win32' ? 'junction' : 'dir');
     const row = (await listRepositoryChanges(repo)).find(f => f.file === 'nested/tracked.txt');
-    expect(row).toMatchObject({ type: 'deleted', deletions: 1 });
+    // Git for Windows follows junctions when reporting tracked files; POSIX
+    // Git reports the replaced directory's file as deleted. Both must omit metadata.
+    expect(row).toMatchObject(process.platform === 'win32'
+      ? { type: 'modified', additions: 1, deletions: 1 }
+      : { type: 'deleted', deletions: 1 });
+    expect(row?.mtimeMs).toBeUndefined();
     expect(row?.size).toBeUndefined();
   });
 

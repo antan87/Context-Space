@@ -11,6 +11,8 @@ import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
 import { setActiveStorageProvider } from '../core/adapters/registry.js';
 import { BOARD_EVENTS_FILE, SCREEN_EVENTS_FILE, listBoardEvents } from '../core/screen-events.js';
 
+vi.mock('node:fs/promises', { spy: true });
+
 describe('board routes', () => {
   let root: string;
   let app: Hono;
@@ -201,13 +203,21 @@ describe('board routes', () => {
   });
 
   it('answers 500 for a file it may not look at, and 400 for a file that is wrong', async () => {
-    if (process.getuid?.() === 0) return; // root can look at anything
-    await fs.chmod(path.join(root, 'docs'), 0o000);
+    // chmod does not deny directory traversal on Windows (or to POSIX root).
+    // Inject the actual filesystem error so both status mappings run everywhere.
+    const { lstat } = await vi.importActual<typeof fs>('node:fs/promises');
+    const denied = vi.spyOn(fs, 'lstat').mockImplementation((...args) => {
+      if (String(args[0]) === path.join(root, 'docs')) {
+        return Promise.reject(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+      }
+      return lstat(...args);
+    });
     try {
       const response = await post({ changes: [{ op: 'add_card', kind: 'file', path: 'docs/overview.html' }] });
       expect(response.status).toBe(500);
+      expect(denied).toHaveBeenCalledWith(path.join(root, 'docs'));
     } finally {
-      await fs.chmod(path.join(root, 'docs'), 0o755);
+      denied.mockRestore();
     }
     expect((await post({ changes: [{ op: 'add_card', kind: 'file', path: 'docs/nope.html' }] })).status).toBe(400);
   });

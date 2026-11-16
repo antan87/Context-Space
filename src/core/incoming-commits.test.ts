@@ -6,6 +6,7 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execa } from 'execa';
+import { pathToFileURL } from 'node:url';
 import {
   classifyGitFetchError,
   incomingCommits,
@@ -22,6 +23,26 @@ const git = async (cwd: string, ...args: string[]) => {
   const { stdout } = await execa('git', args, { cwd });
   return stdout;
 };
+
+// Git commands are parsed by Git's POSIX shell even on Windows. Native paths
+// still go to Node; shell arguments and paths embedded in scripts use slashes.
+const bashPath = (value: string) => value.replace(/\\/g, '/');
+const shellQuote = (value: string) => "'" + bashPath(value).replace(/'/g, "'\\''") + "'";
+const shellScript = (file: string) => `sh ${shellQuote(file)}`;
+
+async function wrapGit(binDir: string, body: string): Promise<void> {
+  const lookup = await execa(process.platform === 'win32' ? 'where.exe' : 'which', ['git']);
+  const realGit = lookup.stdout.trim().split(/\r?\n/)[0]!;
+  await fs.mkdir(binDir, { recursive: true });
+  const script = path.join(binDir, 'git-wrapper.cjs');
+  await fs.writeFile(script, `#!${process.execPath}\nconst fs = require('node:fs');\nlet args = process.argv.slice(2);\n${body}\nconst child = require('node:child_process').spawn(${JSON.stringify(realGit)}, args, { stdio: 'inherit' });\nchild.on('error', error => { throw error; });\nchild.on('exit', code => process.exit(code ?? 1));\n`, { mode: 0o755 });
+  if (process.platform === 'win32') {
+    await fs.writeFile(path.join(binDir, 'git.cmd'), `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+  } else {
+    await fs.copyFile(script, path.join(binDir, 'git'));
+    await fs.chmod(path.join(binDir, 'git'), 0o755);
+  }
+}
 
 const sha256 = async (filePath: string) => {
   const buf = await fs.readFile(filePath);
@@ -144,6 +165,11 @@ async function getClosedLocalhostPort(): Promise<number> {
 }
 
 describe('classifyGitFetchError (pure)', () => {
+  it('quotes native Windows helper paths for Git bash, including spaces and apostrophes', () => {
+    expect(shellScript(path.win32.join('C:\\Users', 'runner admin', 'helper.sh')))
+      .toBe("sh 'C:/Users/runner admin/helper.sh'");
+    expect(shellScript("C:\\Users\\O'Neil\\helper.sh")).toBe("sh 'C:/Users/O'\\''Neil/helper.sh'");
+  });
   it('classifies vendor HTTPS sign-in messages as sign-in', () => {
     const cases = [
       // GitHub HTTPS
@@ -245,6 +271,7 @@ describe('incomingCommits (real git)', { timeout: 60_000 }, () => {
     await fs.mkdir(testHome);
     savedEnv = {
       HOME: process.env.HOME,
+      PM2_HOME: process.env.PM2_HOME,
       PATH: process.env.PATH,
       GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
       GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
@@ -255,6 +282,7 @@ describe('incomingCommits (real git)', { timeout: 60_000 }, () => {
       DISPLAY: process.env.DISPLAY,
     };
     process.env.HOME = testHome;
+    process.env.PM2_HOME = '/tmp/ncx1-pm';
     process.env.GIT_CONFIG_GLOBAL = path.join(testHome, '.gitconfig');
     process.env.GIT_CONFIG_NOSYSTEM = '1';
     delete process.env.GIT_SSH_COMMAND;
@@ -571,14 +599,14 @@ describe('incomingCommits (real git)', { timeout: 60_000 }, () => {
     await fs.writeFile(
       askpassScript,
       `#!/bin/sh
-printf 'called:%s\n' "$*" >> "${askpassLog}"
+printf 'called:%s\n' "$*" >> "${bashPath(askpassLog)}"
 exit 1
 `,
       { mode: 0o755 },
     );
-    await git(repo, 'config', 'core.askPass', askpassScript);
-    process.env.GIT_ASKPASS = askpassScript;
-    process.env.SSH_ASKPASS = askpassScript;
+    await git(repo, 'config', 'core.askPass', shellScript(askpassScript));
+    process.env.GIT_ASKPASS = bashPath(askpassScript);
+    process.env.SSH_ASKPASS = bashPath(askpassScript);
     process.env.DISPLAY = ':0';
 
     const blockingHelper = path.join(root, 'blocking-helper.sh');
@@ -593,7 +621,7 @@ exit 1
       { mode: 0o755 },
     );
     await git(repo, 'remote', 'set-url', 'origin', `http://127.0.0.1:${port}/org/repo.git`);
-    await git(repo, 'config', 'credential.helper', blockingHelper);
+    await git(repo, 'config', 'credential.helper', `!${shellScript(blockingHelper)}`);
 
     const startHttp = Date.now();
     const httpRes = await incomingCommits(ws, { refresh: true });
@@ -604,37 +632,10 @@ exit 1
 
     // 1b. Simulate Git < 2.46 where `-c credential.interactive=never` is not available/stripped:
     // GIT_ASKPASS='' must still block GIT_ASKPASS, core.askPass, and SSH_ASKPASS.
-    const realGit = (await execa('which', ['git'])).stdout.trim();
     const fakeBin = path.join(root, 'fake-old-git-bin');
-    await fs.mkdir(fakeBin, { recursive: true });
-    await fs.writeFile(
-      path.join(fakeBin, 'git'),
-      `#!/bin/sh
-n=$#
-i=1
-skip_next=0
-while [ "$i" -le "$n" ]; do
-  arg=$1
-  shift
-  if [ "$skip_next" -eq 1 ]; then
-    skip_next=0
-    i=$((i + 1))
-    continue
-  fi
-  if [ "$arg" = "-c" ] && [ "$#" -ge 1 ] && [ "$1" = "credential.interactive=never" ]; then
-    skip_next=1
-    i=$((i + 1))
-    continue
-  fi
-  set -- "$@" "$arg"
-  i=$((i + 1))
-done
-exec "${realGit}" "$@"
-`,
-      { mode: 0o755 },
-    );
+    await wrapGit(fakeBin, `args = args.filter((arg, index) => !(arg === '-c' && args[index + 1] === 'credential.interactive=never') && !(arg === 'credential.interactive=never' && args[index - 1] === '-c'));`);
     const origPath = process.env.PATH ?? '';
-    process.env.PATH = `${fakeBin}:${origPath}`;
+    process.env.PATH = `${fakeBin}${path.delimiter}${origPath}`;
     try {
       const fakeOldWithEnv = await incomingCommits(ws, { refresh: true, now: () => Date.now() + 60_000 });
       expect(fakeOldWithEnv.repos[0]?.state).toBe('sign-in');
@@ -655,7 +656,7 @@ exec "${realGit}" "$@"
     await fs.writeFile(
       sshScript,
       `#!/bin/sh
-printf '%s\n' "$*" > "${sshMarker}"
+printf '%s\n' "$*" > "${bashPath(sshMarker)}"
 case "$*" in
   *BatchMode=yes*)
     echo "git@git.example.invalid: Permission denied (publickey)." >&2
@@ -670,7 +671,7 @@ esac
       { mode: 0o755 },
     );
     await git(repo, 'remote', 'set-url', 'origin', 'git@git.example.invalid:org/repo.git');
-    await git(repo, 'config', 'core.sshCommand', sshScript);
+    await git(repo, 'config', 'core.sshCommand', shellScript(sshScript));
 
     const startSsh = Date.now();
     const sshRes = await incomingCommits(ws, { refresh: true, now: () => Date.now() + 180_000 });
@@ -687,7 +688,7 @@ esac
     const stalledSsh = path.join(root, 'stalled-ssh.sh');
     await fs.writeFile(stalledSsh, '#!/bin/sh\nsleep 15 &\nwait\n', { mode: 0o755 });
     await git(repo, 'remote', 'set-url', 'origin', 'git@git.example.invalid:org/repo.git');
-    await git(repo, 'config', 'core.sshCommand', stalledSsh);
+    await git(repo, 'config', 'core.sshCommand', shellScript(stalledSsh));
 
     const start = Date.now();
     const res = await incomingCommits(ws, { refresh: true, fetchTimeoutMs: 250 });
@@ -696,23 +697,25 @@ esac
     expect(res.repos[0]?.message).toBe('Offline — could not reach git.example.invalid');
   });
 
-  it('enforces a hard deadline after kill when a descendant keeps pipes open and ignores SIGTERM, clearing inFlight', async () => {
+  // Windows cannot install a SIGTERM handler or escape taskkill's process-tree kill.
+  it.skipIf(process.platform === 'win32')('enforces a hard deadline after kill when a descendant keeps pipes open and ignores SIGTERM, clearing inFlight', async () => {
     const { ws, bare, repo, maria } = await createWorkspaceWithBareRemote(root);
     const childPidFile = path.join(root, 'setsid-child.pid');
     const openPipeSsh = path.join(root, 'open-pipe-ssh.sh');
-    await fs.writeFile(
-      openPipeSsh,
-      `#!/bin/sh
+    const holder = path.join(root, 'hold-pipes.cjs');
+    await fs.writeFile(holder, `
+const { spawn } = require('node:child_process');
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 8000)'], { detached: true, stdio: ['ignore', 1, 2] });
+require('node:fs').writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
+`);
+    await fs.writeFile(openPipeSsh, `#!/bin/sh
 case " $* " in
   *" -G "*) exit 1 ;;
 esac
-setsid sh -c 'echo $$ > "${childPidFile}"; trap "" TERM; exec sleep 8' </dev/null &
-wait
-`,
-      { mode: 0o755 },
-    );
+exec ${shellQuote(process.execPath)} ${shellQuote(holder)}
+`, { mode: 0o755 });
     await git(repo, 'remote', 'set-url', 'origin', 'git@git.example.invalid:org/repo.git');
-    await git(repo, 'config', 'core.sshCommand', openPipeSsh);
+    await git(repo, 'config', 'core.sshCommand', shellScript(openPipeSsh));
 
     try {
       const start = Date.now();
@@ -722,6 +725,7 @@ wait
       ]);
       const elapsed = Date.now() - start;
       expect(elapsed).toBeLessThan(5_000);
+      expect(Number(await fs.readFile(childPidFile, 'utf8'))).toBeGreaterThan(0);
       expect(r1.repos[0]?.state).toBe('offline');
       expect(r1.repos[0]?.fetching).toBe(false);
       expect(r1.repos[0]?.message).toBe('Offline — could not reach git.example.invalid');
@@ -805,13 +809,13 @@ wait
     await fs.writeFile(
       wrapper,
       `#!/bin/sh
-printf '1\n' >> "${countFile}"
+printf '1\n' >> "${bashPath(countFile)}"
 sleep 0.15
 exec git-upload-pack "$@"
 `,
       { mode: 0o755 },
     );
-    await git(repo, 'config', 'remote.origin.uploadpack', wrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(wrapper));
     expect(bare).toBeTruthy();
 
     const [first, second] = await Promise.all([
@@ -846,12 +850,12 @@ exec git-upload-pack "$@"
     await fs.writeFile(
       wrapper,
       `#!/bin/sh
-printf '1\n' >> "${countFile}"
+printf '1\n' >> "${bashPath(countFile)}"
 exec git-upload-pack "$@"
 `,
       { mode: 0o755 },
     );
-    await git(repo, 'config', 'remote.origin.uploadpack', wrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(wrapper));
 
     let fakeNow = Date.parse('2026-11-14T10:00:00.000Z');
     const now = () => fakeNow;
@@ -975,7 +979,7 @@ exec git-upload-pack "$@"
     await fs.writeFile(
       envSsh,
       `#!/bin/sh
-printf '%s\n' "$*" > "${marker}"
+printf '%s\n' "$*" > "${bashPath(marker)}"
 echo "git@gitlab.example.invalid: Permission denied (publickey)." >&2
 exit 255
 `,
@@ -984,7 +988,7 @@ exit 255
     await git(repo, 'remote', 'set-url', 'origin', 'git@gitlab.example.invalid:group/repo.git');
 
     const prevEnv = process.env.GIT_SSH_COMMAND;
-    process.env.GIT_SSH_COMMAND = `${envSsh} -p 2222`;
+    process.env.GIT_SSH_COMMAND = `${shellScript(envSsh)} -p 2222`;
     try {
       const res = await incomingCommits(ws, { refresh: true });
       expect(res.repos[0]?.state).toBe('sign-in');
@@ -1033,7 +1037,7 @@ exit 255
     // Missing file:// remote repo
     const missingFileRepo = path.join(ws, 'missing-file');
     await execa('git', ['clone', base.bare, missingFileRepo]);
-    await git(missingFileRepo, 'remote', 'set-url', 'origin', `file://${path.join(root, 'gone.git')}`);
+    await git(missingFileRepo, 'remote', 'set-url', 'origin', pathToFileURL(path.join(root, 'gone.git')).href);
 
     // Explicitly tracked upstream with a different remote branch name
     const trackedOtherRepo = path.join(ws, 'tracked-other');
@@ -1087,12 +1091,12 @@ exit 255
     await fs.writeFile(
       wrapper,
       `#!/bin/sh
-printf '1\\n' >> "${countFile}"
+printf '1\\n' >> "${bashPath(countFile)}"
 exec git-upload-pack "$@"
 `,
       { mode: 0o755 },
     );
-    await git(repo, 'config', 'remote.origin.uploadpack', wrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(wrapper));
 
     for (const badMerge of ['refs/tags/v1', 'refs/heads/*', 'refs/heads/a:refs/heads/b']) {
       await git(repo, 'config', `branch.${branch}.merge`, badMerge);
@@ -1115,7 +1119,7 @@ exec git-upload-pack "$@"
 
     const traceFile = path.join(root, 'git-trace.log');
     const prevTrace = process.env.GIT_TRACE;
-    process.env.GIT_TRACE = traceFile;
+    process.env.GIT_TRACE = bashPath(traceFile);
     try {
       const res = await incomingCommits(ws, { refresh: true });
       expect(res.repos[0]?.state).toBe('ok');
@@ -1140,16 +1144,16 @@ exec git-upload-pack "$@"
     await fs.writeFile(
       wrapper,
       `#!/bin/sh
-if [ ! -f "${racedMarker}" ]; then
-  mkdir -p "$(dirname "${trackingLock}")"
-  : > "${trackingLock}"
-  : > "${racedMarker}"
+if [ ! -f "${bashPath(racedMarker)}" ]; then
+  mkdir -p "$(dirname "${bashPath(trackingLock)}")"
+  : > "${bashPath(trackingLock)}"
+  : > "${bashPath(racedMarker)}"
 fi
 exec git-upload-pack "$@"
 `,
       { mode: 0o755 },
     );
-    await git(repo, 'config', 'remote.origin.uploadpack', wrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(wrapper));
 
     let fakeNow = Date.parse('2026-11-14T11:00:00.000Z');
     const now = () => fakeNow;
@@ -1190,7 +1194,7 @@ exit 128
       { mode: 0o755 },
     );
     await git(repo, 'remote', 'set-url', 'origin', 'git@git.example.invalid:org/repo.git');
-    await git(repo, 'config', 'core.sshCommand', lockStderrScript);
+    await git(repo, 'config', 'core.sshCommand', shellScript(lockStderrScript));
     const lockMsgRes = await incomingCommits(ws, { refresh: true, now });
     expect(lockMsgRes.repos[0]?.state).toBe('busy');
   });
@@ -1253,14 +1257,14 @@ exit 128
 if ! mkdir "${activeDir}" 2>/dev/null; then
   printf 'CONCURRENT\\n' >> "${collisionFile}"
 fi
-printf '1\\n' >> "${countFile}"
+printf '1\\n' >> "${bashPath(countFile)}"
 sleep 0.15
 rmdir "${activeDir}" 2>/dev/null || true
 exec git-upload-pack "$@"
 `,
       { mode: 0o755 },
     );
-    await git(base, 'config', 'remote.origin.uploadpack', wrapper);
+    await git(base, 'config', 'remote.origin.uploadpack', shellScript(wrapper));
 
     // 1. Two worktrees on different branches sharing commonDir must never fetch into .git at once.
     const [r1, r2] = await Promise.all([
@@ -1307,7 +1311,7 @@ exec git-upload-pack "$@"
 `,
       { mode: 0o755 },
     );
-    await git(repo, 'config', 'remote.origin.uploadpack', slowWrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(slowWrapper));
 
     const first = await incomingCommits(ws);
     expect(first.repos[0]?.fetching).toBe(true);
@@ -1333,7 +1337,7 @@ exit 128
       { mode: 0o755 },
     );
     await git(repo, 'remote', 'set-url', 'origin', 'git@git.internal.corp:team/repo.git');
-    await git(repo, 'config', 'core.sshCommand', secretScript);
+    await git(repo, 'config', 'core.sshCommand', shellScript(secretScript));
 
     const errRes = await incomingCommits(ws, { refresh: true });
     expect(errRes.repos[0]?.state).toBe('error');
@@ -1371,8 +1375,8 @@ exit 128
     // Keep subsequent background fetches slower than the immediate read path under heavy CI load.
     const slowUploadPack = path.join(root, 'ttl-slow-upload-pack.sh');
     await fs.writeFile(slowUploadPack, '#!/bin/sh\nsleep 0.2\nexec git-upload-pack "$@"\n', { mode: 0o755 });
-    await git(repoTtlA, 'config', 'remote.origin.uploadpack', slowUploadPack);
-    await git(repoTtlB, 'config', 'remote.origin.uploadpack', slowUploadPack);
+    await git(repoTtlA, 'config', 'remote.origin.uploadpack', shellScript(slowUploadPack));
+    await git(repoTtlB, 'config', 'remote.origin.uploadpack', shellScript(slowUploadPack));
 
     // At 23h59m, entry B is still present with its prior lastFetchAt before background refresh finishes.
     fakeNow += 24 * 60 * 60_000 - 60_000;
@@ -1424,7 +1428,7 @@ exit 128
 
     const slowUploadPack = path.join(root, 'cap-slow-upload-pack.sh');
     await fs.writeFile(slowUploadPack, '#!/bin/sh\nsleep 0.2\nexec git-upload-pack "$@"\n', { mode: 0o755 });
-    await git(path.join(workspaces[1]!, 'app'), 'config', 'remote.origin.uploadpack', slowUploadPack);
+    await git(path.join(workspaces[1]!, 'app'), 'config', 'remote.origin.uploadpack', shellScript(slowUploadPack));
 
     // Touch r-0 so r-1 becomes the least-recently-read entry.
     const r0Warm = await incomingCommits(workspaces[0]!, { now, maxRepoStates: cap });
@@ -1487,23 +1491,12 @@ exit 128
 
   it('passes http.lowSpeedLimit=1000 and http.lowSpeedTime=20 to git fetch', async () => {
     const { ws } = await createWorkspaceWithBareRemote(root);
-    const realGit = (await execa('which', ['git'])).stdout.trim();
     const fetchArgsLog = path.join(root, 'fetch-args.log');
     const binDir = path.join(root, 'logged-git-bin');
-    await fs.mkdir(binDir, { recursive: true });
-    await fs.writeFile(
-      path.join(binDir, 'git'),
-      `#!/bin/sh
-case " $* " in
-  *" fetch "*) printf '%s\n' "$*" >> "${fetchArgsLog}" ;;
-esac
-exec "${realGit}" "$@"
-`,
-      { mode: 0o755 },
-    );
+    await wrapGit(binDir, `if (args.includes('fetch')) fs.appendFileSync(${JSON.stringify(fetchArgsLog)}, args.join(' ') + '\\n');`);
 
     const origPath = process.env.PATH ?? '';
-    process.env.PATH = `${binDir}:${origPath}`;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath}`;
     try {
       const res = await incomingCommits(ws, { refresh: true });
       expect(res.repos[0]?.state).toBe('ok');
@@ -1558,7 +1551,7 @@ exec "${realGit}" "$@"
     // 3. Read again immediately (without waiting for cooldown): reports ok and starts a fetch at once.
     const slowWrapper = path.join(root, 'n1-slow-upload-pack.sh');
     await fs.writeFile(slowWrapper, '#!/bin/sh\nsleep 0.1\nexec git-upload-pack "$@"\n', { mode: 0o755 });
-    await git(repo, 'config', 'remote.origin.uploadpack', slowWrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(slowWrapper));
 
     const afterPush = await incomingCommits(ws, { now });
     expect(afterPush.repos[0]?.state).toBe('ok');
@@ -1592,7 +1585,7 @@ exec "${realGit}" "$@"
 
     await git(repo, 'push', '-u', 'origin', branch2);
     await git(repo, 'reset', '--hard', 'HEAD~1');
-    await git(repo, 'config', 'remote.origin.uploadpack', slowWrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(slowWrapper));
     const plainAhead = await incomingCommits(ws, { now });
     expect(plainAhead.repos[0]?.state).toBe('ok');
     expect(plainAhead.repos[0]?.behind).toBe(1);
@@ -1628,7 +1621,7 @@ exec "${realGit}" "$@"
     await git(bare, 'config', 'uploadpack.allowFilter', 'true');
 
     await fs.rm(repo, { recursive: true, force: true });
-    await execa('git', ['clone', '--filter=blob:none', '-b', branch, `file://${bare}`, repo]);
+    await execa('git', ['clone', '--filter=blob:none', '-b', branch, pathToFileURL(bare).href, repo]);
     await git(repo, 'config', 'user.name', 'Developer');
     await git(repo, 'config', 'user.email', 'dev@example.com');
 
@@ -1637,19 +1630,19 @@ exec "${realGit}" "$@"
     await fs.writeFile(
       uploadWrapper,
       `#!/bin/sh
-printf '1\\n' >> "${uploadCountFile}"
+printf '1\\n' >> "${bashPath(uploadCountFile)}"
 exec git-upload-pack "$@"
 `,
       { mode: 0o755 },
     );
-    await git(repo, 'config', 'remote.origin.uploadpack', uploadWrapper);
+    await git(repo, 'config', 'remote.origin.uploadpack', shellScript(uploadWrapper));
 
     const mariaSha1 = await commitAsMaria(maria, 'Blobless Maria add', { 'maria-blob.ts': 'export const mb = 1;\n' });
     const mariaSha2 = await commitAsMaria(maria, 'Blobless Maria edit', { 'base.ts': 'export const base = 2;\n' });
 
     const traceFile = path.join(root, 'blobless-git-trace.log');
     const prevTrace = process.env.GIT_TRACE;
-    process.env.GIT_TRACE = traceFile;
+    process.env.GIT_TRACE = bashPath(traceFile);
     let fakeNow = Date.parse('2026-11-14T13:00:00.000Z');
     const now = () => fakeNow;
     try {

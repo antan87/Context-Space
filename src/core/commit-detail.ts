@@ -353,7 +353,7 @@ export async function readCommit(
   let stdoutNumstat: string;
   let stdoutNameStatus: string;
   try {
-    const [{ stdout: numstatOut }, { stdout: nameStatusOut }] = await Promise.all([
+    const results = await Promise.allSettled([
       execa(
         'git',
         ['-c', 'diff.renames=true', 'diff', '-z', '-M', '--no-ext-diff', '--no-color', '--numstat', baseTree, fullSha],
@@ -365,8 +365,14 @@ export async function readCommit(
         { cwd: repoPath, maxBuffer: diffMaxBuffer },
       ),
     ]);
-    stdoutNumstat = numstatOut;
-    stdoutNameStatus = nameStatusOut;
+    // Drain both children before returning an error. Windows locks their cwd
+    // until exit, and callers may immediately retry or remove a temp repository.
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+    const [numstat, nameStatus] = results;
+    if (numstat.status !== 'fulfilled' || nameStatus.status !== 'fulfilled') throw new Error('Incomplete commit diff');
+    stdoutNumstat = numstat.value.stdout;
+    stdoutNameStatus = nameStatus.value.stdout;
   } catch (error: unknown) {
     if (isMaxBufferError(error)) {
       throw new CommitTooLargeError();

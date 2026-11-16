@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execa } from 'execa';
 import { inspectListedRepositoryFiles, UNTRACKED_COUNT_LIMIT } from './listed-file-inspection.js';
 
 const roots: string[] = [];
@@ -15,9 +16,13 @@ afterEach(async () => {
 const preload = String.raw`
 const fs = require('node:fs');
 const config = JSON.parse(fs.readFileSync(process.env.LISTING_RACE_CONFIG, 'utf8'));
+// Exercise the Windows handle branch on POSIX too, without changing native fs calls.
+if (config.race === 'zero-path-dev' || config.race === 'budget-windows') {
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+}
 const path = require('node:path');
 const original = { open: fs.openSync, close: fs.closeSync, lstat: fs.lstatSync, read: fs.readSync,
-  readFile: fs.readFileSync, chdir: process.chdir.bind(process) };
+  fstat: fs.fstatSync, stat: fs.statSync, readFile: fs.readFileSync, chdir: process.chdir.bind(process) };
 const target = path.join(config.repo, 'nested', 'new.txt');
 const parent = path.dirname(target);
 const saved = path.join(config.repo, 'nested-saved');
@@ -44,20 +49,27 @@ fs.openSync = function(name, flags, ...args) {
     changed = true;
     if (config.race === 'repeated-swap') { swap(); event({ swapped: true }); }
     if (config.race === 'fifo') {
-      fs.unlinkSync(target); require('node:child_process').execFileSync('mkfifo', [target]);
+      fs.unlinkSync(target); fs.renameSync(path.join(config.root, 'replacement-fifo'), target);
       event({ fifo: true, nonblocking: typeof flags === 'number' && !!(flags & fs.constants.O_NONBLOCK) });
       if (typeof flags !== 'number' || !(flags & fs.constants.O_NONBLOCK)) throw new Error('Prevent hanging test');
     }
     if (config.race === 'empty') fs.truncateSync(target, 0);
   }
   const fd = original.open(name, flags, ...args);
-  if (name !== 'new.txt' && !String(name).endsWith('.txt')) return fd;
+  if (name !== '.' && name !== 'new.txt' && !String(name).endsWith('.txt')) return fd;
   descriptors.add(fd); active++; peak = Math.max(peak, active);
   event({ opened: name, active, peak });
   return fd;
 };
+fs.statSync = function(name, ...args) {
+  const result = original.stat(name, ...args);
+  if (config.race === 'zero-path-dev') result.dev = typeof result.dev === 'bigint' ? 0n : 0;
+  return result;
+};
 fs.lstatSync = function(name, ...args) {
   const result = original.lstat(name, ...args);
+  if (config.race === 'zero-path-dev') result.dev = typeof result.dev === 'bigint' ? 0n : 0;
+  if (config.race === 'wrong-inode' && name === 'new.txt' && typeof result.ino === 'bigint') result.ino += 1n;
   if (name === 'new.txt' && swapped && !repeated) {
     fs.unlinkSync(parent); fs.renameSync(saved, parent); swapped = false; restored = true;
     // Exercise both swaps from the rejected pathname-validation design.
@@ -82,12 +94,21 @@ fs.closeSync = function(fd) {
 };
 `;
 
-async function fixture(race?: string) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ctx-listed-anchor-')); roots.push(root);
+async function fixture(race?: string, linkedTempParent = false) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'ctx-listed-anchor-')); roots.push(temporary);
+  let candidate = temporary;
+  if (linkedTempParent) {
+    candidate = path.join(temporary, 'temp-alias');
+    await fs.symlink(temporary, candidate, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  // Match the child's native root even when the OS temp path has linked parents.
+  const root = await fs.realpath(candidate);
   const repo = path.join(root, 'repo'); await fs.mkdir(path.join(repo, 'nested'), { recursive: true });
   await fs.mkdir(path.join(root, 'outside'));
   await fs.writeFile(path.join(repo, 'nested', 'new.txt'), 'one\n');
   await fs.writeFile(path.join(root, 'outside', 'new.txt'), 'external\nsentinel\nthird\n');
+  // Prepare the FIFO outside the synchronous race hook; the hook only swaps it.
+  if (race === 'fifo') await execa('mkfifo', [path.join(root, 'replacement-fifo')]);
   const trace = path.join(root, 'trace.jsonl');
   if (race) {
     const config = path.join(root, 'config.json'); const script = path.join(root, 'preload.cjs');
@@ -104,6 +125,24 @@ const bytes = (events: Array<{ bytes?: number; external?: boolean }>, externalOn
   events.reduce((total, event) => total + ((!externalOnly || event.external) ? event.bytes ?? 0 : 0), 0);
 
 describe('listed file inspection through stable parent directories', () => {
+  // Windows lacks POSIX directory mode bits; root bypasses their access checks.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('inspects readable files in a searchable but unreadable parent', async () => {
+    const { repo } = await fixture();
+    const parent = path.join(repo, 'nested');
+    const stat = await fs.stat(path.join(parent, 'new.txt'));
+    try {
+      await fs.chmod(parent, 0o111);
+      await expect(fs.readdir(parent)).rejects.toMatchObject({ code: 'EACCES' });
+      expect(await fs.readFile(path.join(parent, 'new.txt'), 'utf8')).toBe('one\n');
+      const metadata = { file: 'nested/new.txt', size: 4, mtimeMs: stat.mtimeMs };
+      expect(await inspectListedRepositoryFiles(repo, ['nested/new.txt'], 'metadata')).toEqual([metadata]);
+      expect(await inspectListedRepositoryFiles(repo, ['nested/new.txt'], 'counts'))
+        .toEqual([{ ...metadata, additions: 1 }]);
+    } finally {
+      await fs.chmod(parent, 0o755);
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('survives repeated parent swaps with zero external descriptor bytes', async () => {
     const { repo, events } = await fixture('repeated-swap');
     const before = process.cwd();
@@ -116,8 +155,9 @@ describe('listed file inspection through stable parent directories', () => {
     expect(process.cwd()).toBe(before);
   });
 
-  it.skipIf(process.platform === 'win32')('rejects a cwd redirected externally before its native anchor validation', async () => {
-    const { repo, events } = await fixture('before-anchor');
+  // Windows locks the cwd directory against the ancestor rename used by this race.
+  it.skipIf(process.platform === 'win32').each([false, true])('rejects a cwd redirected externally before its native anchor validation (linked temp parent: %s)', async (linkedTempParent) => {
+    const { repo, events } = await fixture('before-anchor', linkedTempParent);
     expect(await inspectListedRepositoryFiles(repo, ['nested/new.txt'], 'counts')).toEqual([]);
     const trace = await events();
     expect(trace).toContainEqual({ anchorRedirected: true });
@@ -131,6 +171,18 @@ describe('listed file inspection through stable parent directories', () => {
     const trace = await events();
     expect(trace).toContainEqual({ fifo: true, nonblocking: true });
     expect(bytes(trace)).toBe(0);
+  });
+
+  it('uses open directory volume identity when pathname device IDs are zero (Node 22 Windows)', async () => {
+    const { repo } = await fixture('zero-path-dev');
+    expect(await inspectListedRepositoryFiles(repo, ['nested/new.txt'], 'counts'))
+      .toEqual([expect.objectContaining({ size: 4, additions: 1 })]);
+  });
+
+  it('still rejects an entry whose inode differs from the open descriptor', async () => {
+    const { repo, events } = await fixture('wrong-inode');
+    expect(await inspectListedRepositoryFiles(repo, ['nested/new.txt'], 'counts')).toEqual([]);
+    expect(bytes(await events())).toBe(0);
   });
 
   it('bounds actual descriptor bytes when a file grows after fstat', async () => {
@@ -176,15 +228,16 @@ describe('listed file inspection through stable parent directories', () => {
     expect(rows).toEqual([expect.objectContaining({ file: 'nested/new.txt', additions: 1 })]);
   });
 
-  it('keeps descriptor use constant for a large file set', async () => {
-    const { repo, events } = await fixture('budget');
+  it.each(['budget', 'budget-windows'])('keeps descriptor use constant for a large file set (%s)', async (race) => {
+    const { repo, events } = await fixture(race);
     const files = Array.from({ length: 80 }, (_, i) => `${i}.txt`);
     await Promise.all(files.map(file => fs.writeFile(path.join(repo, file), 'a\nb\n')));
     const rows = await inspectListedRepositoryFiles(repo, files, 'counts');
     expect(rows).toHaveLength(80);
     expect(rows.every(row => row.size === 4 && row.additions === 2)).toBe(true);
     const trace = await events();
-    expect(Math.max(...trace.filter(event => event.peak).map(event => event.peak))).toBe(1);
+    expect(Math.max(...trace.filter(event => event.peak).map(event => event.peak)))
+      .toBe(process.platform === 'win32' || race === 'budget-windows' ? 2 : 1);
     expect(trace.at(-1)).toEqual({ closed: true, active: 0 });
   });
 });

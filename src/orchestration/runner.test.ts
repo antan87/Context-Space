@@ -23,10 +23,12 @@ import {
   stopServices,
   pm2Delete,
 } from './runner.js';
+import { isPm2DaemonAlive, overlongPm2SocketPath } from './pm2-home.js';
 import type { RunningState, ServiceConfig } from '../types.js';
 import { findExecutable } from '../utils/user-paths.js';
 
 vi.mock('node:fs/promises');
+vi.mock('node:os', { spy: true });
 vi.mock('execa');
 vi.mock('../utils/user-paths.js', () => ({ findExecutable: vi.fn(() => '/usr/bin/npm') }));
 
@@ -59,6 +61,7 @@ function fakeLivePm2Home(): string {
 describe('orchestration runner PM2 state handling', () => {
   const originalPm2Home = process.env.PM2_HOME;
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) nodeFs.rmSync(dir, { recursive: true, force: true });
     if (originalPm2Home === undefined) delete process.env.PM2_HOME;
     else process.env.PM2_HOME = originalPm2Home;
@@ -109,7 +112,8 @@ describe('orchestration runner PM2 state handling', () => {
       expect(execa).not.toHaveBeenCalled();
     });
 
-    it('returns [] when the pid is alive but rpc.sock is missing', async () => {
+    // Windows PM2 uses named pipes; there is no rpc.sock file to require.
+    it.skipIf(process.platform === 'win32')('returns [] when the pid is alive but rpc.sock is missing', async () => {
       const home = tempDir('pm2t-');
       nodeFs.writeFileSync(path.join(home, 'pm2.pid'), String(process.pid));
       process.env.PM2_HOME = home;
@@ -123,11 +127,10 @@ describe('orchestration runner PM2 state handling', () => {
       expect(execa).toHaveBeenCalledTimes(1);
     });
 
-    it('falls back to ~/.pm2 under HOME when PM2_HOME is unset', async () => {
+    it('falls back to ~/.pm2 under the OS home when PM2_HOME is unset', async () => {
       const fakeHome = tempDir('pm2h-');
-      const oldHome = process.env.HOME;
+      const homedir = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
       delete process.env.PM2_HOME;
-      process.env.HOME = fakeHome;
       try {
         await expect(readPm2List()).resolves.toEqual([]);
         expect(execa).not.toHaveBeenCalled();
@@ -138,17 +141,28 @@ describe('orchestration runner PM2 state handling', () => {
         await expect(readPm2List()).resolves.toEqual([]);
         expect(execa).toHaveBeenCalledTimes(1);
       } finally {
-        process.env.HOME = oldHome;
+        homedir.mockRestore();
       }
     });
 
-    it('a too-long home: read returns null, runs nothing; start and delete refuse naming the fix', async () => {
+    // Windows named pipes do not have the Unix sun_path byte limit.
+    it.skipIf(process.platform === 'win32')('a too-long home: read returns null, runs nothing; start and delete refuse naming the fix', async () => {
       process.env.PM2_HOME = path.join(os.tmpdir(), 'pm2t-' + 'x'.repeat(120));
       await expect(readPm2List()).resolves.toBeNull();
       await expect(pm2Start({ name: 'a', command: 'node', args: [], cwd: '/tmp', logFile: '/tmp/a.log' }))
         .rejects.toThrow(/too long.*rpc\.sock.*Set PM2_HOME to a shorter path/s);
       await expect(pm2Delete('a')).rejects.toThrow(/too long.*rpc\.sock.*Set PM2_HOME to a shorter path/s);
       expect(execa).not.toHaveBeenCalled();
+    });
+
+    it('checks the pid on Windows, which has named pipes rather than Unix socket files', () => {
+      const home = tempDir('pm2t-');
+      expect(isPm2DaemonAlive(home, 'win32')).toBe(false);
+      nodeFs.writeFileSync(path.join(home, 'pm2.pid'), '2147483646');
+      expect(isPm2DaemonAlive(home, 'win32')).toBe(false);
+      nodeFs.writeFileSync(path.join(home, 'pm2.pid'), String(process.pid));
+      expect(isPm2DaemonAlive(home, 'win32')).toBe(true);
+      expect(overlongPm2SocketPath(path.join(home, 'x'.repeat(120)), 'win32')).toBeNull();
     });
 
     it('a delete with no daemon alive starts nothing', async () => {

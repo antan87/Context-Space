@@ -13,7 +13,7 @@ describe('the explain skill\'s words', () => {
   afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
   it('has an example answer that really matches when its code is in the file it names', async () => {
-    const text = await fs.readFile(skillFile, 'utf8');
+    const text = (await fs.readFile(skillFile, 'utf8')).replace(/\r\n/g, '\n');
     const example = /````markdown\n([\s\S]*?)\n````/.exec(text)![1]!;
     const fence = /```ts (\S+):(\d+)-(\d+)\n([\s\S]*?)\n```/.exec(example)!;
     const [, where, start, end, code] = fence as unknown as [string, string, string, string, string];
@@ -33,7 +33,7 @@ describe('the explain skill\'s words', () => {
   });
 
   it('names the statuses as the command prints them, and the fallback command', async () => {
-    const text = await fs.readFile(skillFile, 'utf8');
+    const text = (await fs.readFile(skillFile, 'utf8')).replace(/\r\n/g, '\n');
     for (const status of ['changed', 'moved', 'gone', 'not-in-workspace', 'unreadable']) expect(text).toContain(`\`${status}\``);
     expect(text).toContain('./.contextspace/bin/ctxspace');
     expect(text.split('\n').length).toBeLessThan(120);
