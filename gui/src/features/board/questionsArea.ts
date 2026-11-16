@@ -224,6 +224,12 @@ export function refreshRequest(answer: AnswerView): string | null {
   return copies.length ? `Refresh the answer ${answer.path} ("${answer.question}"): these copies no longer match: ${copies.join(', ')}. Follow the contextspace-explain skill and run ctxspace explain until all copies match.` : null;
 }
 
+/** Plain repair request for the reader's existing Ask in CLI path; nothing starts or submits an AI. */
+export function diagramFixRequest(answer: { path: string; question: string; heading?: string | null }, error: string): string {
+  const part = answer.heading ? `, part "${answer.heading}"` : '';
+  return `Fix the diagram in ${answer.path} ("${answer.question}")${part}: Mermaid says: ${error}. Follow the diagram rules of the contextspace-explain skill.`;
+}
+
 /** The answer as rows of cards, with the ids the Board draws them by. */
 export function answerView(answer: QuestionAnswerDto): AnswerView {
   let n = 0;

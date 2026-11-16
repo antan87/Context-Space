@@ -39,3 +39,13 @@ describe('the explain skill\'s words', () => {
     expect(text.split('\n').length).toBeLessThan(120);
   });
 });
+
+it('teaches card-sized drawable Mermaid with quoted labels and a correct small example', async () => {
+  const text = await fs.readFile(skillFile, 'utf8');
+  expect(text).toContain('flowchart TD');
+  expect(text).toContain('A["Save (draft)"] -->|"on save"| B["Check: 2 files"]');
+  expect(text).toContain('sequence messages');
+  expect(text).toContain('no Markdown, no HTML, no line breaks');
+  expect(text).toContain('classDef');
+  expect(text).toContain("Can't draw this diagram · line N");
+});

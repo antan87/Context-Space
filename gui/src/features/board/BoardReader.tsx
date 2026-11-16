@@ -29,6 +29,8 @@ import type { DiffViewMode } from '../changes/types.js';
 import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
+import { DiagramFixContext } from '../../components/diagramFixContext.js';
+import { diagramFixRequest, isQuestionFile } from './questionsArea.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { isKnowledgeFile } from '../knowledge/knowledgeIndex.js';
 import { BoardKnowledge } from './BoardKnowledge.js';
@@ -77,6 +79,7 @@ export function BoardReader({
   previousTitle,
   indexInfo,
   onAskInCLI,
+  readOnly = false,
 }: {
   /** Whether the board section is currently active and visible. */
   active?: boolean;
@@ -102,7 +105,8 @@ export function BoardReader({
   nextTitle?: string;
   previousTitle?: string;
   indexInfo?: { current: number; total: number };
-  onAskInCLI?: (context: string) => void;
+  onAskInCLI?: (context: string) => void | Promise<unknown>;
+  readOnly?: boolean;
 }) {
   const codeOpen = useCodeWindowOpen(workspaceId);
   const title = useRef<HTMLHeadingElement>(null);
@@ -115,6 +119,9 @@ export function BoardReader({
   // The canvas is out of reach, under the reader: in the window, and where the dock covers it.
   const covering = large || covers;
   const { path, source, repo } = target;
+  const fixDiagram = useMemo(() => !readOnly && !source && !repo && isQuestionFile(path) && onAskInCLI
+    ? (error: string) => onAskInCLI(diagramFixRequest({ path, question: target.title, heading: target.heading }, error))
+    : undefined, [readOnly, source, repo, path, onAskInCLI, target.title, target.heading]);
   // Knowledge is read as entries, not as a document: the target says so, and so does a link to the knowledge file of the workspace
   const isKnowledge = Boolean(target.knowledge) || (!source && !repo && !target.commit && isKnowledgeFile(path, workspacePath));
   const shownTitle = isKnowledge ? 'Knowledge' : target.title;
@@ -641,26 +648,28 @@ export function BoardReader({
             onViewUrlReady={handleViewUrlReady}
           />
         ) : (
-          <DocumentViewer
-            key={open}
-            fill
-            fillFrame
-            chromeless
-            title={path}
-            preview={data}
-            raw={raw}
-            fileUrl={fileUrl}
-            links={links}
-            imageExpanded={maximized}
-            onImageClick={toggleMaximized}
-            status={<>
-              {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
-              {preview.isError && <p role="alert" className="text-sm text-destructive">
-                {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
-                <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
-              </p>}
-            </>}
-          />
+          <DiagramFixContext value={fixDiagram}>
+            <DocumentViewer
+              key={open}
+              fill
+              fillFrame
+              chromeless
+              title={path}
+              preview={data}
+              raw={raw}
+              fileUrl={fileUrl}
+              links={links}
+              imageExpanded={maximized}
+              onImageClick={toggleMaximized}
+              status={<>
+                {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
+                {preview.isError && <p role="alert" className="text-sm text-destructive">
+                  {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
+                  <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
+                </p>}
+              </>}
+            />
+          </DiagramFixContext>
         )}
       </div>
       {(target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">

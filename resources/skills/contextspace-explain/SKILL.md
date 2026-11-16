@@ -24,6 +24,22 @@ One answer is one file: `explain/<short-kebab-slug-of-the-question>.md`, directl
 - Code: a fence whose info string is `<language> <Repo>/<path>:<start>-<end>`, with those lines copied exactly. The repo name is the folder name from the workspace's Repos table. The lines are 1-based and inclusive.
 - Pictures: `![what you see](../board-pictures/name.png)` on a line of its own, relative to the file.
 - Diagrams: a fence of language `mermaid`.
+  A diagram is drawn on its card. Keep it drawable:
+  - Start with `flowchart TD` (top to bottom: a long left-to-right row is too small to read on a card) or `sequenceDiagram`; about a dozen boxes at most.
+  - Ids are plain letters or words (`A`, `save1`); never `end`, `graph`, `subgraph`, `style` or `class` as an id.
+  - Put every label in double quotes, also on edges: `A["Save (draft)"] -->|"on save"| B["Check: 2 files"]`. Inside a label: no double quotes (reword), no Markdown, no HTML, no line breaks.
+  - Write sequence messages without `;` or `#`.
+  - No `%%{init}%%`, `style`, `classDef` or `click` lines. The app refuses diagrams naming outside resources; plain `style`/`classDef` lines still draw, but fight the light and dark themes.
+  - `accTitle: <words>` names the diagram for people who cannot see it.
+  - If the card says "Can't draw this diagram · line N", fix that line.
+
+  Small correct example:
+  ```mermaid
+  flowchart TD
+  accTitle: Saving a draft
+  A["Save (draft)"] -->|"on save"| B["Check: 2 files"]
+  B --> C["Keep draft"]
+  ```
 - Optional front matter, only to place the answer beside the Board Area it is about: `area: checkpoint:<plan key>` or `area: plan:own`.
 
 ````markdown

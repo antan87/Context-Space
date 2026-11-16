@@ -306,3 +306,16 @@ describe('answer freshness', () => {
     expect(refreshRequest(view)).toContain('(gone)');
   });
 });
+
+describe('fix1 diagram repair request', () => {
+  it('names the answer, part and Mermaid diagnostic without starting or submitting anything', async () => {
+    const { diagramFixRequest } = await import('./questionsArea.js');
+    expect(diagramFixRequest({ path: 'explain/x.md', question: 'How do we save?', heading: 'Saving a draft' }, "Parse error on line 2: Expecting 'SQE', got 'PS'"))
+      .toBe('Fix the diagram in explain/x.md ("How do we save?"), part "Saving a draft": Mermaid says: Parse error on line 2: Expecting \'SQE\', got \'PS\'. Follow the diagram rules of the contextspace-explain skill.');
+  });
+  it('leaves the part out when the reader has no heading', async () => {
+    const { diagramFixRequest } = await import('./questionsArea.js');
+    expect(diagramFixRequest({ path: 'explain/x.md', question: 'How?' }, 'No diagram type detected'))
+      .toBe('Fix the diagram in explain/x.md ("How?"): Mermaid says: No diagram type detected. Follow the diagram rules of the contextspace-explain skill.');
+  });
+});

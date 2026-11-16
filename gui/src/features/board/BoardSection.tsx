@@ -2513,6 +2513,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 previousTitle={previousTarget?.title}
                 indexInfo={readerIndexInfo}
                 onAskInCLI={askInCLI}
+                readOnly={readOnly}
               />
             )}
           </div>
@@ -2840,6 +2841,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     previousTitle={previousTarget?.title}
                     indexInfo={readerIndexInfo}
                     onAskInCLI={askInCLI}
+                    readOnly={readOnly}
                   />
                 )}
               </div>

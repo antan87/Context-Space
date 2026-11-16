@@ -1,3 +1,4 @@
+import { Diagram } from '../../components/Diagram.js';
 import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, StickyNote, Terminal, TriangleAlert, type LucideIcon } from 'lucide-react';
@@ -23,7 +24,7 @@ import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
 import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
-import { answersThatFit, ROW_SIZE, type AnswersFit } from './boardRows.js';
+import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
 import { BOARD_SIZE, imageAlt, moreText, type AnswerNode, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
 
@@ -1890,7 +1891,7 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
   if (data.variant === 'diagram') {
     return frame('Read the diagram', undefined, <>
       <span id={titleId} className="truncate text-[12px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground">Diagram</span>
-      <pre className="h-12 overflow-hidden whitespace-pre font-mono text-[12px] leading-4 text-foreground">{data.source.split('\n').slice(0, 3).join('\n')}</pre>
+      <Diagram source={data.source} card cardZoom={READABLE_ZOOM} />
     </>, readAnswer);
   }
 

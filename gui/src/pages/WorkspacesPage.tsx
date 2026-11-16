@@ -268,7 +268,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
   }, [selected, roomBeside, layout.hidden, subTab, onSelectTab]);
 
   const askInCLI = useCallback((context: string) => {
-    void sendToSession(`Regarding ${context}: `);
+    return sendToSession(`Regarding ${context}: `);
   }, [sendToSession]);
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy, ExternalLink } from 'lucide-react';
 import { safeCopyToClipboard } from '../lib/clipboard.js';
+import { Diagram } from './Diagram.js';
 import { cn } from '../lib/utils.js';
 import { classifyMarkdownLink, headingSlug, type MarkdownLinkContext } from './markdownLinks.js';
 
@@ -164,6 +165,11 @@ function MarkdownImage({ node: _node, src, alt, ...props }: React.ComponentProps
 
 function MarkdownPre(props: React.ComponentProps<'pre'> & { node?: unknown }) {
   const { onCard, cut } = useContext(MarkdownRenderContext);
+  const code = React.Children.toArray(props.children)[0];
+  if (React.isValidElement<{ className?: string }>(code) && code.props.className?.split(' ').includes('language-mermaid')) {
+    return <Diagram source={nodeText(props.children).replace(/\r?\n$/, '')} cut={cut}
+      code={<CodeBlock {...props} onCard={onCard} cut={cut} />} />;
+  }
   return <CodeBlock {...props} onCard={onCard} cut={cut} />;
 }
 

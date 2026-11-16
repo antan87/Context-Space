@@ -84,6 +84,13 @@ export function isCentralBoardFile(file) {
 }
 
 export const FOLDER_SPECS = [
+  ...['lib/diagram.ts', 'lib/diagramFrame.ts', 'lib/diagramSafety.ts', 'diagram-frame.ts', 'components/Diagram.tsx', 'components/diagramFixContext.ts'].map((file) => ({
+    folder: `src/${file.replace(/\.tsx?$/, '')}`,
+    path: `gui/src/${file}`,
+    bareNames: [path.basename(file)],
+    specs: ['e2e/board-questions.spec.ts', 'e2e/board-reader.spec.ts'],
+    safety: 'Shared diagram drawing on answer cards and Markdown in the reader; exercised in both specs.',
+  })),
   // Board Reader (reader overlay, pages, navigation, and reader docking)
   {
     folder: 'src/features/board/BoardReader',
