@@ -477,6 +477,148 @@ test.describe('a decision answered from the dialog', () => {
   });
 });
 
+const LONG_DETAIL = [
+  '# Background summary',
+  '',
+  '## Flagged defects and deferred decisions',
+  '',
+  ...Array.from({ length: 14 }, (_, i) => `- Deferred finding ${i + 1}: keep assumptions visible and verify against live settings before selecting.`),
+  '',
+  '### Model selection source',
+  '',
+  '- Specification: https://developers.openai.com/api/docs/guides/model-selection/very-long-path-segment-that-must-wrap-inside-the-dialog-without-causing-horizontal-scrollbars',
+  '',
+  '## Shared product knowledge',
+  '',
+  ...Array.from({ length: 10 }, (_, i) => `Paragraph ${i + 1}: Read shared product sources and keep the evidence owner workspace available before changing behavior.`),
+].join('\n');
+
+test.describe('a decision dialog with a long detail keeps the answer in reach', () => {
+  for (const [width, height] of [[1280, 800], [1100, 700]] as const) {
+    test(`at ${width}x${height}: fits the window, scrolls only the detail with calm headings and no sideways overflow, and keeps typed words across a poll`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      const tracker = await routeBoard(page, [decision(LONG, { suggested: ANSWERS, detail: LONG_DETAIL })]);
+      await stepIn(page, true);
+      const frame = page.getByRole('article', { name: 'Waits for you' });
+      await frame.getByTestId('decision-more-answers').first().click();
+
+      const dialog = page.getByTestId('decision-dialog');
+      await expect(dialog).toBeVisible();
+      await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)));
+
+      const dialogBox = (await dialog.boundingBox())!;
+      expect(dialogBox.y, 'dialog top inside viewport').toBeGreaterThanOrEqual(8);
+      expect(dialogBox.y + dialogBox.height, 'dialog bottom inside viewport').toBeLessThanOrEqual(height - 8);
+      expect(dialogBox.x, 'dialog left inside viewport').toBeGreaterThanOrEqual(8);
+      expect(dialogBox.x + dialogBox.width, 'dialog right inside viewport').toBeLessThanOrEqual(width - 8);
+
+      const input = dialog.getByPlaceholder('Your answer');
+      const answerBtn = dialog.getByRole('button', { name: 'Answer', exact: true });
+      await expect(input).toBeVisible();
+      await expect(answerBtn).toBeVisible();
+
+      // Answer input and button are genuinely within the visible dialog and viewport without scrolling.
+      const inputBox = (await input.boundingBox())!;
+      const btnBox = (await answerBtn.boundingBox())!;
+      for (const [label, box] of [['input', inputBox], ['Answer button', btnBox]] as const) {
+        expect(box.y, `${label} top inside dialog`).toBeGreaterThanOrEqual(dialogBox.y);
+        expect(box.y + box.height, `${label} bottom inside dialog`).toBeLessThanOrEqual(dialogBox.y + dialogBox.height);
+        expect(box.y + box.height, `${label} bottom inside viewport`).toBeLessThanOrEqual(height);
+        expect(box.x + box.width, `${label} right inside dialog`).toBeLessThanOrEqual(dialogBox.x + dialogBox.width);
+      }
+      expect(await input.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return hit === el || el.contains(hit);
+      }), 'input is hit-testable without scrolling').toBe(true);
+      expect(await answerBtn.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        for (let p = el.parentElement; p; p = p.parentElement) {
+          const s = getComputedStyle(p);
+          if (/auto|scroll|hidden|clip/.test(s.overflowY)) {
+            const pr = p.getBoundingClientRect();
+            if (r.top < pr.top - 0.5 || r.bottom > pr.bottom + 0.5) return false;
+          }
+        }
+        return true;
+      }), 'Answer button is not clipped by any ancestor without scrolling').toBe(true);
+
+      // No horizontal overflow in the dialog or its panel/detail.
+      const horizontalOverflows = await dialog.evaluate((root) => {
+        const bad: string[] = [];
+        for (const el of [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))]) {
+          if (el.closest('.sr-only') || el.classList.contains('sr-only')) continue;
+          if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1 && el.tagName !== 'PRE') {
+            bad.push(`${el.tagName.toLowerCase()}.${el.className}: ${el.scrollWidth} > ${el.clientWidth}`);
+          }
+        }
+        return bad;
+      });
+      expect(horizontalOverflows, 'no horizontal overflow inside dialog').toEqual([]);
+
+      // Detail heading font sizes (#, ##, ###) are not larger than the question's.
+      const fontSizes = await dialog.evaluate((root) => {
+        const questionEl = Array.from(root.querySelectorAll<HTMLElement>('*')).find((el) => el.textContent?.includes('Code, Docs and Services') && el.getAttribute('tabindex') === '-1');
+        const h1 = Array.from(root.querySelectorAll<HTMLElement>('h1')).find((el) => el.textContent?.includes('Background summary'));
+        const h2 = Array.from(root.querySelectorAll<HTMLElement>('h2')).find((el) => el.textContent?.includes('Flagged defects'));
+        const h3 = Array.from(root.querySelectorAll<HTMLElement>('h3')).find((el) => el.textContent?.includes('Model selection'));
+        return {
+          question: questionEl ? parseFloat(getComputedStyle(questionEl).fontSize) : 0,
+          h1: h1 ? parseFloat(getComputedStyle(h1).fontSize) : 0,
+          h2: h2 ? parseFloat(getComputedStyle(h2).fontSize) : 0,
+          h3: h3 ? parseFloat(getComputedStyle(h3).fontSize) : 0,
+        };
+      });
+      expect(fontSizes.question).toBeGreaterThan(0);
+      for (const level of ['h1', 'h2', 'h3'] as const) {
+        expect(fontSizes[level], `${level} present`).toBeGreaterThan(0);
+        expect(fontSizes[level], `${level} <= question`).toBeLessThanOrEqual(fontSizes.question);
+      }
+
+      // Only the detail scrolls on its own; question and answer form remain fixed.
+      const questionEl = dialog.locator('[tabindex="-1"]').filter({ hasText: 'Code, Docs and Services' }).first();
+      const qBefore = (await questionEl.boundingBox())!;
+      const iBefore = (await input.boundingBox())!;
+      const scrollState = await dialog.evaluate((root) => {
+        const h2 = Array.from(root.querySelectorAll<HTMLElement>('h2')).find((el) => el.textContent?.includes('Flagged defects'));
+        let scroller: HTMLElement | null = h2?.parentElement ?? null;
+        while (scroller && scroller !== root) {
+          const ov = getComputedStyle(scroller).overflowY;
+          if ((ov === 'auto' || ov === 'scroll') && scroller.scrollHeight > scroller.clientHeight + 1) break;
+          scroller = scroller.parentElement;
+        }
+        if (!scroller || scroller === root) return { found: false, containsQuestion: false, containsInput: false, scrolled: 0 };
+        const q = Array.from(root.querySelectorAll<HTMLElement>('[tabindex="-1"]')).find((el) => el.textContent?.includes('Code, Docs and Services'));
+        const inp = root.querySelector('input[placeholder="Your answer"]');
+        scroller.scrollTop = 180;
+        return {
+          found: true,
+          containsQuestion: Boolean(q && scroller.contains(q)),
+          containsInput: Boolean(inp && scroller.contains(inp)),
+          scrolled: scroller.scrollTop,
+        };
+      });
+      expect(scrollState.found, 'detail has its own scrolling container').toBe(true);
+      expect(scrollState.containsQuestion, 'question is outside detail scroller').toBe(false);
+      expect(scrollState.containsInput, 'answer input is outside detail scroller').toBe(false);
+      expect(scrollState.scrolled, 'detail scrolled').toBeGreaterThan(0);
+      expect((await questionEl.boundingBox())!.y).toBeCloseTo(qBefore.y, 1);
+      expect((await input.boundingBox())!.y).toBeCloseTo(iBefore.y, 1);
+
+      // Typing, a poll, then Answer still sends the typed words.
+      await input.fill('Keep Board only, with docs linked');
+      await page.waitForTimeout(5200);
+      const reads = tracker.control.getCount;
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange', { bubbles: true })));
+      await expect.poll(() => tracker.control.getCount).toBeGreaterThan(reads);
+      await expect(input).toHaveValue('Keep Board only, with docs linked');
+      await answerBtn.click();
+      await expect(dialog).toHaveCount(0);
+      expect(tracker.answers).toEqual([expect.objectContaining({ answer: 'Keep Board only, with docs linked' })]);
+    });
+  }
+});
+
 test.describe('the answer line', () => {
   const MODES = [
     { name: 'in Split', split: true, widths: [1000, 1060, 1100, 1180, 1280, 1360, 1440] },

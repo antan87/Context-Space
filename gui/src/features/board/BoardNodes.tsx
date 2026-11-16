@@ -393,40 +393,55 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
         )}
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger render={<button type="button" data-testid="decision-more-answers" className={cn(GHOST_BUTTON, 'ml-auto')} aria-haspopup="dialog" />}>{fit.ghost}</DialogTrigger>
-          <DialogPopup className="max-w-lg" data-testid="decision-dialog" initialFocus={allAnswers ? question : input} onClick={(e) => e.stopPropagation()}>
-            <DialogHeader>
+          <DialogPopup
+            className="max-w-lg max-h-[min(85dvh,calc(100dvh-2rem))]"
+            bottomStickOnMobile={false}
+            data-testid="decision-dialog"
+            initialFocus={allAnswers ? question : input}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DialogHeader className="shrink-0 pb-2">
               <DialogTitle className="text-sm font-semibold text-muted-foreground">Waits for you</DialogTitle>
               <DialogDescription className="sr-only">Answer this question with a suggestion or in your own words</DialogDescription>
             </DialogHeader>
-            <DialogPanel>
-              <div className="space-y-3">
-                <div ref={question} tabIndex={-1} className="select-text break-words text-base font-medium leading-relaxed text-foreground outline-none"><InlinePlanMarkdown content={decision.question} /></div>
-                {decision.detail && <div className="board-text select-text break-words text-sm leading-6 text-muted-foreground"><ChatMarkdown content={decision.detail} /></div>}
-                {options.length > 0 && (
-                  <div role="group" aria-label="All suggested answers" className="flex flex-wrap gap-1.5">
-                    {options.map((option) => (
-                      <button key={option} type="button" disabled={saving} onClick={() => void submitAnswer(option, true, card.current)} className={cn(ANSWER_BUTTON, 'h-auto min-h-7 whitespace-normal py-1 text-left')}>{option}</button>
-                    ))}
-                  </div>
-                )}
-                <form aria-busy={saving} onSubmit={(e) => { e.preventDefault(); void submitAnswer(customAnswer, true, card.current); }} className="flex items-center gap-1.5">
-                  <input
-                    ref={input}
-                    type="text"
-                    value={customAnswer}
-                    readOnly={saving}
-                    onChange={(e) => setCustomAnswer(e.target.value)}
-                    placeholder="Your answer"
-                    aria-label={`Your answer to ${plain}`}
-                    className="h-8 min-w-0 flex-1 rounded border border-input bg-background px-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-50"
-                  />
-                  <Button type="submit" size="sm" disabled={saving || !customAnswer.trim()}>{saving ? 'Saving…' : 'Answer'}</Button>
-                </form>
-                {saving && <p role="status" className="text-sm text-muted-foreground">Saving…</p>}
-                {displayError && <p role="alert" className="break-words text-sm text-destructive">{displayError}</p>}
+            <div ref={question} tabIndex={-1} className="shrink-0 select-text break-words px-6 pb-3 text-base font-medium leading-relaxed text-foreground outline-none"><InlinePlanMarkdown content={decision.question} /></div>
+            {decision.detail && (
+              <div
+                tabIndex={0}
+                aria-label="Decision details"
+                data-testid="decision-detail"
+                className="min-h-0 min-w-0 shrink overflow-y-auto px-6 py-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              >
+                <div className="board-text select-text min-w-0 [overflow-wrap:anywhere] text-sm leading-6 text-muted-foreground">
+                  <ChatMarkdown content={decision.detail} compact />
+                </div>
               </div>
-            </DialogPanel>
-            <DialogFooter variant="bare">
+            )}
+            <div className={cn('shrink-0 space-y-3 px-6 pb-1', decision.detail && 'pt-3')}>
+              {options.length > 0 && (
+                <div role="group" aria-label="All suggested answers" className="flex flex-wrap gap-1.5">
+                  {options.map((option) => (
+                    <button key={option} type="button" disabled={saving} onClick={() => void submitAnswer(option, true, card.current)} className={cn(ANSWER_BUTTON, 'h-auto min-h-7 whitespace-normal py-1 text-left')}>{option}</button>
+                  ))}
+                </div>
+              )}
+              <form aria-busy={saving} onSubmit={(e) => { e.preventDefault(); void submitAnswer(customAnswer, true, card.current); }} className="flex items-center gap-1.5">
+                <input
+                  ref={input}
+                  type="text"
+                  value={customAnswer}
+                  readOnly={saving}
+                  onChange={(e) => setCustomAnswer(e.target.value)}
+                  placeholder="Your answer"
+                  aria-label={`Your answer to ${plain}`}
+                  className="h-8 min-w-0 flex-1 rounded border border-input bg-background px-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-50"
+                />
+                <Button type="submit" size="sm" disabled={saving || !customAnswer.trim()}>{saving ? 'Saving…' : 'Answer'}</Button>
+              </form>
+              {saving && <p role="status" className="text-sm text-muted-foreground">Saving…</p>}
+              {displayError && <p role="alert" className="break-words text-sm text-destructive">{displayError}</p>}
+            </div>
+            <DialogFooter variant="bare" className="shrink-0 pt-3">
               <AskInCliButton question={decision.question} />
               <DialogClose render={<Button type="button" variant="ghost" size="sm" />}>Close</DialogClose>
             </DialogFooter>

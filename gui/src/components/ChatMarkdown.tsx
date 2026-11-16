@@ -33,6 +33,8 @@ interface ChatMarkdownProps {
    * where they cannot be seen. None of them is a stop for the keyboard (the whole text is one press away, where all of them are).
    */
   cut?: boolean;
+  /** Compact dialog/panel variant: keeps headings semantic and links intact, while scaling headings calmly to <= 15 px. */
+  compact?: boolean;
 }
 
 function nodeText(node: React.ReactNode): string {
@@ -106,21 +108,29 @@ interface MarkdownRenderConfig {
   links?: MarkdownDocumentLinks;
   onCard: boolean;
   cut: boolean;
+  compact: boolean;
   scrollToAnchor: (id: string) => void;
 }
 
 const MarkdownRenderContext = createContext<MarkdownRenderConfig>({
   onCard: false,
   cut: false,
+  compact: false,
   scrollToAnchor: () => {},
 });
 
 function makeHeading(Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  return function MarkdownHeading({ node: _node, children, ...props }: React.ComponentProps<typeof Tag> & { node?: unknown }) {
-    const { onCard } = useContext(MarkdownRenderContext);
+  return function MarkdownHeading({ node: _node, children, className, ...props }: React.ComponentProps<typeof Tag> & { node?: unknown }) {
+    const { onCard, compact } = useContext(MarkdownRenderContext);
     // On a card a heading is only a bold line: the card has its own title, and its ids would repeat from card to card.
-    return onCard ? <p className="font-semibold">{children}</p> : <Tag id={headingSlug(nodeText(children)) || undefined} {...props}>{children}</Tag>;
+    if (onCard) return <p className="font-semibold">{children}</p>;
+    const compactClass = compact
+      ? Tag === 'h1'
+        ? 'mt-3 mb-1 first:mt-0 text-[15px] font-semibold leading-5 text-foreground'
+        : 'mt-2.5 mb-1 first:mt-0 text-[14px] font-semibold leading-5 text-foreground'
+      : undefined;
+    return <Tag id={headingSlug(nodeText(children)) || undefined} {...props} className={cn(className, compactClass)}>{children}</Tag>;
   };
 }
 
@@ -186,14 +196,14 @@ const MARKDOWN_COMPONENTS: Components = {
   pre: MarkdownPre,
 };
 
-export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCard = false, cut = false }) => {
+export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCard = false, cut = false, compact = false }) => {
   const container = useRef<HTMLDivElement>(null);
   const scrollToAnchor = useCallback((id: string) => {
     container.current?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'start' });
   }, []);
   const renderConfig = useMemo<MarkdownRenderConfig>(
-    () => ({ links, onCard, cut, scrollToAnchor }),
-    [links, onCard, cut, scrollToAnchor],
+    () => ({ links, onCard, cut, compact, scrollToAnchor }),
+    [links, onCard, cut, compact, scrollToAnchor],
   );
 
   return (

@@ -689,7 +689,7 @@
 .board-text .prose { font-size: inherit; line-height: inherit; color: inherit; }
 .board-text :is(p, li) { white-space: pre-line; }
 .board-text :is(p, ul, ol, blockquote, table) { margin-block: 0; }
-.board-text .prose > * + * { margin-top: 4px; }
+.board-text .prose > * + :not(h1, h2, h3, h4, h5, h6) { margin-top: 4px; }
 .board-text :is(ul, ol) { padding-inline-start: 1.25em; }
 .board-text li { margin-block: 0; padding-inline-start: 0; }
 .board-text :is(li, blockquote) > p { margin-block: 0; }
