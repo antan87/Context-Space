@@ -22,6 +22,7 @@ import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution';
 import type { DiffAdapterRenderProps } from '../types.js';
 import { getLanguageFromPath } from '../utils/languageDetector.js';
 import { ensureMonacoWorkerEnvironment } from '../utils/monacoWorkerSetup.js';
+import { editorThemeName, watchEditorTheme } from '../../../lib/editorTheme.js';
 import { ensureMonacoNavigation } from '../utils/monacoNavigationSetup.js';
 import { registerLightweightNavigationProviders } from '../utils/changesetSymbolIndex.js';
 import {
@@ -30,6 +31,7 @@ import {
   getOrCreateTextModel,
   registerCrossFileEditorOpener,
 } from '../utils/changesetModelStore.js';
+import { useCodeFontSize } from '../codeFontSize.js';
 
 // Ensure web workers and navigation contributions are configured
 ensureMonacoWorkerEnvironment();
@@ -59,6 +61,7 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
   onOpenFile,
   onLineSelect,
 }) => {
+  const [fontSize] = useCodeFontSize();
   const containerRef = useRef<HTMLDivElement>(null);
   const editorInstanceRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const decorationCollectionRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
@@ -95,6 +98,14 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
       renderSideBySide: viewMode === 'side-by-side',
     });
   }, [viewMode]);
+
+  // Dynamically update fontSize without recreating editor
+  useEffect(() => {
+    if (!editorInstanceRef.current) return;
+    editorInstanceRef.current.updateOptions({
+      fontSize,
+    });
+  }, [fontSize]);
 
   // Dynamically update whitespace trimming without recreating editor
   useEffect(() => {
@@ -167,9 +178,7 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
     }, monaco);
 
     // Instantiate Monaco Diff Editor
-    const isDark =
-      document.documentElement.classList.contains('dark') ||
-      document.documentElement.getAttribute('data-theme') !== 'light';
+    const stopWatchingTheme = watchEditorTheme((theme) => monaco.editor.setTheme(theme));
 
     let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
     let cursorSub: monaco.IDisposable | null = null;
@@ -198,9 +207,11 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
           alwaysConsumeMouseWheel: false,
         },
         lineNumbersMinChars: 3,
-        fontSize: 12,
+        fontSize,
         fontFamily: "'JetBrains Mono', Consolas, Menlo, monospace",
-        theme: isDark ? 'vs-dark' : 'vs',
+        theme: editorThemeName(),
+        // Long lines wrap instead of running off the right edge of either side
+        wordWrap: 'on',
         contextmenu: true,
       });
 
@@ -241,6 +252,7 @@ export const MonacoDiffAdapter: React.FC<MonacoDiffAdapterProps> = ({
 
     // Cleanup: Strictly dispose listeners and editor widget to prevent memory leaks
     return () => {
+      stopWatchingTheme();
       updateSub?.dispose();
       cursorSub?.dispose();
       openerDisposable?.dispose();

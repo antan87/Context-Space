@@ -9,6 +9,13 @@ import type { SkillItem, WorkspaceSkillsConfig } from '../types.js';
 /** The parts of a workspace's skills config that decide which skills it gets. */
 export type SkillSelection = Pick<WorkspaceSkillsConfig, 'enabledSkills' | 'disabledSkills' | 'enabledCategories'>;
 
+/**
+ * Skills the product ships for every workspace: on unless the workspace lists them in `disabledSkills`, whatever else it
+ * has picked or subscribed to. They live in `resources/skills/<id>` and are loaded into the catalog by `getAllSkills`.
+ */
+export const EXPLAIN_SKILL_ID = 'contextspace-explain';
+export const ALWAYS_ON_SKILL_IDS: readonly string[] = [EXPLAIN_SKILL_ID];
+
 export interface SkillExtras {
   /**
    * Skills built from this workspace's analysis. A selected id finds them, but no category brings them in.
@@ -30,7 +37,7 @@ export interface ResolvedSkills {
 
 /**
  * A workspace's skills are every library or workspace skill in a subscribed category (now and later), plus
- * every single pick, minus every exception, plus the extras. A skill a harness owns (`source` set) is never
+ * the skills every workspace gets (`ALWAYS_ON_SKILL_IDS`), plus every single pick, minus every exception, plus the extras. A skill a harness owns (`source` set) is never
  * included, even when an old config lists it. A category is the skill's own `category`: nothing else puts a
  * skill in one.
  */
@@ -58,6 +65,10 @@ export function resolveWorkspaceSkills(
   }
   for (const skill of catalogSkills) {
     if (!skill.source && categories.has(skill.category)) selected.add(skill.id);
+  }
+  for (const id of ALWAYS_ON_SKILL_IDS) {
+    const skill = byId.get(id);
+    if (skill && !skill.source) selected.add(id);
   }
   for (const id of extras.ids ?? []) {
     const skill = byId.get(id);

@@ -14,7 +14,13 @@ export interface PlanProof {
   at?: string;
 }
 
-export interface PlanFileStep { key: string; text: string; done: boolean }
+export interface PlanFileStep {
+  key: string;
+  text: string;
+  done: boolean;
+  /** The key of the step it is nested under: that step is a heading for it. */
+  parent?: string;
+}
 
 export interface PlanFileDecision {
   key: string;
@@ -64,7 +70,12 @@ export interface PlanFileView {
   /** The keys of the decisions that wait for the user's answer. */
   waiting: string[];
   changes: PlanFileChange[];
+  /** The step someone said they are working on now (an AI or a person), when it is still an open step. */
+  now?: PlanNow | null;
 }
+
+/** Who said which step is being worked on now, and when. */
+export interface PlanNow { key: string; by: string; at: string }
 
 export type PlanFileChangeInput =
   | { type: 'tick'; key: string; done: boolean; expected: string }
@@ -106,6 +117,128 @@ export function useChangePlanFile(workspace: string) {
     },
     // A line that changed meanwhile is refused; reading the plan again shows what is there now.
     onError: () => { void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) }); },
+  });
+}
+
+/** Answer a decision directly, with optimistic removal from waiting so it immediately clears from lanes and boards. */
+export function useAnswerDecision(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, answer, expected }: { key: string; answer: string; expected?: string; /** False: the decision stays on the board until the server has answered (the dialog, where the typed words must survive a failure). */ optimistic?: boolean }) =>
+      apiFetch<{ message: string; plan: PlanFileView }>(
+        `/api/workspace/${encodeURIComponent(workspace)}/plan/decisions/${encodeURIComponent(key)}/answer`,
+        { method: 'POST', body: JSON.stringify({ answer, ...(expected ? { expected } : {}) }) },
+      ),
+    onMutate: async ({ key, answer, optimistic }) => {
+      if (optimistic === false) return { previous: undefined };
+      await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
+      const previous = queryClient.getQueryData<PlanFileView>(planFileKey(workspace));
+      if (previous) {
+        const updateDecision = (d: PlanFileDecision) => (d.key === key ? { ...d, done: true, answer } : d);
+        const updatedCheckpoints = previous.checkpoints.map((cp) => ({
+          ...cp,
+          decisions: cp.decisions.map(updateDecision),
+        }));
+        const updatedDecisions = previous.decisions.map(updateDecision);
+        const updatedWaiting = previous.waiting.filter((k) => k !== key);
+        queryClient.setQueryData<PlanFileView>(planFileKey(workspace), {
+          ...previous,
+          checkpoints: updatedCheckpoints,
+          decisions: updatedDecisions,
+          waiting: updatedWaiting,
+        });
+      }
+      return { previous };
+    },
+    onSuccess: async (result) => {
+      // A plan read that started before the answer was saved and lands after it would bring the answered decision back: drop it (the
+      // dialog's answer is not optimistic, so nothing else has cancelled it).
+      await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
+      queryClient.setQueryData(planFileKey(workspace), result.plan);
+      void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(planFileKey(workspace), context.previous);
+      }
+      void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) });
+    },
+  });
+}
+
+/** Tick or untick a plan step directly, with optimistic update so the step status flips immediately on the board. */
+export function useTickPlanStep(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, done, expected }: { key: string; done: boolean; expected?: string }) =>
+      apiFetch<{ message: string; plan: PlanFileView }>(
+        `/api/workspace/${encodeURIComponent(workspace)}/plan/steps/${encodeURIComponent(key)}/tick`,
+        { method: 'POST', body: JSON.stringify({ done, ...(expected ? { expected } : {}) }) },
+      ),
+    onMutate: async ({ key, done }) => {
+      await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
+      const previous = queryClient.getQueryData<PlanFileView>(planFileKey(workspace));
+      if (previous) {
+        const updateStep = (s: PlanFileStep) => (s.key === key ? { ...s, done } : s);
+        const updatedCheckpoints = previous.checkpoints.map((cp) => ({
+          ...cp,
+          done: cp.key === key ? done : cp.done,
+          steps: cp.steps.map(updateStep),
+        }));
+        const updatedSteps = previous.steps.map(updateStep);
+        queryClient.setQueryData<PlanFileView>(planFileKey(workspace), {
+          ...previous,
+          checkpoints: updatedCheckpoints,
+          steps: updatedSteps,
+        });
+      }
+      return { previous };
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(planFileKey(workspace), result.plan);
+      void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(planFileKey(workspace), context.previous);
+      }
+      void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) });
+    },
+  });
+}
+
+/** Say which step is being worked on now (`key`), or that none is (`null`). Local state: the plan file is not changed. */
+export function useSetPlanNow(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string | null) => apiFetch<{ message: string; plan: PlanFileView }>(
+      `/api/workspace/${encodeURIComponent(workspace)}/plan/now`,
+      { method: 'POST', body: JSON.stringify(key === null ? { clear: true } : { key }) },
+    ),
+    onSuccess: (result) => { queryClient.setQueryData(planFileKey(workspace), result.plan); },
+    onError: () => { void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) }); },
+  });
+}
+
+/** Run a verification check for a checkpoint. */
+export function useRunCheckpointCheck(workspace: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key }: { key: string }) =>
+      apiFetch<{ message: string; plan: PlanFileView }>(
+        `/api/workspace/${encodeURIComponent(workspace)}/plan/checkpoints/${encodeURIComponent(key)}/check`,
+        { method: 'POST' },
+      ),
+    onSuccess: (result) => {
+      queryClient.setQueryData(planFileKey(workspace), result.plan);
+      void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) });
+    },
   });
 }
 

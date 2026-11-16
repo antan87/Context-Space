@@ -240,3 +240,33 @@ describe('get_screen_context', () => {
     expect(text).not.toContain('private');
   });
 });
+
+describe('set_current_step', () => {
+  const planFile = () => path.join(dir, 'PLAN.md');
+  const nowFile = () => path.join(dir, '.contextspace', 'plan-now.json');
+
+  it('is registered as a tool that only says where the AI is, and is offered with the screen tools', () => {
+    const tool = findTool('set_current_step')!;
+    expect(tool.inputSchema).toMatchObject({ additionalProperties: false });
+    expect(tool.annotations).toMatchObject({ destructiveHint: false, readOnlyHint: false });
+    expect(tool.description).toMatch(/PLAN\.md is not changed/);
+    expect(enabledTools(config, 'full').map((t) => t.name)).toContain('set_current_step');
+  });
+
+  it('records the step under the AI tool name, clears it, and never touches PLAN.md', async () => {
+    const text = '# Plan\n\n## Checkpoints\n\n- [ ] One\n  - [ ] Build the thing\n  - [ ] Test the thing\n';
+    await fs.writeFile(planFile(), text);
+    const set = await call('set_current_step', { step: 'Build the', harness: 'Claude' });
+    expect(set.body).toMatchObject({ step: 'Build the thing' });
+    expect(JSON.parse(await fs.readFile(nowFile(), 'utf8'))).toMatchObject({ key: 'build-the-thing', by: 'claude' });
+    expect(await fs.readFile(planFile(), 'utf8')).toBe(text);
+    expect((await call('set_current_step', { clear: true })).body).toMatchObject({ cleared: true });
+    await expect(fs.access(nowFile())).rejects.toThrow();
+  });
+
+  it('says why when the step is unknown or missing', async () => {
+    await fs.writeFile(planFile(), '# Plan\n\n## Checkpoints\n\n- [ ] One\n  - [ ] Build the thing\n');
+    expect((await call('set_current_step', { step: 'nothing like it' })).isError).toBe(true);
+    expect((await call('set_current_step', {})).isError).toBe(true);
+  });
+});

@@ -470,4 +470,41 @@ describe('skills-generator', () => {
       );
     });
   });
+
+  describe('the explain skill every workspace gets', () => {
+    const ctx = (): WorkspaceContext => ({ feature: { id: 'explain', branchName: 'explain', description: '', repos: [], assistants: ['claude'], workspacePath: tempWorkspace, createdAt: '' }, repos: [] });
+    const deployed = (folder: string) => fse.pathExists(path.join(tempWorkspace, folder, 'skills', 'contextspace-explain', 'SKILL.md'));
+
+    it('is deployed into a workspace with a saved selection (revision above 0) that never mentioned it', async () => {
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: [] });
+      await generateSkills(ctx(), ['claude'], tempWorkspace);
+      expect(await deployed('.claude')).toBe(true);
+      expect(await deployed('.agents')).toBe(true);
+      expect(await fs.readFile(path.join(tempWorkspace, '.agents/skills/contextspace-explain/SKILL.md'), 'utf8')).toContain('explain/');
+    });
+
+    it('is not deployed when the workspace lists it in disabledSkills, and its copies are removed', async () => {
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: [] });
+      await generateSkills(ctx(), ['claude'], tempWorkspace);
+      expect(await deployed('.claude')).toBe(true);
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: [], disabledSkills: ['contextspace-explain'] });
+      await generateSkills(ctx(), ['claude'], tempWorkspace);
+      expect(await deployed('.claude')).toBe(false);
+      expect(await deployed('.agents')).toBe(false);
+    });
+
+    it('leaves the choice of every other skill as it was', async () => {
+      await saveSkill({ name: 'pr-review-toolkit', category: 'pull-requests', description: 'Reviews', content: '# PR' });
+      await saveSkill({ name: 'standup-notes', category: 'notes', description: 'Notes', content: '# Notes' });
+      await saveWorkspaceSkillsConfig(tempWorkspace, { enabledSkills: ['pr-review-toolkit'] });
+      await generateSkills(ctx(), ['claude'], tempWorkspace);
+      expect(await fse.pathExists(path.join(tempWorkspace, '.claude/skills/pr-review-toolkit/SKILL.md'))).toBe(true);
+      expect(await fse.pathExists(path.join(tempWorkspace, '.claude/skills/standup-notes'))).toBe(false);
+    });
+
+    it('is in the catalog as shipped with the product and flagged as on by default', async () => {
+      const skill = (await getAllSkills()).find((item) => item.id === 'contextspace-explain');
+      expect(skill).toMatchObject({ alwaysOn: true, scope: 'global', custom: false });
+    });
+  });
 });

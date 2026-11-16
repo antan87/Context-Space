@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 
 import { useAcknowledgeQuestions, useProgressFacts, useReopenMilestone, useWorkGuidance, useWorkspaceChanges } from '../../lib/api/queries.js';
 import { useChangePlanFile, usePlanFile } from '../plan/planFile.js';
+import { focusOf } from '../plan/focus.js';
+import { useClockTick } from '../../lib/useClockTick.js';
 import type { OpenQuestion } from '../../types.js';
 import { activeProposals, answersQuestion, freshReveals, latestNext, nextAction, type NextAction } from './progressView.js';
 import { aiCloses, planQuestionsForYou, readSeenCloses, rememberSeenCloses } from './stripPlan.js';
@@ -97,7 +99,10 @@ export function useWhereAreWe({ workspace, active, fillPrompt, replyRef, openFil
     }
   }, [feed.events]);
 
-  const action = useMemo(() => (facts ? nextAction(facts, latestNext(feed.events)) : null), [facts, feed.events]);
+  // What the work is on: the same focus the strip says, so Continue goes where the strip points
+  const clock = useClockTick();
+  const focus = useMemo(() => (plan ? focusOf(plan, undefined, clock) : null), [plan, clock]);
+  const action = useMemo(() => (facts ? nextAction(facts, latestNext(feed.events), focus) : null), [facts, feed.events, focus]);
   const proposals = useMemo(() => (facts ? activeProposals(feed.events, facts, dismissed) : []), [facts, feed.events, dismissed]);
 
   const fill = (text: string) => {
@@ -140,7 +145,7 @@ export function useWhereAreWe({ workspace, active, fillPrompt, replyRef, openFil
   };
 
   return {
-    workspace, panelId, toggleRef, expanded, section, notice, facts, factsQuery, guidance: guidanceQuery.data, plan, questions, planQuestions, closes, openFile,
+    workspace, panelId, toggleRef, expanded, section, notice, facts, factsQuery, guidance: guidanceQuery.data, plan, focus, questions, planQuestions, closes, openFile,
     action, proposals, changes: changesQuery, acknowledge, reopen, changePlan, navigate,
     fill, openPanel, closePanel, runNext, answerInPlan, reopenInPlan, seeCloses, setExpanded, setSection,
     dismissProposal: (eventId: string) => setDismissed((current) => new Set(current).add(eventId)),

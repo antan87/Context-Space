@@ -381,12 +381,20 @@ An ad-hoc `nexusflow mcp run` with no `--role` fails closed to the `readonly` to
 | `annotate_document` | Leave a question, risk or to-do note on one line of a file, shown in the reader as a margin note labelled as the AI's |
 | `suggest_next` | Offer the user one next move with its reason, shown as a Next button in the progress strip |
 | `get_screen_context` | Ask what the user is looking at. Answers only when the user has switched sharing on in the app; it is off by default and switching it off deletes what was stored |
+| `board_read` | Read the workspace board: the cards people and AIs put on it (long text is cut; `cardId` reads one in full), the lines and places, the plan's checkpoints and documents a card can be linked to, and the node id formats. Also available to read-only and review sessions. See [the board](docs/board.md) |
+| `board_add_card` | Put a note on the board, or show a file the AI made (a picture, an HTML page, a PDF, a deck) as a file card. The file must exist inside the workspace |
+| `board_update_card` | Change a card's title, text, description, pinned or archived state |
+| `board_remove_card` | Delete a card with its lines and place. Archive a card to put it away without losing it |
+| `board_move` | Place cards, and the board's own checkpoints, documents and commits, on the canvas, or forget a place with `null` |
+| `board_link` | Draw a line between two things on the board, with an optional label |
+| `board_unlink` | Remove a line, by its id or by both ends |
 | `update_work_assignment` | Set work type, size, stage, objective, expected output, stopping point, and scope |
 | `add_work_document` | Attach original text or a document link with role, status, and scope |
 | `update_work_document` | Edit source labels and scope while preserving original content |
 | `read_work_document` | Read an attached source by its document ID |
 
 AIs change the plan by editing `PLAN.md`, which works in every AI tool without MCP; there are no MCP plan tools.
+The `board_*` tools write `contextspace-board.json` under a lock, refuse a stale `revision`, and tell open screens; see [the board](docs/board.md) for the file, the changes, the HTTP routes and the limits.
 Assignment and source writes are available to `interactive`, `developer`, and `full` roles.
 Read the current revision before editing; see [planning through MCP](docs/work-guidance.md#planning-through-mcp).
 After upgrading a running MCP server, reconnect it in the assistant to discover the new tools.

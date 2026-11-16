@@ -30,7 +30,8 @@ export function useWorkspaceShortcuts() {
         event.preventDefault();
         event.stopPropagation();
         floatingChatStore.reveal(resolved.targetBranch);
-        goToWorkspace(navigate, resolved.targetBranch, resolved.targetSection);
+        const targetSection = resolved.targetSection === 'plan' ? 'board' : resolved.targetSection;
+        goToWorkspace(navigate, resolved.targetBranch, targetSection);
       }
     };
 

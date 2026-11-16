@@ -10,9 +10,9 @@ import { useSyncExternalStore } from 'react';
 const STORAGE_KEY = 'contextspace_chat_layout_v1';
 
 export const CHAT_LAYOUT = {
-  defaultPercent: 62,
-  minPercent: 40,
-  maxPercent: 80,
+  defaultPercent: 50,
+  minPercent: 25,
+  maxPercent: 75,
   /** Below this width there is no room for a usable chat and a panel side by side, so the panel gets the screen. */
   besideMinPx: 1000,
 } as const;

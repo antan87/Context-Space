@@ -445,8 +445,8 @@ test.describe('NexusFlow E2E GUI Tests', () => {
     await page.goto('/#/overview');
     await expect(page.getByRole('link', { name: /Review API/ })).toBeVisible();
     await expect(page.getByRole('link', { name: 'New workspace' })).toBeVisible();
-    await expect(page.getByText('Reusable setup', { exact: true })).toBeVisible();
-    await expect(page.getByText('Advanced tools', { exact: true })).toBeVisible();
+    await expect(page.getByText('Administration', { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Settings', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Skills & agents' })).toBeVisible();
   });
 

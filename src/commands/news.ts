@@ -7,7 +7,7 @@
 
 import { BRAND_NAME } from '../core/constants.js';
 import { ago } from '../core/plan-file-text.js';
-import { FIRST_LOOK_DAYS, newsReaderName, whatsNew, type NewsPlanChange, type WhatsNew } from '../core/whats-new.js';
+import { FIRST_LOOK_DAYS, formatAnswerNewsLine, formatCommitNoteNewsLine, formatIncomingNewsLine, newsReaderName, whatsNew, type NewsPlanChange, type WhatsNew } from '../core/whats-new.js';
 import { planChangeBy } from './plan.js';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 
@@ -85,14 +85,27 @@ export function renderNews(report: WhatsNew, now: Date = new Date()): string {
     ...report.documents.items.map((document) => `${document.name} ${document.change} · ${when(document.at, now)}`),
     ...(report.documents.more ? [more(report.documents.more, 'more')] : []),
   ]);
+  section('Answers', [
+    ...(report.answers?.items ?? []).map((answer) => `${formatAnswerNewsLine(answer)} · ${when(answer.at, now)}`),
+    ...(report.answers?.more ? [more(report.answers.more, 'more')] : []),
+  ]);
   section('Knowledge', [
     ...report.knowledge.items.map((entry) => `${entry.type ?? 'note'} "${short(entry.title, 80)}"${entry.date ? ` · ${entry.date}` : ''}`),
     ...(report.knowledge.more ? [more(report.knowledge.more, 'more')] : []),
   ]);
-  section('Commits', report.commits.flatMap((repo) => [
-    ...repo.commits.map((commit) => `${repo.repo}: ${commit.sha} ${short(commit.subject, 100)} (${commit.author}) · ${when(commit.at, now)}`),
-    ...(repo.more ? [more(repo.more, `more in ${repo.repo}`, repo.moreAtLeast)] : []),
-  ]));
+  section('Commits', [
+    ...report.commits.flatMap((repo) => [
+      ...repo.commits.map((commit) => `${repo.repo}: ${commit.sha} ${short(commit.subject, 100)} (${commit.author}) · ${when(commit.at, now)}`),
+      ...(repo.more ? [more(repo.more, `more in ${repo.repo}`, repo.moreAtLeast)] : []),
+    ]),
+    ...(report.incoming ?? []).flatMap((repo) =>
+      repo.groups.map((group) => formatIncomingNewsLine(repo.repo, group.count, group.author, repo.host)),
+    ),
+  ]);
+  section('Notes', [
+    ...(report.notes?.items ?? []).map((note) => `${formatCommitNoteNewsLine(note)} · ${when(note.at, now)}`),
+    ...(report.notes?.more ? [more(report.notes.more, 'more')] : []),
+  ]);
   if (problems.length) lines.push('', ...problems);
   return lines.join('\n');
 }

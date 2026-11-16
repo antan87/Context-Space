@@ -24,3 +24,34 @@ export function toPromptText(text: unknown): string {
   const cut = /[\ud800-\udbff]/.test(plain[PROMPT_FILL_LIMIT - 1]!) ? PROMPT_FILL_LIMIT - 1 : PROMPT_FILL_LIMIT;
   return plain.slice(0, cut).trimEnd();
 }
+
+const registeredFillers = new Map<string, (text: string) => boolean>();
+
+/** Registers a prompt filler function for a workspace, returning an unregister callback. */
+export function registerPromptFiller(workspace: string, filler: (text: string) => boolean): () => void {
+  registeredFillers.set(workspace, filler);
+  return () => {
+    if (registeredFillers.get(workspace) === filler) {
+      registeredFillers.delete(workspace);
+    }
+  };
+}
+
+/** What the filling that is running right now asks for. Read by the pane's filler, which runs synchronously inside the call. */
+let assistantOnlyNow = false;
+export const promptFillWantsAssistant = (): boolean => assistantOnlyNow;
+
+/**
+ * Types text into the terminal prompt of the given workspace if available. With `assistantOnly`, a plain shell is refused like a
+ * closed terminal: text typed into it would be a command line, not a message to an AI.
+ */
+export function fillPromptForWorkspace(workspace: string, text: string, options: { assistantOnly?: boolean } = {}): boolean {
+  const filler = registeredFillers.get(workspace);
+  if (!filler) return false;
+  assistantOnlyNow = options.assistantOnly === true;
+  try {
+    return filler(text);
+  } finally {
+    assistantOnlyNow = false;
+  }
+}

@@ -3,13 +3,13 @@ import { constants } from 'node:fs';
 import * as path from 'node:path';
 import { assertFileHandleMatchesPath, assertNoLinkedPathComponents, readFileHandleAtMost } from '../resources/fs-safety.js';
 
-const textExtensions = new Set(['.md', '.markdown', '.mdx', '.txt', '.rst', '.adoc', '.csv', '.tsv', '.log', '.svg', '.mmd']);
+const textExtensions = new Set(['.md', '.markdown', '.mdx', '.txt', '.rst', '.adoc', '.csv', '.tsv', '.log', '.mmd']);
 /**
  * Plain-text data an assistant writes next to its documents: a spec, a schema, a config. They open in the viewer like any
  * text, but a repository has many of them (package.json, tsconfig.json), so the listing leaves out the ones in a repository.
  */
 const dataExtensions = new Set(['.json', '.yaml', '.yml', '.toml', '.xml']);
-const images: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const images: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
 const officeExtensions = new Set(['.doc', '.docx', '.odt', '.rtf', '.xls', '.xlsx', '.ods', '.ppt', '.pptx', '.odp']);
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TEXT_BYTES = 1024 * 1024;
@@ -21,7 +21,7 @@ const MAX_TEXT_BYTES = 1024 * 1024;
  */
 const OPEN_HIDDEN_FOLDERS = new Set(['.claude', '.agents', '.github']);
 const HIDDEN_REASON = "Hidden files and folders can't be opened here, except the folders .claude, .agents and .github.";
-const isClosedSegment = (segment: string) => segment.startsWith('.') && !OPEN_HIDDEN_FOLDERS.has(segment);
+export const isClosedSegment = (segment: string) => segment.startsWith('.') && !OPEN_HIDDEN_FOLDERS.has(segment);
 
 function format(name: string) {
   const extension = path.extname(name).toLowerCase();
@@ -40,7 +40,7 @@ function format(name: string) {
  * segment may be `..`, empty, hidden (`.git`; only `.claude`, `.agents` and `.github` are open),
  * or carry Windows drive/stream syntax. Links on disk are rejected by the callers' safety checks.
  */
-function documentPath(root: string, name: string, operation: 'open' | 'save' = 'open') {
+function checkedDocumentName(name: string, operation: 'open' | 'save' = 'open') {
   const normalized = name.replace(/\\/g, '/').replace(/^\/+/, '');
   const segments = normalized.split('/');
   if (!normalized || path.isAbsolute(normalized) || /[:\x00-\x1f\x7f]/.test(normalized) || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
@@ -48,10 +48,23 @@ function documentPath(root: string, name: string, operation: 'open' | 'save' = '
   }
   if (segments.some(isClosedSegment)) throw new Error(`Choose a document inside this workspace. ${HIDDEN_REASON}`);
   if (operation === 'open' && !format(normalized)) throw new Error(`${path.extname(normalized) || 'This'} files can't be opened here. Open it from the workspace folder instead.`);
-  return path.join(root, ...segments);
+  return { normalized, segments };
 }
 
-const IGNORED_DIRECTORIES = new Set([
+function documentPath(root: string, name: string, operation: 'open' | 'save' = 'open') {
+  return path.join(root, ...checkedDocumentName(name, operation).segments);
+}
+
+/**
+ * Checks a workspace-relative name by the rules the documents panel opens files by, without touching the disk, and
+ * returns it with `/` separators. For features that point at a document (the board's file cards), so what they accept
+ * is what the panel can open. The callers check the file itself.
+ */
+export function openableDocumentName(name: string): string {
+  return checkedDocumentName(name, 'open').normalized;
+}
+
+export const IGNORED_DIRECTORIES = new Set([
   'node_modules',
   'dist',
   'build',
@@ -252,4 +265,75 @@ export async function moveRootDocument(root: string, from: string, to: string) {
   await fs.mkdir(path.dirname(toTarget), { recursive: true });
   await fs.rename(fromTarget, toTarget);
   return { from: fromNormalized, to: toNormalized };
+}
+
+export interface PreviewRootDocumentOptions {
+  metaOnly?: boolean;
+}
+
+export async function previewRootDocument(root: string, name: string, options?: PreviewRootDocumentOptions) {
+  const normalizedName = openableDocumentName(name);
+  const target = documentPath(root, normalizedName);
+  await assertNoLinkedPathComponents(root, target);
+  const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await assertFileHandleMatchesPath(handle, target);
+    await assertNoLinkedPathComponents(root, target);
+    const details = format(normalizedName)!;
+    const isText = details.kind === 'markdown' || details.kind === 'text' || details.kind === 'html';
+    const metaOnly = Boolean(options?.metaOnly) || !isText;
+
+    if (metaOnly) {
+      return {
+        name: normalizedName,
+        ...details,
+        size: Number(stat.size),
+        modifiedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+        content: undefined,
+      };
+    }
+
+    if (stat.size > BigInt(MAX_TEXT_BYTES)) {
+      throw new Error(`This document exceeds the ${MAX_TEXT_BYTES / 1024 / 1024} MB preview limit.`);
+    }
+
+    const bytes = await readFileHandleAtMost(handle, MAX_TEXT_BYTES + 1);
+    await assertNoLinkedPathComponents(root, target);
+    await assertFileHandleMatchesPath(handle, target);
+    if (bytes.length > MAX_TEXT_BYTES) {
+      throw new Error('The document grew beyond the size limit.');
+    }
+
+    return {
+      name: normalizedName,
+      ...details,
+      size: Number(stat.size),
+      modifiedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+      content: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function openRootDocumentForStream(root: string, name: string) {
+  const normalizedName = openableDocumentName(name);
+  const target = documentPath(root, normalizedName);
+  await assertNoLinkedPathComponents(root, target);
+  const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await assertFileHandleMatchesPath(handle, target);
+    await assertNoLinkedPathComponents(root, target);
+    const details = format(normalizedName)!;
+    return {
+      handle,
+      name: normalizedName,
+      ...details,
+      size: Number(stat.size),
+      modifiedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+    };
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw error;
+  }
 }

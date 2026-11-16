@@ -1021,6 +1021,8 @@ export interface SkillItem {
   assets?: SkillSupportingFile[];
   /** Scope of the skill: 'workspace' for project-specific or 'global' for machine-wide catalog. */
   scope?: 'workspace' | 'global';
+  /** Every workspace gets this skill unless it lists it in `disabledSkills` (see `ALWAYS_ON_SKILL_IDS`). */
+  alwaysOn?: boolean;
   /** Present when a harness owns this skill. It is listed read-only: edit or delete it in the harness. */
   source?: SkillSource;
   /** Additional frontmatter metadata (custom properties, deeply nested configurations, etc.). */

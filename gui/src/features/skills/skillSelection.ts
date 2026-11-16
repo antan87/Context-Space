@@ -19,7 +19,7 @@ export interface SkillChoice {
   exceptions: string[];
 }
 
-type CatalogSkill = Pick<SkillItem, 'id' | 'category' | 'source'>;
+type CatalogSkill = Pick<SkillItem, 'id' | 'category' | 'source'> & { alwaysOn?: boolean };
 
 /** A skill the user can turn on for a workspace: one of theirs, not one a tool ships. */
 export const isSelectable = (skill: Pick<SkillItem, 'source'>): boolean => !skill.source;
@@ -31,7 +31,7 @@ export const isLibrarySkill = (skill: Pick<SkillItem, 'source' | 'scope'>): bool
 export const isWorkspaceOnlySkill = (skill: Pick<SkillItem, 'source' | 'scope'>): boolean => !skill.source && skill.scope === 'workspace';
 
 /** Why a skill is on, or why it is off though something would have brought it in. */
-export type SkillWhy = 'category' | 'picked' | 'left-out';
+export type SkillWhy = 'category' | 'picked' | 'default' | 'left-out';
 
 export interface SkillStatus {
   on: boolean;
@@ -42,9 +42,11 @@ export function skillStatus(skill: CatalogSkill, choice: SkillChoice): SkillStat
   if (!isSelectable(skill)) return { on: false, why: null };
   const viaCategory = Boolean(skill.category) && choice.categories.includes(skill.category);
   const picked = choice.picks.includes(skill.id);
-  if (choice.exceptions.includes(skill.id)) return { on: false, why: viaCategory || picked ? 'left-out' : null };
+  if (choice.exceptions.includes(skill.id)) return { on: false, why: viaCategory || picked || skill.alwaysOn ? 'left-out' : null };
   if (viaCategory) return { on: true, why: 'category' };
   if (picked) return { on: true, why: 'picked' };
+  // A skill every workspace gets is on until it is left out
+  if (skill.alwaysOn) return { on: true, why: 'default' };
   return { on: false, why: null };
 }
 
@@ -66,7 +68,8 @@ const withId = (ids: readonly string[], id: string) => (ids.includes(id) ? [...i
  * turning it off drops those exceptions too, since there is nothing left to leave out. Skills picked one by one stay picked.
  */
 export function setCategory(choice: SkillChoice, skills: readonly CatalogSkill[], categoryId: string, on: boolean): SkillChoice {
-  const members = new Set(skills.filter((skill) => skill.category === categoryId).map((skill) => skill.id));
+  // A skill every workspace gets keeps its exception: it is the only record of "off", since the product's default would bring it back
+  const members = new Set(skills.filter((skill) => skill.category === categoryId && !skill.alwaysOn).map((skill) => skill.id));
   return {
     categories: on ? withId(choice.categories, categoryId) : without(choice.categories, categoryId),
     picks: [...choice.picks],
@@ -80,7 +83,8 @@ export function setCategory(choice: SkillChoice, skills: readonly CatalogSkill[]
  */
 export function toggleSkill(choice: SkillChoice, skill: CatalogSkill): SkillChoice {
   if (!isSelectable(skill)) return choice;
-  const covered = coveredByCategory(skill, choice);
+  // Something else keeps it on, so turning it off is an exception: a category, or the product's own default
+  const covered = coveredByCategory(skill, choice) || Boolean(skill.alwaysOn);
   if (skillStatus(skill, choice).on) {
     return covered
       ? { ...choice, picks: without(choice.picks, skill.id), exceptions: withId(choice.exceptions, skill.id) }

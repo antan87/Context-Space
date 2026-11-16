@@ -10,7 +10,7 @@ import type { Hono, Context, Handler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { isArchived } from '../core/archive-guard.js';
-import { NewsChangedError, markSeen, whatsNew } from '../core/whats-new.js';
+import { NewsChangedError, markSeen, recentCommits, whatsNew } from '../core/whats-new.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 
 const reader = z.string().trim().min(1).max(40);
@@ -35,7 +35,10 @@ export function registerNewsRoutes(app: Hono, resolveWorkspace: (id: string) => 
   };
 
   app.get('/api/workspace/:id/news', handle(async (root, c) =>
-    whatsNew(root, reader.default('user').parse(c.req.query('reader')), { since: time.optional().parse(c.req.query('since')), pending: !(await isArchivedWorkspace(root)) })));
+    whatsNew(root, reader.default('user').parse(c.req.query('reader')), { since: time.optional().parse(c.req.query('since')), pending: c.req.query('since') === undefined && !(await isArchivedWorkspace(root)) })));
+
+  // The commits of the last few days, whatever the reader has seen: the Board draws these, and the news only says which are new.
+  app.get('/api/workspace/:id/recent-commits', handle(async (root) => recentCommits(root)));
 
   app.post('/api/workspace/:id/news/seen', bodyLimit({ maxSize: 4_000 }), handle(async (root, c) => {
     const body = z.object({ reader, at: time }).strict().parse(await c.req.json());

@@ -111,4 +111,127 @@ describe('plan routes', () => {
     expect(checkpoint.decisions.map((decision) => decision.question)).toEqual(['Export archived reports?', 'Which delimiter?']);
     expect((await post({ type: 'add', step: '' })).status).toBe(400);
   });
+
+  it('answers a decision directly via POST /api/workspace/:id/plan/decisions/:key/answer and updates PLAN.md on disk', async () => {
+    const res = await app.request('/api/workspace/reports/plan/decisions/export-archived-reports/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: 'Yes, include archived' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.message).toBe('Answered "Export archived reports?".');
+    expect(body.plan.waiting).toEqual([]);
+    const updatedPlan = await file();
+    const dec = updatedPlan.checkpoints[0]?.decisions[0];
+    expect(dec?.done).toBe(true);
+    expect(dec?.answer).toBe('Yes, include archived');
+
+    // 404 when decision key is not found
+    const missing = await app.request('/api/workspace/reports/plan/decisions/non-existent-key/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: 'Some answer' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(missing.status).toBe(404);
+
+    // 409 when expected does not match current plan question
+    const conflict = await app.request('/api/workspace/reports/plan/decisions/export-archived-reports/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: 'No', expected: 'Stale question from yesterday?' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(conflict.status).toBe(409);
+
+    // 400 when answer is blank
+    const blank = await app.request('/api/workspace/reports/plan/decisions/export-archived-reports/answer', {
+      method: 'POST',
+      body: JSON.stringify({ answer: '   ' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(blank.status).toBe(400);
+  });
+
+  it('ticks and unticks a step directly via POST /api/workspace/:id/plan/steps/:key/tick', async () => {
+    // Tick with auto-resolved expected
+    const res = await app.request('/api/workspace/reports/plan/steps/write-the-csv-writer/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: true }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.message).toBe('Ticked "Write the CSV writer".');
+    expect(body.plan.checkpoints[0]?.steps[0]?.done).toBe(true);
+
+    const onDisk = await file();
+    expect(onDisk.checkpoints[0]?.steps[0]?.done).toBe(true);
+
+    // Untick with explicit expected
+    const untick = await app.request('/api/workspace/reports/plan/steps/write-the-csv-writer/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: false, expected: 'Write the CSV writer' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(untick.status).toBe(200);
+    const untickBody = await untick.json();
+    expect(untickBody.message).toBe('Unticked "Write the CSV writer".');
+    expect(untickBody.plan.checkpoints[0]?.steps[0]?.done).toBe(false);
+
+    // 404 when step key does not exist
+    const missing = await app.request('/api/workspace/reports/plan/steps/non-existent-step/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: true }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(missing.status).toBe(404);
+
+    // 409 when expected does not match
+    const conflict = await app.request('/api/workspace/reports/plan/steps/write-the-csv-writer/tick', {
+      method: 'POST',
+      body: JSON.stringify({ done: true, expected: 'Outdated step wording' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(conflict.status).toBe(409);
+  });
+
+  it('runs a checkpoint check via POST /api/workspace/:id/plan/checkpoints/:key/check', async () => {
+    check.result = { overallStatus: 'pass', canProgress: true, repos: [{ headSha: 'abc1234def' }] };
+    const res = await app.request('/api/workspace/reports/plan/checkpoints/reports-export-to-csv/check', {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.message).toBe('The check passed.');
+    expect(body.plan.checkpoints[0]?.proof).toMatchObject({ canProgress: true });
+
+    // 404 when checkpoint key does not exist
+    const missing = await app.request('/api/workspace/reports/plan/checkpoints/non-existent-checkpoint/check', {
+      method: 'POST',
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  it('says which step is worked on now, sends it with the plan, and clears it when the step is ticked', async () => {
+    const postNow = (body: unknown) => app.request('/api/workspace/reports/plan/now', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await get()).now).toBeNull();
+    const set = await postNow({ key: 'write-the-csv-writer' });
+    expect(set.status).toBe(200);
+    const body = await set.json();
+    expect(body.message).toBe('Working on "Write the CSV writer" now.');
+    expect(body.plan.now).toMatchObject({ key: 'write-the-csv-writer', by: 'user' });
+    expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(PLAN);
+
+    expect((await postNow({ key: 'export-archived-reports' })).status).toBe(400);
+    expect((await postNow({ key: 'reports-export-to-csv' })).status).toBe(400);
+    expect((await postNow({ key: 'nothing-like-it' })).status).toBe(404);
+    expect((await postNow({ nonsense: true })).status).toBe(400);
+
+    await post({ type: 'tick', key: 'write-the-csv-writer', done: true, expected: 'Write the CSV writer' });
+    expect((await get()).now).toBeNull();
+
+    await postNow({ key: 'write-the-csv-writer' });
+    const cleared = await (await postNow({ clear: true })).json();
+    expect(cleared.plan.now).toBeNull();
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseRemoteUrl, buildCompareUrl } from './pr.js';
+import { parseRemoteUrl, buildCompareUrl, buildCommitUrl } from './pr.js';
 
 describe('parseRemoteUrl', () => {
   const cases: Array<[string, { host: string; owner: string; repo: string; kind: string; project?: string }]> = [
@@ -11,6 +11,8 @@ describe('parseRemoteUrl', () => {
     ['git@bitbucket.org:team/repo.git', { host: 'bitbucket.org', owner: 'team', repo: 'repo', kind: 'bitbucket' }],
     ['https://dev.azure.com/myorg/myproject/_git/myrepo', { host: 'dev.azure.com', owner: 'myorg', project: 'myproject', repo: 'myrepo', kind: 'azure' }],
     ['git@ssh.dev.azure.com:v3/myorg/myproject/myrepo', { host: 'dev.azure.com', owner: 'myorg', project: 'myproject', repo: 'myrepo', kind: 'azure' }],
+    ['https://myorg.visualstudio.com/myproject/_git/myrepo', { host: 'dev.azure.com', owner: 'myorg', project: 'myproject', repo: 'myrepo', kind: 'azure' }],
+    ['https://myorg.visualstudio.com/DefaultCollection/myproject/_git/myrepo', { host: 'dev.azure.com', owner: 'myorg', project: 'myproject', repo: 'myrepo', kind: 'azure' }],
   ];
 
   it.each(cases)('parses %s', (url, expected) => {
@@ -54,5 +56,58 @@ describe('buildCompareUrl', () => {
   it('returns null for an unknown forge', () => {
     const r = parseRemoteUrl('https://git.internal.corp/team/repo.git')!;
     expect(buildCompareUrl(r, 'main', 'feature/x')).toBeNull();
+  });
+});
+
+describe('buildCommitUrl', () => {
+  it('builds a GitHub commit URL', () => {
+    const r = parseRemoteUrl('https://github.com/owner/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://github.com/owner/repo/commit/a1b2c3d4e5f6',
+    );
+  });
+
+  it('builds a GitLab commit URL', () => {
+    const r = parseRemoteUrl('https://gitlab.com/group/subgroup/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://gitlab.com/group/subgroup/repo/-/commit/a1b2c3d4e5f6',
+    );
+  });
+
+  it('builds an Azure DevOps commit URL', () => {
+    const r = parseRemoteUrl('https://dev.azure.com/myorg/myproject/_git/myrepo')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://dev.azure.com/myorg/myproject/_git/myrepo/commit/a1b2c3d4e5f6',
+    );
+  });
+
+  it('builds an Azure DevOps commit URL from visualstudio.com and DefaultCollection forms', () => {
+    const direct = parseRemoteUrl('https://org.visualstudio.com/proj/_git/repo')!;
+    expect(buildCommitUrl(direct, 'a1b2c3d4e5f6')).toBe(
+      'https://dev.azure.com/org/proj/_git/repo/commit/a1b2c3d4e5f6',
+    );
+    const withCollection = parseRemoteUrl('https://org.visualstudio.com/DefaultCollection/proj/_git/repo')!;
+    expect(buildCommitUrl(withCollection, 'a1b2c3d4e5f6')).toBe(
+      'https://dev.azure.com/org/proj/_git/repo/commit/a1b2c3d4e5f6',
+    );
+  });
+
+  it('builds a Bitbucket commit URL', () => {
+    const r = parseRemoteUrl('git@bitbucket.org:team/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBe(
+      'https://bitbucket.org/team/repo/commits/a1b2c3d4e5f6',
+    );
+  });
+
+  it('returns null for an unknown forge', () => {
+    const r = parseRemoteUrl('https://git.internal.corp/team/repo.git')!;
+    expect(buildCommitUrl(r, 'a1b2c3d4e5f6')).toBeNull();
+  });
+
+  it('encodes special characters in path segments safely', () => {
+    const r = parseRemoteUrl('https://github.com/my%20org/my%20repo.git')!;
+    expect(buildCommitUrl(r, 'sha#123')).toBe(
+      'https://github.com/my%20org/my%20repo/commit/sha%23123',
+    );
   });
 });

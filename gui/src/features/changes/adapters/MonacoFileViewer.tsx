@@ -7,12 +7,16 @@
 import { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import './MonacoDiffAdapter.js';
+import { editorThemeName, watchEditorTheme } from '../../../lib/editorTheme.js';
 import { getLanguageFromPath } from '../utils/languageDetector.js';
 import { getModifiedFileUri, getOrCreateTextModel, registerCrossFileEditorOpener } from '../utils/changesetModelStore.js';
+import { useCodeFontSize } from '../codeFontSize.js';
 
 export interface MonacoFileViewerProps {
   filePath: string;
-  repoName: string;
+  repoName?: string;
+  /** Workspace model identity; never registers repository cross-file navigation. */
+  workspaceId?: string;
   repoPath?: string;
   content: string;
   targetLine?: number;
@@ -21,7 +25,8 @@ export interface MonacoFileViewerProps {
   onOpenFile?: (repoName: string, filePath: string, line?: number) => void;
 }
 
-export function MonacoFileViewer({ filePath, repoName, repoPath, content, targetLine, jumpKey, onOpenFile }: MonacoFileViewerProps) {
+export function MonacoFileViewer({ filePath, repoName, repoPath, workspaceId, content, targetLine, jumpKey, onOpenFile }: MonacoFileViewerProps) {
+  const [fontSize] = useCodeFontSize();
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const decorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
@@ -29,9 +34,16 @@ export function MonacoFileViewer({ filePath, repoName, repoPath, content, target
   useEffect(() => { onOpenFileRef.current = onOpenFile; });
 
   useEffect(() => {
+    if (!editorRef.current) return;
+    editorRef.current.updateOptions({ fontSize });
+  }, [fontSize]);
+
+  useEffect(() => {
     if (!containerRef.current) return;
-    const model = getOrCreateTextModel(getModifiedFileUri(repoName, filePath, monaco, repoPath), content, getLanguageFromPath(filePath), monaco);
-    const isDark = document.documentElement.classList.contains('dark') || document.documentElement.getAttribute('data-theme') !== 'light';
+    const ownedModel = workspaceId
+      ? monaco.editor.createModel(content, getLanguageFromPath(filePath), monaco.Uri.from({ scheme: 'contextspace-workspace', authority: encodeURIComponent(workspaceId), path: `/${filePath}` }))
+      : null;
+    const model = ownedModel ?? getOrCreateTextModel(getModifiedFileUri(repoName!, filePath, monaco, repoPath), content, getLanguageFromPath(filePath), monaco);
     const editor = monaco.editor.create(containerRef.current, {
       model,
       readOnly: true,
@@ -41,22 +53,25 @@ export function MonacoFileViewer({ filePath, repoName, repoPath, content, target
       minimap: { enabled: false },
       scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8, alwaysConsumeMouseWheel: false },
       lineNumbersMinChars: 3,
-      fontSize: 12,
+      fontSize,
       fontFamily: "'JetBrains Mono', Consolas, Menlo, monospace",
-      theme: isDark ? 'vs-dark' : 'vs',
+      theme: editorThemeName(),
       renderLineHighlight: 'all',
     });
     editorRef.current = editor;
-    const opener = registerCrossFileEditorOpener((repo, file, line) => onOpenFileRef.current?.(repo, file, line), monaco);
+    const stopWatchingTheme = watchEditorTheme((theme) => monaco.editor.setTheme(theme));
+    const opener = workspaceId ? undefined : registerCrossFileEditorOpener((repo, file, line) => onOpenFileRef.current?.(repo, file, line), monaco);
     return () => {
+      stopWatchingTheme();
       opener?.dispose();
       editor.dispose();
+      ownedModel?.dispose();
       editorRef.current = null;
       decorationsRef.current = null;
     };
     // The editor is rebuilt per file; content and target updates are applied below without losing scroll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, repoName, repoPath]);
+  }, [filePath, repoName, repoPath, workspaceId]);
 
   useEffect(() => {
     const model = editorRef.current?.getModel();

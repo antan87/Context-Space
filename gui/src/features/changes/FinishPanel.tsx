@@ -19,6 +19,7 @@ import { apiFetch } from '../../lib/api/client.js';
 import { invalidateDeliveryState, useLastFinish, useProgression, useWorkspaceRepositories } from '../../lib/api/queries.js';
 import { remoteLabel, submitFinish } from './deliveryApi.js';
 import { PlanFinishList } from '../plan/PlanFinishList.js';
+import { useFinishDraft } from './finishDraftStore.js';
 
 const MIN_REASON = 8;
 
@@ -34,10 +35,13 @@ export function FinishPanel({ ws, onClose, onGitChanged }: Props) {
   const progression = useProgression(wsId);
   const lastFinish = useLastFinish(wsId);
   const repositories = useWorkspaceRepositories(wsId);
-  const [message, setMessage] = useState('');
-  const [createPrs, setCreatePrs] = useState(true);
-  const [overriding, setOverriding] = useState(false);
-  const [reason, setReason] = useState('');
+  // What is typed lives in a store per workspace, so it outlasts the form (it closes when a file or another mode of the Code window is shown).
+  const [draft, patchDraft] = useFinishDraft(wsId);
+  const { message, createPrs, overriding, reason } = draft;
+  const setMessage = (value: string) => patchDraft({ message: value });
+  const setCreatePrs = (value: boolean) => patchDraft({ createPrs: value });
+  const setOverriding = (value: boolean) => patchDraft({ overriding: value });
+  const setReason = (value: string) => patchDraft({ reason: value });
   const [busy, setBusy] = useState<null | 'verify' | 'preview' | 'finish'>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<FinishReport | null>(null);
@@ -90,6 +94,9 @@ export function FinishPanel({ ws, onClose, onGitChanged }: Props) {
     }
     setResult(outcome.data);
     setPreview(null);
+    // What was typed is spent only by a finish that went through: a refused finish (blocked) or one where a repository failed
+    // ("Finish again to retry what failed") keeps the message, the "Finish anyway" tick and its reason for the next try.
+    if (!outcome.data.blocked && outcome.data.repos.every((repo) => !repo.error)) patchDraft({ message: '', overriding: false, reason: '' });
     await refresh();
   };
 

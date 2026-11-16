@@ -4,6 +4,9 @@
  * are rebuilt field by field, because the strip acts on them (it can type a
  * suggestion into the chat prompt), so nothing is trusted just for arriving.
  * Plain functions, so the connection can be tested with a fake event source.
+ *
+ * A board event ("the board changed, read it again") travels in a screen frame, but it is not a screen event: it is
+ * read here into its own kind of live event, so the strip, which shows screen events, can never be handed one.
  */
 
 import type { AnnotationTag, LiveEvent, OpenQuestion, ScreenEvent } from '../../types';
@@ -59,6 +62,15 @@ function cleanQuestion(raw: unknown): OpenQuestion | null {
   return { id: q.id, timestamp: q.timestamp, harness: q.harness, message: q.message, ...(options.length ? { options } : {}) };
 }
 
+/** A board event rebuilt from untrusted JSON: when it happened, and the revision the board has now. */
+function cleanBoardEvent(raw: unknown): Extract<LiveEvent, { type: 'board' }> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const e = raw as Record<string, unknown>;
+  const p = e.payload && typeof e.payload === 'object' ? e.payload as Record<string, unknown> : null;
+  if (!isText(e.timestamp) || !p || typeof p.revision !== 'number' || !Number.isInteger(p.revision) || p.revision < 0) return null;
+  return { type: 'board', timestamp: e.timestamp, revision: p.revision };
+}
+
 /** One frame's data as a live event, or null when it is malformed. */
 export function parseLiveFrame(data: unknown): LiveEvent | null {
   if (typeof data !== 'string') return null;
@@ -67,6 +79,7 @@ export function parseLiveFrame(data: unknown): LiveEvent | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const frame = parsed as Record<string, unknown>;
   if (frame.type === 'screen') {
+    if ((frame.event as { event?: unknown } | null | undefined)?.event === 'board') return cleanBoardEvent(frame.event);
     const event = cleanScreenEvent(frame.event);
     return event ? { type: 'screen', event } : null;
   }

@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { acquireLock } from './locks.js';
-import { PLAN_FILE, parsePlanFile, planItems, type PlanCheckpoint, type PlanDecision, type PlanFile, type PlanStep } from './plan-file.js';
+import { PLAN_FILE, PLAN_NOW_FILE, PlanFileError, parsePlanFile, planItems, workableSteps, type PlanCheckpoint, type PlanDecision, type PlanFile, type PlanStep } from './plan-file.js';
 import { planFileFromStore } from './plan-file-convert.js';
 import { deleteWorkspaceFile, readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
@@ -29,6 +29,7 @@ const OLD_STORE = 'contextspace-plan.json';
 const OLD_SUMMARY = 'contextspace-plan.md';
 const CHANGES_FILE = '.contextspace/plan-changes.jsonl';
 const SEEN_FILE = '.contextspace/plan-seen.json';
+const NOW_FILE = PLAN_NOW_FILE;
 /** How many changes the log keeps. */
 export const CHANGES_KEPT = 300;
 
@@ -225,7 +226,11 @@ async function noticeChanges(location: Location, read: PlanFileRead, by: string,
   try {
     if (seen) {
       const changes = planChanges(seen.items, read.plan, by, new Date().toISOString());
-      if (changes.length) await appendChanges(location, changes);
+      if (changes.length) {
+        await appendChanges(location, changes);
+        // A step ticked or removed is no longer what is being worked on.
+        await pruneNow(location, read.plan).catch(() => undefined);
+      }
     }
     await saveSeen(location, read.plan, fileHash);
   } finally {
@@ -237,6 +242,81 @@ async function appendChanges(location: Location, changes: PlanFileChange[]): Pro
   const old = (await readOptional(location, CHANGES_FILE)) ?? '';
   const lines = [...old.split('\n').filter(Boolean), ...changes.map((change) => JSON.stringify(change))].slice(-CHANGES_KEPT);
   await writeWorkspaceFile(location.root, location.featureId, CHANGES_FILE, `${lines.join('\n')}\n`);
+}
+
+/** Who said which step is being worked on, and when. */
+export interface PlanNow { key: string; by: string; at: string }
+
+async function readNowRecord(location: Location): Promise<PlanNow | null> {
+  const text = await readOptional(location, NOW_FILE).catch(() => null);
+  if (!text) return null;
+  try {
+    const record = JSON.parse(text) as Partial<PlanNow> | null;
+    return record && typeof record.key === 'string' && typeof record.by === 'string' && typeof record.at === 'string' && !Number.isNaN(Date.parse(record.at))
+      ? { key: record.key, by: record.by, at: record.at } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The step being worked on now, or null: none was set, or the step it names is gone, done or only a heading. */
+export async function readPlanNow(workspacePath: string, plan?: PlanFile): Promise<PlanNow | null> {
+  const location = await locate(workspacePath);
+  const record = await readNowRecord(location);
+  if (!record) return null;
+  const current = plan ?? (await readAt(location)).plan;
+  return workableSteps(current).some((step) => step.key === record.key) ? record : null;
+}
+
+async function writeNow(location: Location, record: PlanNow | null): Promise<void> {
+  if (record) {
+    await writeWorkspaceFile(location.root, location.featureId, NOW_FILE, `${JSON.stringify(record)}\n`);
+    return;
+  }
+  // An adapter that cannot delete gets an empty record, which reads as none.
+  const removed = await deleteWorkspaceFile(location.root, location.featureId, NOW_FILE).catch(() => false);
+  if (!removed && (await readOptional(location, NOW_FILE)) !== null) await writeWorkspaceFile(location.root, location.featureId, NOW_FILE, '{}\n');
+}
+
+/** Runs under the plan lock. Clears the record when its step is gone, done or a heading. */
+async function pruneNow(location: Location, plan: PlanFile): Promise<void> {
+  const record = await readNowRecord(location);
+  if (record && !workableSteps(plan).some((step) => step.key === record.key)) await writeNow(location, null);
+}
+
+/** Says which step is being worked on. The step must be open and not a heading. Returns the step's words. */
+export async function setPlanNow(workspacePath: string, key: string, by: string, now: Date = new Date()): Promise<{ record: PlanNow; text: string }> {
+  const location = await locate(workspacePath);
+  const release = await lockOf(location);
+  try {
+    const { plan } = await readAt(location);
+    const step = workableSteps(plan).find((candidate) => candidate.key === key);
+    if (!step) {
+      const known = planItems(plan).find((item) => item.key === key);
+      throw new PlanFileError(known && 'text' in known && known.done
+        ? `"${known.text}" is already done.`
+        : known && 'text' in known ? `"${known.text}" is a heading for steps under it: name one of those.`
+          : `Only an open step can be worked on now. Nothing in ${PLAN_FILE} is a step called "${key}".`, known ? 'invalid' : 'not_found');
+    }
+    const record: PlanNow = { key, by, at: now.toISOString() };
+    await writeNow(location, record);
+    return { record, text: step.text };
+  } finally {
+    await release();
+  }
+}
+
+/** Says nobody is working on a particular step now. True when there was a record to clear. */
+export async function clearPlanNow(workspacePath: string): Promise<boolean> {
+  const location = await locate(workspacePath);
+  const release = await lockOf(location);
+  try {
+    const had = (await readNowRecord(location)) !== null;
+    if (had) await writeNow(location, null);
+    return had;
+  } finally {
+    await release();
+  }
 }
 
 /** The latest changes to the plan, newest first. A line that cannot be read is skipped. */

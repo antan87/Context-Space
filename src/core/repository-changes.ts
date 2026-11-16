@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import { inspectListedRepositoryFiles, UNTRACKED_COUNT_LIMIT } from './listed-file-inspection.js';
 import * as path from 'node:path';
 import { execa } from 'execa';
 
@@ -58,15 +59,11 @@ export async function listRepositoryChangesWithFingerprint(repoPath: string, inc
   // the signature below) or take index.lock while the user runs git.
   const { stdout } = await execa('git', ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: repoPath, stripFinalNewline: false });
   const files = parseGitStatus(stdout);
-  await Promise.all(files.map(async (file) => {
-    try {
-      const stat = await fs.stat(path.join(repoPath, file.file));
-      file.size = stat.size;
-      file.mtimeMs = stat.mtimeMs;
-    } catch {
-      // Deleted files have no size or mtime.
-    }
-  }));
+  const byPath = new Map(files.map(file => [file.file, file]));
+  for (const inspected of await inspectListedRepositoryFiles(repoPath, files.map(file => file.file), 'metadata')) {
+    const file = byPath.get(inspected.file);
+    if (file) { file.size = inspected.size; file.mtimeMs = inspected.mtimeMs; }
+  }
   const index = await indexSignature(repoPath);
   const fingerprint = createHash('sha1')
     .update(JSON.stringify([includeAll, index, stdout, files.map((f) => [f.size, f.mtimeMs])]))
@@ -79,7 +76,6 @@ export async function listRepositoryChangesWithFingerprint(repoPath: string, inc
   }
 
   // Disable rename folding only for line counts; status retains rename identity.
-  const byPath = new Map(files.map(file => [file.file, file]));
   try {
     const stats = await execa('git', ['diff', 'HEAD', '--numstat', '-z', '--no-renames'], { cwd: repoPath, reject: false, stripFinalNewline: false });
     for (const record of stats.stdout.split('\0')) {
@@ -90,6 +86,12 @@ export async function listRepositoryChangesWithFingerprint(repoPath: string, inc
     }
   } catch {
     // A repository without HEAD still has useful status and untracked files.
+  }
+  // git has no numstat for a file it does not track yet: its lines are its additions. Small text files only, so a listing stays cheap.
+  const countable = files.filter(file => file.rawStatus === '??' && file.additions === 0 && (file.size ?? 0) > 0 && (file.size ?? 0) <= UNTRACKED_COUNT_LIMIT);
+  for (const inspected of await inspectListedRepositoryFiles(repoPath, countable.map(file => file.file), 'counts')) {
+    const file = byPath.get(inspected.file);
+    if (file && inspected.additions !== undefined) file.additions = inspected.additions;
   }
   if (includeAll) {
     const listed = await execa('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: repoPath, stripFinalNewline: false });

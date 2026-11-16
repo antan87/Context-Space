@@ -34,11 +34,14 @@ async function openWorkspace(page: Page, initial: unknown[]) {
   return state;
 }
 
-const mark = (page: Page) => page.getByRole('button', { name: 'Branch changed: show the detail' });
+/** The warning is a dot on the header's menu and a line in it. */
+const mark = (page: Page) => page.getByTestId('menu-warning-dot');
+const line = (page: Page) => page.getByRole('menuitem', { name: 'Branch changed: show the detail' });
 const notice = (page: Page) => page.getByRole('region', { name: 'Branch changed' });
-/** The warning is a small mark in the header; its detail opens on demand instead of a banner. */
+/** The line in the menu opens the detail on demand instead of a banner. */
 async function openNotice(page: Page) {
-  await mark(page).click();
+  await page.getByRole('button', { name: 'Workspace actions' }).click();
+  await line(page).click();
   await expect(notice(page)).toBeVisible();
 }
 

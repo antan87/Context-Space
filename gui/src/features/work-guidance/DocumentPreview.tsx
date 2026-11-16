@@ -65,11 +65,12 @@ function collectHeadAssets(html: string, trusted: boolean): HeadAssets {
 }
 
 /**
+ * `fillFrame` is set by a surface that gives the document all the room it has and does not scroll around it (the Board's window).
  * `expanded` is set by DocumentViewer when the document fills the app viewport. Every branch that
  * has an intrinsic height has to opt out of its capped height there, otherwise maximizing only
  * rescales a letterboxed frame.
  */
-export function DocumentPreview({ preview, fileUrl, raw, expanded = false, trusted = false, links }: { preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks }) {
+export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillFrame = false, trusted = false, links, onImageClick }: { preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; fillFrame?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks; onImageClick?: () => void }) {
   const htmlDocument = useMemo(() => {
     if (preview.kind !== 'html' || raw) return '';
     const source = preview.content ?? '';
@@ -79,8 +80,10 @@ export function DocumentPreview({ preview, fileUrl, raw, expanded = false, trust
       trusted,
     });
   }, [preview, raw, trusted]);
-  const height = expanded ? 'h-full flex-1' : 'h-[65vh]';
+  // `fillFrame` is for a container that is a column of its own height and does not scroll: the frame of a page (or a PDF) is as tall as what is left of it.
+  const height = expanded ? 'h-full flex-1' : fillFrame ? 'min-h-0 flex-1' : 'h-[65vh]';
 
+  // `trusted=false` is a fail-safe default (no script, empty sandbox): no UI reaches it, DocumentViewer always passes `trusted`.
   // Only the trusted path may run script, and it must never be sandboxed into the app's origin.
   const sandbox = trusted ? 'allow-scripts' : '';
 
@@ -88,6 +91,42 @@ export function DocumentPreview({ preview, fileUrl, raw, expanded = false, trust
   if (preview.kind === 'html' && !raw) return <iframe title={`Preview of ${preview.name}`} sandbox={sandbox} referrerPolicy="no-referrer" srcDoc={htmlDocument} className={`${height} w-full rounded-lg border border-border bg-white shadow-xs`} />;
   if (preview.content !== undefined) return <pre className={cn('whitespace-pre-wrap break-words font-mono text-xs sm:text-sm rounded-lg border border-border bg-muted/20 p-4', expanded ? 'flex-1 min-h-0 overflow-auto' : 'overflow-x-auto')}>{preview.content}</pre>;
   if (preview.kind === 'pdf') return <iframe title={`Preview of ${preview.name}`} src={fileUrl} className={`${height} w-full rounded-lg border border-border`} />;
-  if (preview.kind === 'image') return <div className={cn('flex items-center justify-center rounded-lg border border-border/60 bg-muted/10 p-2 sm:p-4', expanded && 'h-full flex-1')}><img src={fileUrl} alt={preview.name} className={expanded ? 'mx-auto h-full w-auto max-w-full object-contain' : 'max-w-full max-h-[65vh] h-auto rounded'} /></div>;
+  if (preview.kind === 'image') {
+    return (
+      <div
+        className={cn(
+          'flex items-center justify-center rounded-lg border border-border/60 bg-muted/10 p-2 sm:p-4',
+          expanded && 'h-full flex-1',
+          onImageClick && 'cursor-pointer select-none',
+        )}
+        onClick={onImageClick}
+        role={onImageClick ? 'button' : undefined}
+        tabIndex={onImageClick ? 0 : undefined}
+        onKeyDown={
+          onImageClick
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onImageClick();
+                }
+              }
+            : undefined
+        }
+        aria-label={onImageClick ? (expanded ? 'Exit full screen (Esc)' : 'View full screen') : undefined}
+        title={onImageClick ? (expanded ? 'Click to exit full screen (Esc)' : 'Click to view full screen') : undefined}
+      >
+        <img
+          src={fileUrl}
+          alt={preview.name}
+          className={cn(
+            expanded
+              ? 'mx-auto h-full w-auto max-w-full object-contain cursor-zoom-out'
+              : 'max-w-full max-h-[65vh] h-auto rounded cursor-zoom-in',
+            !onImageClick && 'cursor-default',
+          )}
+        />
+      </div>
+    );
+  }
   return <div className="rounded-lg border border-dashed border-border p-8 text-center"><p className="text-sm text-muted-foreground">Preview is unavailable for this format. Download the document to open it in its application.</p></div>;
 }

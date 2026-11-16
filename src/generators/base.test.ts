@@ -242,6 +242,46 @@ describe('buildContextContent', () => {
       expect(content).toContain('cannot be recovered from the code or git history');
     });
 
+    it('warns agents to force-push only with --force-with-lease --force-if-includes', async () => {
+      const content = await buildContextContent(ctxFor({}));
+
+      expect(content).toContain(
+        "Force-push only with `git push --force-with-lease --force-if-includes`: ContextSpace fetches your branch in the background, so a plain lease no longer protects others' commits.",
+      );
+    });
+
+    it('instructs agents to leave notes on commits with ctxspace note', async () => {
+      const content = await buildContextContent(ctxFor({}));
+
+      expect(content).toContain(
+        'After a merge, pull or rebase that needed decisions or went wrong, or when you find something in a commit (yours or someone else\'s), leave a note on it with `ctxspace note <commit> "<what happened and what to check>"`.',
+      );
+    });
+
+    it('tells every AI to answer how-it-works questions in explain/ and keep the answer true', async () => {
+      const content = await buildContextContent(ctxFor({}));
+
+      expect(content).toContain(
+        'When someone asks how something works, answer in `explain/<topic>.md` so it shows on the Board as cards (skill `contextspace-explain`); when you change code an answer points at, update the answer.',
+      );
+    });
+
+    it('drops the explain line when the workspace left the explain skill out, and keeps it otherwise', async () => {
+      const ws = path.join(dir, 'ws');
+      await fs.mkdir(ws, { recursive: true });
+      const line = 'answer in `explain/<topic>.md`';
+      expect(await buildContextContent(ctxFor({}))).toContain(line);
+      await fs.mkdir(path.join(ws, '.contextspace'), { recursive: true });
+      const save = (config: object) => fs.writeFile(path.join(ws, '.contextspace', 'skills.json'), JSON.stringify({ schemaVersion: 2, revision: 3, enabledSkills: [], enabledCategories: [], ...config }));
+      await save({ disabledSkills: ['standup'] });
+      expect(await buildContextContent(ctxFor({}))).toContain(line);
+      await save({ disabledSkills: ['contextspace-explain'] });
+      const without = await buildContextContent(ctxFor({}));
+      expect(without).not.toContain(line);
+      expect(without).not.toContain('contextspace-explain');
+      expect(without).toContain('leave a note on it with');
+    });
+
     it('names repos that carry their own instructions, which override these', async () => {
       const ctx = ctxFor({});
       (ctx.analysis!.get(nodeRepo)! as { existingAIConfigs: unknown }).existingAIConfigs = [
@@ -326,6 +366,7 @@ describe('buildContextContent', () => {
       expect(section).toContain('`- [ ] Decide: <question>`');
       expect(section).toContain('Never answer it yourself.');
       expect(section).toContain('`ctxspace plan done "<checkpoint>"`');
+      expect(section).toContain('When you start a step, run `ctxspace plan now "<step>"`');
       // The plan instructions every session loads stay short: they were over 3 KB of rules and commands.
       expect(section.length).toBeLessThan(1400);
       expect(content).toContain('./.contextspace/bin/ctxspace');
@@ -423,10 +464,10 @@ describe('buildContextContent', () => {
       const plan = renderPlanFileInstructions();
       const lessons = renderLessonsSection(ctx.lessons);
       expect(content.split('\n').length - plan.split('\n').length - lessons.split('\n').length + 1).toBeLessThan(40);
-      // 1600 until the request_user_input pointer was added, then 1800 until the
-      // screen-tool pointer. Agents that load MCP tools on demand need a line like
-      // each to know the tools exist; these are the two lines allowed past the old cap.
-      expect(content.length - plan.length - lessons.length).toBeLessThan(2000);
+      // 1600 until the request_user_input pointer was added, 1800 until the
+      // screen-tool pointer, then 2000 until the commit-note pointer, then 2200
+      // until the explain pointer. Agents need a short line each to know those tools exist.
+      expect(content.length - plan.length - lessons.length).toBeLessThan(2450);
       expect(plan.split('\n').length).toBeLessThan(10);
       expect(plan.length).toBeLessThan(1400);
     });

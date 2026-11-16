@@ -106,7 +106,7 @@ export function ArchivedWorkspaceView({ workspace }: { workspace: Feature }) {
       <section aria-labelledby="archived-kept" className="rounded-xl border border-border bg-card p-5">
         <h3 id="archived-kept" className="font-semibold">What stays readable</h3>
         <ul className="mt-2 flex flex-wrap gap-2 text-sm">
-          <li><Link className="underline" to={`${base}/plan`}>Milestones and planning notes</Link></li>
+          <li><Link className="underline" to={`${base}/board`}>Board and planning notes</Link></li>
           <li><Link className="underline" to={`${base}/documents`}>Documents</Link></li>
           <li><Link className="underline" to={`${base}/knowledge`}>Knowledge</Link></li>
         </ul>

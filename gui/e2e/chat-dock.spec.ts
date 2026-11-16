@@ -76,14 +76,14 @@ const clickCross = async (page: Page, name: string) => {
 const current = (page: Page, name: string) => expect(session(page, name)).toHaveAttribute('aria-current', 'page');
 
 test.describe('the chat is the centre of a workspace', () => {
-  test('a workspace opens on its plan, with its sessions one click away', async ({ page }) => {
+  test('a workspace opens on its Board, with its sessions one click away', async ({ page }) => {
     await page.goto('/#/workspaces/alpha');
-    await expect(page.getByRole('region', { name: 'The plan', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
     // Nothing runs, so the plan is shown instead of a chat; sessions start in the chat, not in a card beside the plan.
     await expect(chatOf(page)).toBeHidden();
     await expect(page.getByRole('complementary', { name: 'Sessions' })).toHaveCount(0);
-    await expect(page.getByLabel('Plan and sessions')).toBeVisible();
-    await expect(workspaceNav(page).getByRole('link', { name: 'Plan' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('group', { name: 'View mode', exact: true })).toBeVisible();
+    await expect(workspaceNav(page).getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
     // The address is left as it was given: no section is the plan.
     await expect(page).toHaveURL(/#\/workspaces\/alpha$/);
   });
@@ -104,7 +104,7 @@ test.describe('the chat is the centre of a workspace', () => {
       await page.goto(`/#/workspaces/alpha/${section}`);
       await expect(chatOf(page)).toBeHidden();
     }
-    await page.getByRole('button', { name: 'Close this panel and give the chat the whole screen' }).click();
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
     await expect(chatOf(page)).toBeVisible();
   });
 
@@ -113,11 +113,11 @@ test.describe('the chat is the centre of a workspace', () => {
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     expect(attaches.alpha).toBe(1);
 
-    await workspaceNav(page).getByRole('link', { name: 'Plan' }).click();
+    await workspaceNav(page).getByRole('link', { name: 'Board' }).click();
     await expect(chatOf(page)).toBeHidden();
-    await workspaceNav(page).getByRole('link', { name: /^Code/ }).click();
-    await expect(page).toHaveURL(/\/changes$/);
-    await page.getByRole('button', { name: 'Close this panel and give the chat the whole screen' }).click();
+    await workspaceNav(page).getByRole('link', { name: 'Skills' }).click();
+    await expect(page).toHaveURL(/\/skills$/);
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
 
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     // Still one connection: the terminal was never torn down and reattached.
@@ -409,9 +409,9 @@ test.describe('the dock sits exactly over its slot', () => {
   test('keeps its header short: the facts live in the strip, not above it', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
     await expect(chatOf(page)).toBeVisible();
-    await expect(page.getByRole('group', { name: 'Task status' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /^(Checks|Not checked)/ })).toHaveCount(0);
     await page.goto('/#/workspaces/alpha/plan');
-    await expect(page.getByRole('group', { name: 'Task status' })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^(Checks|Not checked)/ })).toBeVisible();
   });
 });
 

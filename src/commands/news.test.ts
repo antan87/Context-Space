@@ -201,4 +201,52 @@ describe('newsCommand', () => {
     await newsCommand({ workspace: 'reports', peek: true });
     expect(resolve.resolveWorkspaceQuiet).toHaveBeenCalledWith('reports');
   });
+
+  it('prints incoming commit summaries per repository and author under Commits', () => {
+    const text = renderNews(report({
+      incoming: [
+        {
+          repo: 'billing',
+          host: { kind: 'azure', name: 'Azure DevOps' },
+          groups: [{ author: 'Maria', count: 3, newestSha: 'f1e2d3c', newestAt: ago(10), subject: 'Stream CSV chunks' }],
+        },
+        {
+          repo: 'api',
+          host: { kind: 'github', name: 'GitHub' },
+          groups: [{ author: 'Bob', count: 1, newestSha: 'c4b5a69', newestAt: ago(5), subject: 'Add health check' }],
+        },
+      ],
+    }), NOW);
+    expect(text).toContain('Commits\n  billing: 3 new commits from Maria on Azure DevOps\n  api: 1 new commit from Bob on GitHub');
+  });
+
+  it('always prefixes incoming lines with the repository name, even for a single repository', () => {
+    const text = renderNews(report({
+      incoming: [{
+        repo: 'api',
+        host: { kind: 'github', name: 'GitHub' },
+        groups: [{ author: 'Maria', count: 2, newestSha: 'abc1234', newestAt: ago(5), subject: 'Fix auth' }],
+      }],
+    }), NOW);
+    expect(text).toContain('Commits\n  api: 2 new commits from Maria on GitHub');
+  });
+
+  it('prints commit notes under Notes with repo, short hash, actor, and title', () => {
+    const text = renderNews(report({
+      notes: {
+        items: [{
+          id: 'note-1',
+          repo: 'NexusFlow',
+          sha: '3bc923fabcdef0123456789',
+          shortSha: '3bc923f',
+          title: 'Merge conflict in boardRows.ts — kept both',
+          body: 'Merge conflict in boardRows.ts — kept both',
+          by: 'ai',
+          at: ago(5),
+        }],
+        more: 0,
+      },
+    }), NOW);
+    expect(text).toContain('Notes\n  AI note on 3bc923f (NexusFlow): Merge conflict in boardRows.ts — kept both · 5 min ago');
+  });
 });

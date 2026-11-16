@@ -2,10 +2,10 @@ import { lazy, Suspense, useState, useEffect, useRef, useMemo } from 'react';
 import {
   AlertTriangle,
   RefreshCw,
-  Sparkles,
 } from 'lucide-react';
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AppSidebar } from './app/AppSidebar.js';
+import { UpdateNotice } from './app/UpdateNotice.js';
 import { defaultWorkspaceTarget } from './app/workspaceList.js';
 import { ToastStack, type Toast } from './app/ToastStack.js';
 import { VsCodeShell } from './app/VsCodeShell.js';
@@ -27,7 +27,10 @@ import { cn } from './lib/utils.js';
 import { toErrorMessage } from './lib/errors.js';
 import { perfMark, perfMarkOnce } from './lib/perfMarks.js';
 import { changesFromResponse } from './features/changes/utils/changesResponse.js';
-import { parseSection, type WorkspaceSection } from './features/workspace-shell/destinations.js';
+import { knowledgeRedirect, parseSection, type WorkspaceSection } from './features/workspace-shell/destinations.js';
+import { closeCodeWindow, documentRequests } from './features/workspace-shell/openRequests.js';
+import { retireReviewIfWorkspaceChanged } from './features/changes/reviewHistory.js';
+import { parseWorkspacePath } from './features/chat/chatRoute.js';
 import { useWorkspaceShortcuts } from './features/workspace-shell/useWorkspaceShortcuts.js';
 
 // Route-level code splitting: each page (and its dependency subtree, e.g. the
@@ -69,7 +72,6 @@ import type {
   StorageAdapterMeta,
   TranscriptMessage,
   WorkspaceStatus,
-  CommitRepoResult,
   RepoChangeListing,
   WorkspaceSyncResult,
   ToolStatus,
@@ -124,6 +126,11 @@ type UiUpdateStatus = {
 function AppInner() {
   const navigate = useNavigate();
   const location = useLocation();
+  const currentWorkspace = parseWorkspacePath(location.pathname)?.workspace ?? null;
+  useEffect(() => {
+    const leftWorkspace = retireReviewIfWorkspaceChanged(currentWorkspace);
+    if (leftWorkspace) closeCodeWindow(leftWorkspace, null);
+  }, [currentWorkspace]);
 
   // Toast State
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -236,41 +243,16 @@ function AppInner() {
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [gitChanges, setGitChanges] = useState<RepoChangeListing[]>([]);
-  const [knowledgeContent, setKnowledgeContent] = useState<string>('');
-  const [knowledgeLoading, setKnowledgeLoading] = useState<boolean>(false);
-  const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
-  const [isEditingKnowledge, setIsEditingKnowledge] = useState<boolean>(false);
-  const [editedKnowledge, setEditedKnowledge] = useState<string>('');
-  const [saveKnowledgeLoading, setSaveKnowledgeLoading] = useState<boolean>(false);
-  const [saveKnowledgeError, setSaveKnowledgeError] = useState<string | null>(null);
   const activeWorkspaceRef = useRef<string | null>(null);
-  const knowledgeLoadRequestRef = useRef(0);
-  const saveKnowledgeRequestRef = useRef(0);
   // One in-flight load per kind of workspace data; see beginWorkspaceLoad.
   const workspaceLoadsRef = useRef(new Map<string, AbortController>());
   // Switching back to a recent workspace shows its last data at once while a
   // fresh load runs, instead of an empty view until every request returns.
   const recentWorkspaceDataRef = useRef(new Map<string, RecentWorkspaceData>());
-  const editedKnowledgeRef = useRef('');
-  const isEditingKnowledgeRef = useRef(false);
   const [syncLoading, setSyncLoading] = useState<boolean>(false);
   const [syncResults, setSyncResults] = useState<WorkspaceSyncResult[] | null>(null);
-  const [commitMessage, setCommitMessage] = useState<string>('');
-  const [showCommitModal, setShowCommitModal] = useState<boolean>(false);
-  const [commitResults, setCommitResults] = useState<CommitRepoResult[] | null>(null);
   const [deleteWsLoading, setDeleteWsLoading] = useState<string | null>(null);
   const [addRepoLoading, setAddRepoLoading] = useState<boolean>(false);
-
-  // Keep refs in sync with the editor controls so async document requests can
-  // preserve a draft even when the user types while a request is in flight.
-  const updateEditedKnowledge = (value: string) => {
-    editedKnowledgeRef.current = value;
-    setEditedKnowledge(value);
-  };
-  const updateIsEditingKnowledge = (value: boolean) => {
-    isEditingKnowledgeRef.current = value;
-    setIsEditingKnowledge(value);
-  };
 
   // AI toolchain update states
   const [toolsStatus, setToolsStatus] = useState<ToolStatus[]>([]);
@@ -600,87 +582,6 @@ function AppInner() {
     }
   };
 
-
-  const fetchKnowledge = async (wsId: string) => {
-    const requestId = ++knowledgeLoadRequestRef.current;
-    const isCurrentRequest = () =>
-      activeWorkspaceRef.current === wsId && knowledgeLoadRequestRef.current === requestId;
-
-    const signal = beginWorkspaceLoad(workspaceLoadsRef.current, 'knowledge');
-    setKnowledgeLoading(true);
-    setKnowledgeError(null);
-    try {
-      const encodedId = encodeURIComponent(wsId);
-      const res = await fetch(`${API_BASE}/api/workspace/${encodedId}/knowledge`, { signal });
-      if (!res.ok) throw new Error('knowledge request failed');
-      const data: unknown = await res.json();
-      if (!data || typeof data !== 'object' || typeof (data as { content?: unknown }).content !== 'string') {
-        throw new Error('knowledge response was malformed');
-      }
-      if (!isCurrentRequest()) return;
-
-      const content = (data as { content: string }).content;
-      setKnowledgeContent(content);
-      // A retry can finish after the editor opened and the user started
-      // typing. In that case the loaded revision must not replace the draft.
-      if (!isEditingKnowledgeRef.current) {
-        editedKnowledgeRef.current = content;
-        setEditedKnowledge(content);
-      }
-      setKnowledgeError(null);
-    } catch (e) {
-      if (!isCurrentRequest()) return;
-      console.error('Failed to load workspace knowledge:', e);
-      setKnowledgeError('Could not load Knowledge. Existing content and your draft were kept. Retry when ready.');
-    } finally {
-      if (isCurrentRequest()) setKnowledgeLoading(false);
-    }
-  };
-
-  const handleSaveKnowledge = async (wsId: string) => {
-    const requestId = ++saveKnowledgeRequestRef.current;
-    const draftToSave = editedKnowledgeRef.current;
-    const isCurrentRequest = () =>
-      activeWorkspaceRef.current === wsId && saveKnowledgeRequestRef.current === requestId;
-
-    setSaveKnowledgeLoading(true);
-    setSaveKnowledgeError(null);
-    try {
-      const encodedId = encodeURIComponent(wsId);
-      const res = await fetch(`${API_BASE}/api/workspace/${encodedId}/knowledge`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: draftToSave }),
-      });
-      if (!res.ok) throw new Error('knowledge save request failed');
-      const data: unknown = await res.json();
-      if (!data || typeof data !== 'object' || (data as { success?: unknown }).success !== true) {
-        throw new Error('knowledge save response was not confirmed');
-      }
-      if (!isCurrentRequest()) return;
-
-      // A load that started before this confirmed save is now stale. Advance
-      // the load generation before publishing the saved revision so a late
-      // response cannot overwrite it or put the spinner back into the view.
-      knowledgeLoadRequestRef.current += 1;
-      setKnowledgeLoading(false);
-      setKnowledgeContent(draftToSave);
-      setKnowledgeError(null);
-      setSaveKnowledgeError(null);
-      // If typing continued while the save was pending, keep the editor open
-      // with the newer draft while recording the confirmed saved revision.
-      if (isEditingKnowledgeRef.current && editedKnowledgeRef.current === draftToSave) {
-        updateIsEditingKnowledge(false);
-      }
-    } catch (e) {
-      if (!isCurrentRequest()) return;
-      console.error('Failed to save workspace knowledge:', e);
-      setSaveKnowledgeError('Could not save Knowledge. Your draft is still open. Retry the save.');
-    } finally {
-      if (isCurrentRequest()) setSaveKnowledgeLoading(false);
-    }
-  };
-
   const handleSyncAll = async (wsId: string) => {
     setSyncLoading(true);
     setSyncResults(null);
@@ -799,6 +700,15 @@ function AppInner() {
     }
   }, [location.pathname]);
 
+  // The old Knowledge address opens the Board with Knowledge in its reader: the same request a link to the knowledge file
+  // makes. The address is replaced, so Back does not return to a screen that no longer exists.
+  useEffect(() => {
+    const toKnowledge = knowledgeRedirect(location.pathname);
+    if (!toKnowledge) return;
+    documentRequests.open(toKnowledge.workspaceId, { name: KNOWLEDGE_FILE });
+    navigate(toKnowledge.to, { replace: true });
+  }, [location.pathname, navigate]);
+
   const fetchToolsStatus = async (force = false) => {
     setToolsLoading(true);
     try {
@@ -846,23 +756,12 @@ function AppInner() {
     // Invalidate every in-flight operation before clearing the old workspace's
     // view. Late responses then fail their identity check and cannot repopulate
     // this state with another workspace's document or draft.
-    knowledgeLoadRequestRef.current += 1;
-    saveKnowledgeRequestRef.current += 1;
     for (const controller of workspaceLoadsRef.current.values()) controller.abort();
     workspaceLoadsRef.current.clear();
     const recent = activeWsId ? recentWorkspaceDataRef.current.get(activeWsId) : undefined;
     setSessions(recent?.sessions ?? []);
     setSessionsLoading(false);
     setGitChanges(recent?.changes ?? []);
-    setKnowledgeContent('');
-    setKnowledgeError(null);
-    setKnowledgeLoading(false);
-    setSaveKnowledgeError(null);
-    setSaveKnowledgeLoading(false);
-    editedKnowledgeRef.current = '';
-    isEditingKnowledgeRef.current = false;
-    setEditedKnowledge('');
-    setIsEditingKnowledge(false);
     if (activeWsId && recent) {
       for (const kind of ['changes', 'sessions'] as const) {
         if (recent[kind] !== undefined) perfMark('cs:ws-data', { id: activeWsId, kind, applied: true, cached: true });
@@ -881,13 +780,6 @@ function AppInner() {
   useEffect(() => {
     if (activeWsId && (subTab === 'sessions' || subTab === 'overview')) {
       fetchWorkspaceSessions(activeWsId);
-    }
-  }, [activeWsId, subTab]);
-
-  // Load knowledge when subTab switches to 'knowledge' or active workspace changes
-  useEffect(() => {
-    if (activeWsId && subTab === 'knowledge') {
-      fetchKnowledge(activeWsId);
     }
   }, [activeWsId, subTab]);
 
@@ -1079,20 +971,7 @@ Core Instructions:
       addRepoLoading={addRepoLoading}
       handleAddRepo={handleAddRepo}
       sessionProps={{ sessions, sessionsLoading, setActiveSession, setTranscript, fetchSessionTranscript, handleOpenDesktopSession, showToast }}
-      changesProps={{ gitChanges, syncLoading, syncResults, commitMessage, showCommitModal, commitResults, setSyncResults, setCommitResults, setCommitMessage, setShowCommitModal, fetchGitChanges, handleSyncAll }}
-      knowledgeProps={{
-        knowledgeContent,
-        knowledgeLoading,
-        knowledgeError,
-        isEditingKnowledge,
-        editedKnowledge,
-        saveKnowledgeLoading,
-        saveKnowledgeError,
-        setEditedKnowledge: updateEditedKnowledge,
-        setIsEditingKnowledge: updateIsEditingKnowledge,
-        handleSaveKnowledge,
-        handleRetryKnowledge: fetchKnowledge,
-      }}
+      changesProps={{ gitChanges, syncLoading, syncResults, setSyncResults, fetchGitChanges, handleSyncAll }}
       showToast={showToast}
     />
   );
@@ -1138,6 +1017,23 @@ Core Instructions:
         activeWsId={activeWsId}
         onCheckForUpdates={() => { void handleCheckForUpdates(); }}
         checkingForUpdates={['checking', 'downloading'].includes(updateStatus?.nativeStatus ?? '')}
+        updateFailed={updateStep === 'error'}
+        updateNotice={updateStatus && updateStatus.updateAvailable && !updateDeferred ? (
+          <UpdateNotice
+            currentVersion={updateStatus.currentVersion}
+            latestVersion={updateStatus.latestVersion}
+            step={updateStep}
+            progress={updateStatus.progress}
+            error={updateStatus.error}
+            releaseNotes={updateStatus.releaseNotes}
+            releaseUrl={updateStatus.releaseUrl || GITHUB_RELEASE_URL}
+            canInstall={Boolean(nativeUpdateBridge)}
+            busy={updatingApp}
+            onDownload={() => { void handleAutoUpdate(); }}
+            onRestart={() => { void handleRestartUpdate(); }}
+            onLater={() => setUpdateDeferred(true)}
+          />
+        ) : undefined}
       />
 
       {/* Main Content Area */}
@@ -1162,82 +1058,6 @@ Core Instructions:
                 </button>
               </div>
             )}
-            {/* Update Notification Banner. Updates are always optional: Later
-                hides the banner for this session and no native installer is
-                exposed when this dashboard is running in a browser. */}
-            {updateStatus && updateStatus.updateAvailable && !updateDeferred && (
-              <div className="mb-6 p-4 bg-gradient-to-r from-amber-500/10 to-orange-600/10 border border-amber-500/30 rounded-xl shadow-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 backdrop-blur-sm">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-warning-foreground shrink-0">
-                    {updatingApp ? (
-                      <RefreshCw size={20} className="animate-spin text-warning-foreground" />
-                    ) : (
-                      <Sparkles size={20} />
-                    )}
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-warning-foreground">
-                      {updateStep === 'error' ? `${BRAND_NAME} update needs attention` : updateStep === 'downloaded' ? 'Update ready to install' : updateStep === 'downloading' ? 'Downloading update…' : `A new version of ${BRAND_NAME} is available!`}
-                    </h4>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {updateStep === 'error'
-                        ? (updateStatus.error || 'The update could not be completed. You can retry or use the release page.')
-                        : updateStep === 'downloaded'
-                          ? `Restart ${BRAND_NAME} when convenient to install it.`
-                          : updateStep === 'downloading'
-                            ? `Downloading from GitHub Releases… ${Math.round(updateStatus.progress || 0)}%`
-                            : `Upgrade from v${updateStatus.currentVersion} to v${updateStatus.latestVersion} to get the latest features and bug fixes.`}
-                    </p>
-                    {updateStep === 'downloading' && (
-                      <div className="mt-2 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-amber-950/50" aria-label="Update download progress">
-                        <div className="h-full bg-amber-400 transition-all" style={{ width: `${Math.max(0, Math.min(100, updateStatus.progress || 0))}%` }} />
-                      </div>
-                    )}
-                    {updateStatus.releaseNotes && (
-                      <details className="mt-2 max-w-xl text-xs text-muted-foreground">
-                        <summary className="cursor-pointer font-semibold text-amber-200">Release notes</summary>
-                        <p className="mt-1 whitespace-pre-wrap">{updateStatus.releaseNotes}</p>
-                      </details>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  {nativeUpdateBridge && updateStep === 'downloaded' && (
-                    <button
-                      onClick={handleRestartUpdate}
-                      className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold text-xs rounded-lg transition-all shadow-md cursor-pointer"
-                    >
-                      Restart &amp; Install
-                    </button>
-                  )}
-                  {nativeUpdateBridge && updateStep !== 'downloaded' && (
-                    <button
-                      onClick={handleAutoUpdate}
-                      disabled={updatingApp}
-                      className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold text-xs rounded-lg transition-all shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
-                    >
-                      {updateStep === 'error' ? 'Retry download' : updatingApp ? 'Downloading…' : 'Download update'}
-                    </button>
-                  )}
-                  <a
-                    href={updateStatus.releaseUrl || GITHUB_RELEASE_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-2 border border-amber-500/30 text-amber-200 hover:bg-amber-500/10 font-semibold text-xs rounded-lg transition-colors"
-                  >
-                    View release
-                  </a>
-                  <button
-                    onClick={() => setUpdateDeferred(true)}
-                    disabled={updatingApp}
-                    className="px-3 py-2 border border-border text-muted-foreground hover:text-foreground font-semibold text-xs rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    Later
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Offline / Backend Unreachable State */}
             {!config && (
               <div className="flex flex-col items-center justify-center py-40 gap-6">

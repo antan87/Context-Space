@@ -7,7 +7,7 @@ export function InlinePlanMarkdown({ content }: { content?: string | null }) {
       components={{
         p: ({ children }) => <>{children}</>,
         code: ({ children }) => (
-          <code className="rounded border border-border/50 bg-muted/60 px-1 py-0.5 font-mono text-[11px] text-foreground font-normal">
+          <code className="rounded border border-border/50 bg-muted/60 px-1 py-0.5 font-mono text-[12.5px] text-foreground font-normal">
             {children}
           </code>
         ),

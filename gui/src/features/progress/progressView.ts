@@ -7,6 +7,7 @@
 
 import type { MilestoneFact, OpenQuestion, ProgressFacts, ScreenEvent, SessionAssistant, WorkGuidance } from '../../types';
 import type { RingMilestone } from './ringGeometry';
+import { focusText, type Focus } from '../plan/focus';
 
 export type NextEvent = Extract<ScreenEvent, { event: 'next' }>;
 export type ProposalEvent = Extract<ScreenEvent, { event: 'milestone_proposal' }>;
@@ -164,7 +165,7 @@ export function latestNext(events: readonly ScreenEvent[]): NextEvent | undefine
  * then the AI's own suggestion, then whatever the facts say is the obvious step.
  * Returns null when nothing is left to do, so the button is not shown at all.
  */
-export function nextAction(facts: ProgressFacts, suggestion?: NextEvent): NextAction | null {
+export function nextAction(facts: ProgressFacts, suggestion?: NextEvent, focus?: Focus | null): NextAction | null {
   const question = facts.openQuestions[0];
   if (question && !unavailable(facts, 'questions')) {
     return { kind: 'panel', section: 'open', label: 'Answer the question', reason: clip(question.message, 140) };
@@ -187,6 +188,13 @@ export function nextAction(facts: ProgressFacts, suggestion?: NextEvent): NextAc
   if (reopened) {
     const why = reopened.reopen?.reason.trim();
     return { kind: 'prompt', source: 'facts', label: `Redo "${reopened.title}"`, reason: why ? `Reopened: ${why}` : 'It was reopened.', prompt: `Let's redo "${reopened.title}"${why ? `: ${why}` : '.'}` };
+  }
+  // What the strip says the work is on (the plan's focus) is where Continue goes; the lifecycle's milestones answer only where the plan has nothing open
+  const where = focusText(focus);
+  if (focus && where) {
+    return focus.source === 'set'
+      ? { kind: 'prompt', source: 'facts', label: `Continue "${where}"`, reason: 'It is what the work is on.', prompt: `Continue with "${where}".` }
+      : { kind: 'prompt', source: 'facts', label: `Start "${where}"`, reason: 'It is next up in the plan.', prompt: `Start "${where}".` };
   }
   const underway = facts.milestones.find((milestone) => milestone.id === facts.currentMilestoneId && milestone.state === 'in_progress')
     ?? facts.milestones.find((milestone) => milestone.state === 'in_progress');

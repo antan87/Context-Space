@@ -1,9 +1,17 @@
+import { registerWorkspaceFileRoutes } from './http/workspace-file-routes.js';
+import { registerWorkspaceReferenceRoutes } from './http/workspace-reference-routes.js';
 import { listRepositoryChangesWithFingerprint, parseGitStatus } from './core/repository-changes.js';
 import { resolveFileReference } from './core/file-reference-resolve.js';
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
 import { registerPlanFileRoutes } from './http/plan-file-routes.js';
 import { registerNewsRoutes } from './http/news-routes.js';
+import { registerIncomingRoutes } from './http/incoming-routes.js';
+import { registerCommitRoutes } from './http/commit-routes.js';
+import { registerCommitNotesRoutes } from './http/commit-notes-routes.js';
+import { registerQuestionsRoutes } from './http/questions-routes.js';
+import { registerViewRoutes } from './http/view-routes.js';
+import { registerBoardRoutes } from './http/board-routes.js';
 import { registerNeedsYouRoute } from './http/needs-you-routes.js';
 import { extractAstSymbols, type ExtractedSymbol } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
@@ -491,15 +499,28 @@ if (installPerfCounters()) {
   });
 }
 
-// Enforce trusted local origin on all mutating HTTP methods across /api/* to defend against
-// cross-site request forgery and browser form posts from untrusted web pages.
+// Cross-site and cross-origin guard for /api/*, to defend against forged requests from untrusted web pages: a page of
+// another site, or the sandboxed frame of an HTML document (an opaque origin, `Origin: null`), which runs its scripts.
+//  - Every request the browser says is cross-site (`Sec-Fetch-Site`) is refused unless it names an app origin, because some GETs
+//    do work (a fetch, the news record, a migration) and a page can send them without being able to read the answer: an <img>
+//    or a no-cors fetch carries no Origin at all. The CORS allowance below does not stop that: it only decides what a page may read.
+//  - A mutating method is refused when it is cross-site at all, and when its Origin or Referer is not a local one.
+// A request with no Sec-Fetch-Site (the CLI, the MCP server, curl: not a browser) and one that is same-origin or same-site
+// (the dashboard, also the Vite dev server on localhost reaching the backend on localhost) pass as before.
+function hasAppOrigin(origin: string | undefined, requestUrl: string): boolean {
+  return hasTrustedLocalOrigin(origin) || hasExactDashboardOrigin(origin, requestUrl);
+}
+
 app.use('/api/*', async (c, next) => {
+  const secFetchSite = c.req.header('sec-fetch-site');
+  const origin = c.req.header('origin');
+  if (secFetchSite === 'cross-site' && !hasAppOrigin(origin, c.req.url)) {
+    return c.json({ error: 'Forbidden cross-site request.' }, 403);
+  }
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(c.req.method)) {
-    const secFetchSite = c.req.header('sec-fetch-site');
     if (secFetchSite === 'cross-site') {
       return c.json({ error: 'Forbidden cross-site request.' }, 403);
     }
-    const origin = c.req.header('origin');
     if (origin && !hasTrustedLocalOrigin(origin)) {
       return c.json({ error: 'Forbidden cross-origin request.' }, 403);
     }
@@ -2649,6 +2670,38 @@ registerPlanFileRoutes(app, async (id) => {
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
 registerNewsRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerIncomingRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerCommitRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerCommitNotesRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerQuestionsRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerViewRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerWorkspaceReferenceRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerWorkspaceFileRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerBoardRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

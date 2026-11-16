@@ -178,7 +178,8 @@ describe('Skills Catalog & Frontmatter Utils', () => {
 
   describe('Skills Management', () => {
     it('should start with an empty skill catalog when no custom skills are saved', async () => {
-      const skills = await getAllSkills();
+      // Only what the product ships for every workspace
+      const skills = (await getAllSkills()).filter((skill) => !skill.alwaysOn);
       expect(skills).toEqual([]);
       expect(skills.length).toBe(0);
       expect(DEFAULT_SKILLS.length).toBe(0);

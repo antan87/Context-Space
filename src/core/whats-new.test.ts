@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { addCommitNote } from './commit-notes.js';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -6,7 +7,8 @@ import { execa } from 'execa';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 import { readPlanFile } from './plan-file-store.js';
-import { NEWS_LIMIT, NewsChangedError, markSeen, newsReaderName, whatsNew } from './whats-new.js';
+import { renderNews } from '../commands/news.js';
+import { NEWS_LIMIT, NewsChangedError, markSeen, newsReaderName, recentCommits, whatsNew } from './whats-new.js';
 
 // Well in the past, so a time marked "now" is never in the future of the machine running the tests.
 const NOW = new Date('2026-06-17T12:00:00.000Z');
@@ -399,4 +401,529 @@ describe('reader names', () => {
     expect(newsReaderName('Claude Code')).toBe('claude-code');
     for (const name of ['', '__proto__', '../x', 'a/b', 'x'.repeat(41)]) expect(() => newsReaderName(name)).toThrow('not a name to read as');
   });
+});
+
+describe('the commits the Board draws', () => {
+  it('are the last three days whatever the reader has seen, and marking the news seen takes none away', async () => {
+    await commit('Too old', ago(24 * 5));
+    await commit('Before the look', ago(30));
+    const first = await whatsNew(root, 'user', { now: NOW, mark: true });
+    expect(first.commits[0]!.commits).toHaveLength(1);
+    const recent = await recentCommits(root, { now: NOW });
+    expect(recent.commits[0]!.commits.map((c) => c.subject)).toEqual(['Before the look']);
+    // after the look the news has no commits, the Board's list still has them, and a later one is added to them
+    await commit('After the look', ago(1));
+    const again = await recentCommits(root, { now: NOW });
+    expect(again.commits[0]!.commits.map((c) => c.subject)).toEqual(['After the look', 'Before the look']);
+    expect((await whatsNew(root, 'user', { now: NOW })).commits[0]!.commits.map((c) => c.subject)).toEqual(['After the look']);
+    expect(await readSeen()).toMatchObject({ readers: { user: { at: NOW.toISOString() } } });
+  });
+
+  it('reads and records nothing', async () => {
+    await commit('A commit', ago(2));
+    await recentCommits(root, { now: NOW });
+    await expect(fs.access(seenFile())).rejects.toThrow();
+  });
+
+  it('includes firstBodyLine, fileCount and pushed on recentCommits without altering whatsNew, and supports up to 50 commits', async () => {
+    const commitEnv = (hoursAgo: number) => {
+      const date = ago(hoursAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      return { GIT_AUTHOR_NAME: 'Anna', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_AUTHOR_DATE: date, GIT_COMMITTER_NAME: 'Anna', GIT_COMMITTER_EMAIL: 'a@example.com', GIT_COMMITTER_DATE: date };
+    };
+    await fs.writeFile(path.join(api, 'alpha.ts'), 'export const a = 1;\n');
+    await fs.writeFile(path.join(api, 'beta.ts'), 'export const b = 2;\n');
+    await execa('git', ['add', 'alpha.ts', 'beta.ts'], { cwd: api, env: commitEnv(3) });
+    await execa('git', ['commit', '-m', 'Add two files', '-m', '\nFirst body paragraph.\nSecond line.'], { cwd: api, env: commitEnv(3) });
+
+    const bare = path.join(root, 'remote.git');
+    await execa('git', ['init', '--bare', bare], { cwd: root });
+    await execa('git', ['remote', 'add', 'origin', bare], { cwd: api });
+    await execa('git', ['push', 'origin', 'HEAD'], { cwd: api });
+
+    await fs.writeFile(path.join(api, 'gamma.ts'), 'export const c = 3;\n');
+    await execa('git', ['add', 'gamma.ts'], { cwd: api, env: commitEnv(2) });
+    await execa('git', ['commit', '-m', 'No body local commit'], { cwd: api, env: commitEnv(2) });
+    await execa('git', ['commit', '--allow-empty', '-m', 'Empty local commit'], { cwd: api, env: commitEnv(1) });
+
+    const recent = await recentCommits(root, { now: NOW });
+    expect(recent.commits[0]!.commits).toEqual([
+      {
+        sha: expect.stringMatching(/^[0-9a-f]{7,}$/),
+        subject: 'Empty local commit',
+        author: 'Anna',
+        at: ago(1).toISOString(),
+        fileCount: 0,
+        pushed: false,
+      },
+      {
+        sha: expect.stringMatching(/^[0-9a-f]{7,}$/),
+        subject: 'No body local commit',
+        author: 'Anna',
+        at: ago(2).toISOString(),
+        fileCount: 1,
+        pushed: false,
+      },
+      {
+        sha: expect.stringMatching(/^[0-9a-f]{7,}$/),
+        subject: 'Add two files',
+        author: 'Anna',
+        at: ago(3).toISOString(),
+        firstBodyLine: 'First body paragraph.',
+        fileCount: 2,
+        pushed: true,
+      },
+    ]);
+
+    const news = await whatsNew(root, 'user', { now: NOW });
+    expect(news.commits[0]!.commits[0]).not.toHaveProperty('fileCount');
+    expect(news.commits[0]!.commits[2]).not.toHaveProperty('firstBodyLine');
+
+    for (let i = 0; i < 15; i += 1) {
+      await commit(`Batch commit ${i + 1}`, ago(1));
+    }
+    const batch = await recentCommits(root, { now: NOW });
+    expect(batch.commits[0]!.commits).toHaveLength(18);
+  });
+});
+
+describe('incoming commits on remote-tracking refs', () => {
+  const setupIncomingRemote = async () => {
+    const ext = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'whats-new-remote-')));
+    const bare = path.join(ext, 'remote.git');
+    await execa('git', ['init', '--bare', '-b', 'main', bare]);
+    const azureUrl = 'https://dev.azure.com/org/proj/_git/api';
+    await execa('git', ['config', 'user.name', 'Anna'], { cwd: api });
+    await execa('git', ['config', 'user.email', 'a@example.com'], { cwd: api });
+    await execa('git', ['config', `url.${bare}.insteadOf`, azureUrl], { cwd: api });
+    await execa('git', ['remote', 'add', 'origin', azureUrl], { cwd: api });
+
+    await commit('Initial local', ago(10), 'Anna');
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: api });
+    await whatsNew(root, 'user', { mark: true, now: ago(9) });
+
+    const maria = path.join(ext, 'maria');
+    await execa('git', ['clone', bare, maria]);
+    await execa('git', ['config', 'user.name', 'Maria'], { cwd: maria });
+    await execa('git', ['config', 'user.email', 'maria@example.com'], { cwd: maria });
+
+    const mariaEnv = (hoursAgo: number) => {
+      const date = ago(hoursAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      return {
+        GIT_AUTHOR_NAME: 'Maria',
+        GIT_AUTHOR_EMAIL: 'maria@example.com',
+        GIT_AUTHOR_DATE: date,
+        GIT_COMMITTER_NAME: 'Maria',
+        GIT_COMMITTER_EMAIL: 'maria@example.com',
+        GIT_COMMITTER_DATE: date,
+      };
+    };
+
+    const commitAsMaria = async (subject: string, hoursAgo: number) => {
+      await fs.writeFile(path.join(maria, `${subject.replace(/\W+/g, '_')}.txt`), subject);
+      const env = mariaEnv(hoursAgo);
+      await execa('git', ['add', '.'], { cwd: maria, env });
+      await execa('git', ['commit', '-m', subject], { cwd: maria, env });
+      return (await execa('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: maria })).stdout.trim();
+    };
+
+    return { ext, azureUrl, maria, mariaEnv, commitAsMaria };
+  };
+
+  it('groups unseen incoming commits by author and host without fetching, preserves unseen commits across pending markSeen, and clears on pull', async () => {
+    const { ext, azureUrl, maria, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commitAsMaria('First incoming change', 4);
+      const secondShort = await commitAsMaria('Second incoming change', 2);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const first = await whatsNew(root, 'user', { pending: true, now: ago(1) });
+      expect(first.empty).toBe(false);
+      expect(first.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 2,
+          newestSha: secondShort,
+          newestAt: ago(2).toISOString(),
+          subject: 'Second incoming change',
+        }],
+      }]);
+
+      // Maria pushes a 3rd commit and it gets fetched BEFORE markSeen is called: pending promotes snapshot 1's tracking SHA
+      const thirdShort = await commitAsMaria('Third incoming commit', 0.5);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      await markSeen(root, 'user', first.at);
+
+      const next = await whatsNew(root, 'user', { pending: true, now: NOW });
+      expect(next.empty).toBe(false);
+      expect(next.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 1,
+          newestSha: thirdShort,
+          newestAt: ago(0.5).toISOString(),
+          subject: 'Third incoming commit',
+        }],
+      }]);
+
+      await markSeen(root, 'user', next.at);
+
+      // Even if a 4th commit exists on an unreachable remote, whatsNew never fetches and stays instant/empty
+      await commitAsMaria('Fourth unfetched commit', 0.2);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['remote', 'set-url', 'origin', 'https://127.0.0.1:1/never-fetched.git'], { cwd: api });
+      const quiet = await whatsNew(root, 'user', { now: NOW });
+      expect(quiet.incoming).toEqual([]);
+      expect(quiet.empty).toBe(true);
+
+      // Pulling brings commits into HEAD; seen incoming commits do not return as new commits
+      await execa('git', ['remote', 'set-url', 'origin', azureUrl], { cwd: api });
+      await execa('git', ['merge', '--ff-only', 'origin/main'], { cwd: api });
+      const afterPull = await whatsNew(root, 'user', { now: NOW });
+      expect(afterPull.incoming).toEqual([]);
+      expect(afterPull.commits).toEqual([{ repo: 'api', commits: [], more: 0 }]);
+      expect(afterPull.empty).toBe(true);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-report seen incoming commits after pulling by merge', async () => {
+    const { ext, maria, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commit('Anna local commit', ago(5), 'Anna');
+      await commitAsMaria('Maria merge change 1', 4);
+      await commitAsMaria('Maria merge change 2', 3);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const seenReport = await whatsNew(root, 'user', { pending: true, now: ago(2) });
+      expect(seenReport.incoming?.[0]?.groups[0]?.count).toBe(2);
+      await markSeen(root, 'user', seenReport.at);
+
+      await execa('git', ['merge', '--no-edit', 'origin/main'], { cwd: api });
+      const afterMerge = await whatsNew(root, 'user', { now: NOW });
+      expect(afterMerge.incoming).toEqual([]);
+      const commitSubjects = afterMerge.commits[0]!.commits.map((c) => c.subject);
+      expect(commitSubjects).not.toContain('Maria merge change 1');
+      expect(commitSubjects).not.toContain('Maria merge change 2');
+      expect(commitSubjects).toEqual([expect.stringMatching(/^Merge /)]);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-report seen incoming commits after rebasing local commits onto them', async () => {
+    const { ext, maria, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commit('Anna local work', ago(5), 'Anna');
+      await commitAsMaria('Maria rebase target 1', 4);
+      await commitAsMaria('Maria rebase target 2', 3);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const seenReport = await whatsNew(root, 'user', { pending: true, now: ago(2) });
+      expect(seenReport.incoming?.[0]?.groups[0]?.count).toBe(2);
+      await markSeen(root, 'user', seenReport.at);
+
+      await execa('git', ['rebase', 'origin/main'], { cwd: api });
+      const afterRebase = await whatsNew(root, 'user', { now: NOW });
+      expect(afterRebase.incoming).toEqual([]);
+      expect(afterRebase.commits[0]!.commits.map((c) => c.subject)).toEqual(['Anna local work']);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('reports only the amended commit after a remote force-push instead of re-reporting already-seen commits', async () => {
+    const { ext, maria, mariaEnv, commitAsMaria } = await setupIncomingRemote();
+    try {
+      await commitAsMaria('Maria C1', 4);
+      await commitAsMaria('Maria C2', 3);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const rep1 = await whatsNew(root, 'user', { pending: true, now: ago(2) });
+      expect(rep1.incoming?.[0]?.groups[0]?.count).toBe(2);
+      await markSeen(root, 'user', rep1.at);
+
+      // Maria amends C2 -> C2' and force-pushes; C1 was already seen and must not be counted again
+      await fs.writeFile(path.join(maria, 'Maria_C2.txt'), 'Maria C2 amended content');
+      const amendEnv = mariaEnv(1);
+      await execa('git', ['add', '.'], { cwd: maria, env: amendEnv });
+      await execa('git', ['commit', '--amend', '-m', 'Maria C2 amended'], { cwd: maria, env: amendEnv });
+      const amendedShort = (await execa('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: maria })).stdout.trim();
+      await execa('git', ['push', '--force', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const rep2 = await whatsNew(root, 'user', { now: NOW });
+      expect(rep2.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 1,
+          newestSha: amendedShort,
+          newestAt: ago(1).toISOString(),
+          subject: 'Maria C2 amended',
+        }],
+      }]);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores pre-existing incoming commits older than the window on a first look and after upgrading pre-OP2 seen state', async () => {
+    const ext = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'whats-new-old-incoming-')));
+    try {
+      const bare = path.join(ext, 'remote.git');
+      await execa('git', ['init', '--bare', '-b', 'main', bare]);
+      const azureUrl = 'https://dev.azure.com/org/proj/_git/api';
+      await execa('git', ['config', 'user.name', 'Anna'], { cwd: api });
+      await execa('git', ['config', 'user.email', 'a@example.com'], { cwd: api });
+      await execa('git', ['config', `url.${bare}.insteadOf`, azureUrl], { cwd: api });
+      await execa('git', ['remote', 'add', 'origin', azureUrl], { cwd: api });
+
+      const initialHead = await commit('Initial local commit', ago(24 * 25), 'Anna');
+      await execa('git', ['push', '-u', 'origin', 'main'], { cwd: api });
+
+      const maria = path.join(ext, 'maria');
+      await execa('git', ['clone', bare, maria]);
+      await execa('git', ['config', 'user.name', 'Maria'], { cwd: maria });
+      await execa('git', ['config', 'user.email', 'maria@example.com'], { cwd: maria });
+
+      const commitAt = async (subject: string, hoursAgo: number) => {
+        await fs.writeFile(path.join(maria, `${subject.replace(/\W+/g, '_')}.txt`), subject);
+        const date = ago(hoursAgo).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        const env = {
+          GIT_AUTHOR_NAME: 'Maria',
+          GIT_AUTHOR_EMAIL: 'maria@example.com',
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_NAME: 'Maria',
+          GIT_COMMITTER_EMAIL: 'maria@example.com',
+          GIT_COMMITTER_DATE: date,
+        };
+        await execa('git', ['add', '.'], { cwd: maria, env });
+        await execa('git', ['commit', '-m', subject], { cwd: maria, env });
+        return (await execa('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: maria })).stdout.trim();
+      };
+
+      await commitAt('20-day-old upstream commit', 24 * 20);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      // 1. First look (no seen.json): defaults to 3-day window, so 20-day-old incoming is not reported as new
+      const firstLook = await whatsNew(root, 'user', { now: NOW });
+      expect(firstLook.basis).toBe('first-look');
+      expect(firstLook.incoming).toEqual([]);
+
+      // 2. Upgraded pre-OP2 seen.json (has repos map, lacks incoming tracking field)
+      await write('.contextspace/seen.json', JSON.stringify({
+        version: 1,
+        readers: {
+          user: {
+            at: ago(2).toISOString(),
+            repos: { api: initialHead },
+            knowledge: [],
+            documents: [],
+          },
+        },
+      }));
+      const afterUpgrade = await whatsNew(root, 'user', { now: NOW });
+      expect(afterUpgrade.basis).toBe('last-look');
+      expect(afterUpgrade.incoming).toEqual([]);
+
+      // 3. A genuinely new incoming commit after `from` is still reported without the 20-day-old one
+      const recentShort = await commitAt('Fresh incoming commit', 1);
+      await execa('git', ['push', 'origin', 'main'], { cwd: maria });
+      await execa('git', ['fetch', 'origin'], { cwd: api });
+
+      const withFresh = await whatsNew(root, 'user', { now: NOW });
+      expect(withFresh.incoming).toEqual([{
+        repo: 'api',
+        host: { kind: 'azure', name: 'Azure DevOps' },
+        groups: [{
+          author: 'Maria',
+          count: 1,
+          newestSha: recentShort,
+          newestAt: ago(1).toISOString(),
+          subject: 'Fresh incoming commit',
+        }],
+      }]);
+    } finally {
+      await fs.rm(ext, { recursive: true, force: true });
+    }
+  });
+
+  it('tracks commit notes in whatsNew and seen.json without losing notes added during a pending report', async () => {
+    vi.useFakeTimers();
+    try {
+      const sha = await commit('Fix merge edge case', ago(60));
+      await write('.contextspace/seen.json', JSON.stringify({
+        version: 1,
+        readers: {},
+        pending: {},
+      }));
+
+      vi.setSystemTime(ago(20));
+      const oldNote = await addCommitNote(root, {
+        commit: sha.slice(0, 7),
+        text: 'Pre-upgrade note\nShould stay unseen after upgrade.',
+      });
+
+      // Simulate upgraded pre-CN1 seen record (no `notes` field): existing note before seen.at stays unseen.
+      await write('.contextspace/seen.json', JSON.stringify({
+        version: 1,
+        readers: {
+          user: { at: ago(15).toISOString(), repos: { api: sha }, knowledge: [], documents: [] },
+        },
+        pending: {},
+      }));
+      const upgraded = await whatsNew(root, 'user', { now: ago(10) });
+      expect(upgraded.notes?.items).toEqual([]);
+      expect(upgraded.empty).toBe(true);
+
+      // A new note arrives at t = -8h. A pending report sees it...
+      vi.setSystemTime(ago(8));
+      const n1 = await addCommitNote(root, {
+        commit: sha.slice(0, 7),
+        text: 'Merge conflict in boardRows.ts — kept both\nCheck both branches.',
+        by: 'claude',
+      });
+      const pendingReport = await whatsNew(root, 'user', { now: ago(5), pending: true });
+      expect(pendingReport.empty).toBe(false);
+      expect(pendingReport.notes?.items.map((n) => n.id)).toEqual([n1.note.id]);
+
+      // ...and BEFORE the user marks it seen, a second note n2 lands at t = -3h!
+      vi.setSystemTime(ago(3));
+      const n2 = await addCommitNote(root, {
+        commit: sha,
+        text: 'Follow-up finding on rebase',
+      });
+
+      await markSeen(root, 'user', pendingReport.at);
+      const afterSeen = await whatsNew(root, 'user', { now: NOW, mark: true });
+      expect(afterSeen.notes?.items.map((n) => n.id)).toEqual([n2.note.id]);
+      expect(afterSeen.notes?.items.map((n) => n.id)).not.toContain(n1.note.id);
+      expect(afterSeen.notes?.items.map((n) => n.id)).not.toContain(oldNote.note.id);
+
+      // Once marked seen, it does not reappear.
+      const quiet = await whatsNew(root, 'user', { now: new Date(NOW.getTime() + 60_000) });
+      expect(quiet.notes?.items).toEqual([]);
+      expect(quiet.empty).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('answer freshness', () => {
+  it('reports new broken copies once, and again after a fix or another break, preserving a pending snapshot', async () => {
+    const answer = '# How?\n\n## Part\n\n```ts api/a.ts:1\none\n```\n\n```ts api/b.ts:1\ntwo\n```\n';
+    await write('api/a.ts', 'one\n');
+    await write('api/b.ts', 'two\n');
+    await write('explain/how.md', answer, ago(2));
+    await whatsNew(root, 'user', { now: ago(1), mark: true });
+    await write('api/a.ts', 'changed\n');
+    const first = await whatsNew(root, 'user', { now: NOW, pending: true });
+    expect(first.answers?.items).toMatchObject([{ path: 'explain/how.md', change: 'out-of-date', copies: 1 }]);
+    expect(first.documents.items.some((item) => item.name === 'explain/how.md')).toBe(false);
+    await write('api/b.ts', 'changed\n');
+    await markSeen(root, 'user', first.at);
+    expect((await whatsNew(root, 'user', { now: NOW, mark: true })).answers?.items).toMatchObject([{ copies: 2 }]);
+    expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toEqual([]);
+    await write('api/a.ts', 'one\n');
+    await write('api/b.ts', 'two\n');
+    await whatsNew(root, 'user', { now: NOW, mark: true });
+    await write('api/a.ts', 'changed\n');
+    expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ copies: 1 }]);
+  });
+});
+
+
+describe('answer files in news', () => {
+  it('replaces document lines with new and updated answer lines and prints Answers', async () => {
+    await whatsNew(root, 'user', { now: ago(2), mark: true });
+    await write('explain/new.md', '# How?\n', ago(1));
+    const added = await whatsNew(root, 'user', { now: NOW, mark: true });
+    expect(added.answers?.items).toMatchObject([{ path: 'explain/new.md', question: 'How?', change: 'added' }]);
+    expect(added.documents.items).toEqual([]);
+    expect(renderNews(added, NOW)).toContain('Answers\n  New answer: How?');
+    await write('explain/new.md', '# How again?\n', new Date(NOW.getTime() + 1000));
+    const updated = await whatsNew(root, 'user', { now: new Date(NOW.getTime() + 2000) });
+    expect(updated.answers?.items).toMatchObject([{ question: 'How again?', change: 'changed' }]);
+    expect(renderNews(updated, NOW)).toContain('Answer updated: How again?');
+  });
+});
+
+it('does not forget a broken copy while it cannot be checked', async () => {
+  await write('explain/how.md', '# How?\n\n```ts api/a.ts:1\none\n```\n', ago(2));
+  await write('api/a.ts', 'changed\n');
+  await whatsNew(root, 'user', { now: ago(1), mark: true });
+  await write('api/a.ts', '\0binary');
+  expect((await whatsNew(root, 'user', { now: NOW, mark: true })).answers?.items).toEqual([]);
+  await write('api/a.ts', 'changed\n');
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toEqual([]);
+});
+
+it('caps answer news and the saved snapshot', async () => {
+  await whatsNew(root, 'user', { now: ago(2), mark: true });
+  await Promise.all(Array.from({ length: 201 }, (_, i) => write(`explain/q${String(i).padStart(3, '0')}.md`, `# Question ${i}?\n`, ago(1))));
+  const report = await whatsNew(root, 'user', { now: NOW, mark: true });
+  expect(report.answers?.items).toHaveLength(NEWS_LIMIT);
+  expect(report.answers?.more).toBe(190);
+  expect((await readSeen()).readers.user.answers).toHaveLength(201); // The omitted file is retained as unavailable.
+});
+
+it('retains unavailable answer state and the unreported update through a mark', async () => {
+  const answer = '# How?\n\n```ts api/a.ts:1\none\n```\n';
+  await write('api/a.ts', 'changed\n');
+  await write('explain/how.md', answer, ago(4));
+  await whatsNew(root, 'user', { now: ago(3), mark: true });
+  await write('explain/how.md', 'x'.repeat(1024 * 1024 + 1), ago(2));
+  await whatsNew(root, 'user', { now: ago(1), mark: true });
+  await write('explain/how.md', answer, ago(2));
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ change: 'changed' }]);
+  await whatsNew(root, 'user', { now: NOW, mark: true });
+  await write('explain/how.md', 'x'.repeat(1024 * 1024 + 1), ago(2));
+  await whatsNew(root, 'user', { now: NOW, mark: true });
+  await write('explain/how.md', answer, ago(2));
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toEqual([]);
+});
+
+it('notices a second break after an unmarked empty repair report', async () => {
+  await write('explain/how.md', '# How?\n\n```ts api/a.ts:1\none\n```\n', ago(4));
+  await write('api/a.ts', 'changed\n');
+  await whatsNew(root, 'user', { now: ago(3), mark: true });
+  await write('api/a.ts', 'one\n');
+  expect((await whatsNew(root, 'user', { now: ago(2), pending: true })).answers?.items).toEqual([]);
+  await write('api/a.ts', 'changed\n');
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ change: 'out-of-date' }]);
+});
+
+it('does not announce old broken answers when upgrading a pre-E3 record', async () => {
+  await write('explain/how.md', '# How?\n\n```ts api/a.ts:1\none\n```\n', ago(4));
+  await write('api/a.ts', 'changed\n');
+  await write('.contextspace/seen.json', JSON.stringify({ version: 1, readers: { user: { at: ago(2).toISOString(), repos: {}, knowledge: [], documents: ['explain/how.md'] } }, pending: {} }));
+  expect((await whatsNew(root, 'user', { now: ago(1), pending: true })).answers?.items).toEqual([]);
+  await write('api/a.ts', 'one\n');
+  await whatsNew(root, 'user', { now: NOW, pending: true });
+  await write('api/a.ts', 'changed\n');
+  expect((await whatsNew(root, 'user', { now: NOW })).answers?.items).toMatchObject([{ change: 'out-of-date' }]);
+});
+
+it('caps answer lists when reading both reader and pending records', async () => {
+  const answers = Array.from({ length: 520 }, (_, i) => ({ path: `explain/${i}.md`, broken: ['copy'] }));
+  const record = { at: ago(2).toISOString(), repos: {}, knowledge: [], documents: [], answers };
+  await write('.contextspace/seen.json', JSON.stringify({ version: 1, readers: { user: record, other: record }, pending: { other: record } }));
+  await whatsNew(root, 'user', { now: NOW, pending: true });
+  const seen = await readSeen();
+  expect(seen.readers.other.answers).toHaveLength(500);
+  expect(seen.pending.other.answers).toHaveLength(500);
 });

@@ -13,6 +13,10 @@ const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
 
 const storage = new Map<string, string>();
+// Which media queries match: none (a wide desktop) unless a test sets it.
+let matchesQuery: (query: string) => boolean = () => false;
+const DOCKED_KEY = 'ctxspace_sidebar_docked_v1';
+
 const localStorageMock = {
   getItem: (key: string) => storage.get(key) ?? null,
   setItem: (key: string, value: string) => storage.set(key, value),
@@ -33,8 +37,8 @@ beforeAll(() => {
   (globalThis as unknown as { window: unknown }).window = {
     addEventListener: () => {},
     removeEventListener: () => {},
-    matchMedia: () => ({
-      matches: false,
+    matchMedia: (query: string) => ({
+      matches: matchesQuery(query),
       addEventListener: () => {},
       removeEventListener: () => {},
     }),
@@ -48,6 +52,9 @@ afterAll(() => {
 
 beforeEach(() => {
   storage.clear();
+  matchesQuery = () => false;
+  // Most of these are about the full list, which is only on screen once it is docked.
+  storage.set(DOCKED_KEY, 'true');
   floatingChatStore.removeTab('feat/alpha');
   floatingChatStore.removeTab('feat/beta');
 });
@@ -191,7 +198,7 @@ describe('AppSidebar - Open Sessions and Close Controls', () => {
   });
 
   it('renders discoverable close button in rail mode for active session', () => {
-    storage.set('ctxspace_sidebar_collapsed', 'true');
+    storage.delete(DOCKED_KEY);
     floatingChatStore.openCli('feat/alpha');
     floatingChatStore.addTab('feat/beta');
 
@@ -337,48 +344,76 @@ describe('AppSidebar - Active and Archived lists', () => {
   });
 });
 
-describe('AppSidebar - Advanced tools', () => {
-  const advancedButton = /<button[^>]*aria-expanded="(true|false)"[^>]*>(?:(?!<\/button>).)*Advanced tools<\/button>/;
-
-  it('keeps Reusable setup in view and folds Workrooms and Strategies away by default', () => {
+describe('AppSidebar - Administration', () => {
+  it('keeps Administration with Skills & agents in view and purges legacy clutter', () => {
     const html = renderSidebar({}, '/overview');
 
-    expect(html).toContain('Reusable setup');
-    expect(html).toContain('aria-label="Projects"');
+    expect(html).toContain('Administration');
     expect(html).toContain('aria-label="Skills &amp; agents"');
-    const match = advancedButton.exec(html);
-    expect(match?.[1]).toBe('false');
-    expect(match?.[0]).toContain('aria-controls="sidebar-advanced-tools"');
-    // The items stay in the page behind `hidden`, so the button's aria-controls always points at something.
-    expect(html).toMatch(/<div id="sidebar-advanced-tools" hidden="">/);
-    expect(html).toContain('aria-label="Workrooms"');
-    expect(html).toContain('aria-label="Strategies"');
-  });
-
-  it('is open when the viewer left it open', () => {
-    storage.set('ctxspace_sidebar_advanced_open', 'true');
-    const html = renderSidebar({}, '/overview');
-
-    expect(advancedButton.exec(html)?.[1]).toBe('true');
-    expect(html).toMatch(/<div id="sidebar-advanced-tools">/);
-  });
-
-  it.each(['/workrooms', '/workrooms/room-1', '/workflows', '/strategies'])('is open by itself on %s', (path) => {
-    const html = renderSidebar({}, path);
-
-    expect(advancedButton.exec(html)?.[1]).toBe('true');
-    expect(html).toMatch(/<div id="sidebar-advanced-tools">/);
-  });
-
-  it('is folded away on a page outside the section even when storage cannot be read', () => {
-    const original = localStorageMock.getItem;
-    localStorageMock.getItem = () => { throw new DOMException('blocked', 'SecurityError'); };
-    try {
-      const html = renderSidebar({}, '/overview');
-      expect(advancedButton.exec(html)?.[1]).toBe('false');
-    } finally {
-      localStorageMock.getItem = original;
-    }
+    expect(html).not.toContain('aria-label="Projects"');
+    expect(html).not.toContain('aria-label="Workrooms"');
+    expect(html).not.toContain('aria-label="Strategies"');
+    expect(html).not.toContain('Advanced tools');
   });
 });
 
+
+describe('AppSidebar - rail, sheet and dock', () => {
+  it('is the slim rail by default, with Jump to among its icons', () => {
+    storage.clear();
+    const html = renderSidebar({}, '/overview');
+
+    expect(html).toContain('data-sidebar="rail"');
+    expect(html).toContain('w-14');
+    expect(html).toContain('aria-label="Jump to a workspace"');
+    expect(html).toContain('aria-keyshortcuts="Control+k Meta+k"');
+    expect(html).toContain('aria-label="Show workspaces (z)"');
+    // The full list is not in the page until it is opened as a sheet.
+    expect(html).not.toContain('data-sidebar="full"');
+    expect(html).not.toContain('placeholder="Filter..."');
+  });
+
+  it('mounts the Jump to dialog once, in the rail too, so the shortcut works there', () => {
+    storage.clear();
+    const html = renderSidebar({}, '/overview');
+
+    expect(html.match(/<dialog/g)).toHaveLength(1);
+    expect(html).toContain('aria-labelledby="quick-switch-title"');
+  });
+
+  it('docks the full list once pinned, and offers to collapse it', () => {
+    const html = renderSidebar({}, '/overview');
+
+    expect(html).toContain('data-sidebar="full"');
+    expect(html).not.toContain('data-sidebar="rail"');
+    expect(html).toContain('Collapse (z)');
+    expect(html).not.toContain('Keep the sidebar open');
+    expect(html.match(/<dialog/g)).toHaveLength(1);
+  });
+
+  it('ignores the old collapsed choice', () => {
+    storage.clear();
+    storage.set('ctxspace_sidebar_collapsed', 'false');
+
+    expect(renderSidebar({}, '/overview')).toContain('data-sidebar="rail"');
+  });
+
+  it('never docks in a narrow window, even when it was pinned on a wide one', () => {
+    matchesQuery = (query) => query.includes('min-width: 768px');
+    const html = renderSidebar({}, '/overview');
+
+    expect(html).toContain('data-sidebar="rail"');
+    expect(html).not.toContain('data-sidebar="full"');
+    expect(html).not.toContain('Collapse (z)');
+  });
+
+  it('shows the phone its full list with no rail, pin or collapse', () => {
+    matchesQuery = (query) => query.includes('max-width: 767px');
+    storage.clear();
+    const html = renderSidebar({}, '/overview');
+
+    // The phone shows only its top bar; its sheet is closed.
+    expect(html).not.toContain('data-sidebar="rail"');
+    expect(html).toContain('Open navigation');
+  });
+});

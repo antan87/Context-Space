@@ -11,19 +11,24 @@ test.use({ workspacesData: [feature], workspacesStatusData: {
   review: { id: 'review', branchName: 'review', changedFiles: 1, dirtyRepos: 1, syncStatus: 'up-to-date', runningServices: 0 },
 } });
 
-test('reviews the actual worktree, switches diff mode, and copies refinement feedback for CLI chat', async ({ page, context, baseURL }) => {
+test('reviews the actual worktree, switches diff mode, and copies Ask AI feedback when no AI is connected', async ({ page, context, baseURL }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(baseURL!).origin });
   const json = (body: unknown) => ({ contentType: 'application/json', body: JSON.stringify(body) });
   await page.route('**/api/workspace/review/lifecycle', route => route.fulfill(json({ lifecycle: { steps: [] }, report: null })));
   await page.route('**/api/workspace/review/changes', route => route.fulfill(json({ changes: [{ repoName: 'app', repoPath: feature.repos[0], files: [{ file: 'demo.ts', type: 'modified', additions: 1, deletions: 1 }] }] })));
   await page.route('**/api/workspace/review/changes/symbols', route => route.fulfill(json({ symbols: [] })));
   await page.route('**/api/workspace/review/changes/diff?*', route => route.fulfill(json({ diff, fileContent: 'export const answer = 2;\n', originalContent: 'export const answer = 1;\n', symbols: [] })));
-  await page.goto('/#/workspaces/review/changes');
+  await page.route('**/api/terminals/review/status', route => route.fulfill({ json: { available: true, sessions: [], targets: [] } }));
+  await page.routeWebSocket('**/ws/terminal', socket => socket.close());
+  await page.goto('/#/workspaces/review/overview');
   await expect(page.getByRole('heading', { level: 1, name: 'review' })).toBeVisible();
   // The one workspace header reports the changes and links to where they are reviewed.
-  await expect(page.getByRole('group', { name: 'Task status' }).getByRole('link', { name: /Changes/ })).toContainText('1 file');
-  await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: /^Code/ })).toHaveAttribute('aria-current', 'page');
-  const code = page.getByRole('region', { name: 'Workspace code' });
+  await page.getByRole('button', { name: 'Workspace actions' }).click();
+  await expect(page.getByRole('menuitem', { name: /^Review/ })).toContainText('1 file');
+  await page.getByRole('menuitem', { name: /^Review/ }).click();
+  await expect(page).toHaveURL(/\/board/);
+  const code = page.getByRole('region', { name: 'Review', exact: true });
+  await expect(code).toBeVisible();
   await code.getByRole('treeitem', { name: /demo\.ts/ }).click();
   const diffToolbar = code.getByRole('toolbar', { name: 'Diff' });
   const sideBySide = diffToolbar.getByRole('button', { name: 'Side by side' });
@@ -40,10 +45,11 @@ test('reviews the actual worktree, switches diff mode, and copies refinement fee
   await expect(page.getByRole('menuitem', { name: /Accept this change/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(moreOptions).toBeHidden();
-  await diffToolbar.getByRole('button', { name: /Refine/ }).click();
+  await diffToolbar.getByRole('button', { name: 'Ask AI', exact: true }).click();
   await page.getByPlaceholder('e.g. Ensure null safety when calculating vacation debt...').fill('Use answer 3 instead.');
-  await page.getByRole('button', { name: 'Copy for CLI chat', exact: true }).click();
+  await page.getByRole('button', { name: 'Send to AI', exact: true }).click();
   await expect(page.getByRole('region', { name: 'CLI Chat' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('Use answer 3 instead.');
   const request = await page.evaluate(() => navigator.clipboard.readText());
   expect(request).toContain('Use answer 3 instead.');
   expect(request).toContain('app/demo.ts');

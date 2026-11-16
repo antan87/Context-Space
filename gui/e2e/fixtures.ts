@@ -1,5 +1,5 @@
 import { test as base, expect, type Route } from '@playwright/test';
-import { planFile, whatsNew } from './planData';
+import { boardFile, planFile, whatsNew } from './planData';
 
 export type MockDataOptions = {
   configData: any;
@@ -15,6 +15,8 @@ export type MockDataOptions = {
   harnessesData: any;
   workflowsTemplatesData: any;
   servicesData: any;
+  /** The full sidebar starts docked beside the page, as most specs expect. False starts on the slim rail, the app's default. */
+  sidebarDocked: boolean;
 };
 
 export const test = base.extend<MockDataOptions & { setupMocks: void }>({
@@ -78,6 +80,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
   }, { option: true }],
   workflowsTemplatesData: [{ templates: [] }, { option: true }],
   servicesData: [{ services: [], orchestrationTools: [], runningState: [], runningOrchestrators: [] }, { option: true }],
+  sidebarDocked: [true, { option: true }],
 
   setupMocks: [async ({
     page,
@@ -94,12 +97,23 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     harnessesData,
     workflowsTemplatesData,
     servicesData,
+    sidebarDocked,
   }, use) => {
     const json = (body: unknown) => async (route: Route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
+    // Most specs drive the full sidebar, which the app only docks once pinned. Seeded on the first load of a tab only, so a
+    // spec that pins or collapses it keeps that choice through a reload.
+    await page.addInitScript((docked) => {
+      if (window !== window.top) return;
+      try {
+        if (docked && !sessionStorage.getItem('e2e-sidebar-seeded')) localStorage.setItem('ctxspace_sidebar_docked_v1', 'true');
+        sessionStorage.setItem('e2e-sidebar-seeded', '1');
+      } catch { /* no storage */ }
+    }, sidebarDocked);
+
     // How the plan works opens by itself on a first visit; a spec about it clears this.
-    await page.addInitScript(() => { try { window.localStorage.setItem('contextspace.plan.how-it-works-seen', '1'); } catch { /* no storage */ } });
+    await page.addInitScript(() => { if (window !== window.top) return; try { window.localStorage.setItem('contextspace.plan.how-it-works-seen', '1'); } catch { /* no storage */ } });
 
     await page.route('**/api/config', json(configData));
     await page.route('**/api/adapters', json(adaptersData));
@@ -154,6 +168,16 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/workspace/*/plan', json(planFile()));
     // Nothing changed since the user last looked, so no card above the plan; a spec about it routes its own.
     await page.route('**/api/workspace/*/news', json(whatsNew()));
+    // The Board's recent commits (what it draws, whatever was seen): none unless a spec says
+    await page.route('**/api/workspace/*/recent-commits', (route) => route.fulfill({ json: { at: new Date().toISOString(), from: new Date(Date.now() - 3 * 86_400_000).toISOString(), commits: [] } }));
+    // Incoming commits pushed by others: none unless a spec registers its own route
+    await page.route('**/api/workspace/*/incoming**', (route) => route.fulfill({ json: { at: new Date().toISOString(), repos: [] } }));
+    // Nothing has been put on the board; a spec about the board routes its own.
+    await page.route('**/api/workspace/*/board', json(boardFile()));
+    // No workspace files by default; specs about Workspace files register their own listing route.
+    await page.route('**/api/workspace/*/files', json({ files: [], truncated: false, errors: [] }));
+    // Nothing is moved on the board either: a place that is sent anyway is refused. A spec about moving things routes its own.
+    await page.route('**/api/workspace/*/board/changes', (route) => route.fulfill({ status: 409, json: { error: 'No board change was expected here.' } }));
     // Nothing needs the user in any workspace; a spec about the Overview routes its own.
     await page.route('**/api/needs-you?*', json({ workspaces: [] }));
     // The Where Are We strip above the chat: an empty plan and a live feed with nothing in it. A spec that
@@ -184,6 +208,7 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     // The chat sits beside Plan, Changes and the other parts when there is room. Specs about those parts are about
     // the parts, so they start with the chat hidden there; a spec about the layout sets its own.
     await page.addInitScript(() => {
+      if (window !== window.top) return;
       try {
         if (!localStorage.getItem('contextspace_chat_layout_v1')) localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: true, percent: 62 }));
       } catch { /* Storage can be unavailable. */ }

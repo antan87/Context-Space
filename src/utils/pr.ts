@@ -1,9 +1,10 @@
 /**
  * @module utils/pr
- * Pull-request helpers: detect the GitHub CLI, parse a git remote URL into its
- * host/owner/repo, and construct a "create PR / MR" compare URL for the common
- * forges. Pure functions (`parseRemoteUrl`, `buildCompareUrl`) are unit-tested;
- * `detectGh`/`createPrWithGh` shell out to `gh`.
+ * Pull-request and commit helpers: detect the GitHub CLI, parse a git remote URL
+ * into its host/owner/repo, and construct a "create PR / MR" compare URL or
+ * commit URL for the common forges. Pure functions (`parseRemoteUrl`,
+ * `buildCompareUrl`, `buildCommitUrl`) are unit-tested; `detectGh`/`createPrWithGh`
+ * shell out to `gh`.
  */
 
 import { execa } from 'execa';
@@ -29,7 +30,7 @@ export interface GhStatus {
 }
 
 /** Determines the forge kind from a hostname. */
-function forgeKind(host: string): ForgeKind {
+export function forgeKind(host: string): ForgeKind {
   const h = host.toLowerCase().trim();
   if (h === 'github.com' || h.endsWith('.github.com')) return 'github';
   if (h === 'gitlab.com' || h.endsWith('.gitlab.com')) return 'gitlab';
@@ -48,6 +49,26 @@ function forgeKind(host: string): ForgeKind {
 
 function stripGitSuffix(s: string): string {
   return s.replace(/\.git$/, '');
+}
+
+function toNormalizedUrl(url: string): URL | null {
+  const raw = url.trim();
+  if (!raw) return null;
+  let normalized = raw;
+  const scp = raw.match(/^([^@/:]+)@([^:]+):(.+)$/); // git@host:owner/repo(.git)
+  if (scp && !raw.includes('://')) {
+    normalized = `ssh://${scp[1]}@${scp[2]}/${scp[3]}`;
+  }
+  try {
+    return new URL(normalized);
+  } catch {
+    return null;
+  }
+}
+
+/** Extracts the hostname from an HTTP(S), SSH, or SCP-style Git remote URL, or `null` for local paths. */
+export function extractRemoteHost(url: string): string | null {
+  return toNormalizedUrl(url)?.hostname || null;
 }
 
 /**
@@ -71,32 +92,23 @@ export function parseRemoteUrl(url: string): ParsedRemote | null {
     };
   }
 
-  // Normalize into a URL we can parse with the WHATWG URL class.
-  let normalized = raw;
-  const scp = raw.match(/^([^@]+)@([^:]+):(.+)$/); // git@host:owner/repo(.git)
-  if (scp && !raw.includes('://')) {
-    normalized = `ssh://${scp[1]}@${scp[2]}/${scp[3]}`;
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(normalized);
-  } catch {
-    return null;
-  }
+  const parsed = toNormalizedUrl(raw);
+  if (!parsed) return null;
 
   const host = parsed.hostname;
   const kind = forgeKind(host);
   const segments = parsed.pathname.split('/').filter(Boolean).map((s) => decodeURIComponent(s));
   if (segments.length < 2) return null;
 
-  // Azure HTTPS: /{org}/{project}/_git/{repo}  (org may be a leading path segment)
+  // Azure HTTPS: /{org}/{project}/_git/{repo} or https://{org}.visualstudio.com/[DefaultCollection/]{project}/_git/{repo}
   const gitIdx = segments.indexOf('_git');
   if (kind === 'azure' && gitIdx >= 1) {
     const repo = segments[gitIdx + 1];
     const project = segments[gitIdx - 1];
-    // The org is whatever precedes the project (Azure hosts it at /{org}/...).
-    const org = segments.slice(0, gitIdx - 1).join('/') || project;
+    const lowerHost = host.toLowerCase();
+    const org = lowerHost.endsWith('.visualstudio.com')
+      ? host.slice(0, host.length - '.visualstudio.com'.length)
+      : segments.slice(0, gitIdx - 1).join('/') || project;
     if (repo) {
       return { host: 'dev.azure.com', owner: org, project, repo: stripGitSuffix(repo), kind: 'azure' };
     }
@@ -133,6 +145,40 @@ export function buildCompareUrl(remote: ParsedRemote, baseBranch: string, headBr
       );
     case 'bitbucket':
       return `https://${remote.host}/${remote.owner}/${remote.repo}/pull-requests/new?source=${enc(headBranch)}&dest=${enc(baseBranch)}`;
+    default:
+      return null;
+  }
+}
+
+function encodePathSegments(rawPath: string): string {
+  return rawPath
+    .split('/')
+    .filter(Boolean)
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+}
+
+/**
+ * Builds a commit URL for a forge, or `null` for an unknown forge.
+ * Path segments are encoded safely.
+ */
+export function buildCommitUrl(remote: ParsedRemote, sha: string): string | null {
+  const enc = encodeURIComponent;
+  const owner = encodePathSegments(remote.owner);
+  const repo = enc(remote.repo);
+  const encSha = enc(sha);
+
+  switch (remote.kind) {
+    case 'github':
+      return `https://${remote.host}/${owner}/${repo}/commit/${encSha}`;
+    case 'gitlab':
+      return `https://${remote.host}/${owner}/${repo}/-/commit/${encSha}`;
+    case 'azure': {
+      const project = remote.project ? `${enc(remote.project)}/` : '';
+      return `https://dev.azure.com/${owner}/${project}_git/${repo}/commit/${encSha}`;
+    }
+    case 'bitbucket':
+      return `https://${remote.host}/${owner}/${repo}/commits/${encSha}`;
     default:
       return null;
   }
@@ -182,4 +228,28 @@ export async function createPrWithGh(
   } catch (error) {
     return { url: null, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * Resolves the preferred git remote URL for forge detection and commit links.
+ * Keeps the raw config URL when it already identifies a known forge (so local
+ * mirror `insteadOf` rewrites preserve the upstream host), and falls back to
+ * `git remote get-url` when the raw URL is empty or an alias (`gh:org/repo`)
+ * whose effective URL resolves to a known forge.
+ */
+export async function resolvePreferredRemoteUrl(
+  rawUrl: string,
+  readEffectiveUrl: () => Promise<string | null>,
+): Promise<string | null> {
+  const raw = rawUrl.trim();
+  const rawParsed = raw ? parseRemoteUrl(raw) : null;
+  if (rawParsed && rawParsed.kind !== 'unknown') return raw;
+
+  const effective = (await readEffectiveUrl())?.trim() ?? '';
+  if (!raw) return effective || null;
+  if (effective) {
+    const effectiveParsed = parseRemoteUrl(effective);
+    if (effectiveParsed && effectiveParsed.kind !== 'unknown') return effective;
+  }
+  return raw;
 }

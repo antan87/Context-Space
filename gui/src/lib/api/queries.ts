@@ -9,6 +9,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQueries, useQuery, 
 
 import { apiFetch } from './client.js';
 import { planFileKey } from '../../features/plan/planFile.js';
+import { newsKey, recentCommitsKey } from '../../features/plan/whatsNew.js';
 import { workingIn } from '../../features/chat/liveSessions.js';
 import { RUNNING_TERMINALS_KEY } from '../../features/chat/useRunningTerminals.js';
 import type { RunningTerminal } from '../../features/terminal/client.js';
@@ -992,6 +993,10 @@ export function useLastFinish(wsId: string | null) {
  */
 export function invalidateDeliveryState(queryClient: QueryClient, wsId: string): Promise<unknown> {
   return Promise.all([
+    queryClient.invalidateQueries({ queryKey: newsKey(wsId) }),
+    queryClient.invalidateQueries({ queryKey: recentCommitsKey(wsId) }),
+    // A commit's own header (pushed or not, the forge link) changes when it is pushed; the open commit, file and scroll stay as they are.
+    queryClient.invalidateQueries({ queryKey: ['board-commit', wsId] }),
     queryClient.invalidateQueries({ queryKey: ['workspace-repositories', wsId] }),
     queryClient.invalidateQueries({ queryKey: ['workspace-progression', wsId] }),
     queryClient.invalidateQueries({ queryKey: ['workspace-finish-last', wsId] }),

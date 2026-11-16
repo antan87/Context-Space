@@ -26,6 +26,7 @@ async function mockWorkspace(page: Page) {
   } }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
   await page.route('**/api/workspace/demo/changes', (route) => route.fulfill({ json: { changes: [{ repoName: 'api', repoPath: '/dev/api', files: [{ file: 'cache.ts', type: 'modified', additions: 4, deletions: 1 }] }] } }));
+  await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: { file: 'contextspace-board.json', revision: 1, positions: {}, cards: [] } }));
 }
 
 /**
@@ -84,12 +85,13 @@ async function checkChatBeside(page: Page, label: string) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/#/workspaces/demo/plan');
   await expect(page.getByRole('region', { name: 'Where are we', exact: true })).toContainText('Needs you');
-  await expect(page.getByRole('separator', { name: 'Resize the chat' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Goal', exact: true })).toBeVisible();
+  await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
   await expectNoSeriousViolations(page, `${label} chat beside the plan`);
-  await page.goto('/#/workspaces/demo/changes');
-  await expect(page.getByRole('separator', { name: 'Resize the chat' })).toBeVisible();
-  await expectNoSeriousViolations(page, `${label} chat beside the changes`);
+  await page.getByRole('button', { name: 'Workspace actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^Review/ }).click();
+  await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
+  await expectNoSeriousViolations(page, `${label} Review`);
 }
 
 async function checkChatStrip(page: Page, label: string) {
@@ -195,11 +197,11 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
     test('workspace destinations', async ({ page }) => {
       await mockWorkspace(page);
-      for (const section of ['overview', 'plan', 'documents', 'changes']) {
+      for (const section of ['overview', 'board', 'sessions', 'skills']) {
         await page.goto(`/#/workspaces/demo/${section}`);
         await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
-        await expect(page.getByRole('group', { name: 'Task status' })).toContainText('Checks failed');
-        if (section === 'documents') await expect(page.getByText('No documents in the workspace root yet.', { exact: false })).toBeVisible();
+        await expect(page.locator('header').filter({ has: page.getByRole('heading', { level: 1 }) }).getByRole('link', { name: 'Checks failed' })).toBeVisible();
+        await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${section[0].toUpperCase()}${section.slice(1)}`) })).toHaveAttribute('aria-current', 'page');
         await expectNoSeriousViolations(page, `workspace ${section}`);
       }
     });
@@ -276,7 +278,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 }
 
 test.describe('constrained windows', () => {
-  test.use({ workspacesData: [workspace], viewport: { width: 900, height: 800 } });
+  test.use({ workspacesData: [workspace], sidebarDocked: false, viewport: { width: 900, height: 800 } });
 
   test('keep the task in view at 900×800 without horizontal scrolling', async ({ page }) => {
     await mockWorkspace(page);
@@ -286,19 +288,21 @@ test.describe('constrained windows', () => {
     const main = await page.getByRole('main').boundingBox();
     expect(main!.width).toBeGreaterThanOrEqual(800);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(900);
-    for (const name of ['Plan', 'Code', 'Docs', 'Services']) {
+    for (const name of ['Overview', 'Board', 'Sessions', 'Skills']) {
       await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInViewport();
     }
-    // The rail still expands on request, by keyboard.
-    await page.getByRole('button', { name: /Expand/ }).focus();
+    // The full list still opens on request, by keyboard.
+    await page.getByRole('button', { name: 'Show workspaces (z)' }).focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByRole('button', { name: /^Collapse/ })).toBeVisible();
+    await expect(page.getByPlaceholder('Filter...')).toBeVisible();
   });
 
-  test('keep the full sidebar in a 1024-wide window', async ({ page }) => {
-    // Windows CI clamps the desktop window to a 1024×768 screen; the rail is only for narrower windows.
+  test('keep the slim rail in a 1024-wide window, with the full list one press away', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto('/#/overview');
+    await expect(page.locator('aside[data-sidebar="rail"]')).toBeVisible();
+    await expect(page.locator('aside[data-sidebar="full"]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show workspaces (z)' }).click();
     await expect(page.getByText('ContextSpace', { exact: true }).first()).toBeVisible();
   });
 
@@ -310,9 +314,9 @@ test.describe('constrained windows', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(720);
     const nav = page.getByRole('navigation', { name: 'Workspace' });
-    await nav.getByRole('link', { name: 'Services' }).focus();
+    await nav.getByRole('link', { name: 'Skills' }).focus();
     await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(/\/services$/);
+    await expect(page).toHaveURL(/\/skills$/);
     await expect(page.getByRole('button', { name: 'Open navigation' })).toBeVisible();
   });
 });

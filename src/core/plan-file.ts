@@ -24,6 +24,8 @@
  */
 
 export const PLAN_FILE = 'PLAN.md';
+/** Where ContextSpace keeps which step is being worked on now: local state, not part of the plan. */
+export const PLAN_NOW_FILE = '.contextspace/plan-now.json';
 
 /** What every checkbox in the plan has. */
 export interface PlanLine {
@@ -38,6 +40,8 @@ export interface PlanLine {
 
 export interface PlanStep extends PlanLine {
   text: string;
+  /** The key of the step this one is nested under, when it is indented below another step: that one is a heading for it. */
+  parent?: string;
 }
 
 export interface PlanDecision extends PlanLine {
@@ -114,6 +118,8 @@ export function parsePlanFile(text: string): PlanFile {
   const details = new Map<PlanLine, string[]>();
   const keep = (item: PlanLine, line: string) => details.set(item, [...(details.get(item) ?? []), line]);
   const close = () => { open = null; };
+  // The steps whose nested checkboxes may follow, with their indents: a step's parent is the nearest one indented less than it.
+  let stepStack: Array<{ key: string; indent: number }> = [];
 
   lines.forEach((line, index) => {
     const fenceMark = FENCE.exec(line)?.[1];
@@ -132,6 +138,7 @@ export function parsePlanFile(text: string): PlanFile {
     const heading = HEADING.exec(line);
     if (heading) {
       close();
+      stepStack = [];
       const level = heading[1]!.length;
       const words = heading[2]!.trim();
       if (level === 1 && !plan.title) plan.title = words;
@@ -153,6 +160,7 @@ export function parsePlanFile(text: string): PlanFile {
       const words = task[3]!.trim();
       if (inCheckpoints && (checkpointIndent === null || indent <= checkpointIndent)) {
         checkpointIndent = indent;
+        stepStack = [];
         const title = unbold(words);
         checkpoint = { key: uniqueKey(title), title, done, line: index, end: index, steps: [], decisions: [] };
         plan.checkpoints.push(checkpoint);
@@ -161,6 +169,8 @@ export function parsePlanFile(text: string): PlanFile {
       }
       const under = inCheckpoints ? checkpoint : null;
       if (DECIDE.test(words)) {
+        // A decision ends the steps beside it and above it in the outline, so a step nested under it is not under the step before it
+        while (stepStack.length > 0 && stepStack[stepStack.length - 1]!.indent >= indent) stepStack.pop();
         const question = words.replace(DECIDE, '').replace(/(\*\*|__)$/, '').trim();
         const decision: PlanDecision = {
           key: uniqueKey(question), question, done, line: index, end: index, suggested: [],
@@ -169,7 +179,10 @@ export function parsePlanFile(text: string): PlanFile {
         (under ? under.decisions : plan.decisions).push(decision);
         open = { item: decision, indent };
       } else {
-        const step: PlanStep = { key: uniqueKey(words), text: words, done, line: index, end: index };
+        while (stepStack.length > 0 && stepStack[stepStack.length - 1]!.indent >= indent) stepStack.pop();
+        const parent = stepStack[stepStack.length - 1]?.key;
+        const step: PlanStep = { key: uniqueKey(words), text: words, done, line: index, end: index, ...(parent ? { parent } : {}) };
+        stepStack.push({ key: step.key, indent });
         (under ? under.steps : plan.steps).push(step);
         open = { item: step, indent };
       }
@@ -220,6 +233,28 @@ export function openDecisions(plan: PlanFile): PlanDecision[] {
   ].filter((decision) => !decision.done);
 }
 
+/** The keys of the open steps that have open steps under them, however deep: headings, not steps to work on. */
+export function headingKeys(steps: readonly PlanStep[]): Set<string> {
+  const byKey = new Map(steps.map((step) => [step.key, step]));
+  const headings = new Set<string>();
+  for (const step of steps) {
+    if (step.done) continue;
+    const seen = new Set<string>();
+    for (let up = step.parent ? byKey.get(step.parent) : undefined; up && !seen.has(up.key); up = up.parent ? byKey.get(up.parent) : undefined) {
+      seen.add(up.key);
+      if (!up.done) headings.add(up.key);
+    }
+  }
+  return headings;
+}
+
+/** The steps someone can be working on: open, and not a heading for open steps under it. */
+export function workableSteps(plan: PlanFile): PlanStep[] {
+  const all = [...plan.checkpoints.flatMap((checkpoint) => checkpoint.steps), ...plan.steps];
+  const headings = headingKeys(all);
+  return all.filter((step) => !step.done && !headings.has(step.key));
+}
+
 /** A change the file no longer allows: the line moved or changed since it was read, or is not there. */
 export class PlanFileError extends Error {
   constructor(message: string, readonly code: 'not_found' | 'conflict' | 'invalid') {
@@ -235,6 +270,23 @@ function findItem(plan: PlanFile, key: string): PlanCheckpoint | PlanStep | Plan
 }
 
 const nameOf = (item: PlanCheckpoint | PlanStep | PlanDecision) => ('question' in item ? item.question : 'title' in item ? item.title : item.text);
+
+/**
+ * The item the words name: its key, or the words of one item, whole or as the start of exactly one. Several matches
+ * are named, so the caller can say which.
+ */
+export function findPlanItem(plan: PlanFile, words: string, only?: 'checkpoint' | 'decision' | 'step'): PlanCheckpoint | PlanStep | PlanDecision {
+  const items = planItems(plan).filter((item) => !only || (only === 'decision' ? 'question' in item : only === 'checkpoint' ? 'title' in item : 'text' in item));
+  const wanted = words.trim().toLowerCase();
+  const exact = items.filter((item) => item.key === words.trim() || item.key === planKey(words) || nameOf(item).toLowerCase() === wanted);
+  const matches = exact.length ? exact : items.filter((item) => nameOf(item).toLowerCase().startsWith(wanted) || planKey(nameOf(item)).startsWith(planKey(words)));
+  const what = only ?? 'item';
+  if (!wanted || !matches.length) throw new PlanFileError(`No ${what} in ${PLAN_FILE} matches "${words}". Run "ctxspace plan" to see them.`, 'not_found');
+  if (matches.length > 1) {
+    throw new PlanFileError(`"${words}" matches ${matches.length} items: ${matches.slice(0, 5).map((item) => `"${nameOf(item)}"`).join(', ')}. Use more of the words.`, 'invalid');
+  }
+  return matches[0]!;
+}
 
 /** One line of text, safe to put on a line of the file. */
 export function oneLine(text: string, max = 2000): string {

@@ -50,26 +50,25 @@ async function mockServer(page: Page, { running = [] as Terminal[], saved = fals
 }
 
 
-test('opens on the plan, with no second place to start a session: that is the chat', async ({ page }) => {
+test('opens on the Board, with sessions started from the terminal', async ({ page }) => {
   await mockServer(page, { saved: true });
   await page.goto('/#/workspaces/feature-x');
-  await expect(page.getByRole('region', { name: 'The plan', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Start a session' })).toHaveCount(0);
-  const tabs = page.getByLabel('Plan and sessions');
-  await expect(tabs.getByText('Plan', { exact: true })).toBeVisible();
-  await expect(tabs.getByRole('button', { name: /New session/ })).toHaveCount(0);
+  await expect(page.getByTestId('view-mode-board')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Board', exact: true }).getByRole('button', { name: /New session/ })).toHaveCount(0);
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/home-no-session.png` });
 });
 
 test('shows the running sessions beside the plan, named after their tool, and brings one on screen', async ({ page }) => {
   const server = await mockServer(page, { running: [terminal('t-claude', 'claude')], startedBy: 'claude' });
   await page.goto('/#/workspaces/feature-x');
-  const tabs = page.getByLabel('Plan and sessions');
-  const session = tabs.getByRole('button', { name: /^Show Claude Code, / });
+  const session = page.getByTestId('view-mode-terminal');
   await expect(session).toBeVisible();
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/home-running.png` });
   await session.click();
   await expect(page).toHaveURL(/#\/workspaces\/feature-x\/chat$/);
+  await expect(page.getByRole('tab', { name: /^Claude Code, / })).toBeVisible();
   await expect.poll(() => server.attached).toContain('t-claude');
   expect(server.created).toEqual([]);
 });
@@ -84,13 +83,13 @@ test('continues a saved conversation from the chat, where sessions start', async
   expect(server.created[0]).not.toHaveProperty('prompt');
 });
 
-test('the session tabs have a Plan tab, and old links to the chat and the sessions still open them', async ({ page }) => {
+test('Board is reached from the view mode control, and old chat and session links still open', async ({ page }) => {
   await mockServer(page, { running: [terminal('t-claude', 'claude')] });
   await page.goto('/#/workspaces/feature-x/chat');
   await expect(page.getByRole('region', { name: 'CLI Chat', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Plan', exact: true }).first().click();
-  await expect(page).toHaveURL(/#\/workspaces\/feature-x\/plan$/);
-  await expect(page.getByRole('region', { name: 'The plan', exact: true })).toBeVisible();
+  await page.getByTestId('view-mode-board').click();
+  await expect(page).toHaveURL(/#\/workspaces\/feature-x\/board$/);
+  await expect(page.getByRole('region', { name: 'Board', exact: true })).toBeVisible();
   await page.goto('/#/workspaces/feature-x/sessions');
   await expect(page.getByRole('heading', { name: 'AI Sessions & History' })).toBeVisible();
 });

@@ -1,24 +1,14 @@
 {
   "exceptions": [
     {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "expires": "2026-11-02",
-      "reason": "braces: no patched release exists (every version up to the latest, 3.0.3, is affected). It is a stack-exhaustion denial of service from deeply nested brace patterns, so it needs an attacker-chosen pattern. In the root package it is reached through globby, which src/ only calls with fixed literal patterns such as **/*.csproj, and through pm2's file watcher, which nothing here turns on. In extension it is reached only through @vscode/vsce, a devDependency that packages the extension. Re-check when braces publishes a fix."
+      "id": "GHSA-g3hv-75wg-m249",
+      "expires": "2026-12-16",
+      "reason": "minimatch >=7.0.0 <11.0.1: a denial of service from an attacker-chosen glob pattern. Every affected copy left is in build tooling, never in the app: minimatch 10 in gui through typescript-eslint (@typescript-eslint/typescript-estree), minimatch 9 and 10 in desktop through electron-builder (@electron/universal and others), minimatch 10 in extension through typescript-eslint, @vscode/vsce and mocha. They run only on fixed patterns from this repository's own config. The locked releases of those tools do not allow a patched minimatch; npm audit's only offer is a downgrade to older releases (typescript-eslint 8.36, electron-builder 25.1, mocha 11.4), which we do not take. The root package's own copy is already on the patched 11.0.8. Re-check when those tools update."
     },
     {
-      "id": "GHSA-ch52-4w7c-c8xp",
-      "expires": "2026-11-02",
-      "reason": "http-cache-semantics: no patched release exists. It is reached only through electron-builder, a devDependency of desktop (got, cacheable-request, http-cache-semantics, while downloading build tooling), so none of it ships in the app. The disclosure needs a shared HTTP cache serving several users, which a build machine's download cache is not. Re-check when http-cache-semantics publishes a fix."
-    },
-    {
-      "id": "GHSA-hp3w-g68c-fv3c",
-      "expires": "2026-11-02",
-      "reason": "sprintf-js: no patched release exists (all versions affected). It is reached only through electron-builder, a devDependency of desktop (app-builder-lib -> @electron/get -> global-agent -> roarr -> sprintf-js, during packaging), so none of it ships in the app. Re-check when sprintf-js or electron-builder publishes a fix."
-    },
-    {
-      "id": "GHSA-xcx6-jx8p-x3h5",
-      "expires": "2026-11-02",
-      "reason": "@azure/msal-node: no upstream release of @vscode/vsce or @azure/identity resolves to the patched 7.1.0 release. It is reached only through @vscode/vsce, a devDependency of extension (@vscode/vsce -> @azure/identity -> @azure/msal-node), so none of it ships in the app. Re-check when @vscode/vsce or @azure/identity updates."
+      "id": "GHSA-3g3m-2fjr-6pw4",
+      "expires": "2026-12-16",
+      "reason": "glob >=9.0.0 <=14.0.1: a cancelled glob can keep walking the filesystem after its AbortSignal fires. The only affected copy left is glob 13 in extension: a direct devDependency there (^13.0.6, not imported by the extension's code) that mocha and @vscode/vsce 3 also use to run the tests and package the extension. None of it ships, and nothing there passes an AbortSignal. Clearing it needs extension's own glob raised to ^14.0.2 and mocha and vsce releases on a patched glob (or without glob, as vsce 4 is), to do as their own change. The root package's own copy is already on the patched 14.0.6. Re-check when mocha updates."
     }
   ]
 }

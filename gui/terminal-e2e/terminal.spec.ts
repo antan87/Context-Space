@@ -4,9 +4,10 @@ import { test, expect } from '@playwright/test';
 // especially), and a slow start says nothing about the code under test.
 const SHELL_STATE = { timeout: 20_000 };
 
-test('one real shell survives window changes and reload, then stops explicitly', async ({ page }) => {
+test('one real shell survives window changes and reload, then stops explicitly', async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   let launches = 0;
+  let resizes = 0;
   page.on('websocket', ws => { ws.on('framereceived', frame => { const data = JSON.parse(String(frame.payload)); if (data.type === 'error') console.log('Terminal error:', data.message); }); ws.on('socketerror', error => console.log('Terminal socket:', error)); });
   page.on('request', request => { if (request.url().endsWith('/terminal-test/create')) launches++; });
   // Typing while the shell is handling a resize (SIGWINCH) drops keystrokes on
@@ -15,14 +16,21 @@ test('one real shell survives window changes and reload, then stops explicitly',
   // have gone quiet. Tracks every socket, including the one after reload.
   let lastTerminalActivity = Date.now();
   page.on('websocket', ws => {
-    ws.on('framesent', frame => { try { if (JSON.parse(String(frame.payload)).type === 'resize') lastTerminalActivity = Date.now(); } catch { /* not a terminal frame */ } });
+    ws.on('framesent', frame => {
+      try {
+        if (JSON.parse(String(frame.payload)).type === 'resize') {
+          lastTerminalActivity = Date.now();
+          resizes++;
+        }
+      } catch { /* not a terminal frame */ }
+    });
     ws.on('framereceived', frame => { try { if (JSON.parse(String(frame.payload)).type === 'output') lastTerminalActivity = Date.now(); } catch { /* not a terminal frame */ } });
   });
   const settle = () => expect.poll(() => Date.now() - lastTerminalActivity, { timeout: 10_000, intervals: [100] }).toBeGreaterThanOrEqual(400);
   await page.addInitScript(() => {
     if (!localStorage.getItem('contextspace_floating_chat_state_v1')) localStorage.setItem('contextspace_floating_chat_state_v1', JSON.stringify({ openTabs: ['terminal-test'], activeTab: 'terminal-test' }));
   });
-  // Wide enough for Code and Docs to open beside the chat rather than in its place.
+  // Wide enough for the Board to open beside the chat in Split rather than in its place.
   await page.setViewportSize({ width: 1450, height: 900 });
   await page.goto('/#/workspaces/terminal-test/chat');
   const chat = page.getByRole('region', { name: 'CLI Chat', exact: true });
@@ -31,16 +39,11 @@ test('one real shell survives window changes and reload, then stops explicitly',
   await pane.getByRole('group', { name: 'CLI tools' }).getByRole('button', { name: 'Start Shell', exact: true }).click();
   await expect(pane.getByTestId('terminal-state')).toHaveText('Running', SHELL_STATE);
   const openPaneOptions = () => pane.getByRole('button', { name: 'Pane options' }).click();
-  // Code and Docs open on the workspace rail, beside the chat. Code has a toolbar button in the chat; Docs answers to
-  // Ctrl+Shift+D from the terminal. Each opens and closes the same way.
+  const review = page.getByRole('region', { name: 'Review', exact: true });
   const code = page.getByRole('region', { name: 'Workspace code' });
-  const documents = page.getByRole('region', { name: 'Workspace documents' });
-  const toggleInspector = async (name: 'Code' | 'Docs') => {
-    if (name === 'Code') await pane.getByRole('button', { name, exact: true }).click();
-    else { await pane.locator('.xterm-helper-textarea').focus(); await page.keyboard.press('Control+Shift+D'); }
-  };
+  const board = page.getByRole('region', { name: 'Board', exact: true });
   await expect(pane.getByRole('button', { name: 'Reconnect', exact: true })).toHaveCount(0);
-  await page.screenshot({ path: 'test-results/terminal-compact.png' });
+  await page.screenshot({ path: testInfo.outputPath('terminal-compact.png') });
   // The shell is a session tab of its own; the tab is named after the tool.
   await expect(sessionTabs).toHaveCount(1);
   await expect(sessionTabs.first()).toHaveAccessibleName(/^Shell, /);
@@ -53,51 +56,96 @@ test('one real shell survives window changes and reload, then stops explicitly',
   const command = process.platform === 'win32' ? "$env:CS_KEEP='42'; Write-Output ('CS_' + 'STARTED')" : 'export CS_KEEP=42; echo CS_STARTED';
   await run(pane, command);
   await expect(pane.locator('.xterm-accessibility-tree')).toContainText('CS_STARTED');
-  // Code opens beside the terminal, which stays visible and keeps its shell.
-  await toggleInspector('Code');
-  await expect(page).toHaveURL(/\/workspaces\/terminal-test\/changes$/);
+  // Review opens over both panes while the terminal stays mounted underneath it, then closes back to the shell.
+  await page.getByRole('button', { name: 'Workspace actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^Review/ }).click();
+  await expect(review).toBeVisible();
   await expect(code).toBeVisible();
-  await expect(pane).toBeVisible();
-  await page.screenshot({ path: 'test-results/terminal-compact-inspector.png' });
-  await toggleInspector('Code');
-  await expect(code).toBeHidden();
+  await expect(page).toHaveURL(/\/workspaces\/terminal-test\/board$/);
+  const reviewBox = (await review.boundingBox())!;
+  const paneBox = (await pane.boundingBox())!;
+  expect(reviewBox.x).toBeLessThanOrEqual(paneBox.x + 1);
+  expect(reviewBox.y).toBeLessThanOrEqual(paneBox.y + 1);
+  expect(reviewBox.x + reviewBox.width).toBeGreaterThanOrEqual(paneBox.x + paneBox.width - 2);
+  expect(reviewBox.y + reviewBox.height).toBeGreaterThanOrEqual(paneBox.y + paneBox.height - 2);
+  await page.screenshot({ path: testInfo.outputPath('terminal-compact-inspector.png') });
+  await review.getByRole('button', { name: /^Back to the (Terminal|Board)$/ }).click();
+  await expect(review).toBeHidden();
   await expect(pane).toBeVisible();
   await run(pane, process.platform === 'win32' ? "Write-Output ('CS_' + $env:CS_KEEP + '_CODE')" : 'echo CS_${CS_KEEP}_CODE');
   await expect(pane.locator('.xterm-accessibility-tree')).toContainText('CS_42_CODE');
-  await toggleInspector('Docs');
-  await expect(documents).toBeVisible();
+  // Switching to Board hides the terminal without stopping its shell, and Terminal brings it back.
+  await page.getByTestId('view-mode-board').click();
+  await expect(page.getByTestId('view-mode-board')).toHaveAttribute('aria-pressed', 'true');
+  await expect(board).toBeVisible();
+  await expect(pane).toBeHidden();
+  await page.getByTestId('view-mode-terminal').click();
+  await expect(page.getByTestId('view-mode-terminal')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page).toHaveURL(/\/workspaces\/terminal-test\/chat$/);
+  await expect(board).toBeHidden();
   await expect(pane).toBeVisible();
-  await toggleInspector('Docs');
-  await expect(documents).toBeHidden();
+  await run(pane, process.platform === 'win32' ? "Write-Output ('CS_' + $env:CS_KEEP + '_BOARD')" : 'echo CS_${CS_KEEP}_BOARD');
+  await expect(pane.locator('.xterm-accessibility-tree')).toContainText('CS_42_BOARD');
+  // Resizing the terminal beside the Board in Split resizes the PTY; the shell keeps every keystroke after it.
+  await page.getByTestId('view-mode-split').click();
+  await expect(page.getByTestId('view-mode-split')).toHaveAttribute('aria-pressed', 'true');
+  await expect(board).toBeVisible();
   await expect(pane).toBeVisible();
-  await run(pane, process.platform === 'win32' ? "Write-Output ('CS_' + $env:CS_KEEP + '_DOCS')" : 'echo CS_${CS_KEEP}_DOCS');
-  await expect(pane.locator('.xterm-accessibility-tree')).toContainText('CS_42_DOCS');
-  // Resizing the chat beside Code resizes the PTY; the shell keeps every keystroke after it.
-  await toggleInspector('Code');
-  const separator = page.getByRole('separator', { name: 'Resize the chat' });
+  await settle();
+  const boardBox = (await board.boundingBox())!;
+  const splitPaneBox = (await pane.boundingBox())!;
+  expect(boardBox.x + boardBox.width).toBeLessThanOrEqual(splitPaneBox.x + 1);
+  const readCols = async (tag: string) => {
+    const pattern = new RegExp(`CS_COLS_${tag}_(\\d+)`);
+    const cmd = process.platform === 'win32'
+      ? `Write-Output ('CS_COLS_${tag}_' + $Host.UI.RawUI.WindowSize.Width)`
+      : `echo CS_COLS_${tag}_$(tput cols)`;
+    await run(pane, cmd);
+    let cols = 0;
+    await expect.poll(async () => {
+      const rows = await pane.locator('.xterm-accessibility-tree').getByRole('listitem').allTextContents();
+      const match = rows.map(row => row.match(pattern)).find(Boolean);
+      cols = match ? Number(match[1]) : 0;
+      return cols;
+    }).toBeGreaterThan(0);
+    return cols;
+  };
+  const colsBefore = await readCols('BEFORE');
+  const separator = page.getByRole('separator', { name: 'Resize the workspace panes' });
   await expect(separator).toHaveAttribute('aria-orientation', 'vertical');
   const share = Number(await separator.getAttribute('aria-valuenow'));
+  const resizesBefore = resizes;
   await separator.focus();
   await page.keyboard.press('ArrowLeft');
-  await expect(separator).toHaveAttribute('aria-valuenow', String(share - 3));
+  await expect(separator).toHaveAttribute('aria-valuenow', String(share + 3));
+  await expect.poll(() => resizes).toBeGreaterThan(resizesBefore);
+  await expect.poll(async () => (await pane.boundingBox())!.width).toBeGreaterThan(splitPaneBox.width);
+  const colsAfter = await readCols('AFTER');
+  expect(colsAfter).toBeGreaterThan(colsBefore);
   await run(pane, process.platform === 'win32' ? "Write-Output ('CS_' + $env:CS_KEEP + '_WIDE')" : 'echo CS_${CS_KEEP}_WIDE');
   await expect(pane.locator('.xterm-accessibility-tree')).toContainText('CS_42_WIDE');
-  await toggleInspector('Code');
+  await page.getByTestId('view-mode-terminal').click();
+  await expect(board).toBeHidden();
   await expect.poll(() => pane.getByLabel('Interactive CLI terminal').evaluate(host => {
     const screen = host.querySelector('.xterm-screen');
     if (!screen) return Infinity;
     return screen.getBoundingClientRect().bottom - host.getBoundingClientRect().bottom;
   })).toBeLessThanOrEqual(1);
   // Another workspace's chat, then back: the shell and its open panel are as they were.
-  await toggleInspector('Code');
-  const sidebar = page.locator('aside.context-sidebar');
-  await sidebar.getByRole('button', { name: 'Resume CLI chat for terminal-other' }).click();
+  await page.getByTestId('view-mode-split').click();
+  await expect(board).toBeVisible();
+  const workspacesSheet = page.getByRole('dialog', { name: 'Workspaces', exact: true });
+  await page.getByRole('button', { name: 'Show workspaces (z)' }).click();
+  await expect(workspacesSheet).toBeVisible();
+  await workspacesSheet.getByRole('button', { name: 'Resume CLI chat for terminal-other' }).click();
   await expect(page.getByTestId('terminal-pane').filter({ visible: true }).first().getByRole('region', { name: 'Start a CLI session' })).toBeVisible();
-  await sidebar.locator('[data-sidebar-session="terminal-test"]').click();
-  await expect(page).toHaveURL(/\/workspaces\/terminal-test\/changes$/);
-  await expect(code).toBeVisible();
+  await expect(workspacesSheet).not.toBeAttached();
+  await page.locator('aside[data-sidebar="rail"] [data-sidebar-session="terminal-test"]').click();
+  await expect(page).toHaveURL(/\/workspaces\/terminal-test\/board$/);
+  await expect(board).toBeVisible();
   await expect(pane.getByTestId('terminal-state')).toHaveText('Running', SHELL_STATE);
-  await toggleInspector('Code');
+  await page.getByTestId('view-mode-terminal').click();
+  await expect(page).toHaveURL(/\/workspaces\/terminal-test\/chat$/);
   await page.reload();
   await expect(pane.getByTestId('terminal-state')).toHaveText('Running', SHELL_STATE);
   // Taken over after the reload, once: one tab, and no start screen.
@@ -115,7 +163,7 @@ test('one real shell survives window changes and reload, then stops explicitly',
   await expect(pane.getByRole('button', { name: 'End', exact: true })).toHaveCount(0);
 });
 
-test('two real shells work in one workspace at once, side by side, and both come back after a reload', async ({ page }) => {
+test('two real shells work in one workspace at once, side by side, and both come back after a reload', async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   let launches = 0;
   page.on('request', request => { if (request.url().endsWith('/terminal-test/create')) launches++; });
@@ -166,7 +214,7 @@ test('two real shells work in one workspace at once, side by side, and both come
   await expect(screenOf(0)).toContainText('CS_STILL_left');
   await run(1, process.platform === 'win32' ? "Write-Output ('CS_RIGHT_' + $env:CS_SIDE + '.')" : 'echo CS_RIGHT_${CS_SIDE}.');
   await expect(screenOf(1)).toContainText('CS_RIGHT_.');
-  await page.screenshot({ path: 'test-results/terminal-two-sessions.png' });
+  await page.screenshot({ path: testInfo.outputPath('terminal-two-sessions.png') });
   expect(launches).toBe(2);
 
   // A reload brings both back, each in one tab, without starting anything.

@@ -23,6 +23,8 @@ import { statusCommand } from './commands/status.js';
 import { verifyCommand, type VerifyCommandOptions } from './commands/verify.js';
 import { flowCommand, type FlowCommandOptions } from './commands/flow.js';
 import { registerPlanCommand } from './commands/plan.js';
+import { registerNoteCommand } from './commands/note.js';
+import { registerExplainCommand } from './commands/explain.js';
 import { askCommand, type AskOptions } from './commands/ask.js';
 import { newsCommand, type NewsOptions } from './commands/news.js';
 import { runsInsideAiTool } from './utils/ai-tool.js';
@@ -238,6 +240,12 @@ program
 
 // The plan, one item at a time: what AI tools run in their shell and people read in the Plan tab.
 registerPlanCommand(program, (error) => runAction(async () => { throw error; })());
+
+// AI notes left on commits (written by AI tools; people read them in Review and What's new).
+registerNoteCommand(program);
+
+// The answers in explain/ and whether their copied code still matches (read only; AI tools run this before saying an answer is done).
+registerExplainCommand(program);
 
 // Asking the user, for an AI tool without MCP: the same alert the MCP tool request_user_input raises.
 program

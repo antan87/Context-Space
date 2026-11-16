@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Archive, Boxes, FileCode, FileText, LayoutDashboard, Lightbulb, ListChecks, Server, Terminal, type LucideIcon } from 'lucide-react';
+import { Archive, Boxes, FileCode, FileText, Kanban, LayoutDashboard, ListChecks, Server, Terminal, type LucideIcon } from 'lucide-react';
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
@@ -11,10 +11,10 @@ interface RailItem { label: string; purpose: string; icon: LucideIcon }
 const ITEMS: Partial<Record<WorkspaceSection, RailItem>> = {
   overview: { label: 'Overview', purpose: 'Workspace summary, mapped repositories, and telemetry', icon: LayoutDashboard },
   plan: { label: 'Plan', purpose: 'The plan and its checkpoints, the brief the assistant works from, and the checks', icon: ListChecks },
+  board: { label: 'Board', purpose: 'The plan, documents and the commits new since you last looked, laid out on a canvas you can pan and zoom', icon: Kanban },
   sessions: { label: 'Sessions', purpose: 'CLI sessions, conversation history, and usage logs', icon: Terminal },
-  changes: { label: 'Code', purpose: 'The code and its changes: read files, review, commit and finish the work', icon: FileCode },
+  changes: { label: 'Review', purpose: 'Read what changed, commit and finish the work', icon: FileCode },
   documents: { label: 'Docs', purpose: 'Documents in the workspace', icon: FileText },
-  knowledge: { label: 'Knowledge', purpose: 'What the assistant has learned in this workspace', icon: Lightbulb },
   skills: { label: 'Skills', purpose: 'Assistant skills, tools, and playbooks configured for this workspace', icon: Boxes },
   services: { label: 'Services', purpose: "Your app's own processes, such as a dev server, and their logs", icon: Server },
 };
@@ -29,6 +29,7 @@ interface WorkspaceRailProps {
   section: WorkspaceSection;
   archived?: boolean;
   badges?: Partial<Record<WorkspaceSection, number>>;
+  compact?: boolean;
 }
 
 /**
@@ -36,12 +37,15 @@ interface WorkspaceRailProps {
  * tooltip. The chat is the page, so it has no item of its own; choosing the part that is open closes it again. Each
  * item is a link, so the address says what is open and back and forward move between them.
  */
-export function WorkspaceRail({ workspaceId, section, archived = false, badges = {} }: WorkspaceRailProps) {
+export function WorkspaceRail({ workspaceId, section, archived = false, badges = {}, compact = false }: WorkspaceRailProps) {
   const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
   return (
     <nav
       aria-label="Workspace"
-      className="fixed inset-x-0 bottom-0 z-30 flex shrink-0 border-t border-border bg-card/95 backdrop-blur md:static md:inset-auto md:z-auto md:w-16 md:flex-col md:border-l md:border-t-0 md:bg-card/60 md:py-1.5 md:backdrop-blur-none"
+      className={cn(
+        'fixed inset-x-0 bottom-0 z-30 flex shrink-0 border-t border-border bg-card/95 backdrop-blur md:static md:inset-auto md:z-auto md:flex-col md:border-l md:border-t-0 md:bg-card/60 md:py-1.5 md:backdrop-blur-none transition-all duration-200',
+        compact ? 'md:w-11' : 'md:w-16'
+      )}
     >
       <ul className="flex w-full flex-row justify-around gap-0.5 px-1 py-1 md:flex-col md:justify-start md:px-0.5 md:py-0">
         {railSectionsFor(archived).map((candidate) => {
@@ -63,13 +67,15 @@ export function WorkspaceRail({ workspaceId, section, archived = false, badges =
                       className={cn(
                         'relative flex h-12 flex-col items-center justify-center gap-1 rounded-md px-0.5 text-[10px] leading-none transition-colors md:h-auto md:justify-start md:py-1.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
                         active ? 'bg-secondary font-semibold text-foreground' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+                        compact && 'md:py-2.5'
                       )}
                     />
                   }
                 >
                   <Icon aria-hidden="true" className="size-4" />
-                  <span className="max-w-full truncate">{item.label}</span>
-                  {count ? <span aria-hidden="true" className="absolute right-1 top-0.5 min-w-4 rounded-full bg-primary/20 px-1 text-center text-[9px] font-semibold tabular-nums text-foreground">{count}</span> : null}
+                  {!compact && <span className="max-w-full truncate">{item.label}</span>}
+                  {compact && <span className="sr-only">{item.label}</span>}
+                  {count ? <span aria-hidden="true" className={cn('absolute right-1 top-0.5 min-w-4 rounded-full bg-primary/20 px-1 text-center text-[9px] font-semibold tabular-nums text-foreground', compact && '-top-0.5 right-0.5')}>{count}</span> : null}
                 </TooltipTrigger>
                 <TooltipPopup side="left">{item.purpose}{active && !archived ? '. Choose again to close it.' : ''}</TooltipPopup>
               </Tooltip>

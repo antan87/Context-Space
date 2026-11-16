@@ -14,6 +14,18 @@ import { PRIMARY_KNOWLEDGE_FILE, PRIMARY_PLAN_FILE, CLI_NAME } from '../core/con
 import { resolveActiveDomainRules } from '../core/domain-packs.js';
 import { renderPlanFileInstructions } from '../core/plan-file-text.js';
 import { renderLessonsSection } from './lessons.js';
+import { getWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
+import { EXPLAIN_SKILL_ID } from '../resources/selection.js';
+
+/** The explain line follows the skill: a workspace that left the skill out is not told to use it. */
+async function explainSkillWanted(workspacePath?: string): Promise<boolean> {
+  if (!workspacePath) return true;
+  try {
+    return !(await getWorkspaceSkillsConfig(workspacePath)).disabledSkills?.includes(EXPLAIN_SKILL_ID);
+  } catch {
+    return true;
+  }
+}
 
 /** How a repo relates to its siblings in this workspace. */
 export interface RepoRelations {
@@ -130,6 +142,9 @@ function orderReposByDependency<T extends { name: string }>(
 export async function buildContextContent(ctx: WorkspaceContext): Promise<string> {
   const { feature, repos, analysis } = ctx;
   const inPlace = isInPlace(feature);
+  const explainLine = (await explainSkillWanted(feature.workspacePath))
+    ? `- When someone asks how something works, answer in \`explain/<topic>.md\` so it shows on the Board as cards (skill \`contextspace-explain\`); when you change code an answer points at, update the answer.\n`
+    : '';
 
   const relations = analysis && analysis.size > 0
     ? computeRepoRelations(ctx)
@@ -288,5 +303,7 @@ If \`ctxspace\` is not on PATH, use \`./.contextspace/bin/ctxspace\` (bash) or \
 - \`.agents/skills/\` — enabled playbooks; Claude copies: \`.claude/skills/\`.
 - Need the user's answer or approval? Run \`${CLI_NAME} ask "<question>" --option "<answer>" ...\` (or MCP \`request_user_input\`) so this chat is flagged, then ask in the chat and end your turn.
 - Show your work: MCP \`show_in_reader\`, \`annotate_document\` and \`suggest_next\` put it beside the user's chat. They only show things. No MCP: say it in the chat.
-${ownInstructions}${customCommands}${teamwork}${enterpriseSection}`;
+- Force-push only with \`git push --force-with-lease --force-if-includes\`: ContextSpace fetches your branch in the background, so a plain lease no longer protects others' commits.
+- After a merge, pull or rebase that needed decisions or went wrong, or when you find something in a commit (yours or someone else's), leave a note on it with \`${CLI_NAME} note <commit> "<what happened and what to check>"\`.
+${explainLine}${ownInstructions}${customCommands}${teamwork}${enterpriseSection}`;
 }

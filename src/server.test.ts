@@ -130,6 +130,133 @@ describe('Server API Endpoints Unit Tests', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Invalid session UUID format.' });
   });
 
+  // The dashboard runs a document's scripts by default, in a sandboxed frame with an opaque origin: its requests carry
+  // `Origin: null` and, from a browser, `Sec-Fetch-Site: cross-site`. None of them may change anything, including the
+  // "simple" ones a page can send without a preflight (text/plain, which this server's JSON reads accept all the same).
+  describe('state-changing requests from a sandboxed page', () => {
+    const body = JSON.stringify({ workspacePath: '/mock/workspace/path', command: 'rm -rf /' });
+
+    it('refuses Origin "null" and a foreign origin for POST, PUT, PATCH and DELETE, whatever the content type', async () => {
+      for (const origin of ['null', 'https://page.example', 'http://localhost.evil.example']) {
+        for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+          for (const contentType of ['text/plain', 'application/json', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x']) {
+            const response = await app.request('/api/open-editor', { method, headers: { Origin: origin, 'Content-Type': contentType }, body });
+            expect(response.status, `${method} ${contentType} from ${origin}`).toBe(403);
+            await expect(response.json()).resolves.toEqual({ error: 'Forbidden cross-origin request.' });
+          }
+        }
+      }
+    });
+
+    it('refuses a request the browser says is cross-site, and one that comes from a foreign page without an Origin', async () => {
+      const crossSite = await app.request('/api/open-editor', { method: 'POST', headers: { 'Sec-Fetch-Site': 'cross-site', 'Content-Type': 'text/plain' }, body });
+      expect(crossSite.status).toBe(403);
+      await expect(crossSite.json()).resolves.toEqual({ error: 'Forbidden cross-site request.' });
+      const referer = await app.request('/api/open-editor', { method: 'POST', headers: { Referer: 'https://page.example/doc', 'Content-Type': 'text/plain' }, body });
+      expect(referer.status).toBe(403);
+      await expect(referer.json()).resolves.toEqual({ error: 'Forbidden cross-origin referer.' });
+    });
+
+    it('still lets the dashboard, the CLI and the MCP server through: a local origin, or no Origin at all', async () => {
+      for (const headers of [
+        { 'Content-Type': 'text/plain' },
+        { 'Content-Type': 'application/json' },
+        { Origin: 'http://127.0.0.1:3000', 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' },
+        { Origin: 'http://localhost:5173', 'Content-Type': 'application/json' },
+      ]) {
+        const response = await app.request('/api/open-editor', { method: 'POST', headers, body });
+        // Past the guards and into the handler, which refuses the command it was given.
+        expect(response.status, JSON.stringify(headers)).toBe(400);
+      }
+    });
+
+    it('gives a page of another origin nothing it could read: no CORS allowance for "null" or a foreign origin, on a read or a preflight', async () => {
+      for (const origin of ['null', 'https://page.example']) {
+        const read = await app.request('/api/data-guide', { headers: { Origin: origin } });
+        expect(read.headers.get('access-control-allow-origin'), `read from ${origin}`).toBeNull();
+        const preflight = await app.request('/api/open-editor', {
+          method: 'OPTIONS',
+          headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' },
+        });
+        expect(preflight.headers.get('access-control-allow-origin'), `preflight from ${origin}`).toBeNull();
+      }
+      const own = await app.request('/api/data-guide', { headers: { Origin: 'http://127.0.0.1:3000' } });
+      expect(own.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:3000');
+    });
+  });
+
+  // Some GETs do work (git fetch for /api/repos/freshness, the news record, a migration under /work), and a page of another
+  // site can make the browser send them without being able to read the answer: an <img>, a no-cors fetch. Those carry
+  // `Sec-Fetch-Site: cross-site` and no Origin, so the server refuses what is cross-site and names no app origin.
+  describe('reads that a page of another site can send', () => {
+    const IMG = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'image' };
+    const get = (url: string, headers: Record<string, string>) => app.request(url, { headers });
+
+    it('refuses an image-style or no-cors GET from another site, to the routes that do work and to the rest', async () => {
+      for (const url of ['/api/repos/freshness', '/api/workspace/demo/news', '/api/workspace/demo/work', '/api/data-guide', '/api/workspaces']) {
+        const response = await get(url, IMG);
+        expect(response.status, url).toBe(403);
+        await expect(response.json()).resolves.toEqual({ error: 'Forbidden cross-site request.' });
+      }
+    });
+
+    it('refuses a cross-site read whose Origin is "null" (a sandboxed frame) or a foreign page', async () => {
+      for (const origin of ['null', 'https://page.example', 'http://localhost.evil.example', 'http://127.0.0.1.evil.example:3000']) {
+        const response = await get('/api/data-guide', { ...IMG, 'Sec-Fetch-Mode': 'cors', Origin: origin });
+        expect(response.status, origin).toBe(403);
+      }
+    });
+
+    it('lets a same-origin or same-site read through, and a request that is not a browser\'s', async () => {
+      for (const headers of [
+        { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors' },
+        { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' },
+        // The Vite dev server on localhost reaching the backend on localhost.
+        { 'Sec-Fetch-Site': 'same-site', 'Sec-Fetch-Mode': 'cors', Origin: 'http://localhost:5173' },
+        { 'Sec-Fetch-Site': 'none', 'Sec-Fetch-Mode': 'navigate' },
+        // The CLI, the MCP server and curl send no fetch metadata at all.
+        {},
+        { Origin: 'http://127.0.0.1:3000' },
+      ]) {
+        const response = await get('/api/data-guide', headers);
+        expect(response.status, JSON.stringify(headers)).toBe(200);
+      }
+    });
+
+    it('lets the dashboard through when the browser calls it cross-site from an app origin: 127.0.0.1 to localhost, or a configured dev origin', async () => {
+      for (const origin of ['http://127.0.0.1:4173', 'http://localhost:5173', 'http://[::1]:5173']) {
+        const response = await get('/api/data-guide', { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'cors', Origin: origin });
+        expect(response.status, origin).toBe(200);
+      }
+      const saved = { primary: process.env.CONTEXTSPACE_DASHBOARD_ORIGIN, legacy: process.env.NEXUSFLOW_DASHBOARD_ORIGIN };
+      try {
+        delete process.env.CONTEXTSPACE_DASHBOARD_ORIGIN;
+        process.env.NEXUSFLOW_DASHBOARD_ORIGIN = 'https://dash.dev.example:8443';
+        const configured = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'cors', Origin: 'https://dash.dev.example:8443' };
+        expect((await get('/api/data-guide', configured)).status).toBe(200);
+        expect((await get('/api/data-guide', { ...configured, Origin: 'https://other.dev.example:8443' })).status).toBe(403);
+        delete process.env.NEXUSFLOW_DASHBOARD_ORIGIN;
+        expect((await get('/api/data-guide', configured)).status).toBe(403);
+      } finally {
+        for (const [name, value] of [['CONTEXTSPACE_DASHBOARD_ORIGIN', saved.primary], ['NEXUSFLOW_DASHBOARD_ORIGIN', saved.legacy]] as const) {
+          if (value === undefined) delete process.env[name]; else process.env[name] = value;
+        }
+      }
+    });
+
+    it('still refuses a state-changing request that is cross-site, even from an app origin', async () => {
+      const response = await app.request('/api/open-editor', {
+        method: 'POST', headers: { 'Sec-Fetch-Site': 'cross-site', Origin: 'http://localhost:5173', 'Content-Type': 'application/json' }, body: '{}',
+      });
+      expect(response.status).toBe(403);
+    });
+
+    it('leaves a preflight to the CORS rules, which give another origin nothing to read', async () => {
+      const response = await app.request('/api/data-guide', { method: 'OPTIONS', headers: { Origin: 'https://page.example', 'Access-Control-Request-Method': 'GET', 'Sec-Fetch-Site': 'cross-site' } });
+      expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    });
+  });
+
   describe('POST /api/open-editor', () => {
     const workspacesDir = path.resolve('mock-workspaces');
     const workspacePath = path.join(workspacesDir, 'test-workspace');

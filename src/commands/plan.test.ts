@@ -7,13 +7,13 @@ import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
 import { setActiveStorageProvider } from '../core/adapters/registry.js';
 import { changePlan } from '../core/plan.js';
 import { parsePlanFile } from '../core/plan-file.js';
-import { readPlanChanges } from '../core/plan-file-store.js';
+import { readPlanChanges, readPlanNow } from '../core/plan-file-store.js';
 
 const PASSED = { overallStatus: 'pass', canProgress: true, repos: [{ headSha: 'abc1234def5678' }] };
 const FAILED = { overallStatus: 'fail', canProgress: false, repos: [{ headSha: 'abc1234def5678' }] };
 const check = vi.hoisted(() => ({ result: undefined as unknown }));
 vi.mock('../core/verify.js', () => ({ verifyWorkspace: async () => check.result }));
-import { findByWords, planAdd, planAnswer, planChangeBy, planCheck, planDone, planLog, planShow, registerPlanCommand, type PlanCommandContext } from './plan.js';
+import { findByWords, planNow as planNowCommand, planAdd, planAnswer, planChangeBy, planCheck, planDone, planLog, planShow, registerPlanCommand, type PlanCommandContext } from './plan.js';
 
 let root: string;
 let printed: string[];
@@ -43,7 +43,7 @@ function context(over: Partial<PlanCommandContext> = {}): PlanCommandContext {
   return { workspacePath: root, by: 'claude', json: false, print: (text) => printed.push(text), now: new Date('2026-10-10T12:00:00.000Z'), ...over };
 }
 const output = () => printed.join('\n');
-const planNow = async () => parsePlanFile(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8'));
+const planFileNow = async () => parsePlanFile(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8'));
 
 beforeEach(async () => {
   check.result = PASSED;
@@ -110,7 +110,7 @@ describe('reading the plan', () => {
   });
 
   it('finds an item by its words, or the start of them, and names the matches when several fit', async () => {
-    const plan = await planNow();
+    const plan = await planFileNow();
     expect(findByWords(plan, 'add the export')).toMatchObject({ text: 'Add the Export button' });
     expect(findByWords(plan, 'Reports export to CSV', 'checkpoint')).toMatchObject({ title: 'Reports export to CSV' });
     expect(() => findByWords(plan, 'Re')).toThrow(/matches 2 items: "Report rows load fast", "Reports export to CSV"/);
@@ -121,7 +121,7 @@ describe('reading the plan', () => {
 describe('changing the plan', () => {
   it('ticks a step, and logs who did', async () => {
     await planDone(context(), 'Add the Export button');
-    expect((await planNow()).checkpoints[1]!.steps[1]!.done).toBe(true);
+    expect((await planFileNow()).checkpoints[1]!.steps[1]!.done).toBe(true);
     expect(output()).toBe('Ticked "Add the Export button".\nPlan: 1 of 2 checkpoints done · 1 waiting for the user. Run "ctxspace plan" to see it.');
     expect((await readPlanChanges(root))[0]).toMatchObject({ by: 'claude', action: 'ticked', text: 'Add the Export button' });
   });
@@ -129,10 +129,10 @@ describe('changing the plan', () => {
   it('runs a checkpoint\'s check before ticking it, and leaves it open when the check fails', async () => {
     check.result = FAILED;
     await expect(planDone(context(), 'Reports export to CSV')).rejects.toThrow('"Reports export to CSV" stays open: its check failed on abc1234 · now. Fix what fails and run it again.');
-    expect((await planNow()).checkpoints[1]!.done).toBe(false);
+    expect((await planFileNow()).checkpoints[1]!.done).toBe(false);
     check.result = PASSED;
     await planDone(context(), 'Reports export to CSV');
-    expect((await planNow()).checkpoints[1]!.done).toBe(true);
+    expect((await planFileNow()).checkpoints[1]!.done).toBe(true);
   });
 
   it('runs a check without ticking, and fails the command when it fails', async () => {
@@ -140,20 +140,20 @@ describe('changing the plan', () => {
     await planCheck(context());
     expect(output()).toBe('"Reports export to CSV": check failed on abc1234 · now.');
     expect(process.exitCode).toBe(1);
-    expect((await planNow()).checkpoints[1]!.done).toBe(false);
+    expect((await planFileNow()).checkpoints[1]!.done).toBe(false);
   });
 
   it('answers a decision, and will not tick one as done', async () => {
     await expect(planDone(context(), 'Should archived')).rejects.toThrow(/is a decision: answer it with ctxspace plan answer/);
     await planAnswer(context({ by: 'user' }), 'Should archived', 'Yes, all of them');
-    expect((await planNow()).checkpoints[1]!.decisions[0]).toMatchObject({ done: true, answer: 'Yes, all of them' });
+    expect((await planFileNow()).checkpoints[1]!.decisions[0]).toMatchObject({ done: true, answer: 'Yes, all of them' });
     expect(output()).toContain('Answered "Should archived reports be exported?": Yes, all of them');
   });
 
   it('adds a step or a decision under a checkpoint, or on its own', async () => {
     await planAdd(context(), { step: 'Show a progress bar' }, 'Reports export');
     await planAdd(context(), { decision: { question: 'Which delimiter?', suggested: ['Comma', 'Semicolon'], ifNoAnswer: 'comma' } });
-    const plan = await planNow();
+    const plan = await planFileNow();
     expect(plan.checkpoints[1]!.steps.map((step) => step.text)).toContain('Show a progress bar');
     expect(plan.decisions[0]).toMatchObject({ question: 'Which delimiter?', suggested: ['Comma', 'Semicolon'], ifNoAnswer: 'comma' });
     expect(printed[0]).toContain('Added the step "Show a progress bar" under "Reports export to CSV".');
@@ -189,7 +189,7 @@ describe('the command line', () => {
 
   it('takes the decision\'s suggestions as repeated options', async () => {
     await cli('-w', root, 'decide', 'Which', 'delimiter?', '--under', 'Reports export', '--suggest', 'Comma', '--suggest', 'Semicolon', '--if-no-answer', 'comma');
-    expect((await planNow()).checkpoints[1]!.decisions[1]).toMatchObject({ question: 'Which delimiter?', suggested: ['Comma', 'Semicolon'] });
+    expect((await planFileNow()).checkpoints[1]!.decisions[1]).toMatchObject({ question: 'Which delimiter?', suggested: ['Comma', 'Semicolon'] });
   });
 
   it('tells an AI with older instructions that the plan is PLAN.md now', async () => {
@@ -201,5 +201,40 @@ describe('the command line', () => {
     const { lines } = await cli('-w', root, '--json', 'done', 'nothing like it');
     expect(JSON.parse(lines[0]!)).toMatchObject({ ok: false, code: 'not_found' });
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('ctxspace plan now', () => {
+  it('records the step by its words, naming who said it, and leaves PLAN.md alone', async () => {
+    await planNowCommand(context(), 'Add the Export');
+    expect(output()).toContain('Working on "Add the Export button" now.');
+    expect(await readPlanNow(root)).toMatchObject({ key: 'add-the-export-button', by: 'claude' });
+    expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(PLAN);
+  });
+
+  it('names the choices when the words fit several, and says when no step fits', async () => {
+    await expect(planNowCommand(context(), 'Re')).rejects.toThrow(/matches 2|No step/);
+    await expect(planNowCommand(context(), 'nothing like it')).rejects.toThrow(/No step in PLAN.md matches/);
+    await expect(planNowCommand(context(), 'Write the CSV writer')).rejects.toThrow(/already done/);
+    await expect(planNowCommand(context(), 'Should archived reports')).rejects.toThrow(/No step/);
+    expect(await readPlanNow(root)).toBeNull();
+  });
+
+  it('clears it with --clear, and says so in JSON', async () => {
+    await planNowCommand(context(), 'Add the Export button');
+    printed = [];
+    await planNowCommand(context({ json: true }), '', true);
+    expect(JSON.parse(output())).toMatchObject({ ok: true });
+    expect(await readPlanNow(root)).toBeNull();
+    printed = [];
+    await planNowCommand(context(), '', true);
+    expect(output()).toContain('No step was marked');
+  });
+
+  it('is registered with its option', () => {
+    const program = new Command();
+    registerPlanCommand(program, () => undefined);
+    const now = program.commands.find((c) => c.name() === 'plan')!.commands.find((c) => c.name() === 'now')!;
+    expect(now.options.map((o) => o.long)).toContain('--clear');
   });
 });

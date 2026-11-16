@@ -243,6 +243,8 @@ describe('generation lock', () => {
       libraryHome = await fs.mkdtemp(path.join(os.tmpdir(), 'nexusflow-lock-library-'));
       process.env.NEXUSFLOW_HOME = libraryHome;
       delete process.env.CONTEXTSPACE_HOME;
+      // Every workspace gets the explain skill; these tests are about the skills they pick, so it has its copy already
+      await writeSkillCopy('.claude/skills', 'contextspace-explain');
     });
 
     afterEach(async () => {

@@ -281,3 +281,54 @@ describe('which tools read which workspace skill folder', () => {
     expect(folderReaders([])).toEqual([]);
   });
 });
+
+describe('a skill every workspace gets', () => {
+  const explain = skill('contextspace-explain', 'workflows', { custom: false, alwaysOn: true });
+  const all = [...skills, explain];
+
+  it('shows as on for a saved selection that never mentioned it, with its own reason', () => {
+    expect(skillStatus(explain, none)).toEqual({ on: true, why: 'default' });
+    expect(onSkillIds(all, none)).toEqual(['contextspace-explain']);
+  });
+
+  it('is not turned into a pick when the server says it is on', () => {
+    const choice = choiceFromConfig({ schemaVersion: 2, revision: 7, enabledSkills: [], enabledCategories: [] }, all, ['contextspace-explain']);
+    expect(choice).toEqual({ categories: [], picks: [], exceptions: [] });
+  });
+
+  it('turning it off on the Skills screen saves it as left out, which stops it being deployed', () => {
+    const off = toggleSkill(none, explain);
+    expect(off).toEqual({ categories: [], picks: [], exceptions: ['contextspace-explain'] });
+    expect(skillStatus(explain, off)).toEqual({ on: false, why: 'left-out' });
+  });
+
+  it('turning it off when it was also picked drops the pick and leaves it out; turning it on again takes the exception away', () => {
+    const picked = { categories: [], picks: ['contextspace-explain'], exceptions: [] };
+    expect(toggleSkill(picked, explain)).toEqual({ categories: [], picks: [], exceptions: ['contextspace-explain'] });
+    expect(toggleSkill({ categories: [], picks: [], exceptions: ['contextspace-explain'] }, explain)).toEqual(none);
+  });
+
+  it('does not change how any other skill is chosen', () => {
+    expect(skillStatus(loose, none)).toEqual({ on: false, why: null });
+    expect(toggleSkill(none, loose)).toEqual({ categories: [], picks: ['loose'], exceptions: [] });
+  });
+
+  it('stays off when its category is turned off, and when the category is turned on again', () => {
+    const inWorkflows = { categories: ['workflows'], picks: [], exceptions: [] };
+    const explainOff = toggleSkill(inWorkflows, explain);
+    expect(explainOff.exceptions).toEqual(['contextspace-explain']);
+    const categoryOff = setCategory(explainOff, all, 'workflows', false);
+    expect(categoryOff).toEqual({ categories: [], picks: [], exceptions: ['contextspace-explain'] });
+    expect(skillStatus(explain, categoryOff)).toEqual({ on: false, why: 'left-out' });
+    expect(onSkillIds(all, categoryOff)).toEqual([]);
+    const categoryOn = setCategory(categoryOff, all, 'workflows', true);
+    expect(skillStatus(explain, categoryOn).on).toBe(false);
+    // Other skills of a category still come back when it is turned on again
+    const git = setCategory(toggleSkill({ categories: ['git'], picks: [], exceptions: [] }, review), all, 'git', false);
+    expect(git.exceptions).toEqual([]);
+  });
+
+  it('is on, not left out, when the category is turned off while it was never turned off itself', () => {
+    expect(skillStatus(explain, setCategory({ categories: ['workflows'], picks: [], exceptions: [] }, all, 'workflows', false))).toEqual({ on: true, why: 'default' });
+  });
+});

@@ -28,6 +28,13 @@ import { listRootDocuments } from './root-documents.js';
 import { assertNoLinkedPathComponents, atomicWriteFile } from '../resources/fs-safety.js';
 import { isGitRepo } from '../utils/git.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
+import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit } from './commit-log-format.js';
+import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from './incoming-commits.js';
+import { BoardWorkspaceError } from './board.js';
+import { listCommitNotes } from './commit-notes.js';
+import { readQuestions, type QuestionAnswer } from './questions.js';
+
+export { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit };
 
 /** How many items each section lists (per repository for commits); the rest are counted. */
 export const NEWS_LIMIT = 10;
@@ -39,6 +46,7 @@ const SEEN_LOCK = '.contextspace/seen.lock';
 /** What one record keeps. A longer list is cut to the newest, and the cut is remembered by the length. */
 const KEPT_KNOWLEDGE = 500;
 const KEPT_DOCUMENTS = 1000;
+const KEPT_NOTES = 500;
 /** The readers kept in the file; the least recent ones are dropped. */
 const KEPT_READERS = 20;
 /** The most commits one repository counts, so a long history is never walked. */
@@ -52,10 +60,15 @@ export interface SeenRecord {
   at: string;
   /** Each repository's HEAD, by the repository's name. */
   repos: Record<string, string>;
+  /** Each repository's last-seen remote-tracking commit, by the repository's name. */
+  incoming?: Record<string, string>;
   /** The ids (date and title as a slug) of the knowledge entries. */
   knowledge: string[];
   /** The names of the documents, newest first. */
   documents: string[];
+  /** The ids of commit notes seen then. */
+  notes?: string[];
+  answers?: Array<{ path: string; broken: string[]; at?: string }>;
 }
 
 /** `readers`: when each reader last looked. `pending`: what the report a screen showed them saw, until they say so. */
@@ -91,6 +104,9 @@ export interface NewsCommit {
   author: string;
   subject: string;
   at: string;
+  firstBodyLine?: string;
+  fileCount?: number;
+  pushed?: boolean;
 }
 
 /** One repository's commits, or why they could not be read. */
@@ -111,6 +127,38 @@ export interface NewsSection<T> {
   more: number;
 }
 
+export interface NewsIncomingGroup {
+  author: string;
+  count: number;
+  newestSha: string;
+  newestAt: string;
+  subject: string;
+}
+
+export interface NewsIncomingRepo {
+  repo: string;
+  host: IncomingHost | null;
+  groups: NewsIncomingGroup[];
+}
+
+export interface NewsCommitNote {
+  id: string;
+  repo: string;
+  sha: string;
+  shortSha: string;
+  title: string;
+  body: string;
+  by: string;
+  at: string;
+}
+
+export interface NewsAnswer { path: string; question: string; change: 'added' | 'changed' | 'out-of-date'; copies: number; at: string }
+
+export function formatAnswerNewsLine(answer: NewsAnswer): string {
+  if (answer.change === 'out-of-date') return `Answer out of date: ${answer.question} (${answer.copies} ${answer.copies === 1 ? 'copy' : 'copies'})`;
+  return `${answer.change === 'added' ? 'New answer' : 'Answer updated'}: ${answer.question}`;
+}
+
 export interface WhatsNew {
   reader: string;
   /** When this report was made; hand it to {@link markSeen} to say the reader has looked. */
@@ -125,7 +173,12 @@ export interface WhatsNew {
   documents: NewsSection<NewsDocument>;
   /** Newest first. */
   knowledge: NewsSection<NewsKnowledge>;
+  /** Newest first. */
+  notes?: NewsSection<NewsCommitNote>;
+  answers?: NewsSection<NewsAnswer>;
   commits: NewsRepo[];
+  /** Unseen commits sitting on local remote-tracking refs (never fetched during news). */
+  incoming?: NewsIncomingRepo[];
   /** Things that could not be read, one line each. A repository that could not be read is in `commits` instead. */
   problems: string[];
   /** Nothing changed in any section. */
@@ -156,7 +209,17 @@ function recordFrom(value: unknown): SeenRecord | null {
   if (!isObject(value) || typeof value.at !== 'string' || Number.isNaN(Date.parse(value.at))) return null;
   const strings = (list: unknown, max: number) => (Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string').slice(0, max) : []);
   const repos = Object.entries(isObject(value.repos) ? value.repos : {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && SHA.test(entry[1]));
-  return { at: value.at, repos: Object.fromEntries(repos), knowledge: strings(value.knowledge, KEPT_KNOWLEDGE), documents: strings(value.documents, KEPT_DOCUMENTS) };
+  const incoming = Object.entries(isObject(value.incoming) ? value.incoming : {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && SHA.test(entry[1]));
+  const notes = Array.isArray(value.notes) ? strings(value.notes, KEPT_NOTES) : undefined;
+  return {
+    at: value.at,
+    repos: Object.fromEntries(repos),
+    ...(incoming.length > 0 ? { incoming: Object.fromEntries(incoming) } : {}),
+    knowledge: strings(value.knowledge, KEPT_KNOWLEDGE),
+    documents: strings(value.documents, KEPT_DOCUMENTS),
+    ...(notes !== undefined ? { notes } : {}),
+    ...(Array.isArray(value.answers) ? { answers: value.answers.slice(0, KEPT_NOTES).flatMap((entry) => isObject(entry) && typeof entry.path === 'string' ? [{ path: entry.path, broken: strings(entry.broken, 20000), ...(typeof entry.at === 'string' && !Number.isNaN(Date.parse(entry.at)) ? { at: entry.at } : {}) }] : []) } : {}),
+  };
 }
 
 const EMPTY_SEEN: SeenFile = { version: 1, readers: {}, pending: {} };
@@ -219,11 +282,6 @@ const saveRecord = (root: string, reader: string, record: SeenRecord) => updateS
   return reader;
 });
 
-const savePending = (root: string, reader: string, record: SeenRecord) => updateSeenFile(root, (seen) => {
-  seen.pending[reader] = record;
-  return reader;
-});
-
 /** The reader's pending record becomes theirs, when it is the one made at `at`. */
 const promotePending = (root: string, reader: string, at: number) => updateSeenFile(root, (seen) => {
   const held = entryOf(seen.pending, reader);
@@ -243,6 +301,8 @@ interface Snapshot {
   heads: RepoHead[];
   documents: DocumentFile[];
   knowledge: NewsKnowledge[];
+  notes: NewsCommitNote[];
+  answers: QuestionAnswer[];
   problems: string[];
 }
 
@@ -310,20 +370,29 @@ async function takeSnapshot(root: string): Promise<Snapshot> {
     return fallback;
   };
   const repos = await getWorkspaceRepoPaths(root).catch(unreadable('The list of repositories', []));
-  const [heads, documents, knowledge] = await Promise.all([
+  const readNotes = unreadable('Commit notes', [] as NewsCommitNote[]);
+  const [heads, documents, knowledge, notes, answers] = await Promise.all([
     Promise.all(repos.map(repoHead)),
     readDocuments(root, repos).catch(unreadable('The documents', [])),
     readKnowledge(root).catch(unreadable('The knowledge', [])),
+    listCommitNotes(root).then((items): NewsCommitNote[] =>
+      items.map(({ id, repo, sha, shortSha, title, body, by, at }) => ({ id, repo, sha, shortSha, title, body, by, at })),
+    ).catch((error) => (error instanceof BoardWorkspaceError ? [] : readNotes(error))),
+    readQuestions(root).catch(unreadable('Answers', [] as QuestionAnswer[])),
   ]);
-  return { heads, documents, knowledge, problems };
+  return { heads, documents, knowledge, notes, answers, problems };
 }
 
-function recordOf(snapshot: Snapshot, at: string): SeenRecord {
+function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, string> = {}, previous: SeenRecord | null = null, unavailable: Set<string> = new Set()): SeenRecord {
+  const incomingEntries = Object.entries(incomingRefs).filter(([, sha]) => SHA.test(sha));
   return {
     at,
     repos: Object.fromEntries(snapshot.heads.flatMap((repo) => (repo.head ? [[repo.name, repo.head] as const] : []))),
+    ...(incomingEntries.length > 0 ? { incoming: Object.fromEntries(incomingEntries) } : {}),
     knowledge: snapshot.knowledge.slice(0, KEPT_KNOWLEDGE).map((entry) => entry.id),
     documents: snapshot.documents.slice(0, KEPT_DOCUMENTS).map((document) => document.name),
+    notes: snapshot.notes.slice(0, KEPT_NOTES).map((note) => note.id),
+    answers: [...snapshot.answers.map((answer) => ({ path: answer.path, broken: brokenCopies(answer, previous?.answers?.find((entry) => entry.path === answer.path)?.broken) })), ...[...unavailable].map((name) => { const old = previous?.answers?.find((entry) => entry.path === name); return { path: name, broken: old?.broken ?? [], at: old?.at ?? previous?.at ?? new Date(0).toISOString() }; })].slice(0, KEPT_NOTES),
   };
 }
 
@@ -361,6 +430,27 @@ function documentNews(files: DocumentFile[], record: SeenRecord | null, from: nu
   })), limit);
 }
 
+function brokenCopies(answer: QuestionAnswer, previous: string[] = []): string[] {
+  return answer.parts.flatMap((part, partIndex) => part.cards.flatMap((card, cardIndex) => {
+    if (card.kind !== 'code') return [];
+    const id = `${partIndex}:${cardIndex}:${card.where ?? ''}:${card.start ?? ''}:${card.end ?? ''}`;
+    const unknown = card.check.status === 'unreadable' || card.check.status === 'not-in-workspace';
+    return card.check.status === 'changed' || card.check.status === 'gone' || (unknown && previous.includes(id)) ? [id] : [];
+  }));
+}
+
+function answerNews(answers: QuestionAnswer[], record: SeenRecord | null, from: number, limit: number, at: string): NewsSection<NewsAnswer> {
+  const previous = new Map(record?.answers?.map((entry) => [entry.path, entry]) ?? []);
+  return capped(answers.flatMap((answer): NewsAnswer[] => {
+    const broken = brokenCopies(answer);
+    const old = previous.get(answer.path);
+    const changed = afterTime(answer.modifiedAt, old?.at ? Date.parse(old.at) : from);
+    const isNew = changed && (!record || !record.documents.includes(answer.path));
+    const change = isNew ? 'added' : changed ? 'changed' : !(record && record.answers === undefined && !afterTime(answer.modifiedAt, Date.parse(record.at))) && broken.some((copy) => !old?.broken.includes(copy)) ? 'out-of-date' : null;
+    return change ? [{ path: answer.path, question: answer.question, change, copies: broken.length, at: change === 'out-of-date' ? at : answer.modifiedAt }] : [];
+  }), limit);
+}
+
 /** Entries the record does not list; without a record, the entries dated since `from`. */
 function knowledgeNews(entries: NewsKnowledge[], record: SeenRecord | null, from: number, limit: number): NewsSection<NewsKnowledge> {
   if (!record) {
@@ -373,6 +463,24 @@ function knowledgeNews(entries: NewsKnowledge[], record: SeenRecord | null, from
   return capped(entries.filter((entry) => !known.has(entry.id) && (oldest === null || (entry.date ?? '') >= oldest)), limit);
 }
 
+/** Notes the record does not list; without a record, or after an upgrade without `notes`, only notes made since `from` or `record.at`. */
+function commitNoteNews(notes: NewsCommitNote[], record: SeenRecord | null, from: number, limit: number): NewsSection<NewsCommitNote> {
+  if (!record) return capped(notes.filter((note) => afterTime(note.at, from)), limit);
+  if (record.notes === undefined) return capped(notes.filter((note) => afterTime(note.at, Date.parse(record.at))), limit);
+  const known = new Set(record.notes);
+  const oldest = record.notes.length >= KEPT_NOTES ? notes.find((note) => note.id === record.notes!.at(-1))?.at ?? null : null;
+  return capped(notes.filter((note) => !known.has(note.id) && (oldest === null || note.at >= oldest)), limit);
+}
+
+export function formatCommitNoteNewsLine(note: Pick<NewsCommitNote, 'by' | 'shortSha' | 'repo' | 'title'>): string {
+  const actor = note.by === 'ai'
+    ? 'AI'
+    : `${note.by.charAt(0).toUpperCase()}${note.by.slice(1)}`;
+  return `${actor} note on ${note.shortSha} (${note.repo}): ${note.title}`;
+}
+
+const RECENT_COMMITS_LIMIT = 50;
+
 function parseCommits(stdout: string): NewsCommit[] {
   return stdout.split('\n').filter(Boolean).map((line) => {
     const [sha = '', author = '', date = '', ...subject] = line.split('\x1f');
@@ -381,16 +489,91 @@ function parseCommits(stdout: string): NewsCommit[] {
   });
 }
 
+function groupIncomingByAuthor(commits: IncomingCommit[]): NewsIncomingGroup[] {
+  const byAuthor = new Map<string, NewsIncomingGroup>();
+  for (const commit of commits) {
+    const author = commit.author || 'Unknown';
+    const existing = byAuthor.get(author);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      byAuthor.set(author, {
+        author,
+        count: 1,
+        newestSha: commit.sha,
+        newestAt: commit.at,
+        subject: commit.subject,
+      });
+    }
+  }
+  return [...byAuthor.values()];
+}
+
+export function formatIncomingNewsLine(
+  repo: string,
+  count: number,
+  author: string,
+  host: { name: string } | null | undefined,
+): string {
+  const noun = count === 1 ? 'commit' : 'commits';
+  const summary = host?.name
+    ? `${count} new ${noun} from ${author} on ${host.name}`
+    : `${count} new ${noun} from ${author}`;
+  return `${repo}: ${summary}`;
+}
+
+function parseDetailedCommits(stdout: string, unpushed: Set<string> | null): NewsCommit[] {
+  return parseDetailedCommitLog(stdout).map(({ fullSha, ...commit }) => ({
+    ...commit,
+    ...(unpushed !== null ? { pushed: !unpushed.has(fullSha) } : {}),
+  }));
+}
+
 /** Commits since the recorded HEAD; when that is unknown or gone (a rebase), the commits since `from`. */
-async function repoNews(repo: RepoHead, recorded: string | undefined, from: string, limit: number): Promise<NewsRepo> {
+async function repoNews(
+  repo: RepoHead,
+  recorded: string | undefined,
+  from: string,
+  limit: number,
+  options: { detailed?: boolean; seenIncomingOid?: string } = {},
+): Promise<NewsRepo> {
   const none: NewsRepo = { repo: repo.name, commits: [], more: 0 };
   if (repo.problem) return { ...none, problem: repo.problem };
   if (!repo.head || repo.head === recorded) return none;
-  const log = (...range: string[]) => git(repo.path, ['log', `--max-count=${COMMITS_COUNTED}`, '--format=%h%x1f%an%x1f%cI%x1f%s', ...range, '--']);
+  const detailed = options.detailed === true;
+  const format = detailed
+    ? DETAILED_COMMIT_FORMAT
+    : '--format=%h%x1f%an%x1f%cI%x1f%s';
+  const extra = detailed ? ['--shortstat'] : [];
+  const sinceArg = `--since=${new Date(from).toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+  let seenIncoming: string | undefined;
+  if (options.seenIncomingOid && SHA.test(options.seenIncomingOid)) {
+    const exists = await git(repo.path, ['rev-parse', '--verify', '-q', `${options.seenIncomingOid}^{commit}`]);
+    if (exists.ok) seenIncoming = options.seenIncomingOid;
+  }
+  const notArgs = seenIncoming ? ['--not', seenIncoming] : [];
+  const log = (...range: string[]) => git(repo.path, ['log', `--max-count=${COMMITS_COUNTED}`, ...extra, format, ...range, ...notArgs, '--']);
+  const revRange = recorded ? [`${recorded}..${repo.head}`] : [sinceArg, repo.head];
+  const unpushedExclude = seenIncoming ? [`^${seenIncoming}`] : [];
+  let unpushedPromise: ReturnType<typeof git> | Promise<null> = detailed
+    ? git(repo.path, ['rev-list', '--max-count=500', ...revRange, ...unpushedExclude, '--not', '--remotes', '--'])
+    : Promise.resolve(null);
   let result = recorded ? await log(`${recorded}..${repo.head}`) : null;
-  if (!result?.ok) result = await log(`--since=${new Date(from).toISOString().replace(/\.\d{3}Z$/, 'Z')}`, repo.head);
+  if (!result?.ok) {
+    if (recorded && detailed) {
+      unpushedPromise = git(repo.path, ['rev-list', '--max-count=500', sinceArg, repo.head, ...unpushedExclude, '--not', '--remotes', '--']);
+    }
+    result = await log(sinceArg, repo.head);
+  }
   if (!result.ok) return { ...none, problem: result.reason };
-  const commits = parseCommits(result.stdout);
+  let unpushed: Set<string> | null = null;
+  if (detailed) {
+    const revResult = await unpushedPromise;
+    if (revResult?.ok) {
+      unpushed = new Set(revResult.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+    }
+  }
+  const commits = detailed ? parseDetailedCommits(result.stdout, unpushed) : parseCommits(result.stdout);
   const section = capped(commits, limit);
   return { ...none, commits: section.items, more: section.more, ...(commits.length >= COMMITS_COUNTED ? { moreAtLeast: true as const } : {}) };
 }
@@ -428,20 +611,71 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
 
   const snapshot = await takeSnapshot(root);
   problems.push(...snapshot.problems);
-  const [plan, commits] = await Promise.all([
+  const [plan, commits, localIncoming] = await Promise.all([
     planNews(root, name, fromMs, now.getTime(), limit).catch((error): NewsSection<NewsPlanChange> => {
       problems.push(`The plan could not be read: ${reasonOf(error)}`);
       return { items: [], more: 0 };
     }),
-    Promise.all(snapshot.heads.map((repo) => repoNews(repo, kept?.repos[repo.name], from, limit))),
+    Promise.all(snapshot.heads.map((repo) => repoNews(repo, kept?.repos[repo.name], from, limit, { seenIncomingOid: kept?.incoming?.[repo.name] }))),
+    Promise.all(snapshot.heads.map(async (repo) => {
+      if (repo.problem) return { repo: repo.name, host: null, trackingRefOid: null, commits: [] as IncomingCommit[] };
+      const seenTrackingOid = kept?.incoming?.[repo.name];
+      const res = await readLocalIncomingForRepo(repo.path, {
+        seenTrackingOid,
+        headOid: repo.head ?? null,
+      });
+      const filtered = !seenTrackingOid ? res.commits.filter((commit) => afterTime(commit.at, fromMs)) : res.commits;
+      return { repo: repo.name, host: res.host, trackingRefOid: res.trackingRefOid, commits: filtered };
+    })),
   ]);
-  const documents = documentNews(snapshot.documents, kept, fromMs, limit);
+  const documents = documentNews(snapshot.documents.filter((document) => !/^explain\/[^/]+\.md$/i.test(document.name)), kept, fromMs, limit);
+  const answers = answerNews(snapshot.answers, kept, fromMs, limit, now.toISOString());
   const knowledge = knowledgeNews(snapshot.knowledge, kept, fromMs, limit);
+  const notes = commitNoteNews(snapshot.notes, kept, fromMs, limit);
+  const incomingRefs = Object.fromEntries(
+    localIncoming.flatMap((entry) => (entry.trackingRefOid ? [[entry.repo, entry.trackingRefOid] as const] : [])),
+  );
+  const incoming: NewsIncomingRepo[] = localIncoming.flatMap((entry) => {
+    const groups = groupIncomingByAuthor(entry.commits);
+    return groups.length > 0 ? [{ repo: entry.repo, host: entry.host, groups }] : [];
+  });
 
-  if (options.mark) await saveRecord(root, name, recordOf(snapshot, now.toISOString()));
-  else if (options.pending) await savePending(root, name, recordOf(snapshot, now.toISOString()));
-  const empty = [plan, documents, knowledge].every((section) => section.items.length === 0) && commits.every((repo) => repo.commits.length === 0);
-  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, commits, problems, empty };
+  // Keep omitted files that still exist (or cannot be statted); only a confirmed deletion drops them.
+  const present = new Set(snapshot.answers.map((answer) => answer.path));
+  const candidates = new Set([...(record?.answers?.map((answer) => answer.path) ?? []), ...snapshot.documents.map((document) => document.name).filter((name) => /^explain\/[^/]+\.md$/i.test(name))]);
+  const unavailable = new Set<string>();
+  for (const candidate of candidates) {
+    if (present.has(candidate) || !/^explain\/[^/]+\.md$/i.test(candidate)) continue;
+    try { await fs.lstat(path.join(root, candidate)); unavailable.add(candidate); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unavailable.add(candidate); }
+  }
+  const nextRecord = recordOf(snapshot, now.toISOString(), incomingRefs, record, unavailable);
+  if (options.mark) await saveRecord(root, name, nextRecord);
+  else if (options.pending) {
+    // Only remove repaired identities, under the lock and only if the reader has not changed since our snapshot.
+    await updateSeenFile(root, (seen) => {
+      const current = entryOf(seen.readers, name);
+      if (current && record && JSON.stringify(current) === JSON.stringify(record)) {
+        if (current.answers === undefined) {
+          current.answers = nextRecord.answers?.filter((entry) => {
+            const answer = snapshot.answers.find((item) => item.path === entry.path);
+            return !answer || !afterTime(answer.modifiedAt, Date.parse(current.at));
+          });
+        }
+        const observed = new Map(snapshot.answers.map((answer) => [answer.path, answer]));
+        current.answers = current.answers?.map((entry) => {
+          const answer = observed.get(entry.path);
+          return answer ? { ...entry, broken: entry.broken.filter((id) => brokenCopies(answer, entry.broken).includes(id)) } : entry;
+        });
+      }
+      seen.pending[name] = nextRecord;
+      return name;
+    });
+  }
+  const empty = [plan, documents, knowledge, notes, answers].every((section) => section.items.length === 0)
+    && commits.every((repo) => repo.commits.length === 0)
+    && incoming.length === 0;
+  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, notes, answers, commits, incoming, problems, empty };
 }
 
 /**
@@ -456,4 +690,18 @@ export async function markSeen(workspacePath: string, reader: string, at: string
   const when = at instanceof Date ? at : new Date(at);
   if (Number.isNaN(when.getTime())) throw new Error('"at" is not a date and time.');
   await promotePending(root, newsReaderName(reader), when.getTime());
+}
+
+/**
+ * The commits of the last few days, whatever a reader has seen: what the Board draws, so that marking the news as seen never takes
+ * work off the board. It reads and records nothing. The shape is the news report's commits, newest first per repository.
+ */
+export async function recentCommits(workspacePath: string, options: { now?: Date; days?: number; limit?: number } = {}): Promise<{ at: string; from: string; commits: NewsRepo[] }> {
+  const root = await fs.realpath(workspacePath);
+  const now = options.now ?? new Date();
+  const from = new Date(now.getTime() - (options.days ?? FIRST_LOOK_DAYS) * 24 * 60 * 60 * 1000).toISOString();
+  const repos = await getWorkspaceRepoPaths(root).catch(() => []);
+  const heads = await Promise.all(repos.map(repoHead));
+  const commits = await Promise.all(heads.map((repo) => repoNews(repo, undefined, from, options.limit ?? RECENT_COMMITS_LIMIT, { detailed: true })));
+  return { at: now.toISOString(), from, commits };
 }

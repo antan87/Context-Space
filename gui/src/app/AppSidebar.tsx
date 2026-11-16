@@ -1,8 +1,7 @@
-import { useState, useMemo, useEffect, useCallback, useRef, type CSSProperties } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
 import {
   Menu as MenuIcon,
   FolderGit2,
-  Workflow,
   Boxes,
   Settings as SettingsIcon,
   BookOpen,
@@ -14,10 +13,10 @@ import {
   ArrowUpDown,
   Check,
   Activity,
-  Users,
   History,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
   RefreshCw,
   X,
   type LucideIcon,
@@ -30,7 +29,8 @@ import { cn } from '../lib/utils.js';
 import { BRAND_NAME, GITHUB_REPO_URL } from '../brand.js';
 import { Sheet, SheetPopup, SheetTitle, SheetTrigger } from '../components/ui/sheet.js';
 import { useIsMobile, useMediaQuery } from '../components/ui/use-mobile.js';
-import { QuickSwitch } from './QuickSwitch.js';
+import { QuickSwitch, QuickSwitchField } from './QuickSwitch.js';
+import { openQuickSwitch } from './quickSwitchEvents.js';
 import { useTheme, COLOR_THEMES } from './ThemeProvider.js';
 import { useFloatingChat } from '../features/chat/floatingChatStore.js';
 import { useChatThreads } from '../features/chat/useChatThreads.js';
@@ -48,7 +48,6 @@ import { LiveDot, LiveMarker } from '../features/chat/LiveMarker.js';
 import type { Feature, WorkspaceStatus } from '../types.js';
 import { RepositoriesPanel, RepositoriesToggle } from './WorkspaceRepositories.js';
 import { SidebarResizeHandle } from './SidebarResizeHandle.js';
-import { useAdvancedToolsOpen } from './advancedTools.js';
 import { hasUnpreparedRepo } from '../features/worktrees/normalizeWorktrees.js';
 import { normalizeWorktreeGroups } from '../features/worktrees/normalizeWorktrees.js';
 import { hasBranchDrift } from '../features/worktrees/branchDrift.js';
@@ -58,6 +57,7 @@ import { useWorktreeNavigationState } from '../features/worktrees/worktreeStore.
 import { useSidebarWidth } from '../features/worktrees/sidebarWidth.js';
 import { isArchivedWorkspace, workspacesForList } from './workspaceList.js';
 import { isTypingTarget } from './typingTarget.js';
+import { isCodeWindowOpen } from '../features/workspace-shell/codeWindowOpen.js';
 
 export type WorkspaceSortOption =
   | 'created-desc'
@@ -75,16 +75,11 @@ interface NavItem {
 }
 
 const SETUP_ITEMS: NavItem[] = [
-  { label: 'Projects', description: 'Saved repository groups', to: '/projects', icon: FolderGit2, match: (p) => p.startsWith('/projects') },
-  { label: 'Skills & agents', description: 'Assistant instructions', to: '/skills', icon: Boxes, match: (p) => p.startsWith('/skills') || p.startsWith('/agents') },
+  { label: 'Skills & agents', description: 'Assistant instructions and defaults', to: '/skills', icon: Boxes, match: (p) => p.startsWith('/skills') || p.startsWith('/agents') },
 ];
 
-const ADVANCED_ITEMS: NavItem[] = [
-  { label: 'Workrooms', description: 'Coordinate related work', to: '/workrooms', icon: Users, match: (p) => p.startsWith('/workrooms') },
-  { label: 'Strategies', description: 'Reusable workflows', to: '/workflows', icon: Workflow, match: (p) => p.startsWith('/workflows') || p.startsWith('/strategies') },
-];
-
-const ADVANCED_TOOLS_ID = 'sidebar-advanced-tools';
+/** Whatever is open as a modal that `z` must not act behind: a native dialog (Jump to), an expanded view (aria-modal), a Base UI dialog or alert dialog popup, or any sheet popup. The sidebar's own sheet matches too; the `z` handler skips this check while that sheet is open, since `z` closes it. */
+const OPEN_MODAL = 'dialog[open], [aria-modal="true"], [data-slot$="dialog-popup"], [data-slot="sheet-popup"]';
 
 export interface AppSidebarProps {
   appVersion: string;
@@ -97,7 +92,13 @@ export interface AppSidebarProps {
   /** Checks for a new version on request; updates never install without confirmation. */
   onCheckForUpdates?: () => void;
   checkingForUpdates?: boolean;
+  /** The update dot with its popover, shown beside the version while a new version waits. */
+  updateNotice?: ReactNode;
+  /** The update failed: the phone's menu button names it and shows the warning colour. */
+  updateFailed?: boolean;
   initialSearch?: string;
+  /** The content is already inside the phone's own sheet: the full list, with no rail, no pin and no `z`. */
+  inSheet?: boolean;
 }
 
 function SidebarContents({
@@ -109,7 +110,9 @@ function SidebarContents({
   onSelectWorkspace,
   onCheckForUpdates,
   checkingForUpdates = false,
+  updateNotice,
   initialSearch = '',
+  inSheet = false,
 }: AppSidebarProps) {
   const { pathname } = useLocation();
   const { theme, setTheme, colorTheme, setColorTheme } = useTheme();
@@ -184,28 +187,48 @@ function SidebarContents({
   const isSessionsListOpen = sessionsExpanded;
   const isWorkspacesListOpen = workspacesExpanded;
   const [appearanceExpanded, setAppearanceExpanded] = useState(false);
-  const { open: advancedOpen, toggle: toggleAdvanced } = useAdvancedToolsOpen(ADVANCED_ITEMS.some((item) => item.match(pathname)));
 
-  // Worktree & Rail State
-  const { isCollapsed: savedCollapsed, toggleCollapsed: toggleSaved } = useWorktreeNavigationState();
-  // In a narrow window (split screen, 200% zoom) the rail is the default so the
-  // task keeps the room; expanding it there is temporary and leaves the saved choice alone.
+  // Worktree & Rail State. On a desktop the sidebar is the slim rail. The full list opens over the page as a sheet, so the
+  // page never changes size, or the person pins it open and it docks beside the page. A narrow window (split screen,
+  // 200% zoom) cannot dock it: there the sheet is the only way.
+  const { isDocked, setDocked } = useWorktreeNavigationState();
   const narrow = useMediaQuery('(min-width: 768px) and (max-width: 999px)');
-  const [narrowExpanded, setNarrowExpanded] = useState(false);
-  const isCollapsed = narrow ? !narrowExpanded : savedCollapsed;
-  const toggleCollapsed = useCallback(() => {
-    if (narrow) setNarrowExpanded((expanded) => !expanded);
-    else toggleSaved();
-  }, [narrow, toggleSaved]);
-  useEffect(() => { setNarrowExpanded(false); }, [pathname]);
-  // The width the person dragged it to. The rails and the narrow window keep their own, so it applies only to the full sidebar.
+  const docked = !inSheet && isDocked && !narrow;
+  const railShown = !inSheet && !docked;
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const railButton = useRef<HTMLButtonElement>(null);
+  // Where focus goes back to when the sheet closes: whatever opened it, else the rail's button.
+  const sheetOpener = useRef<HTMLElement | null>(null);
+  const openSheet = useCallback(() => {
+    sheetOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSheetOpen(true);
+  }, []);
+  const closeSheet = useCallback(() => setSheetOpen(false), []);
+  useEffect(() => { setSheetOpen(false); }, [pathname]);
+  // A sheet left open while the list docked (another tab, or a window that grew) must not come back when it undocks.
+  useEffect(() => { if (docked) setSheetOpen(false); }, [docked]);
+  const sheetFinalFocus = useCallback(() => {
+    const opener = sheetOpener.current;
+    return opener && opener.isConnected && opener !== document.body ? opener : railButton.current;
+  }, []);
+  const dock = useCallback(() => {
+    setDocked(true);
+    setSheetOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-sidebar-undock]')?.focus());
+  }, [setDocked]);
+  const undock = useCallback(() => {
+    setDocked(false);
+    requestAnimationFrame(() => railButton.current?.focus());
+  }, [setDocked]);
+  // The width the person dragged it to. The rail and the phone's sheet keep their own, so it applies to the docked sidebar and the sheet.
   const { width: sidebarWidth, setWidth: setSidebarWidth, reset: resetSidebarWidth } = useSidebarWidth();
   const [resizingSidebar, setResizingSidebar] = useState(false);
 
-  // The sidebar is the only place that shows what each open chat is working on, so it reads that: while it is the
-  // full sidebar (the rail shows no summaries) and the window is being looked at. A closed mobile sheet is not mounted.
+  // The sidebar is the only place that shows what each open chat is working on, so it reads that: while the full list
+  // is showing, docked or open as a sheet (the rail shows no summaries), and the window is being looked at. A closed
+  // sheet is not mounted.
   const windowAttentive = useWindowAttentive();
-  const chatThreads = useChatThreads(workspaces, shouldReadThreads({ sidebarExpanded: !isCollapsed, windowAttentive }));
+  const chatThreads = useChatThreads(workspaces, shouldReadThreads({ sidebarExpanded: !railShown || sheetOpen, windowAttentive }));
 
   const liveRepositories = useWorkspaceRepositories(activeWorkspace?.branchName ?? null);
   const [preparingRepo, setPreparingRepo] = useState<string | null>(null);
@@ -216,19 +239,26 @@ function SidebarContents({
   const needsPreparing = !activeWorkspace?.archivedAt && hasUnpreparedRepo(repoGroups);
   const branchChanged = !activeWorkspace?.archivedAt && hasBranchDrift(repoGroups);
 
-  // Keyboard shortcut for toggling rail (Z or [)
+  // Keyboard shortcut (Z or [): on the rail it opens or closes the sheet, and on the docked sidebar it undocks it.
   useEffect(() => {
+    if (inSheet) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       // A letter typed into a field, or used to pick an option in a select, is not the shortcut.
       if (isTypingTarget(e.target)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // While the Board's reader is open, [ and ] move through its cards: they are not the sidebar's
+      if (e.key === '[' && (document.querySelector('[data-board-reader]') || isCodeWindowOpen())) return;
       if (e.key === 'z' || e.key === 'Z' || e.key === '[') {
-        toggleCollapsed();
+        // Not behind a modal, whatever the mode: undocking there would move focus behind it, and a sheet would open invisible.
+        if (!sheetOpen && document.querySelector(OPEN_MODAL)) return;
+        if (docked) undock();
+        else if (sheetOpen) closeSheet();
+        else openSheet();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleCollapsed]);
+  }, [inSheet, docked, sheetOpen, undock, openSheet, closeSheet]);
 
   const filteredWorkspaces = useMemo(() => {
     const list = workspacesForList(workspaces, showArchived, search);
@@ -292,15 +322,26 @@ function SidebarContents({
     'repos-desc': 'Repos',
   };
 
-  // ─── COLLAPSED RAIL MODE (56px / w-14) ─────────────────────────────────────
-  if (isCollapsed) {
-    return (
-      <aside className="context-sidebar flex w-14 shrink-0 flex-col border-r border-border bg-card select-none h-screen overflow-hidden transition-[width] duration-200 items-center py-3 justify-between z-30">
+  // ─── RAIL (56px / w-14), the default on a desktop ─────────────────────────
+  const rail = (
+      <aside key="rail" data-sidebar="rail" className="context-sidebar flex w-14 shrink-0 flex-col border-r border-border bg-card select-none h-screen overflow-hidden transition-[width] duration-200 items-center py-3 justify-between z-30">
         {/* Top Icons */}
         <div className="flex flex-col items-center gap-3 w-full">
           <Link to="/overview" aria-label={`${BRAND_NAME} overview`} title={`${BRAND_NAME} v${appVersion}`}>
             <ContextSpaceIcon size={24} className="rounded-md shadow-xs hover:scale-105 transition-transform" />
           </Link>
+          {updateNotice}
+
+          <button
+            type="button"
+            onClick={openQuickSwitch}
+            aria-label="Jump to a workspace"
+            title={`Jump to… (${apple ? '⌘' : 'Ctrl '}K)`}
+            aria-keyshortcuts="Control+k Meta+k"
+            className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+          >
+            <Search size={16} />
+          </button>
 
           <NavLink
             to="/overview"
@@ -329,7 +370,8 @@ function SidebarContents({
           {openTabs.length > 0 && (
             <>
               <div className="my-1 w-6 border-t border-border/60" />
-              <div className="flex flex-col items-center gap-1.5 overflow-y-auto no-scrollbar max-h-[calc(100vh-230px)] w-full px-2" role="group" aria-label="Open sessions">
+              {/* The top padding gives each tile's close button, which sits over the tile's corner, room above the first tile. */}
+              <div className="-mt-3 flex flex-col items-center gap-3 overflow-y-auto no-scrollbar max-h-[calc(100vh-230px)] w-full px-2 pt-3" role="group" aria-label="Open sessions">
                 {openTabs.map((tab, idx) => {
                   const ws = workspaces.find((w) => w.branchName === tab || w.id === tab);
                   const isSelected = currentWsId === tab || activeWsId === tab;
@@ -387,11 +429,12 @@ function SidebarContents({
                         aria-label={`Close session ${label}`}
                         title={`Close session ${label}`}
                         className={cn(
-                          'absolute left-0 -top-0.5 z-20 grid size-4 place-items-center rounded-full border border-border bg-card text-muted-foreground shadow-xs transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-primary group-hover:opacity-100 group-focus-within:opacity-100 cursor-pointer',
+                          'group/close absolute -left-2 -top-3 z-20 grid size-6 place-items-center rounded-full text-muted-foreground transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100 cursor-pointer',
                           isSelected ? 'opacity-90' : 'opacity-0'
                         )}
                       >
-                        <X size={10} aria-hidden="true" />
+                        {/* The button is 24 px for the pointer; the circle you see stays small. */}
+                        <span className="grid size-4 place-items-center rounded-full border border-border bg-card shadow-xs group-focus-visible/close:ring-2 group-focus-visible/close:ring-ring group-focus-visible/close:ring-offset-1 group-focus-visible/close:ring-offset-card"><X size={10} aria-hidden="true" /></span>
                       </button>
                     </div>
                   );
@@ -412,9 +455,9 @@ function SidebarContents({
                 />
                 <button
                   type="button"
-                  onClick={toggleCollapsed}
-                  aria-label={`Active Workspace: ${activeWorkspace.branchName} (Click to expand)`}
-                  title={`Active Workspace: ${activeWorkspace.branchName} (Click to expand)`}
+                  onClick={openSheet}
+                  aria-label={`Active Workspace: ${activeWorkspace.branchName} (Click to show workspaces)`}
+                  title={`Active Workspace: ${activeWorkspace.branchName} (Click to show workspaces)`}
                   className="relative flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-[11px] font-semibold tracking-tight text-primary-foreground shadow-sm transition-colors cursor-pointer"
                 >
                   <span aria-hidden="true">{sessionInitials(activeWorkspace.name || activeWorkspace.branchName)}</span>
@@ -427,7 +470,7 @@ function SidebarContents({
           )}
         </div>
 
-        {/* Bottom Expand Control */}
+        {/* Bottom: theme, and the full list */}
         <div className="flex flex-col items-center gap-2">
           <button
             type="button"
@@ -440,29 +483,36 @@ function SidebarContents({
           </button>
 
           <button
+            ref={railButton}
             type="button"
-            onClick={toggleCollapsed}
-            aria-label="Expand Cockpit Sidebar (Shortcut: z)"
-            title="Expand Cockpit Sidebar (Shortcut: z)"
+            onClick={sheetOpen ? closeSheet : openSheet}
+            aria-label="Show workspaces (z)"
+            title="Show workspaces (z)"
+            aria-keyshortcuts="z ["
+            aria-haspopup="dialog"
+            aria-expanded={sheetOpen}
             className="p-2 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 border border-border/50 transition-colors cursor-pointer"
           >
             <PanelLeftOpen size={16} />
           </button>
         </div>
       </aside>
-    );
-  }
+  );
 
-  // ─── EXPANDED COCKPIT MODE (256px by default, w-64; the person can drag it wider) ──
-  return (
-    <>
+  // ─── THE FULL LIST (256px by default, w-64; the person can drag it wider): docked beside the page, or in the sheet ──
+  const fullSidebar = (
     <aside
+      key="full"
+      data-sidebar="full"
       className={cn(
-        'context-sidebar flex w-[min(var(--sidebar-width,16rem),45vw)] shrink-0 flex-col border-r border-border bg-card select-none h-screen overflow-hidden',
+        'context-sidebar flex flex-col bg-card select-none overflow-hidden',
+        railShown
+          ? 'h-full w-full'
+          : 'w-[min(var(--sidebar-width,16rem),45vw)] shrink-0 border-r border-border h-screen',
         // It follows the pointer while dragged, and eases only when it changes any other way.
-        !resizingSidebar && 'transition-[width] duration-200',
+        docked && !resizingSidebar && 'transition-[width] duration-200',
       )}
-      style={narrow ? undefined : ({ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties)}
+      style={docked ? ({ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties) : undefined}
     >
       {/* Top Header */}
       <div className="flex h-11 items-center justify-between px-3 border-b border-border/60">
@@ -474,6 +524,7 @@ function SidebarContents({
         </Link>
         <span className="flex items-center gap-0.5">
           <span className="text-[10px] font-mono text-muted-foreground">v{appVersion}</span>
+          {updateNotice}
           {onCheckForUpdates && (
             <IconButton label="Check for updates" icon={<RefreshCw className={checkingForUpdates ? 'animate-spin' : undefined} />} disabled={checkingForUpdates} onClick={onCheckForUpdates} className="text-muted-foreground" />
           )}
@@ -488,8 +539,7 @@ function SidebarContents({
              means going back first. The active one is marked, and its repositories and
              branches are one disclosure away instead of replacing the list. */
           <div className="flex flex-col gap-2 min-w-0">
-            {/* QuickSwitch */}
-            <QuickSwitch workspaces={workspaces} />
+            <QuickSwitchField />
 
             {/* Top Nav Actions */}
             <div className="flex flex-col gap-0.5">
@@ -861,7 +911,7 @@ function SidebarContents({
         {activeWorkspace && <PrepareRepoDialog wsId={activeWorkspace.branchName} repoName={preparingRepo} onClose={() => setPreparingRepo(null)} />}
 
         <div className="border-t border-border/60 pt-2">
-          <p className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">Reusable setup</p>
+          <p className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">Administration</p>
           {SETUP_ITEMS.map((item) => {
             const Icon = item.icon;
             return <NavLink key={item.to} to={item.to} aria-label={item.label} className={linkClass(item.match(pathname))}>
@@ -869,21 +919,6 @@ function SidebarContents({
               <span className="min-w-0"><span className="block">{item.label}</span><span className="block text-[10px] font-normal text-muted-foreground">{item.description}</span></span>
             </NavLink>;
           })}
-          <button type="button" onClick={toggleAdvanced} aria-expanded={advancedOpen} aria-controls={ADVANCED_TOOLS_ID}
-            className="flex w-full items-center gap-1 rounded px-2 pb-1 pt-3 text-left text-[10px] font-medium text-muted-foreground hover:text-foreground">
-            <ChevronDown size={11} aria-hidden="true" className={cn('shrink-0 transition-transform duration-200', !advancedOpen && '-rotate-90')} />
-            Advanced tools
-          </button>
-          {/* Kept in the page while folded away, so the button's aria-controls never points at nothing. */}
-          <div id={ADVANCED_TOOLS_ID} hidden={!advancedOpen}>
-            {ADVANCED_ITEMS.map((item) => {
-              const Icon = item.icon;
-              return <NavLink key={item.to} to={item.to} aria-label={item.label} className={linkClass(item.match(pathname))}>
-                <Icon size={14} />
-                <span className="min-w-0"><span className="block">{item.label}</span><span className="block text-[10px] font-normal text-muted-foreground">{item.description}</span></span>
-              </NavLink>;
-            })}
-          </div>
         </div>
 
         <div className="mt-auto border-t border-border/60 pt-2">
@@ -916,20 +951,67 @@ function SidebarContents({
         </div>
       </div>
 
-      {/* Bottom Footer: Rail Collapse Control */}
-      <div className="h-9 px-3 border-t border-border/60 flex items-center justify-between text-xs text-muted-foreground bg-muted/20">
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          className="flex items-center gap-1.5 hover:text-foreground transition-colors cursor-pointer text-[11px]"
-          title="Collapse rail into icon strip (Shortcut: z)"
-        >
-          <PanelLeftClose size={13} />
-          <span>Collapse (z)</span>
-        </button>
-      </div>
+      {/* Bottom footer: pin the list open from the sheet, or undock it back to the rail. Neither in the phone's sheet,
+          nor in a narrow window, which cannot dock. */}
+      {!inSheet && (docked || !narrow) && (
+        <div className="h-9 px-3 border-t border-border/60 flex items-center justify-between text-xs text-muted-foreground bg-muted/20">
+          {docked ? (
+            <button
+              type="button"
+              onClick={undock}
+              data-sidebar-undock=""
+              className="flex items-center gap-1.5 hover:text-foreground transition-colors cursor-pointer text-[11px]"
+              title="Collapse into the slim rail (Shortcut: z)"
+            >
+              <PanelLeftClose size={13} />
+              <span>Collapse (z)</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={dock}
+              className="flex items-center gap-1.5 hover:text-foreground transition-colors cursor-pointer text-[11px]"
+              title="Keep the sidebar open beside the page"
+            >
+              <Pin size={13} />
+              <span>Keep the sidebar open</span>
+            </button>
+          )}
+        </div>
+      )}
     </aside>
-    {!narrow && <SidebarResizeHandle width={sidebarWidth} onResize={setSidebarWidth} onReset={resetSidebarWidth} onDraggingChange={setResizingSidebar} />}
+  );
+
+  return (
+    <>
+      <QuickSwitch workspaces={workspaces} onOpen={closeSheet} fallbackFocus={() => railButton.current} />
+      {inSheet ? fullSidebar : docked ? (
+        <>
+          {fullSidebar}
+          <SidebarResizeHandle width={sidebarWidth} onResize={setSidebarWidth} onReset={resetSidebarWidth} onDraggingChange={setResizingSidebar} />
+        </>
+      ) : (
+        <>
+          {rail}
+          <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+            <SheetPopup
+              side="left"
+              backdrop={false}
+              showCloseButton={false}
+              finalFocus={sheetFinalFocus}
+              className="w-[min(var(--sidebar-width,16rem),45vw)] max-w-none shadow-[8px_0_24px_-12px_rgb(0_0_0/0.25)] dark:shadow-[8px_0_24px_-8px_rgb(0_0_0/0.6)]"
+              initialFocus={() => document.querySelector<HTMLElement>('[data-sidebar-jump]')}
+              style={narrow ? undefined : ({ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties)}
+              onClick={(event) => {
+                if ((event.target as HTMLElement).closest('a')) closeSheet();
+              }}
+            >
+              <SheetTitle className="sr-only">Workspaces</SheetTitle>
+              {fullSidebar}
+            </SheetPopup>
+          </Sheet>
+        </>
+      )}
     </>
   );
 }
@@ -948,8 +1030,9 @@ export function AppSidebar(props: AppSidebarProps) {
   return (
     <div className="fixed inset-x-0 top-0 z-40 flex h-12 items-center border-b border-border bg-card px-3 md:hidden">
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetTrigger className="inline-flex items-center gap-2 rounded-md px-2 py-2 text-sm font-medium" aria-label="Open navigation">
+        <SheetTrigger className="inline-flex items-center gap-2 rounded-md px-2 py-2 text-sm font-medium" aria-label={props.updateNotice ? `Open navigation, ${props.updateFailed ? 'update needs attention' : 'update available'}` : 'Open navigation'}>
           <MenuIcon size={20} /> {BRAND_NAME}
+          {props.updateNotice && <span aria-hidden="true" data-testid="mobile-update-dot" className={`size-2 rounded-full ${props.updateFailed ? 'bg-[var(--state-needs)]' : 'bg-primary'}`} />}
         </SheetTrigger>
         <SheetPopup
           side="left"
@@ -961,6 +1044,7 @@ export function AppSidebar(props: AppSidebarProps) {
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SidebarContents
             {...props}
+            inSheet
             onSelectWorkspace={(id) => {
               props.onSelectWorkspace?.(id);
               setOpen(false);

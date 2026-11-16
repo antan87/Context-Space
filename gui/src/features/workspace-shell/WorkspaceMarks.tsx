@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { Check, Copy, GitBranch, HardDrive } from 'lucide-react';
+import { Check, Copy } from 'lucide-react';
 import { CLI_NAME } from '../../brand.js';
 import { Button } from '../../components/ui/button.js';
-import { Popover, PopoverPopup, PopoverTrigger } from '../../components/ui/popover.js';
+import { Dialog, DialogHeader, DialogPopup, DialogTitle } from '../../components/ui/dialog.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { useWorkspaceBackup, useWorkspaceRepositories } from '../../lib/api/queries.js';
 import { branchDrifts, switchBackCommand, type BranchDrift } from '../worktrees/branchDrift.js';
@@ -33,61 +33,51 @@ function CommandButton({ command }: { command: string }) {
   );
 }
 
-/** A small mark in the header with a dot, whose detail opens on demand instead of a banner pushing the content down. */
-function Mark({ label, icon, title, children }: { label: string; icon: ReactNode; title: string; children: ReactNode }) {
-  return (
-    <Popover>
-      <PopoverTrigger
-        aria-label={label} title={label}
-        className="relative grid size-7 cursor-pointer place-items-center rounded-md text-[var(--state-needs)] transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        {icon}
-        <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--state-needs)]" />
-      </PopoverTrigger>
-      <PopoverPopup align="end" className="w-[min(26rem,calc(100vw-2rem))]">
-        <section aria-label={title} className="space-y-2 text-sm">
-          <h3 className="font-semibold">{title}</h3>
-          {children}
-        </section>
-      </PopoverPopup>
-    </Popover>
-  );
+export interface WorkspaceWarning {
+  id: string;
+  /** The menu line, which says what is wrong and that there is a way to fix it. */
+  label: string;
+  title: string;
+  detail: ReactNode;
 }
 
 /**
- * When notes a person wrote here exist only on this computer, and the two commands that fix it. The server
- * cannot run them: it has no way to add a remote or push, on purpose. Hidden when there is a remote, when
- * nothing hand-written needs keeping, or once dismissed (remembered per workspace; `doctor` keeps reporting it).
+ * The workspace's warnings that need action. They show as a dot on the header's menu and a line in it, and the
+ * line opens the detail. Nothing here appears while a warning is dismissed (remembered per workspace).
+ *
+ * - Backup: notes a person wrote exist only on this computer, and two commands fix it. The server cannot run them:
+ *   it has no way to add a remote or push, on purpose. `doctor` keeps reporting it after a dismissal.
+ * - Branch: a workspace's folder is on another branch than the one it edits on, which makes the editor show another
+ *   branch's files without a word. It may be deliberate, so it only describes what it sees and how to switch back.
  */
-function BackupMark({ workspaceId }: { workspaceId: string }) {
-  const { data } = useWorkspaceBackup(workspaceId);
-  const [dismissed, setDismissed] = useState(() => wasDismissed(backupKey(workspaceId)));
-  if (!data?.atRisk || !data.summary || dismissed) return null;
-  return (
-    <Mark label="Not backed up: show how to fix it" icon={<HardDrive aria-hidden="true" className="size-4" />} title="Not backed up">
-      <p className="text-muted-foreground">{data.summary}</p>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <CommandButton command={`${CLI_NAME} remote add <git-url>`} />
-        <span aria-hidden="true" className="text-xs text-muted-foreground">then</span>
-        <CommandButton command={`${CLI_NAME} remote push`} />
-      </div>
-      <Button size="xs" variant="ghost" onClick={() => { rememberDismissed(backupKey(workspaceId)); setDismissed(true); }}>Dismiss</Button>
-    </Mark>
-  );
-}
-
-/**
- * When a workspace's folder is on another branch than the one it edits on, which makes the editor show another
- * branch's files without a word. It may be deliberate, so it only describes what it sees and how to switch back.
- */
-function BranchMark({ workspaceId }: { workspaceId: string }) {
-  const { data } = useWorkspaceRepositories(workspaceId);
+export function useWorkspaceWarnings(workspaceId: string, enabled: boolean): { warnings: WorkspaceWarning[]; dismiss: (id: string) => void } {
+  const backup = useWorkspaceBackup(workspaceId).data;
+  const repositories = useWorkspaceRepositories(enabled ? workspaceId : null).data;
   const [, setVersion] = useState(0);
-  const drifts = branchDrifts(data).filter((drift) => !wasDismissed(branchKey(workspaceId, drift)));
-  if (drifts.length === 0) return null;
-  return (
-    <Mark label="Branch changed: show the detail" icon={<GitBranch aria-hidden="true" className="size-4" />} title="Branch changed">
-      <ul className="space-y-2">
+  const [backupDismissed, setBackupDismissed] = useState(() => wasDismissed(backupKey(workspaceId)));
+  const warnings: WorkspaceWarning[] = [];
+  if (enabled && backup?.atRisk && backup.summary && !backupDismissed) {
+    warnings.push({
+      id: 'backup',
+      label: 'Not backed up: show how to fix it',
+      title: 'Not backed up',
+      detail: <>
+        <p className="text-muted-foreground">{backup.summary}</p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <CommandButton command={`${CLI_NAME} remote add <git-url>`} />
+          <span aria-hidden="true" className="text-xs text-muted-foreground">then</span>
+          <CommandButton command={`${CLI_NAME} remote push`} />
+        </div>
+      </>,
+    });
+  }
+  const drifts = enabled ? branchDrifts(repositories).filter((drift) => !wasDismissed(branchKey(workspaceId, drift))) : [];
+  if (drifts.length > 0) {
+    warnings.push({
+      id: 'branch',
+      label: 'Branch changed: show the detail',
+      title: 'Branch changed',
+      detail: <ul className="space-y-2">
         {drifts.map((drift) => (
           <li key={drift.repoName} className="space-y-1">
             <p>
@@ -99,16 +89,31 @@ function BranchMark({ workspaceId }: { workspaceId: string }) {
             <CommandButton command={switchBackCommand(drift)} />
           </li>
         ))}
-      </ul>
-      <Button size="xs" variant="ghost" onClick={() => { drifts.forEach((drift) => rememberDismissed(branchKey(workspaceId, drift))); setVersion((value) => value + 1); }}>Dismiss</Button>
-    </Mark>
-  );
+      </ul>,
+    });
+  }
+  const dismiss = (id: string) => {
+    if (id === 'backup') { rememberDismissed(backupKey(workspaceId)); setBackupDismissed(true); return; }
+    drifts.forEach((drift) => rememberDismissed(branchKey(workspaceId, drift)));
+    setVersion((value) => value + 1);
+  };
+  return { warnings, dismiss };
 }
 
-/** The workspace's warnings as marks in its header, each with its detail one click away. */
-export function WorkspaceMarks({ workspaceId }: { workspaceId: string }) {
-  return <>
-    <BackupMark workspaceId={workspaceId} />
-    <BranchMark workspaceId={workspaceId} />
-  </>;
+/** One warning's detail, opened from its line in the header menu. */
+export function WarningDialog({ warning, onClose, onDismiss }: { warning: WorkspaceWarning | null; onClose: () => void; onDismiss: (id: string) => void }) {
+  return (
+    <Dialog open={Boolean(warning)} onOpenChange={(open) => { if (!open) onClose(); }}>
+      {warning && <DialogPopup className="max-w-md" showCloseButton={false}>
+        <section aria-label={warning.title} className="space-y-3 p-5 text-sm">
+          <DialogHeader className="p-0"><DialogTitle className="text-base">{warning.title}</DialogTitle></DialogHeader>
+          {warning.detail}
+          <div className="flex gap-1.5">
+            <Button size="xs" variant="ghost" onClick={() => { onDismiss(warning.id); onClose(); }}>Dismiss</Button>
+            <Button size="xs" variant="ghost" onClick={onClose}>Close</Button>
+          </div>
+        </section>
+      </DialogPopup>}
+    </Dialog>
+  );
 }

@@ -20,7 +20,7 @@ import { terminalRequest, terminalToken, terminalSocketUrl, type TerminalInfo, t
 import { findFileReferences, type FileReference } from './fileReferences.js';
 import { hardWrapSkip } from './wrappedRows.js';
 import { findWebLinks } from './webLinks.js';
-import { toPromptText } from './promptFill.js';
+import { promptFillWantsAssistant, toPromptText } from './promptFill.js';
 import { SHIFT_ENTER_SEQUENCE, terminalKeyAction } from './terminalKeys.js';
 import type { AISession } from '../../types.js';
 
@@ -142,9 +142,6 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
   const backgroundOutputRef = useRef(onBackgroundOutput);
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { openFileRef.current = onOpenFileReference; }, [onOpenFileReference]);
-  // Where the session runs, so a relative path it prints resolves from there. Read by the link providers.
-  const cwdRef = useRef<string | undefined>(undefined);
-  useEffect(() => { cwdRef.current = terminal?.cwd; }, [terminal]);
   useEffect(() => { statusChangeRef.current = onStatusChange; backgroundOutputRef.current = onBackgroundOutput; }, [onStatusChange, onBackgroundOutput]);
   const replyRef = useRef(onReply);
   useEffect(() => { replyRef.current = onReply; }, [onReply]);
@@ -163,9 +160,12 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
     fillPromptRef.current = (text: string) => {
       const data = toPromptText(text);
       const term = renderer.current;
+      // Asked for an AI session only (Ask AI in the Code window): a plain shell is refused like a closed terminal
+      if (promptFillWantsAssistant() && targetRef.current === 'shell') return false;
       if (!data || !term || term.options.disableStdin || socket.current?.readyState !== WebSocket.OPEN) return false;
-      send({ type: 'input', data });
-      if (activeRef.current) term.focus();
+      const sendData = typeof text === 'string' && text.endsWith(' ') && !data.endsWith(' ') ? `${data} ` : data;
+      send({ type: 'input', data: sendData });
+      term.focus();
       return true;
     };
     return () => { fillPromptRef.current = null; };
@@ -221,7 +221,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
         allowNonHttpProtocols: true,
         activate: (_event, uri) => {
           if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer');
-          else if (/^file:\/\//i.test(uri)) openFileRef.current?.({ path: uri, cwd: cwdRef.current });
+          else if (/^file:\/\//i.test(uri)) openFileRef.current?.({ path: uri });
         },
       },
     });
@@ -340,7 +340,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
       callback(findFileReferences(windowed.text).map(reference => ({
         text: reference.text,
         range: { start: windowed.positionAt(reference.start, false), end: windowed.positionAt(reference.end, true) },
-        activate: () => openFileRef.current?.({ path: reference.path, line: reference.line, cwd: cwdRef.current }),
+        activate: () => openFileRef.current?.({ path: reference.path, line: reference.line }),
       })));
     } });
     renderer.current = term; fit.current = sizing; search.current = searching;

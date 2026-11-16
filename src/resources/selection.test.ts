@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SkillItem } from '../types.js';
-import { isDefaultSkillsConfig, resolveWorkspaceSkills, workspaceOnlySkillIds } from './selection.js';
+import { ALWAYS_ON_SKILL_IDS, isDefaultSkillsConfig, resolveWorkspaceSkills, workspaceOnlySkillIds } from './selection.js';
 
 function skill(id: string, category: string, extra: Partial<SkillItem> = {}): SkillItem {
   return { id, name: id, category, description: `About ${id}`, content: `# ${id}`, custom: true, ...extra };
@@ -118,5 +118,34 @@ describe('workspace-only skills on a default config', () => {
     expect(isDefaultSkillsConfig({ revision: 1 })).toBe(false);
     expect(workspaceOnlySkillIds({ revision: 1 }, catalog)).toEqual([]);
     expect(workspaceOnlySkillIds({ revision: 0, disabledSkills: ['x'] }, catalog)).toEqual([]);
+  });
+});
+
+describe('skills every workspace gets', () => {
+  const explain = skill('contextspace-explain', 'workflows', { custom: false });
+  const others = [skill('review-pr', 'pull-requests'), skill('standup', 'notes')];
+
+  it('names the explain skill', () => {
+    expect(ALWAYS_ON_SKILL_IDS).toContain('contextspace-explain');
+  });
+
+  it('is on for a saved selection (revision above 0) that never mentioned it, and changes nothing else', () => {
+    const config = { enabledSkills: ['review-pr'], enabledCategories: [], disabledSkills: [], revision: 7 };
+    expect(ids(resolveWorkspaceSkills(config, [...others, explain]).skills)).toEqual(['contextspace-explain', 'review-pr']);
+    expect(ids(resolveWorkspaceSkills(config, others).skills)).toEqual(['review-pr']);
+  });
+
+  it('is on for an empty selection too', () => {
+    expect(ids(resolveWorkspaceSkills({ enabledSkills: [], enabledCategories: [], disabledSkills: [] }, [explain]).skills)).toEqual(['contextspace-explain']);
+  });
+
+  it('is not deployed when the workspace lists it in disabledSkills, even when it is picked or its category is on', () => {
+    const config = { enabledSkills: ['contextspace-explain'], enabledCategories: ['workflows'], disabledSkills: ['contextspace-explain'], revision: 3 };
+    expect(ids(resolveWorkspaceSkills(config, [...others, explain]).skills)).toEqual([]);
+  });
+
+  it('is never copied when a harness ships a skill with that id', () => {
+    const shipped = harnessSkill('contextspace-explain', 'workflows');
+    expect(ids(resolveWorkspaceSkills({ enabledSkills: [], enabledCategories: [], disabledSkills: [] }, [shipped]).skills)).toEqual([]);
   });
 });

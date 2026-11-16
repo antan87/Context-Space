@@ -129,25 +129,28 @@ test.describe('the sidebar width', () => {
     await expect.poll(() => widthOf(sidebar(page))).toBe(MAX);
   });
 
-  test('leaves the collapsed rail as narrow as ever, and is there again when it expands', async ({ page }) => {
+  test('leaves the rail as narrow as ever, and is there again when it docks', async ({ page }) => {
     await page.goto('/#/overview');
     await drag(page, 100);
     await expect.poll(() => widthOf(sidebar(page))).toBe(DEFAULT + 100);
     await page.getByRole('button', { name: /^Collapse/ }).click();
     await expect(handle(page)).toHaveCount(0);
     await expect.poll(() => widthOf(sidebar(page))).toBe(56);
-    await page.getByRole('button', { name: /^Expand/ }).click();
+    // The sheet takes the saved width too, and the pin docks it at that width.
+    await page.getByRole('button', { name: 'Show workspaces (z)' }).click();
+    await expect.poll(() => widthOf(page.locator('[data-slot="sheet-popup"]'))).toBe(DEFAULT + 100);
+    await page.getByRole('button', { name: 'Keep the sidebar open' }).click();
     await expect.poll(() => widthOf(sidebar(page))).toBe(DEFAULT + 100);
   });
 
-  test('is not offered in a narrow window, whose rail expands to the usual width', async ({ page }) => {
+  test('is not offered in a narrow window, whose sheet opens at the usual width', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('ctxspace_sidebar_width', '400'));
     await page.setViewportSize({ width: 900, height: 800 });
     await page.goto('/#/overview');
     await expect(handle(page)).toHaveCount(0);
-    await page.getByRole('button', { name: /Expand/ }).click();
+    await page.getByRole('button', { name: 'Show workspaces (z)' }).click();
     // It eases open, so wait for it to arrive.
-    await expect.poll(() => widthOf(sidebar(page))).toBe(DEFAULT);
+    await expect.poll(() => widthOf(page.locator('[data-slot="sheet-popup"]'))).toBe(DEFAULT);
     await expect(handle(page)).toHaveCount(0);
   });
 

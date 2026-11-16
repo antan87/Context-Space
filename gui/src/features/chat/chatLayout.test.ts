@@ -29,8 +29,8 @@ describe('chatLayout', () => {
     expect(chatLayout.get().percent).toBe(CHAT_LAYOUT.maxPercent);
     chatLayout.setPercent(51.6);
     expect(chatLayout.get().percent).toBe(52);
-    // The chat keeps most of the screen by default.
-    expect(CHAT_LAYOUT.defaultPercent).toBeGreaterThan(50);
+    // The chat splits the screen equally by default.
+    expect(CHAT_LAYOUT.defaultPercent).toBe(50);
     expect(clampChatPercent(Number.NaN)).toBe(CHAT_LAYOUT.defaultPercent);
     expect(clampChatPercent(Number.POSITIVE_INFINITY)).toBe(CHAT_LAYOUT.defaultPercent);
   });
@@ -57,9 +57,9 @@ describe('chatLayout', () => {
   });
 
   it('starts from the default when what was saved is unreadable or out of range', async () => {
-    expect((await load({ [KEY]: '{nope' })).chatLayout.get()).toEqual({ hidden: false, percent: 62 });
-    expect((await load({ [KEY]: JSON.stringify({ hidden: 'yes', percent: 500 }) })).chatLayout.get()).toEqual({ hidden: false, percent: 80 });
-    expect((await load({ [KEY]: JSON.stringify({ percent: 'wide' }) })).chatLayout.get().percent).toBe(62);
+    expect((await load({ [KEY]: '{nope' })).chatLayout.get()).toEqual({ hidden: false, percent: 50 });
+    expect((await load({ [KEY]: JSON.stringify({ hidden: 'yes', percent: 500 }) })).chatLayout.get()).toEqual({ hidden: false, percent: 75 });
+    expect((await load({ [KEY]: JSON.stringify({ percent: 'wide' }) })).chatLayout.get().percent).toBe(50);
     vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } });
     vi.resetModules();
     const { chatLayout } = await import('./chatLayout');

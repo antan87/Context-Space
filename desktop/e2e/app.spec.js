@@ -80,7 +80,9 @@ test.describe('desktop app', () => {
     try {
       if (proc?.pid) {
         if (process.platform === 'win32') {
-          spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
+          spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
+            stdio: 'ignore', timeout: 5_000, killSignal: 'SIGKILL',
+          });
         } else {
           proc.kill('SIGKILL');
         }
@@ -94,10 +96,9 @@ test.describe('desktop app', () => {
   // suite (Chromium against the built GUI), so we don't re-drive it here where
   // Electron-on-Windows cold-start timing makes nav clicks flaky.
   test('boots the backend and loads the dashboard shell', async () => {
-    // The served GUI shows the dashboard's brand, or on a first run with no config the setup page; the backend
-    // error page ("ContextSpace could not start its backend") and a blank page show neither. Waiting for the brand
-    // alone raced the setup page, which replaces the briefly drawn shell once the config is read.
-    const dashboard = window.getByText('ContextSpace', { exact: true });
+    // The slim rail has no visible brand. Configured installs land on Overview;
+    // fresh installs show setup. Neither a blank page nor a backend error matches.
+    const dashboard = window.getByRole('heading', { level: 1, name: 'Overview', exact: true });
     const firstRunSetup = window.getByRole('heading', { level: 1, name: 'Set up ContextSpace', exact: true });
     await expect(dashboard.or(firstRunSetup).first()).toBeVisible({ timeout: 30_000 });
 

@@ -1,11 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, FolderGit2, Search, X } from 'lucide-react';
 import type { Feature } from '../types.js';
 import { jumpTargets } from './workspaceList.js';
+import { QUICK_SWITCH_OPEN_EVENT, openQuickSwitch } from './quickSwitchEvents.js';
 
-/** Native dialog supplies focus containment, Escape, and focus restoration. */
-export function QuickSwitch({ workspaces }: { workspaces: Feature[] }) {
+/** The full sidebar's "Jump to…" field. It only asks; the one QuickSwitch mounted in the sidebar answers. */
+export function QuickSwitchField() {
+  return <button type="button" data-sidebar-jump="" onClick={openQuickSwitch} className="mx-2.5 my-2 flex h-9 items-center gap-2 rounded-lg border border-input bg-background/60 px-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground" aria-label="Search and jump to a workspace" aria-keyshortcuts="Control+k Meta+k"><Search size={14} /><span>Jump to…</span><kbd className="ml-auto rounded border border-border px-1 text-[10px]">⌘ / Ctrl K</kbd></button>;
+}
+
+/**
+ * The Jump to dialog and its one ⌘K / Ctrl K listener. Mount it once, whatever the sidebar shows: the rail has no
+ * field, so the shortcut and the rail's icon are its only ways in. A native dialog supplies focus containment,
+ * Escape, and focus restoration.
+ */
+export function QuickSwitch({ workspaces, onOpen, fallbackFocus }: {
+  workspaces: Feature[];
+  /** Told as it opens, so a sheet underneath can close first and Escape then closes only this. */
+  onOpen?: () => void;
+  /** Where focus goes when it closes and what opened it is gone (a field inside a sheet that closed). */
+  fallbackFocus?: () => HTMLElement | null;
+}) {
+  const opener = useRef<HTMLElement | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -22,6 +39,8 @@ export function QuickSwitch({ workspaces }: { workspaces: Feature[] }) {
   ].filter((a) => `${a.title} ${a.detail}`.toLowerCase().includes(query.trim().toLowerCase()));
   const current = Math.min(active, Math.max(actions.length - 1, 0));
   function open() {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    onOpen?.();
     setQuery('');
     setActive(0);
     dialog.current?.showModal();
@@ -31,24 +50,31 @@ export function QuickSwitch({ workspaces }: { workspaces: Feature[] }) {
     dialog.current?.close();
     navigate(route);
   }
+  // Effect events always see the latest props (onOpen), which a listener added once would not.
+  const onKey = useEffectEvent((event: KeyboardEvent) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      if (dialog.current?.open) dialog.current.close();
+      else open();
+    }
+  });
+  const onOpenRequest = useEffectEvent(() => { if (!dialog.current?.open) open(); });
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        if (dialog.current?.open) dialog.current.close();
-        else open();
-      }
+    const keydown = (event: KeyboardEvent) => onKey(event);
+    const request = () => onOpenRequest();
+    window.addEventListener('keydown', keydown);
+    window.addEventListener(QUICK_SWITCH_OPEN_EVENT, request);
+    return () => {
+      window.removeEventListener('keydown', keydown);
+      window.removeEventListener(QUICK_SWITCH_OPEN_EVENT, request);
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
   }, []);
   useEffect(() => {
     if (dialog.current?.open) document.getElementById(`quick-result-${current}`)?.scrollIntoView({ block: 'nearest' });
   }, [current]);
 
   return <>
-    <button type="button" onClick={open} className="mx-2.5 my-2 flex h-9 items-center gap-2 rounded-lg border border-input bg-background/60 px-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground" aria-label="Search and jump to a workspace" aria-keyshortcuts="Control+k Meta+k"><Search size={14} /><span>Jump to…</span><kbd className="ml-auto rounded border border-border px-1 text-[10px]">⌘ / Ctrl K</kbd></button>
-    <dialog ref={dialog} aria-labelledby="quick-switch-title" className="context-switch m-auto w-[min(560px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-border bg-popover p-0 text-popover-foreground shadow-2xl" onClick={(e) => { if (e.target === dialog.current) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) dialog.current.close(); } }}>
+    <dialog ref={dialog} aria-labelledby="quick-switch-title" onClose={() => { if (opener.current && !opener.current.isConnected) fallbackFocus?.()?.focus(); }} className="context-switch m-auto w-[min(560px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-border bg-popover p-0 text-popover-foreground shadow-2xl" onClick={(e) => { if (e.target === dialog.current) { const box = e.currentTarget.getBoundingClientRect(); if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) dialog.current.close(); } }}>
       <h2 id="quick-switch-title" className="sr-only">Jump to a workspace or page</h2>
       <div className="flex items-center gap-3 border-b border-border px-5 has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-inset has-[input:focus-visible]:ring-ring"><Search size={18} className="text-primary" /><input ref={input} value={query} onChange={(e) => { setQuery(e.target.value); setActive(0); }} onKeyDown={(e) => {
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setActive(actions.length ? (current + (e.key === 'ArrowDown' ? 1 : -1) + actions.length) % actions.length : 0); }

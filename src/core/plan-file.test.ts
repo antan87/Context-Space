@@ -147,3 +147,58 @@ describe('the free text around the structure', () => {
     });
   });
 });
+
+describe('nested steps', () => {
+  const NESTED = [
+    '# Work', '', '## Checkpoints', '',
+    '- [ ] **Board**',
+    '  - [ ] **Group heading**:',
+    '    - [ ] **Slice C: density**',
+    '      - [x] C1: grid',
+    '      - [ ] C2: tabs',
+    '    - [ ] Slice D',
+    '  - [ ] Sibling at the top',
+    '  - [x] Heading with all children done',
+    '    - [x] Done child',
+    '',
+    '## Notes', '', '- [ ] Outside one', '  - [ ] Outside two',
+    '- [ ] Outside three',
+  ].join('\n');
+
+  it('names the step each nested step sits under, however deep, and nothing for the others', () => {
+    const plan = parsePlanFile(NESTED);
+    const steps = plan.checkpoints[0]!.steps;
+    const keys = Object.fromEntries(steps.map((step) => [step.text.replace(/\*\*/g, ''), step.key]));
+    const parentOf = (text: string) => steps.find((step) => step.text.replace(/\*\*/g, '') === text)?.parent;
+    expect(parentOf('Group heading:')).toBeUndefined();
+    expect(parentOf('Slice C: density')).toBe(keys['Group heading:']);
+    expect(parentOf('C1: grid')).toBe(keys['Slice C: density']);
+    expect(parentOf('C2: tabs')).toBe(keys['Slice C: density']);
+    expect(parentOf('Slice D')).toBe(keys['Group heading:']);
+    expect(parentOf('Sibling at the top')).toBeUndefined();
+    expect(parentOf('Done child')).toBe(keys['Heading with all children done']);
+    expect(steps).toHaveLength(8);
+  });
+
+  it('does not carry a parent across a heading or out of the checkpoints', () => {
+    const plan = parsePlanFile(NESTED);
+    expect(plan.steps.map((step) => [step.text, step.parent])).toEqual([
+      ['Outside one', undefined], ['Outside two', 'outside-one'], ['Outside three', undefined],
+    ]);
+  });
+
+  it('does not take the step before a Decide line for the parent of a step nested under the Decide', () => {
+    const plan = parsePlanFile([
+      '# Work', '', '## Checkpoints', '',
+      '- [ ] **Board**',
+      '  - [ ] Step A',
+      '  - [ ] **Decide:** Which way?',
+      '    - [ ] Step B under the decision',
+      '  - [ ] Step C',
+    ].join('\n'));
+    const steps = plan.checkpoints[0]!.steps;
+    expect(steps.map((step) => [step.text, step.parent])).toEqual([
+      ['Step A', undefined], ['Step B under the decision', undefined], ['Step C', undefined],
+    ]);
+  });
+});

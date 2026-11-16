@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Copy, Download, Edit3, ExternalLink, Eye, FolderInput, Maximize2, Minimize2, Save, ShieldAlert, X } from 'lucide-react';
+import { Check, Code2, Copy, Download, Edit3, ExternalLink, Eye, FolderInput, Maximize2, Minimize2, MoreHorizontal, Save, X } from 'lucide-react';
 import { Button, buttonVariants } from '../../components/ui/button.js';
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
+import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
 import { DocumentPreview, type DocumentPreviewData } from './DocumentPreview.js';
-import { dependsOnExternalScript } from './previewPolicy.js';
 
 /** Matches the app's existing overlay idiom (dialog.tsx, PluggableDiffViewer, WorktreeTitleModal). */
 const OVERLAY = 'fixed inset-0 z-[100] flex flex-col bg-background';
@@ -39,6 +39,14 @@ export interface DocumentViewerProps {
    * takes the panel's whole height. `leading` goes at the start of that row (navigation, Back).
    */
   fill?: boolean;
+  /**
+   * With `fill`: the frame of an HTML page (or a PDF) takes the whole height of the body, which then does not scroll, so the
+   * page scrolls on its own and nothing scrolls twice. Other documents still scroll in the body. Without it the frame is a
+   * fixed share of the screen's height and the body scrolls around it.
+   */
+  fillFrame?: boolean;
+  /** With `fill`: no row of its own: the reader around it draws the title and the actions. */
+  chromeless?: boolean;
   leading?: ReactNode;
   notice?: ReactNode;
   className?: string;
@@ -52,31 +60,20 @@ export interface DocumentViewerProps {
   onMove?: (to: string) => Promise<void> | void;
   /** Initial editing state (useful for tests or opening directly in edit mode) */
   initialEditing?: boolean;
-}
-
-/** Trust is per document and never persisted: it lapses as soon as the document is closed. */
-function TrustControl({ trusted, onToggle, compact }: { trusted: boolean; onToggle: () => void; compact: boolean }) {
-  return <Button
-    size={compact ? 'xs' : 'sm'}
-    variant={trusted ? 'destructive-outline' : 'outline'}
-    aria-pressed={trusted}
-    title={trusted ? 'Stop running scripts from this document' : 'Run scripts in this document so its styling can load'}
-    onClick={onToggle}
-  >
-    <ShieldAlert size={compact ? 12 : 14} />
-    {trusted ? 'Stop trusting' : 'Trust this document'}
-  </Button>;
+  /** Direct click handler for image preview (e.g. toggle full screen) */
+  onImageClick?: () => void;
+  /** Controlled image expanded state (e.g. driven by BoardReader fullscreen) */
+  imageExpanded?: boolean;
 }
 
 /**
  * Owns the maximize affordance for every document surface. Expanding fills the app viewport inside
  * the app's own borders — `fixed inset-0` portaled to `document.body` above the app shell, never the
- * browser Fullscreen API — so Download, the raw toggle and the trust control all stay reachable, and
+ * browser Fullscreen API — so Download and the raw toggle stay reachable, and
  * docked side panels like the chat cannot overlap it.
  */
-export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['Raw text', 'Rendered view'], onClose, compact = false, fill = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false }: DocumentViewerProps) {
+export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['View source', 'View page'], onClose, compact = false, fill = false, fillFrame = false, chromeless = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false, onImageClick, imageExpanded }: DocumentViewerProps) {
   const [expanded, setExpanded] = useState(false);
-  const [trusted, setTrusted] = useState(false);
   const [editing, setEditing] = useState(initialEditing);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -87,6 +84,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   const [moveError, setMoveError] = useState<string | null>(null);
   const inlineToggle = useRef<HTMLButtonElement>(null);
   const overlayToggle = useRef<HTMLButtonElement>(null);
+  const moreInline = useRef<HTMLButtonElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const wasExpanded = useRef(false);
   const mountedRef = useRef(true);
@@ -126,13 +124,12 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     }
   };
 
-  // Trust and edit state lapse when a different document is opened.
+  // Edit state lapses when a different document is opened.
   const currentDocName = preview?.name ?? title;
   const previousDocName = useRef(currentDocName);
   useEffect(() => {
     if (currentDocName && previousDocName.current !== currentDocName) {
       previousDocName.current = currentDocName;
-      setTrusted(false);
       setExpanded(false);
       setEditing(false);
       setEditContent(preview?.content ?? '');
@@ -219,6 +216,8 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     if (!expanded) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // Escape inside an open menu closes the menu only.
+        if (event.defaultPrevented || document.querySelector('[data-slot="menu-popup"]')) return;
         event.stopPropagation();
         setExpanded(false);
         return;
@@ -261,22 +260,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   };
 
   const buttonSize = compact ? 'xs' : 'sm';
-  const scriptBound = useMemo(
-    () => preview?.kind === 'html' && !raw && dependsOnExternalScript(preview.content ?? ''),
-    [preview, raw],
-  );
-  const trustControl = preview?.kind === 'html' && !raw
-    ? <TrustControl trusted={trusted} onToggle={() => setTrusted(value => !value)} compact={compact} />
-    : null;
-  const guidance = <>
-    {notice}
-    {scriptBound && <p role="status" className={cn('flex items-start gap-1.5 text-xs text-muted-foreground', compact ? 'mb-2' : 'mb-3')}>
-      <ShieldAlert size={12} className="mt-0.5 shrink-0" />
-      {trusted
-        ? 'This document can run scripts from the internet, so remote code is running in a sandboxed frame.'
-        : 'This page loads styling from an external script, which is blocked. Trust the document to load it.'}
-    </p>}
-  </>;
+  const guidance = notice;
   const editorView = (
     <div className="flex flex-col flex-1 h-full min-h-[350px] gap-2">
       <textarea
@@ -293,14 +277,29 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     </div>
   );
 
+  const isImageExpanded = expanded || Boolean(imageExpanded);
+  const handleImageClick = onImageClick ?? (() => setExpanded((value) => !value));
+
+  // The frame of a page or a PDF that has the body to itself, in a body that does not scroll.
+  const framed = fill && fillFrame && !editing && !raw && (preview?.kind === 'html' || (preview?.kind === 'pdf' && preview.content === undefined));
   const body = (expandedNow: boolean) => editing
     ? editorView
     : preview
-      ? <DocumentPreview preview={preview} fileUrl={fileUrl} raw={raw} expanded={expandedNow} trusted={trusted} links={links} />
+      ? <DocumentPreview
+          preview={preview}
+          fileUrl={fileUrl}
+          raw={raw}
+          expanded={expandedNow || isImageExpanded}
+          fillFrame={framed && !expandedNow}
+          trusted
+          links={links}
+          onImageClick={preview.kind === 'image' ? handleImageClick : undefined}
+        />
       : <>{status}</>;
 
   const folder = (preview?.name ?? title).includes('/') ? (preview?.name ?? title).slice(0, (preview?.name ?? title).lastIndexOf('/') + 1) : '';
-  const iconLink = 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground';
+  /** A document with nothing to preview (a .docx): the body only offers the download, so the row does too. */
+  const noPreview = preview?.kind === 'download' && preview.content === undefined;
   /** The reader's one row: where the document is, then what can be done with it, as quiet icons. */
   const fillChrome = (expandedNow: boolean) => (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2 text-xs">
@@ -309,10 +308,16 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         {folder && <span className="text-muted-foreground">{folder}</span>}
         <span className="font-medium text-foreground">{title.slice(folder && title.startsWith(folder) ? folder.length : 0)}</span>
       </h3>
+      {watching && <span role="img" aria-label="Watching for changes" title="Watching for changes" className="inline-flex shrink-0 text-muted-foreground"><Eye aria-hidden="true" size={13} /></span>}
       {canEdit && !editing && (
         <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Edit document" title="Edit document" onClick={() => { setEditContent(preview?.content ?? ''); setEditing(true); }}>
           <Edit3 size={13} />
         </Button>
+      )}
+      {noPreview && downloadHref && !editing && (
+        <a href={downloadHref} download={preview?.name.split('/').pop() ?? title.split('/').pop()} className={cn(buttonVariants({ variant: 'ghost', size: 'xs' }), 'h-7 shrink-0 gap-1 px-2 text-xs')}>
+          <Download aria-hidden="true" size={13} />Download
+        </a>
       )}
       {editing && (
         <>
@@ -324,36 +329,32 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
           </Button>
         </>
       )}
-      {onToggleWatch && (
-        <Button size="xs" variant={watching ? 'secondary' : 'ghost'} className={cn('size-7 shrink-0 p-0', watching && 'text-emerald-500')}
-          disabled={editing}
-          aria-label={watching ? 'Watching document for changes (live reload)' : 'Watch document for changes'}
-          aria-pressed={watching}
-          title={editing ? 'Cannot watch while editing' : (watching ? 'Watching for changes (live reload active)' : 'Watch document for changes')}
-          onClick={onToggleWatch}>
-          <Eye size={13} />
-        </Button>
-      )}
-      {onToggleRaw && !editing && <Button size="xs" variant="ghost" className="shrink-0" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
-      {!editing && trustControl}
-      <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label={copiedPath ? 'Path copied' : `Copy path ${pathToCopy}`} title={copiedPath ? 'Path copied to clipboard' : 'Copy path'} onClick={handleCopyPath}>
-        {copiedPath ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
-      </Button>
-      {onMove && !editing && (
-        <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Move or rename document" title="Move or rename document" onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setMoveOpen(true); }}>
-          <FolderInput size={13} />
-        </Button>
-      )}
-      {downloadHref && (
-        <a className={iconLink} href={downloadHref} download={preview?.name.split('/').pop() ?? title.split('/').pop()} aria-label="Download" title="Download">
-          <Download size={13} />
-        </a>
-      )}
-      {browserHref && (
-        <a className={iconLink} href={browserHref} target="_blank" rel="noopener noreferrer" aria-label="Open in browser" title="Open in your browser, where the document runs as authored">
-          <ExternalLink size={13} />
-        </a>
-      )}
+      {/* The rest sits in one menu so the title keeps its room in a narrow panel. */}
+      <Menu>
+        <MenuTrigger ref={expandedNow ? undefined : moreInline} aria-label="More document actions" title="More document actions" className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+          <MoreHorizontal aria-hidden="true" size={14} />
+        </MenuTrigger>
+        <MenuPopup align="end" className="w-60" positionerClassName={expandedNow ? 'z-[110]' : undefined}>
+          {onToggleWatch && (
+            <MenuCheckboxItem checked={watching} disabled={editing} onCheckedChange={() => onToggleWatch()} aria-label="Watch document for changes">
+              Watch for changes
+            </MenuCheckboxItem>
+          )}
+          {onToggleRaw && !editing && <MenuItem onClick={onToggleRaw}><Code2 aria-hidden="true" />{raw ? rawLabels[1] : rawLabels[0]}</MenuItem>}
+          <MenuItem onClick={handleCopyPath} aria-label={copiedPath ? 'Path copied' : `Copy path ${pathToCopy}`}>
+            {copiedPath ? <Check aria-hidden="true" className="text-emerald-500" /> : <Copy aria-hidden="true" />}{copiedPath ? 'Path copied' : 'Copy path'}
+          </MenuItem>
+          {onMove && !editing && (
+            <MenuItem onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setExpanded(false); setMoveOpen(true); }}><FolderInput aria-hidden="true" />Move or rename</MenuItem>
+          )}
+          {downloadHref && (
+            <MenuItem render={<a href={downloadHref} download={preview?.name.split('/').pop() ?? title.split('/').pop()} />}><Download aria-hidden="true" />Download</MenuItem>
+          )}
+          {browserHref && (
+            <MenuItem render={<a href={browserHref} target="_blank" rel="noopener noreferrer" />}><ExternalLink aria-hidden="true" />Open in browser</MenuItem>
+          )}
+        </MenuPopup>
+      </Menu>
       <Button ref={expandedNow ? overlayToggle : inlineToggle} size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Expand document" aria-pressed={expandedNow}
         title={expandedNow ? 'Collapse document' : 'Expand document'} onClick={() => setExpanded(value => !value)}>
         {expandedNow ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
@@ -394,7 +395,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
               className="h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground gap-1 shrink-0"
               aria-label="Move or rename document"
               title="Move or rename document"
-              onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setMoveOpen(true); }}
+              onClick={() => { setTargetPath(preview?.name ?? title); setMoveError(null); setExpanded(false); setMoveOpen(true); }}
             >
               <FolderInput size={compact ? 11 : 13} />
               <span className="text-[11px] hidden sm:inline">Move</span>
@@ -442,7 +443,6 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
             </Button>
           )}
           {onToggleRaw && !editing && <Button size={buttonSize} variant="outline" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
-          {!editing && trustControl}
           {downloadHref && (
             <a
               className={cn(buttonVariants({ variant: 'outline', size: buttonSize }), 'gap-1.5')}
@@ -488,8 +488,8 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     <>
       {fill ? (
         <div className={cn('flex h-full min-h-0 flex-col', expanded && 'hidden', className)}>
-          {fillChrome(false)}
-          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+          {!chromeless && fillChrome(false)}
+          <div className={cn('min-h-0 flex-1 px-5 py-4', framed || (isImageExpanded && preview?.kind === 'image') ? 'flex flex-col overflow-hidden' : 'overflow-auto')}>
             {guidance}
             {body(false)}
           </div>
@@ -534,7 +534,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       )}
       {moveOpen && (
         <Dialog open={moveOpen} onOpenChange={(next) => !next && setMoveOpen(false)}>
-          <DialogPopup className="max-w-md">
+          <DialogPopup className="max-w-md" finalFocus={() => moreInline.current ?? true}>
             <DialogHeader>
               <DialogTitle>Move or rename document</DialogTitle>
               <DialogDescription>

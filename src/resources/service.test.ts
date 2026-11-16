@@ -107,6 +107,13 @@ describe('resource administration service', () => {
   describe('previewResourceSelections', () => {
     const files = (items: Awaited<ReturnType<typeof previewResourceSelections>>, id: string) =>
       items.find((item) => item.id === id)?.files;
+    // Every workspace also gets the explain skill; these tests are about the skills chosen
+    const ids = (items: Awaited<ReturnType<typeof previewResourceSelections>>) => items.map((item) => item.id).filter((id) => id !== 'contextspace-explain');
+
+    it('previews the explain skill every workspace gets, until it is left out', async () => {
+      expect((await previewResourceSelections([], [], ['claude'])).map((item) => item.id)).toEqual(['contextspace-explain']);
+      expect(await previewResourceSelections([], [], ['claude'], [], ['contextspace-explain'])).toEqual([]);
+    });
 
     it('covers the skills of a chosen category as well as the single picks, in both skill folders', async () => {
       await saveSkill({ name: 'review-pr', category: 'pull-requests', description: 'Reviews', content: '# Review' });
@@ -116,7 +123,7 @@ describe('resource administration service', () => {
 
       const items = await previewResourceSelections(['standup'], [], [], ['pull-requests']);
 
-      expect(items.map((item) => item.id).sort()).toEqual(['review-pr', 'standup', 'write-description']);
+      expect(ids(items).sort()).toEqual(['review-pr', 'standup', 'write-description']);
       expect(files(items, 'review-pr')).toEqual(['.agents/skills/review-pr/SKILL.md', '.claude/skills/review-pr/SKILL.md']);
       expect(files(items, 'standup')).toEqual(['.agents/skills/standup/SKILL.md', '.claude/skills/standup/SKILL.md']);
     });
@@ -127,7 +134,7 @@ describe('resource administration service', () => {
 
       const items = await previewResourceSelections([], [], [], ['pull-requests'], ['write-description']);
 
-      expect(items.map((item) => item.id)).toEqual(['review-pr']);
+      expect(ids(items)).toEqual(['review-pr']);
     });
 
     it('still previews only the single picks when no category is chosen', async () => {
@@ -136,7 +143,7 @@ describe('resource administration service', () => {
 
       const items = await previewResourceSelections(['standup'], [], ['claude']);
 
-      expect(items.map((item) => item.id)).toEqual(['standup']);
+      expect(ids(items)).toEqual(['standup']);
     });
 
     it('leaves out a skill a harness ships, whether it is picked or in a chosen category', async () => {
@@ -156,7 +163,7 @@ describe('resource administration service', () => {
 
         const items = await previewResourceSelections(['pdf'], [], ['claude'], ['documents']);
 
-        expect(items.map((item) => item.id)).toEqual(['write-report']);
+        expect(ids(items)).toEqual(['write-report']);
       } finally {
         for (const [key, value] of [['NEXUSFLOW_HOME', saved.nexusflow], ['HOME', saved.home], ['USERPROFILE', saved.userProfile]] as const) {
           if (value === undefined) delete process.env[key];

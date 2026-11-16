@@ -88,9 +88,9 @@ test.describe('the open sessions in the sidebar', () => {
 
   test('keep the part of the workspace being read when another one is chosen', async ({ page }) => {
     await openAll(page);
-    await page.goto('/#/workspaces/alpha/plan');
+    await page.goto('/#/workspaces/alpha/board');
     await session(page, 'beta').click();
-    await expect(page).toHaveURL(/#\/workspaces\/beta\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/beta\/board$/);
   });
 
   test('are the same after a reload', async ({ page }) => {
@@ -145,17 +145,17 @@ test.describe('the open sessions in the sidebar', () => {
 test.describe('the keyboard', () => {
   test('jumps to a session with Alt and its number, and cycles with Alt and the up and down arrows', async ({ page }) => {
     await openAll(page);
-    await page.goto('/#/workspaces/gamma/plan');
+    await page.goto('/#/workspaces/gamma/board');
     await settled(page).catch(() => undefined);
     await page.keyboard.press('Alt+2');
-    await expect(page).toHaveURL(/#\/workspaces\/beta\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/beta\/board$/);
     await page.keyboard.press('Alt+ArrowDown');
-    await expect(page).toHaveURL(/#\/workspaces\/gamma\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/gamma\/board$/);
     // Down from the last wraps to the first; up from the first wraps to the last.
     await page.keyboard.press('Alt+ArrowDown');
-    await expect(page).toHaveURL(/#\/workspaces\/alpha\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/board$/);
     await page.keyboard.press('Alt+ArrowUp');
-    await expect(page).toHaveURL(/#\/workspaces\/gamma\/plan$/);
+    await expect(page).toHaveURL(/#\/workspaces\/gamma\/board$/);
     await expect(session(page, 'gamma')).toHaveAttribute('aria-current', 'page');
     await expect.poll(() => order(page)).toEqual(names);
   });

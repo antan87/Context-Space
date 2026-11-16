@@ -110,7 +110,9 @@ describe('parseExceptions', () => {
   it('accepts the exceptions file committed to the repository', () => {
     const committed = JSON.parse(fs.readFileSync(new URL('../.github/audit-exceptions.json', import.meta.url), 'utf8'));
     const parsed = parseExceptions(committed);
-    expect(parsed.map((entry: { id: string }) => entry.id)).toEqual(expect.arrayContaining([BRACES.id, CACHE.id]));
+    // Every committed entry is accepted, whichever advisories it holds today.
+    expect(parsed.map((entry: { id: string }) => entry.id)).toEqual(committed.exceptions.map((entry: { id: string }) => entry.id));
+    expect(parsed.length).toBeGreaterThan(0);
   });
 });
 

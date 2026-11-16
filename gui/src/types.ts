@@ -460,6 +460,8 @@ export interface SkillItem {
   references?: SkillSupportingFile[];
   scripts?: SkillSupportingFile[];
   scope?: 'workspace' | 'global';
+  /** Every workspace gets this skill unless it leaves it out. */
+  alwaysOn?: boolean;
   /** Set when a harness (Claude Code, Codex, ...) owns the skill; it is read-only here. */
   source?: { harness: string; label: string; root: string };
   organization?: string;
@@ -985,7 +987,9 @@ export type LiveEvent =
   | { type: 'question'; request: OpenQuestion }
   | { type: 'answered'; timestamp: string }
   /** The plan changed on disk, whoever changed it: read it again. */
-  | { type: 'plan'; timestamp: string };
+  | { type: 'plan'; timestamp: string }
+  /** The board was changed by someone: read it again. It is never a screen event, so the strip never shows it. */
+  | { type: 'board'; timestamp: string; revision: number };
 
 /** One changed file, as GET /api/workspace/:id/changes lists it. */
 export interface ChangedFileEntry {

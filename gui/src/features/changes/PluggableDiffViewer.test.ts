@@ -106,12 +106,12 @@ describe('PluggableDiffViewer & Diff Adapters', () => {
 
   it('offers Refine only when the caller can act on it, and moves past the last change to the next file', () => {
     const plain = renderToStaticMarkup(createElement(PluggableDiffViewer, { filePath: 'src/index.ts', repoName: 'nexusflow', patchText: samplePatch }));
-    expect(plain).not.toContain('Refine');
+    expect(plain).not.toContain('Ask AI');
     const withRefine = renderToStaticMarkup(createElement(PluggableDiffViewer, {
       filePath: 'src/index.ts', repoName: 'nexusflow', patchText: samplePatch,
       onRequestRefine: () => undefined, onPrevFile: () => undefined,
     }));
-    expect(withRefine).toContain('Refine');
+    expect(withRefine).toContain('Ask AI');
     // At the first change, the previous button goes to the previous file instead of doing nothing.
     expect(withRefine).toContain('aria-label="Previous file"');
   });

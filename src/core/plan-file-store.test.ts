@@ -6,7 +6,7 @@ import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 import { changePlan } from './plan.js';
 import { addToPlan, answerDecision, setDone } from './plan-file.js';
-import { changePlanFile, movePlanToFile, readPlanChanges, readPlanChecks, readPlanFile, runPlanCheck } from './plan-file-store.js';
+import { changePlanFile, clearPlanNow, movePlanToFile, readPlanChanges, readPlanChecks, readPlanFile, readPlanNow, runPlanCheck, setPlanNow } from './plan-file-store.js';
 import { loadWorkspaceState, mutateWorkspaceState } from './workspace-state.js';
 
 vi.mock('./verify.js', () => ({
@@ -92,5 +92,66 @@ describe('a checkpoint check', () => {
     expect((await loadWorkspaceState(root)).planChecks?.['reports-export-to-csv']).toMatchObject({ canProgress: true });
     expect((await readPlanFile(root)).plan.checkpoints[0]!.done).toBe(false);
     await expect(runPlanCheck(root, 'nope')).rejects.toThrow(/no checkpoint/);
+  });
+});
+
+describe('the step being worked on now', () => {
+  const NOW_PLAN = '# Reports\n\n## Checkpoints\n\n- [ ] Reports export to CSV\n  - [ ] Write the CSV writer\n  - [ ] Add the Export button\n    - [ ] Wire the button\n- [ ] Later\n  - [ ] A later step\n';
+  const nowFile = () => path.join(root, '.contextspace', 'plan-now.json');
+  beforeEach(async () => { await fs.writeFile(path.join(root, 'PLAN.md'), NOW_PLAN); await readPlanFile(root); });
+
+  it('keeps who said it and when, beside the plan and not in it', async () => {
+    const at = new Date('2026-11-06T10:00:00.000Z');
+    const { record, text } = await setPlanNow(root, 'a-later-step', 'claude', at);
+    expect(text).toBe('A later step');
+    expect(record).toEqual({ key: 'a-later-step', by: 'claude', at: at.toISOString() });
+    expect(await readPlanNow(root)).toEqual(record);
+    expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(NOW_PLAN);
+  });
+
+  it('is cleared when the step is ticked in the app, by the CLI path or by hand in the file', async () => {
+    await setPlanNow(root, 'write-the-csv-writer', 'claude');
+    await changePlanFile(root, (text) => setDone(text, 'write-the-csv-writer', true), { by: 'user' });
+    expect(await exists('.contextspace/plan-now.json')).toBe(false);
+    expect(await readPlanNow(root)).toBeNull();
+
+    await setPlanNow(root, 'a-later-step', 'claude');
+    await fs.writeFile(path.join(root, 'PLAN.md'), (await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).replace('- [ ] A later step', '- [x] A later step'));
+    await readPlanFile(root);
+    expect(await exists('.contextspace/plan-now.json')).toBe(false);
+  });
+
+  it('is cleared when the step is removed, and a step that is gone reads as none', async () => {
+    await setPlanNow(root, 'a-later-step', 'claude');
+    await fs.writeFile(path.join(root, 'PLAN.md'), NOW_PLAN.replace('  - [ ] A later step\n', ''));
+    expect(await readPlanNow(root)).toBeNull();
+    await readPlanFile(root);
+    expect(await exists('.contextspace/plan-now.json')).toBe(false);
+  });
+
+  it('does not come back when the step is unticked later', async () => {
+    await setPlanNow(root, 'a-later-step', 'claude');
+    await changePlanFile(root, (text) => setDone(text, 'a-later-step', true), { by: 'user' });
+    await changePlanFile(root, (text) => setDone(text, 'a-later-step', false), { by: 'user' });
+    expect(await readPlanNow(root)).toBeNull();
+  });
+
+  it('refuses a step that is done, a heading, a checkpoint or unknown', async () => {
+    await expect(setPlanNow(root, 'add-the-export-button', 'claude')).rejects.toThrow(/heading/);
+    await expect(setPlanNow(root, 'reports-export-to-csv', 'claude')).rejects.toThrow(/not found|Only an open step|no step|Nothing/i);
+    await expect(setPlanNow(root, 'nope', 'claude')).rejects.toThrow(/Only an open step/);
+    await changePlanFile(root, (text) => setDone(text, 'write-the-csv-writer', true), { by: 'user' });
+    await expect(setPlanNow(root, 'write-the-csv-writer', 'claude')).rejects.toThrow(/already done/);
+    expect(await exists('.contextspace/plan-now.json')).toBe(false);
+  });
+
+  it('reads a damaged record as none, and clears on request', async () => {
+    await fs.mkdir(path.dirname(nowFile()), { recursive: true });
+    await fs.writeFile(nowFile(), '{not json');
+    expect(await readPlanNow(root)).toBeNull();
+    await setPlanNow(root, 'a-later-step', 'claude');
+    expect(await clearPlanNow(root)).toBe(true);
+    expect(await clearPlanNow(root)).toBe(false);
+    expect(await readPlanNow(root)).toBeNull();
   });
 });

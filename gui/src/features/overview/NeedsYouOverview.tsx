@@ -43,7 +43,7 @@ function QuestionCard({ item, workspace }: { item: QuestionNeed; workspace?: str
         question={item.text} detail={item.detail} error={change.error?.message}
         onAnswer={(answer) => change.mutateAsync({ type: 'answer', key: item.id, answer, expected: item.text }).then(() => true, () => false)}
       />
-      <Link to={`${base(item.workspaceId)}/plan`} className="inline-block text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">Open in the plan</Link>
+      <Link to={`${base(item.workspaceId)}/board`} className="inline-block text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">Open on the board</Link>
     </div>
   </li>;
 }
@@ -52,8 +52,8 @@ function QuestionCard({ item, workspace }: { item: QuestionNeed; workspace?: str
 function NeedRow({ item }: { item: Exclude<NeedItem, QuestionNeed> }) {
   const when = 'at' in item ? whenText(item.at) : '';
   const look = item.kind === 'chat' ? { Icon: MessageCircleQuestion, tone: 'text-[var(--state-needs)]', to: base(item.workspaceId), action: 'Answer in the chat' }
-    : item.kind === 'proposal' ? { Icon: CircleDashed, tone: 'text-[var(--state-needs)]', to: `${base(item.workspaceId)}/plan`, action: 'Decide in the plan' }
-      : { Icon: CircleX, tone: 'text-[var(--state-reopened)]', to: `${base(item.workspaceId)}/plan`, action: 'Open the plan' };
+    : item.kind === 'proposal' ? { Icon: CircleDashed, tone: 'text-[var(--state-needs)]', to: `${base(item.workspaceId)}/board`, action: 'Decide on the board' }
+      : { Icon: CircleX, tone: 'text-[var(--state-reopened)]', to: `${base(item.workspaceId)}/board`, action: 'Open the board' };
   const line = item.kind === 'chat' ? `${whoName(item.by)} asked in the chat${when ? ` ${when}` : ''}`
     : item.kind === 'proposal' ? `${whoName(item.by)} ${PROPOSAL_WORDS[item.action] ?? item.action}${when ? ` · ${when}` : ''}`
       : 'Its check failed';
@@ -95,7 +95,7 @@ export function NeedsYouOverview({ workspaceIds, titles }: { workspaceIds: reado
           : <>
             {groups.length === 0 ? <p className="text-sm text-muted-foreground">Nothing needs you right now. Questions that hold up work, checks that fail and work waiting for your OK show up here.</p>
               : <ul className="space-y-4">{groups.map((group) => <li key={group.workspaceId} className="space-y-1.5">
-                <Link to={`${base(group.workspaceId)}/plan`} className="px-0.5 text-xs font-semibold text-muted-foreground hover:text-foreground hover:underline">{title(group.workspaceId)}</Link>
+                <Link to={`${base(group.workspaceId)}/board`} className="px-0.5 text-[12.5px] font-semibold text-muted-foreground hover:text-foreground hover:underline">{title(group.workspaceId)}</Link>
                 <ul className="space-y-2">{group.items.map((item, index) => item.kind === 'question'
                   ? <QuestionCard key={`question-${item.id}`} item={item} />
                   : <NeedRow key={`${item.kind}-${'id' in item ? item.id : index}`} item={item} />)}</ul>
@@ -112,7 +112,7 @@ export function NeedsYouOverview({ workspaceIds, titles }: { workspaceIds: reado
     {closed.length > 0 && <section aria-labelledby="ai-closed-heading" className="space-y-1.5 rounded-xl border border-border bg-card px-4 py-3 shadow-xs">
       <h2 id="ai-closed-heading" className="text-base font-semibold text-foreground">Finished by the AI lately</h2>
       <ul>{closed.map((entry) => <li key={`${entry.workspaceId}-${entry.id}-${entry.at}`}>
-        <Link to={`${base(entry.workspaceId)}/plan`} className="flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring">
+        <Link to={`${base(entry.workspaceId)}/board`} className="flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring">
           <ListChecks aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[var(--state-done)]" />
           <span className="min-w-0 flex-1 text-sm">
             <span className="font-medium">{whoName(entry.by)}</span> {CLOSE_WORDS[entry.action] ?? entry.action} &ldquo;{entry.title}&rdquo;

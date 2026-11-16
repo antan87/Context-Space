@@ -1,6 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import { execa } from 'execa';
+import * as path from 'node:path';
+import * as nodeFs from 'node:fs';
+import * as os from 'node:os';
 
 import { startOrchestrator, stopOrchestrator, stopRecordedOrchestrator, orchestratorPm2Name } from './orchestrator.js';
 import type { OrchestrationDetection } from '../types.js';
@@ -36,9 +39,28 @@ function tilt(): OrchestrationDetection {
   };
 }
 
+/** A throwaway PM2 home with a live daemon record (this process's pid and an rpc.sock file). Never ~ or ~/.pm2. */
+const tempDirs: string[] = [];
+function fakeLivePm2Home(): string {
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'pm2t-'));
+  tempDirs.push(dir);
+  if (dir === os.homedir() || dir.startsWith(path.join(os.homedir(), '.pm2'))) throw new Error('unsafe temp dir');
+  nodeFs.writeFileSync(path.join(dir, 'pm2.pid'), String(process.pid));
+  nodeFs.writeFileSync(path.join(dir, 'rpc.sock'), '');
+  return dir;
+}
+
 describe('orchestrator runner', () => {
+  const originalPm2Home = process.env.PM2_HOME;
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) nodeFs.rmSync(dir, { recursive: true, force: true });
+    if (originalPm2Home === undefined) delete process.env.PM2_HOME;
+    else process.env.PM2_HOME = originalPm2Home;
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.PM2_HOME = fakeLivePm2Home();
     vi.mocked(fs.mkdir).mockResolvedValue(undefined as any);
     vi.mocked(fs.readFile).mockRejectedValue(new Error('ENOENT'));
     vi.mocked(fs.writeFile).mockResolvedValue(undefined as any);
