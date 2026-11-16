@@ -34,5 +34,15 @@ describe('stripHeadingColon', () => {
     expect(stripHeadingColon('**Slice C:**')).toBe('**Slice C**');
     expect(stripHeadingColon('Slice C :')).toBe('Slice C');
     expect(stripHeadingColon('Slice C: Purge')).toBe('Slice C: Purge');
+    expect(stripHeadingColon('Slice C: ~~')).toBe('Slice C ~~');
+    expect(stripHeadingColon('Slice C:_*')).toBe('Slice C_*');
+  });
+
+  it('answers at once for a colon followed by a long run of marks (no catastrophic backtracking)', () => {
+    // Before, `(?:\*\*|\*)+` could match each "**" two ways: 40 stars took about 10 s and 50 froze the Board.
+    const started = performance.now();
+    expect(stripHeadingColon(`Note:${'*'.repeat(5_000)}x`)).toBe(`Note:${'*'.repeat(5_000)}x`);
+    expect(stripHeadingColon(`Note:${'*'.repeat(5_000)}`)).toBe(`Note${'*'.repeat(5_000)}`);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });

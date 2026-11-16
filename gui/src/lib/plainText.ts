@@ -20,7 +20,8 @@ const MARKS = [
 export function stripHeadingColon(text: string): string {
   return text
     .trimEnd()
-    .replace(/\s*:(\s*(?:\*\*|__|\*|_|~~)+)$/, '$1')
+    // Each mark character matches one way only ("**" as two "*"), so a long run cannot backtrack exponentially.
+    .replace(/\s*:(\s*(?:[*_]|~~)+)$/, '$1')
     .replace(/(\*\*|__|\*|_|~~)\s*:$/, '$1')
     .replace(/\s*:$/, '');
 }
