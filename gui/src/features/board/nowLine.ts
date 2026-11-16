@@ -12,8 +12,8 @@ import type { KnowledgeEntry } from '../knowledge/knowledgeEntries.js';
 import { buildBoardNav, type NavItem } from './boardNav.js';
 
 export interface NowLineParts {
-  /** "Now" when someone said which step is worked on, "Next up" for the plan's order, none when nothing is open. */
-  word: 'Now' | 'Next up' | null;
+  /** "Now" when someone said which step is worked on, "Last worked on" for recent work, "Next up" for the plan's order, none when nothing is open. */
+  word: 'Now' | 'Last worked on' | 'Next up' | null;
   /** The step, else its checkpoint; the full words (the line cuts them with an ellipsis and keeps them in the title). */
   text: string;
   /** The Area the focus is in. */

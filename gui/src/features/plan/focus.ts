@@ -1,25 +1,27 @@
 /**
  * The one answer to "what is the focus": the step being worked on and the checkpoint it serves. Every part of the app that says
- * Now or Next up (the Now line, the Area pill, the Now row, the header chip, the chat's progress line, and the Area the board
- * puts the work-in-progress things in) reads it here.
+ * Now, Last worked on, or Next up (the Now line, the Area pill, the Now row, the header chip, the chat's progress line, and the
+ * Area the board puts the work-in-progress things in) reads it here.
  *
  * Someone says which step they work on (`ctxspace plan now`, the app's "Work on this now"): that is `source: 'set'`, and only
- * that is called Now. Without it, or when it is older than a day, the plan's order is a guess: the first open checkpoint and its
- * first open step that is not a heading. That is `source: 'plan'`, and it is called Next up, never Now or Current.
+ * that is called Now. Without it, or when it is older than a day, the app checks where work last happened in `plan.changes`
+ * (newest first: `ticked`, `unticked`, `added`, `answered` on a step or decision in a checkpoint that is still open now): that is
+ * `source: 'recent'`, called Last worked on, with that checkpoint's first open workable step. Otherwise the plan's order is a guess:
+ * the first open checkpoint and its first open step that is not a heading (`source: 'plan'`, called Next up, never Now or Current).
  */
 
 import { plainText, stripHeadingColon } from '../../lib/plainText.js';
-import type { PlanFileCheckpoint, PlanFileStep, PlanFileView, PlanNow } from './planFile.js';
+import type { PlanFileChange, PlanFileCheckpoint, PlanFileStep, PlanFileView, PlanNow } from './planFile.js';
 
 /** A step marked as worked on longer ago than this counts as not marked: nobody refreshed it. */
 export const NOW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export interface Focus {
-  /** The step; missing when the first open checkpoint has no open step to work on. */
+  /** The step; missing when the focus checkpoint has no open step to work on. */
   step?: PlanFileStep;
   /** The checkpoint the step is under; null for a step outside the checkpoints. */
   checkpoint: PlanFileCheckpoint | null;
-  source: 'set' | 'plan';
+  source: 'set' | 'recent' | 'plan';
   /** Who said it and when: only for `set`. */
   by?: string;
   at?: string;
@@ -57,13 +59,57 @@ export function workableKeys(plan: Pick<PlanFileView, 'checkpoints' | 'steps'> |
   return keys;
 }
 
+const RECENT_ACTIONS = new Set<PlanFileChange['action']>(['ticked', 'unticked', 'added', 'answered']);
+
+const changeTime = (change: PlanFileChange): number => {
+  const ms = Date.parse(change.at);
+  return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+};
+
+/**
+ * The still-open checkpoint where work last happened, from `plan.changes` newest first.
+ * `removed` changes do not match on their own; edits count through the `added` change logged at the same time.
+ */
+function recentCheckpoint(
+  checkpoints: ReadonlyArray<PlanFileCheckpoint>,
+  changes: ReadonlyArray<PlanFileChange> | undefined,
+): PlanFileCheckpoint | undefined {
+  if (!changes?.length) return undefined;
+  const openByStep = new Map<string, PlanFileCheckpoint>();
+  const openByDecision = new Map<string, PlanFileCheckpoint>();
+  for (const cp of checkpoints) {
+    if (cp.done) continue;
+    for (const s of cp.steps) if (!openByStep.has(s.key)) openByStep.set(s.key, cp);
+    for (const d of cp.decisions) if (!openByDecision.has(d.key)) openByDecision.set(d.key, cp);
+  }
+  if (openByStep.size === 0 && openByDecision.size === 0) return undefined;
+  const ordered = [...changes].sort((a, b) => {
+    const ta = changeTime(a);
+    const tb = changeTime(b);
+    if (ta === tb) return 0;
+    return tb > ta ? 1 : -1;
+  });
+  for (const change of ordered) {
+    if (!RECENT_ACTIONS.has(change.action)) continue;
+    if (change.kind === 'step') {
+      const cp = openByStep.get(change.key);
+      if (cp) return cp;
+    } else if (change.kind === 'decision') {
+      const cp = openByDecision.get(change.key);
+      if (cp) return cp;
+    }
+  }
+  return undefined;
+}
+
 /**
  * The focus of the plan. `now` is the record of the step someone said they work on; left out, it is the plan's own (`plan.now`).
- * A record that names a step that is gone, done or only a heading, or that is older than 24 hours, counts as none.
+ * A record that names a step that is gone, done or only a heading, or that is older than 24 hours, counts as none, falling back
+ * to where work last happened (`source: 'recent'`), then to the first open checkpoint in file order (`source: 'plan'`).
  * Null when nothing is open.
  */
 export function focusOf(
-  plan: Pick<PlanFileView, 'checkpoints' | 'steps'> & { now?: PlanNow | null } | undefined,
+  plan: (Pick<PlanFileView, 'checkpoints' | 'steps'> & { now?: PlanNow | null; changes?: ReadonlyArray<PlanFileChange> }) | undefined,
   now?: PlanNow | null,
   clock: number = Date.now(),
 ): Focus | null {
@@ -78,6 +124,11 @@ export function focusOf(
     const loose = plan.steps.find((entry) => entry.key === record.key);
     if (loose && !loose.done && !headingKeysOf(plan.steps).has(loose.key)) return { step: loose, checkpoint: null, source: 'set', by: record.by, at: record.at };
   }
+  const recent = recentCheckpoint(plan.checkpoints, plan.changes);
+  if (recent) {
+    const step = firstWorkable(recent.steps);
+    return { ...(step ? { step } : {}), checkpoint: recent, source: 'recent' };
+  }
   const checkpoint = plan.checkpoints.find((entry) => !entry.done);
   if (checkpoint) {
     const step = firstWorkable(checkpoint.steps);
@@ -87,8 +138,9 @@ export function focusOf(
   return loose ? { step: loose, checkpoint: null, source: 'plan' } : null;
 }
 
-/** What the focus is called: "Now" only when someone said so. */
-export const focusWord = (focus: Pick<Focus, 'source'>): 'Now' | 'Next up' => (focus.source === 'set' ? 'Now' : 'Next up');
+/** What the focus is called: "Now" only when someone said so, "Last worked on" for recent work, else "Next up". */
+export const focusWord = (focus: Pick<Focus, 'source'>): 'Now' | 'Last worked on' | 'Next up' =>
+  focus.source === 'set' ? 'Now' : focus.source === 'recent' ? 'Last worked on' : 'Next up';
 
 /** The focus in words, without markup: the step, else its checkpoint. */
 export const focusText = (focus: Pick<Focus, 'step' | 'checkpoint'> | null | undefined): string =>

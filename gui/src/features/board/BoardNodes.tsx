@@ -21,7 +21,7 @@ import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } fr
 import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
-import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { areaCountItems, areaCounts, areaFocusWord, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
@@ -1992,7 +1992,7 @@ function areaLabel(data: AreaData, hiddenSubtitle?: string): string {
   const counts = areaCounts(data);
   return summaryLabel([
     data.title,
-    data.done ? 'done' : data.nowSet ? 'now' : data.current ? 'next up' : data.kind === 'checkpoint' ? 'not done' : undefined,
+    data.done ? 'done' : data.current ? areaFocusWord(data).toLowerCase() : data.kind === 'checkpoint' ? 'not done' : undefined,
     !isStepless(data.kind) ? areaSteps(data).toLowerCase() : undefined,
     data.waitingCount > 0 ? (data.waitingCount === 1 ? 'waits for you' : `${data.waitingCount} wait for you`) : undefined,
     counts.length > 0 ? counts.join(', ') : undefined,
@@ -2045,7 +2045,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
               data.done ? (
                 <Badge variant="success" className="board-area-badge sm:h-5 sm:text-[13.5px]">Done</Badge>
               ) : data.current ? (
-                <Badge variant={data.nowSet ? 'default' : 'outline'} className="board-area-badge sm:h-5 sm:text-[13.5px]">{data.nowSet ? 'Now' : 'Next up'}</Badge>
+                <Badge variant={data.nowSet ? 'default' : 'outline'} className="board-area-badge sm:h-5 sm:text-[13.5px]">{areaFocusWord(data)}</Badge>
               ) : null
             )}
             {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge sm:h-5 sm:text-[13.5px]">Plan</Badge>}
@@ -2308,7 +2308,7 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
           {data.nextOpenStep}
         </span>
       )}
-      {!data.done && data.current && !isStepless(data.kind) && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
+      {!data.done && data.current && !isStepless(data.kind) && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{areaFocusWord(data)}</span>}
       {data.waitingCount > 0 && data.tier !== 2 && (
         <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-state-needs">
           <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />Waiting
@@ -2372,7 +2372,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const subtitleText = !statusLine && data.tier === 2 ? data.waitingQuestion : data.tier === 4 ? data.nextOpenStep : undefined;
   const otherPx = statusLine ? 0
     : (data.tier === 3 ? Math.min(120, newsShown.length > 0 ? newsShown.reduce((sum, item) => sum + newsLabelWidth(item.label) + 4, 0) : Math.ceil(textEm(data.newsSummary ?? '') * 12)) : 0)
-      + (!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' ? Math.ceil(textEm(data.nowSet ? 'Now' : 'Next up') * 12) + 8 : 0)
+      + (!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' ? Math.ceil(textEm(areaFocusWord(data)) * 12) + 8 : 0)
       + (data.tier !== 2 && data.waitingCount > 0 ? 72 : 0);
   const secondLine = miniSecondLine({
     room: (width ?? 240) - 24 - (showPicture ? 92 : 0) - (showQuestion ? questionRoom : 0) - (data.tier === 2 && subtitleText ? 10 : 0),
@@ -2411,6 +2411,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
     data.stepsTotal,
     data.waitingCount,
     data.nowSet,
+    data.focusSource,
     data.done,
     hasStatus,
     showPicture,
@@ -2536,7 +2537,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       ) : null}
       {!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' && (
         <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium leading-4', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>
-          {data.nowSet ? 'Now' : 'Next up'}
+          {areaFocusWord(data)}
         </span>
       )}
       {data.tier !== 2 && data.waitingCount > 0 && (

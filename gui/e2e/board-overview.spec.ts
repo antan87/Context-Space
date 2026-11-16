@@ -602,6 +602,66 @@ test.describe('Board, areas', () => {
     await expect(firstArea).toHaveAttribute('aria-label', /Done/i);
   });
 
+  test('shows the open checkpoint where work last happened as Last worked on, with its first open step as Next up, and a set mark says Now', async ({ page }) => {
+    await routeBoard(page);
+    const planState = {
+      current: planFile({
+        title: 'Last worked on plan',
+        now: null,
+        checkpoints: [
+          checkpoint('First checkpoint', { steps: [step('Step 1.1')] }),
+          checkpoint('Second checkpoint', { steps: [step('Step 2.1')] }),
+          checkpoint('Third checkpoint', { steps: [step('Step 3.0', true), step('Step 3.1')] }),
+        ],
+        changes: [
+          { at: minutesAgo(3), by: 'claude', action: 'ticked', kind: 'step', key: 'step-3-0', text: 'Step 3.0' },
+          { at: minutesAgo(10), by: 'claude', action: 'added', kind: 'step', key: 'step-2-1', text: 'Step 2.1' },
+        ],
+      }),
+    };
+    let releaseEvent: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { releaseEvent = resolve; });
+    await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planState.current }));
+    await page.route('**/api/workspace/*/screen-events**', async (route) => {
+      await gate;
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: `retry: 60000\n\nevent: plan\nid: p-now\ndata: ${JSON.stringify({ type: 'plan', timestamp: new Date().toISOString() })}\n\n`,
+      });
+    });
+
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+
+    const overview = board(page).locator('#board-overview');
+    const heroCard = overview.locator('.react-flow__node-area');
+    await expect(heroCard).toHaveCount(1);
+    await expect(heroCard).toContainText('Third checkpoint');
+    await expect(heroCard.locator('.board-area-badge')).toHaveText('Last worked on');
+    await expect(overview.locator('button.board-area').filter({ hasText: 'Third checkpoint' })).toHaveAttribute('aria-label', /last worked on/i);
+    await expect(heroCard.locator('button[data-step-key="step-3-1"]')).toContainText('Next up');
+    await expect(heroCard.locator('button[data-step-key="step-3-1"]')).toContainText('Step 3.1');
+
+    const nowMain = page.getByTestId('board-now-main');
+    await expect(nowMain).toContainText('Last worked on');
+    await expect(nowMain).toContainText('Step 3.1');
+    await expect(nowMain).toContainText('Third checkpoint');
+
+    // A set mark overrides recent work and says Now
+    planState.current = {
+      ...planState.current,
+      now: { key: 'step-2-1', by: 'claude', at: new Date().toISOString() },
+    };
+    releaseEvent();
+
+    await expect(heroCard).toContainText('Second checkpoint');
+    await expect(heroCard.locator('.board-area-badge')).toHaveText('Now');
+    await expect(nowMain).toContainText('Now');
+    await expect(nowMain).toContainText('Step 2.1');
+    await expect(overview.locator('button.board-area').filter({ hasText: 'Third checkpoint' })).not.toHaveAttribute('aria-label', /last worked on|\bnow\b/i);
+  });
+
   test('supports prefers-reduced-motion: reduce with instant step-in and step-out', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await routeBoard(page);

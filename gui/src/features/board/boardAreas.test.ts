@@ -219,6 +219,22 @@ describe('boardAreas', () => {
           expect(areas.some((a) => a.data.nowSet)).toBe(false);
         }
       });
+
+      it('follows where work last happened when nothing is marked Now, without calling it Now', () => {
+        const doc = sampleDoc('doc-loose', 'Loose doc');
+        const recentPlan: PlanFileView = {
+          ...samplePlan,
+          now: null,
+          changes: [{ at: new Date(Date.now() - 120_000).toISOString(), by: 'claude', action: 'added', kind: 'step', key: 's1', text: 'Deploy to prod' }],
+        };
+        const areas = buildBoardAreas({ plan: recentPlan, board, news, documents: [doc] });
+        const focus = areas.filter((a) => a.data.current);
+        expect(focus.map((a) => a.id)).toEqual(['checkpoint:ship']);
+        expect(focus[0]!.data).toMatchObject({ current: true, nowSet: false, focusSource: 'recent', focusStep: 's1' });
+        expect(areas.some((a) => a.data.nowSet)).toBe(false);
+        expect(areas.find((a) => a.data.commitCount > 0)!.id).toBe('checkpoint:ship');
+        expect(areas.find((a) => a.cards.some((c) => c.id === 'loose-card'))!.id).toBe('checkpoint:csv');
+      });
     });
 
     it('tracks archived cards in archivedCount and hides them from visible cards unless showArchived is true', () => {

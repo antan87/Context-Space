@@ -13,7 +13,7 @@
 import type { RepoChangeSummary } from '../changes/changeSummary.js';
 import type { Edge, Node } from '@xyflow/react';
 import type { WorkDocument } from '../../types.js';
-import { focusOf, headingKeysOf } from '../plan/focus.js';
+import { focusOf, focusWord, headingKeysOf, type Focus } from '../plan/focus.js';
 import { stepsDone, type PlanFileDecision, type PlanFileStep, type PlanFileView, type PlanProof } from '../plan/planFile.js';
 import type { NewsCommit, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView, WorkspaceFileEntry } from './boardData.js';
@@ -87,14 +87,20 @@ export type AreaOpenStep = { key: string; text: string; done: boolean };
 /** The Areas that are not plan work: they have no steps to count, no progress bar and no "Now". */
 export const isStepless = (kind: AreaData['kind']) => kind === 'work' || kind === 'files' || kind === 'questions';
 
+/** What the focus Area calls itself: "Now" only when a step in it is marked, "Last worked on" when work last happened there, else "Next up". */
+export const areaFocusWord = (data: Pick<AreaData, 'nowSet' | 'focusSource'>): 'Now' | 'Last worked on' | 'Next up' =>
+  focusWord({ source: data.nowSet ? 'set' : data.focusSource === 'recent' ? 'recent' : 'plan' });
+
 export type AreaData = {
   kind: 'checkpoint' | 'plan' | 'work' | 'files' | 'questions';
   title: string;
   done: boolean;
-  /** The focus Area: the one the work is on (the step someone said they work on, else the plan's first open checkpoint). It is Now only when `nowSet`. */
+  /** The focus Area: the one the work is on (the step someone said they work on, where work last happened, else the plan's first open checkpoint). It is Now only when `nowSet`. */
   current: boolean;
-  /** Someone said which step is being worked on and it is in this Area: only then is it called Now. A guess from the plan's order is "Next up". */
+  /** Someone said which step is being worked on and it is in this Area: only then is it called Now. A guess from recent work or the plan's order is never Now. */
   nowSet: boolean;
+  /** How the focus Area was chosen (`set` -> "Now", `recent` -> "Last worked on", `plan` -> "Next up"). */
+  focusSource?: Focus['source'];
   /** The key of the focus step, in the focus Area. */
   focusStep?: string;
   /** Up to 3 open workable steps (skipping headings) for the focus Area in Tier 1. */
@@ -899,6 +905,7 @@ export function buildBoardAreas({
       done: draft.done,
       current: isCurrent,
       nowSet: isCurrent && nowSet,
+      ...(isCurrent && focus ? { focusSource: focus.source } : {}),
       ...(isCurrent && focus?.step ? { focusStep: focus.step.key } : {}),
       ...(openSteps.length > 0 ? { openSteps } : {}),
       ...(nextOpenStep ? { nextOpenStep } : {}),

@@ -27,7 +27,7 @@ export interface WhereAreWeBarProps {
   /** Questions in the plan that wait for the developer, beside the AI's chat questions. */
   planQuestions?: number;
   toggleRef?: Ref<HTMLButtonElement>;
-  /** What the work is on (`focusOf`): Now when someone said which step, else Next up. Without one (no plan, or nothing open in it), the older lifecycle's current milestone is named. */
+  /** What the work is on (`focusOf`): Now when someone said which step, Last worked on for recent work, else Next up. Without one (no plan, or nothing open in it), the older lifecycle's current milestone is named. */
   focus?: Focus | null;
   onToggle: () => void;
   onNext: (action: NextAction) => void;

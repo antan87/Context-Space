@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { focusOf, focusSignature, focusWord, NOW_MAX_AGE_MS, stableNow, workableKeys } from './focus.js';
-import type { PlanFileCheckpoint, PlanFileStep, PlanFileView } from './planFile.js';
+import type { PlanFileChange, PlanFileCheckpoint, PlanFileDecision, PlanFileStep, PlanFileView } from './planFile.js';
 
 const step = (key: string, done = false, parent?: string): PlanFileStep => ({ key, text: `Step ${key}`, done, ...(parent ? { parent } : {}) });
-const checkpoint = (key: string, steps: PlanFileStep[], done = false): PlanFileCheckpoint => ({ key, title: `Checkpoint ${key}`, done, steps, decisions: [] });
-const plan = (checkpoints: PlanFileCheckpoint[], steps: PlanFileStep[] = []) => ({ checkpoints, steps } as Pick<PlanFileView, 'checkpoints' | 'steps'>);
+const decision = (key: string, done = false): PlanFileDecision => ({ key, question: `Decision ${key}?`, done, suggested: [] });
+const checkpoint = (key: string, steps: PlanFileStep[], done = false, decisions: PlanFileDecision[] = []): PlanFileCheckpoint => ({ key, title: `Checkpoint ${key}`, done, steps, decisions });
+const plan = (checkpoints: PlanFileCheckpoint[], steps: PlanFileStep[] = [], changes?: PlanFileChange[]) =>
+  ({ checkpoints, steps, ...(changes ? { changes } : {}) } as Pick<PlanFileView, 'checkpoints' | 'steps'> & { changes?: PlanFileChange[] });
 
 const CLOCK = Date.parse('2026-11-06T12:00:00.000Z');
-const record = (key: string, ageMs = 5 * 60_000, by = 'claude') => ({ key, by, at: new Date(CLOCK - ageMs).toISOString() });
+const isoAgo = (ms: number) => new Date(CLOCK - ms).toISOString();
+const record = (key: string, ageMs = 5 * 60_000, by = 'claude') => ({ key, by, at: isoAgo(ageMs) });
+const change = (
+  key: string,
+  action: PlanFileChange['action'] = 'ticked',
+  ageMs = 5 * 60_000,
+  kind: PlanFileChange['kind'] = 'step',
+): PlanFileChange => ({ at: isoAgo(ageMs), by: 'claude', action, kind, key, text: `Item ${key}` });
 
 const P = plan([
   checkpoint('c1', [step('h1'), step('a', false, 'h1'), step('b', false, 'h1'), step('c')]),
@@ -68,6 +77,87 @@ describe('focusOf', () => {
     expect(focusOf(plan([]), null, CLOCK)).toBeNull();
     expect(focusOf(undefined, record('a'), CLOCK)).toBeNull();
   });
+
+  describe('where work last happened (recent changes)', () => {
+    const three = plan([
+      checkpoint('c1', [step('s1-1')]),
+      checkpoint('c2', [step('s2-done', true), step('s2-h'), step('s2-next', false, 's2-h')]),
+      checkpoint('c3', [step('s3-done', true), step('s3-h'), step('s3-open', false, 's3-h')], false, [decision('d3', true)]),
+    ]);
+
+    it('picks the open checkpoint of the newest ticked step, skipping headings to its first open workable step, and says Last worked on', () => {
+      const p = { ...three, changes: [change('s3-done', 'ticked', 60_000), change('s1-1', 'added', 120_000)] };
+      const focus = focusOf(p, null, CLOCK)!;
+      expect(focus).toMatchObject({ source: 'recent', checkpoint: { key: 'c3' }, step: { key: 's3-open' } });
+      expect(focus.by).toBeUndefined();
+      expect(focus.at).toBeUndefined();
+      expect(focusWord(focus)).toBe('Last worked on');
+    });
+
+    it('walks changes newest first even if the list is not sorted newest first', () => {
+      const p = { ...three, changes: [change('s2-done', 'ticked', 10 * 60_000), change('s3-done', 'ticked', 2 * 60_000)] };
+      expect(focusOf(p, null, CLOCK)).toMatchObject({ source: 'recent', checkpoint: { key: 'c3' }, step: { key: 's3-open' } });
+    });
+
+    it('skips changes in a finished checkpoint and falls back to the newest change in an open checkpoint', () => {
+      const withDone = plan(
+        [
+          checkpoint('c0', [step('done-step', true)], true),
+          ...three.checkpoints,
+        ],
+        [],
+        [change('done-step', 'ticked', 30_000), change('s2-done', 'ticked', 120_000)],
+      );
+      expect(focusOf(withDone, null, CLOCK)).toMatchObject({ source: 'recent', checkpoint: { key: 'c2' }, step: { key: 's2-next' } });
+    });
+
+    it('counts unticked, added and answered changes in open checkpoints', () => {
+      expect(focusOf({ ...three, changes: [change('s3-open', 'unticked', 60_000)] }, null, CLOCK)).toMatchObject({ source: 'recent', checkpoint: { key: 'c3' } });
+      expect(focusOf({ ...three, changes: [change('s3-open', 'added', 60_000)] }, null, CLOCK)).toMatchObject({ source: 'recent', checkpoint: { key: 'c3' } });
+      expect(focusOf({ ...three, changes: [change('d3', 'answered', 60_000, 'decision')] }, null, CLOCK)).toMatchObject({ source: 'recent', checkpoint: { key: 'c3' }, step: { key: 's3-open' } });
+    });
+
+    it('ignores standalone removed changes, while a step edit (removed + added at the same time) matches through added', () => {
+      const onlyRemoved = { ...three, changes: [change('gone-step', 'removed', 10_000)] };
+      expect(focusOf(onlyRemoved, null, CLOCK)).toMatchObject({ source: 'plan', checkpoint: { key: 'c1' }, step: { key: 's1-1' } });
+
+      const edited = {
+        ...three,
+        changes: [
+          change('old-wording', 'removed', 10_000),
+          change('s3-open', 'added', 10_000),
+        ],
+      };
+      expect(focusOf(edited, null, CLOCK)).toMatchObject({ source: 'recent', checkpoint: { key: 'c3' }, step: { key: 's3-open' } });
+    });
+
+    it('ignores changes to loose steps or checkpoints, and keeps an open checkpoint with no workable steps left', () => {
+      const looseChange = plan(three.checkpoints, [step('loose')], [change('loose', 'ticked', 10_000), change('c3', 'added', 20_000, 'checkpoint')]);
+      expect(focusOf(looseChange, null, CLOCK)).toMatchObject({ source: 'plan', checkpoint: { key: 'c1' } });
+
+      const noOpenSteps = plan([checkpoint('c1', [step('s1')]), checkpoint('c2', [step('s2-done', true)], false, [decision('d2')])], [], [change('s2-done', 'ticked', 10_000)]);
+      const focus = focusOf(noOpenSteps, null, CLOCK)!;
+      expect(focus).toMatchObject({ source: 'recent', checkpoint: { key: 'c2' } });
+      expect(focus.step).toBeUndefined();
+    });
+
+    it('falls back to today\'s plan order when changes are empty or only in finished checkpoints', () => {
+      const onlyFinished = plan([checkpoint('c0', [step('x', true)], true), checkpoint('c1', [step('s1')])], [], [change('x', 'ticked', 10_000)]);
+      expect(focusOf(onlyFinished, null, CLOCK)).toMatchObject({ source: 'plan', checkpoint: { key: 'c1' }, step: { key: 's1' } });
+      expect(focusOf({ ...three, changes: [] }, null, CLOCK)).toMatchObject({ source: 'plan', checkpoint: { key: 'c1' }, step: { key: 's1-1' } });
+    });
+
+    it('prefers a valid set mark over recent changes, and falls back to recent when the mark is older than 24 hours', () => {
+      const p = { ...three, changes: [change('s3-done', 'ticked', 60_000)] };
+      const setFocus = focusOf(p, record('s2-next', 5 * 60_000), CLOCK)!;
+      expect(setFocus).toMatchObject({ source: 'set', checkpoint: { key: 'c2' }, step: { key: 's2-next' } });
+      expect(focusWord(setFocus)).toBe('Now');
+
+      const expiredFocus = focusOf(p, record('s2-next', NOW_MAX_AGE_MS + 1), CLOCK)!;
+      expect(expiredFocus).toMatchObject({ source: 'recent', checkpoint: { key: 'c3' }, step: { key: 's3-open' } });
+      expect(focusWord(expiredFocus)).toBe('Last worked on');
+    });
+  });
 });
 
 describe('workableKeys', () => {
@@ -94,5 +184,20 @@ describe('a tick does not rebuild the Areas unless the focus changed', () => {
     expect(expired.at).toBe(later);
     const other = stableNow(first, focusSignature(focusOf(P, record('c'), CLOCK)), CLOCK);
     expect(other).not.toBe(first);
+  });
+
+  it('keeps stable across ticks in recent mode and moves when an expired set mark falls to recent', () => {
+    const withRecent = { ...P, changes: [change('later', 'added', 60_000)] };
+    const recentSig = (clock: number) => focusSignature(focusOf(withRecent, null, clock));
+    const firstRecent = stableNow(undefined, recentSig(CLOCK), CLOCK);
+    let held = firstRecent;
+    for (let minute = 1; minute <= 30; minute += 1) held = stableNow(held, recentSig(CLOCK + minute * 60_000), CLOCK + minute * 60_000);
+    expect(held).toBe(firstRecent);
+
+    const setAt = stableNow(undefined, focusSignature(focusOf(withRecent, record('a'), CLOCK)), CLOCK);
+    const later = CLOCK + NOW_MAX_AGE_MS;
+    const fellToRecent = stableNow(setAt, focusSignature(focusOf(withRecent, record('a'), later)), later);
+    expect(fellToRecent).not.toBe(setAt);
+    expect(fellToRecent.signature.startsWith('recent|')).toBe(true);
   });
 });

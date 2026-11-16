@@ -6,7 +6,7 @@
  */
 
 import { bylineText, parseCommitNodeId, type ReaderTarget } from './boardActions.js';
-import { stepsText, waitingText, type BoardArea, type Size } from './boardAreas.js';
+import { areaFocusWord, stepsText, waitingText, type BoardArea, type Size } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, QUESTIONS_GROUP } from './questionsArea.js';
 import { cardOrder, fileTypeOf, uniqueId, type FileType } from './boardLayout.js';
@@ -211,7 +211,7 @@ export function buildBoardNav(areas: BoardArea[], options: BuildBoardNavOptions)
             : area.data.done
               ? { text: 'Done', variant: 'success' }
               : area.data.current && area.data.kind !== 'work'
-                ? { text: area.data.nowSet ? 'Now' : 'Next up', variant: area.data.nowSet ? 'default' : 'outline' }
+                ? { text: areaFocusWord(area.data), variant: area.data.nowSet ? 'default' : 'outline' }
                 : area.data.kind === 'plan'
                   ? { text: 'Plan', variant: 'outline' }
                   : undefined,

@@ -27,10 +27,11 @@ const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString(
 
 const LONG_TWO = 'The Code window, with commit, finish and sync back to the main branch of every repository in the workspace';
 
-function plan(now: Now, question: boolean, long = false) {
+function plan(now: Now, question: boolean, long = false, changes: Array<Record<string, unknown>> = []) {
   return {
     ...planFile({
       title: 'New canvas',
+      changes: changes as never,
       checkpoints: [
         {
           key: 'a-board-tab-in-nexusflow', title: AREA_ONE, done: false,
@@ -62,11 +63,11 @@ const newsOf = (n: number) => whatsNew({
   commits: n > 0 ? [{ repo: 'NexusFlow', more: 0, commits: [{ sha: 'a91f2e0c4d5b', author: 'Claude', subject: 'feat(board): the Code window', at: minutesAgo(2) }] }] : [],
 });
 
-interface Options { now?: Now; question?: boolean; news?: number; gate?: boolean; long?: boolean; recent?: boolean }
+interface Options { now?: Now; question?: boolean; news?: number; gate?: boolean; long?: boolean; recent?: boolean; changes?: Array<Record<string, unknown>> }
 
 async function routeNow(page: Page, opts: Options = {}) {
   const state = { extra: [] as Array<Record<string, unknown>>, now: opts.now ?? null, question: opts.question ?? false, news: opts.news ?? 0, posts: [] as unknown[], seen: 0, release: () => {} };
-  const planNow = () => plan(state.now, state.question, opts.long);
+  const planNow = () => plan(state.now, state.question, opts.long, opts.changes);
   await page.route('**/api/terminals/bootstrap', (route) => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
   await page.route('**/api/terminals/*/status', (route) => route.fulfill({ json: { available: true, sessions: [], targets: [{ id: 'shell', name: 'Shell', available: true, reason: null }] } }));
   await page.route('**/api/workspace/*/sessions', (route) => route.fulfill({ json: { sessions: [] } }));
@@ -200,6 +201,33 @@ for (const size of SIZES) {
       await expect(row).toContainText('Now');
       await expect(line(page)).toBeVisible();
       await shot(page, `area-now-${tag}-${size.scheme}`);
+    });
+
+    test('with recent work and no mark it says Last worked on everywhere and fits cleanly', async ({ page }) => {
+      await routeNow(page, {
+        changes: [{ at: minutesAgo(3), by: 'claude', action: 'added', kind: 'step', key: 'f2', text: 'F2: Commit, finish and sync back' }],
+      });
+      await openBoard(page, size.split);
+      await expect(main(page)).toContainText('Last worked on');
+      await expect(main(page)).toContainText(SET_STEP);
+      await expect(page.getByTestId('board-now-who')).toHaveCount(0);
+      await expect(areaCard(page, AREA_TWO)).toHaveAccessibleName(/\blast worked on\b/);
+      const hero = page.locator('#board-overview .react-flow__node-area');
+      await expect(hero.locator('.board-area-badge')).toHaveText('Last worked on');
+      await expect(hero.locator('button[data-step-key="f1"]')).toContainText('Next up');
+      const strip = page.getByRole('region', { name: 'Where are we', exact: true });
+      if (await strip.count()) await expect(strip).toContainText(`Last worked on · ${SET_STEP}`);
+      const parts = line(page).locator('button:visible');
+      const boxes: Array<{ x: number; y: number; width: number; height: number }> = [];
+      for (const part of await parts.all()) {
+        const box = (await part.boundingBox())!;
+        expect(box.height).toBeGreaterThanOrEqual(24);
+        boxes.push(box);
+      }
+      for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i]!; const b = boxes[j]!;
+        expect(a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height, `parts ${i} and ${j} overlap`).toBe(false);
+      }
     });
 
     test('shows the question count in the warning colour and goes to the question', async ({ page }) => {
