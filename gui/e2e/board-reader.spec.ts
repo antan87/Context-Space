@@ -400,7 +400,11 @@ test.describe('Board, reader', () => {
     const body = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long note.`).join('\n');
     await openBoard(page, [FILE_CARDS[0], boardNote(3, { title: 'A long note', body })], { [boardId(1)]: FILE_PLACES[boardId(1)], [boardId(3)]: { x: 1100, y: 240 } });
     await opener(page, 'The CSV spec').click();
-    await board(page).getByRole('button', { name: 'Read A long note' }).focus();
+    // Opening focus finishes before this test deliberately moves the keyboard back to the board.
+    await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
+    const readNote = board(page).getByRole('button', { name: 'Read A long note' });
+    await readNote.focus();
+    await expect(readNote).toBeFocused();
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: 'A long note' });
     await expect(dialog).toBeVisible();
@@ -418,10 +422,14 @@ test.describe('Board, reader', () => {
 
     // 2. Open BoardReader
     await opener(page, 'The CSV spec').click();
+    // Opening focus finishes before this test deliberately moves the keyboard back to the board.
+    await expect(readerTitle(page, 'The CSV spec')).toBeFocused();
     await expect(reader(page)).toBeVisible();
 
     // 3. Open Read all dialog over everything
-    await board(page).getByRole('button', { name: 'Read A long note' }).focus();
+    const readNote = board(page).getByRole('button', { name: 'Read A long note' });
+    await readNote.focus();
+    await expect(readNote).toBeFocused();
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: 'A long note' });
     await expect(dialog).toBeVisible();
@@ -1009,17 +1017,20 @@ test.describe('Board, reader', () => {
       await expect(page.getByRole('menu')).toHaveCount(0);
       await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toHaveCount(0);
       await expect(reader(page).locator('pre')).toContainText('<h1>');
+      await expect(moreButton(page)).toBeFocused();
       await page.keyboard.press('Enter');
       await expect(menuItem(page, 'View source')).toHaveCount(0);
       await page.getByRole('menuitem', { name: 'View page' }).focus();
       await page.keyboard.press('Enter');
       await expect(reader(page).locator('iframe[title="Preview of overview.html"]')).toBeVisible();
       // Show beside the board, and Show large, by keyboard; the choice is kept.
+      await expect(moreButton(page)).toBeFocused();
       await page.keyboard.press('Enter');
       await page.getByRole('menuitem', { name: 'Show beside the board' }).focus();
       await page.keyboard.press('Enter');
       expect(await storedLayout(page)).toBe('side');
       await expectMenuItem(page, 'Show large', true);
+      await expect(moreButton(page)).toBeFocused();
       await page.keyboard.press('Enter');
       await page.getByRole('menuitem', { name: 'Show large' }).focus();
       await page.keyboard.press('Enter');

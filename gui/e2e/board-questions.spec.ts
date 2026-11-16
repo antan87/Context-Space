@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures';
-import { board, minutesAgo, node, PICTURE, routeBoard, routeCards, stepIntoArea, viewAtRest, workspace } from './boardHelpers';
+import { board, minutesAgo, node, PICTURE, routeBoard, routeCards, routeWorkspaceDocumentReferences, stepIntoArea, viewAtRest, workspace } from './boardHelpers';
 import { boardFile, checkpoint, planFile, step, whatsNew } from './planData';
 
 /**
@@ -349,17 +349,51 @@ test('a card that changed since opens both versions, with the lines that differ 
 });
 
 test('a card for a file that is gone or not in this workspace shows the copy in the reader', async ({ page }) => {
-  await stepIntoAnswer(page);
-  await rowControl(page, 'row:q:2').click();
-  await viewAtRest(page);
+  await page.goto('/#/workspaces/demo/board');
+  // This tests reader routing, not overview camera immobility: wait for the actual Area and row controls.
+  await board(page).locator('.board-overview-plane button.board-area').filter({ hasText: SECURITY.question }).click();
+  await expect(board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question, exact: true })).toBeVisible();
+  const row = rowControl(page, 'row:q:2');
+  await row.click();
+  await expect(row).toHaveAttribute('aria-expanded', 'true');
   for (const [id, label] of [[6, /^Read NexusFlow\/src\/core\/old\.ts · 1, File gone/], [7, /^Read Billing\/src\/pay\.ts · 8, Not in this workspace/]] as const) {
     const button = node(page, `qcard:explain/how-do-we-enforce-security.md#${id}`).getByRole('button', { name: label });
     await button.click();
     await expect(readerOf(page)).toBeVisible();
+    await expect(readerOf(page).getByRole('heading', { name: SECURITY.question, level: 2, exact: true })).toBeFocused();
     await expect(codeWindow(page)).toBeHidden();
     await page.keyboard.press('Escape');
     await expect(button).toBeFocused();
   }
+});
+
+test('Back to an answer section keeps the later scroll instead of repeating its initial heading jump', async ({ page }) => {
+  await routeWorkspaceDocumentReferences(page, () => [SECURITY.path, 'board-pictures/signin.png'], workspace.workspacePath);
+  await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
+    const name = new URL(route.request().url()).searchParams.get('name') ?? '';
+    if (name.endsWith('.png')) return route.fulfill({ json: { name, kind: 'image', size: 100 } });
+    return route.fulfill({ json: { name, kind: 'markdown', content: `${SECURITY_MD}\n\n[Follow picture](../board-pictures/signin.png)` } });
+  });
+  await stepIntoAnswer(page);
+  await node(page, 'qcard:explain/how-do-we-enforce-security.md#2').getByRole('button', { name: 'Read Sign-in is checked on every request' }).click();
+  const scroller = readerOf(page).locator('.overflow-auto').first();
+  await expect(readerOf(page)).toContainText('Secret paragraph 40.');
+  // The first landing can finish its heading positioning before the person moves away.
+  await scroller.dispatchEvent('wheel', { deltaY: 100 });
+  await scroller.evaluate((el) => { el.scrollTop = 600; el.dispatchEvent(new Event('scroll')); });
+  await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(600);
+  await readerOf(page).getByRole('link', { name: 'Follow picture' }).evaluate((el: HTMLElement) => el.click());
+  await expect(readerOf(page).getByRole('heading', { name: 'signin.png', exact: true })).toBeVisible();
+  await readerOf(page).getByRole('button', { name: /^Back to / }).click();
+  await expect(readerOf(page)).toContainText('Secret paragraph 40.');
+  await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(600);
+  // Read after the heading effect's original four frames, too.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    let frames = 0;
+    const next = () => { if (++frames > 6) resolve(); else requestAnimationFrame(next); };
+    requestAnimationFrame(next);
+  }));
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(600);
 });
 
 test('a picture card shows the picture and opens it; a picture that is missing says so and never shows a broken image', async ({ page }) => {
@@ -845,8 +879,11 @@ test('answer news opens its Area and Escape returns to its line', async ({ page 
   await page.getByTestId('board-now-news').click();
   const line = page.getByRole('button', { name: /Answer out of date: How do we enforce security/ });
   await line.click();
+  // Escape belongs to the departing popover until its closing dialog has unmounted.
+  await expect(page.getByTestId('board-news-list')).toHaveCount(0);
   await expect(board(page).locator('#board-area').getByRole('heading', { name: SECURITY.question })).toBeVisible();
   await page.keyboard.press('Escape');
+  await expect(board(page).locator('#board-area')).toHaveCount(0);
   await expect(line).toBeFocused();
 });
 

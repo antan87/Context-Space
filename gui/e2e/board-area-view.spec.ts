@@ -432,8 +432,8 @@ test.describe('a decision answered from the dialog', () => {
     await all.focus();
     await page.keyboard.press('Enter');
     await expect(dialog).toBeVisible();
-    expect(await page.evaluate(() => document.activeElement?.tagName === 'BUTTON' || document.activeElement?.tagName === 'INPUT')).toBe(false);
     await expect(dialog.locator(':focus')).toContainText('Code, Docs and Services');
+    expect(await page.evaluate(() => document.activeElement?.tagName === 'BUTTON' || document.activeElement?.tagName === 'INPUT')).toBe(false);
     await page.keyboard.press('Enter');
     await page.keyboard.press('Enter');
     await expect(dialog).toBeVisible();
@@ -504,12 +504,40 @@ test.describe('the answer line', () => {
           expect(box.x + box.width, `${name} at ${width}: "${await button.innerText()}" ends before the ghost button starts`).toBeLessThanOrEqual(ghost.x);
           expect(box.height).toBeLessThanOrEqual(26);
         }
-        // the hard guarantee: whatever the estimate let through, the buttons' box ends before the ghost button
+        // The clip and every whole rendered button end before the ghost button.
         if (group) expect(group.x + group.width, `${name} at ${width}: the buttons' clip`).toBeLessThanOrEqual(ghost.x);
         if (group) expect(await card.getByTestId('decision-answers').evaluate((el) => getComputedStyle(el).overflowX)).toMatch(/clip|hidden/);
       }
     });
   }
+
+  test('wide-font emoji answers stay whole and remain reachable through All answers', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const emoji = '🚀🚀🚀';
+    const answers = [emoji, 'Y', 'N'];
+    await routeBoard(page, [decision('Which answer fits?', { suggested: answers })]);
+    await stepIn(page, true);
+    const card = page.getByTestId(/^decision-card-/).first();
+    const inline = card.getByRole('group', { name: 'Suggested answers' });
+    await expect(inline.getByRole('button', { name: emoji, exact: true })).toBeVisible();
+    await inline.getByRole('button', { name: emoji, exact: true }).focus();
+    // Apply to the real buttons and their measuring copies. This also changes widths after the first layout.
+    await page.addStyleTag({ content: '[data-testid^="decision-card-"] :is([role="group"][aria-label="Suggested answers"] > button, [data-answer-width]) { letter-spacing: 120px; }' });
+    await expect.poll(async () => {
+      const ghost = (await card.getByTestId('decision-more-answers').boundingBox())!;
+      const boxes = await inline.getByRole('button').evaluateAll((buttons) => buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { right: rect.right, height: rect.height };
+      }));
+      return boxes.every((box) => box.right <= ghost.x && box.height <= 26);
+    }, { message: 'wide-font emoji must fit whole' }).toBe(true);
+    await expect(inline.getByRole('button', { name: emoji, exact: true })).toHaveCount(0);
+    await expect(card.getByTestId('decision-more-answers')).toHaveText('All answers…');
+    await expect(card.getByTestId('decision-more-answers')).toBeFocused();
+    await card.getByTestId('decision-more-answers').click();
+    const all = page.getByTestId('decision-dialog').getByRole('group', { name: 'All suggested answers' });
+    for (const answer of answers) await expect(all.getByRole('button', { name: answer, exact: true })).toBeVisible();
+  });
 
   test('the keyboard ring of an answer button is whole: nothing between it and the card clips its 2 px outline and 1 px offset', async ({ page }) => {
     await routeBoard(page, TWO());

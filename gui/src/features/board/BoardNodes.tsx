@@ -23,7 +23,7 @@ import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
 import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
-import { answersThatFit, ROW_SIZE } from './boardRows.js';
+import { answersThatFit, ROW_SIZE, type AnswersFit } from './boardRows.js';
 import { BOARD_SIZE, imageAlt, moreText, type AnswerNode, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
 
@@ -292,7 +292,41 @@ function AskInCliButton({ question }: { question: string }) {
 function CompactDecisionCard(props: WaitingDecisionCardProps) {
   const { decision, width = ROW_SIZE.decisionWidth } = props;
   const { options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError, submitAnswer } = useDecisionAnswer(props);
-  const fit = useMemo(() => answersThatFit(options, width), [options, width]);
+  const estimate = useMemo(() => answersThatFit(options, width), [options, width]);
+  const answerLine = useRef<HTMLDivElement>(null);
+  const answerMeasure = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState<{ options: string[]; fit: AnswersFit } | null>(null);
+  const fit = measured?.options === options ? measured.fit : estimate;
+  useLayoutEffect(() => {
+    const line = answerLine.current;
+    const probes = answerMeasure.current;
+    if (!line || !probes) return;
+    const measure = () => {
+      const room = line.getBoundingClientRect().width;
+      if (room <= 0) return;
+      // All dimensions are in screen pixels, including the gap: no rounded offsetWidth or guessed font metrics.
+      const next = answersThatFit(options, width, {
+        line: room,
+        buttons: Array.from(probes.querySelectorAll('[data-answer-width]'), (el) => el.getBoundingClientRect().width),
+        ghost: Math.max(...Array.from(probes.querySelectorAll('[data-ghost-width]'), (el) => el.getBoundingClientRect().width)),
+        gap: probes.querySelector('[data-answer-gap]')!.getBoundingClientRect().width,
+      });
+      const held = document.activeElement;
+      // If a late font/resize hides the focused answer, its complete version stays behind this control.
+      if (held instanceof HTMLElement && line.contains(held) && held.closest('[data-testid="decision-answers"]')
+        && !next.shown.includes(held.textContent ?? '')) {
+        line.querySelector<HTMLElement>('[data-testid="decision-more-answers"]')?.focus({ preventScroll: true });
+      }
+      setMeasured((previous) => previous?.options === options && previous.fit.ghost === next.ghost
+        && previous.fit.shown.length === next.shown.length && previous.fit.shown.every((option, i) => option === next.shown[i])
+        ? previous : { options, fit: next });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(line);
+    for (const el of probes.children) observer.observe(el);
+    return () => observer.disconnect();
+  }, [options, width]);
   const plain = plainText(decision.question);
   const [open, setOpen] = useState(false);
   const card = useRef<HTMLLIElement>(null);
@@ -320,7 +354,7 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
       {...answerPressGuard}
       data-testid={`decision-card-${decision.key}`}
       style={{ height: ROW_SIZE.decisionCard }}
-      className="nodrag nopan box-border outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col justify-between overflow-hidden rounded-lg border border-warning/40 bg-warning/8 px-2.5 py-[7px] text-foreground shadow-2xs"
+      className="relative nodrag nopan box-border outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col justify-between overflow-hidden rounded-lg border border-warning/40 bg-warning/8 px-2.5 py-[7px] text-foreground shadow-2xs"
     >
       <div className="flex items-start gap-2">
         <CircleHelp aria-hidden="true" className="mt-px size-4 shrink-0 text-warning-foreground" />
@@ -330,9 +364,18 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
         </span>
       </div>
 
+      {/* Invisible, noninteractive copies use exactly the answer/ghost typography and padding, including the actual platform font. */}
+      <div aria-hidden="true" className="pointer-events-none invisible absolute left-0 top-0 size-0 overflow-clip">
+      <div ref={answerMeasure} className="flex w-max items-center">
+        {options.map((option) => <span key={option} data-answer-width="" className={ANSWER_BUTTON}>{option}</span>)}
+        <span data-ghost-width="" className={GHOST_BUTTON}>All answers…</span>
+        <span data-ghost-width="" className={GHOST_BUTTON}>Other answer…</span>
+        <span data-answer-gap="" className="w-1.5 shrink-0" />
+      </div>
+      </div>
       {/* The line takes 24 px of the card's height, but is 32 px tall (4 px pulled back above and below, into the card's padding), so that a focus
-          ring (2 px and 1 px offset) is whole inside the clip that keeps a button the estimate let through from ever printing over the ghost button. */}
-      <div className="-my-1 flex h-8 min-w-0 items-center gap-1.5">
+          ring (2 px and 1 px offset) is whole inside the clip. Rendered measurements keep every shown button whole. */}
+      <div ref={answerLine} className="-my-1 flex h-8 min-w-0 items-center gap-1.5">
         {displayError ? (
           <>
             <p role="alert" className="min-w-0 flex-1 truncate text-[12.5px] text-destructive" title={displayError}>{displayError}</p>

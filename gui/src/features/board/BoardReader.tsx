@@ -157,11 +157,14 @@ export function BoardReader({
   const scrolls = useRef(new Map<string, { el: Element; top: number }>());
   // Keyed by the trail too: another trail starts with every place at the top
   const scrollId = `${trailId ?? 0}|${open}`;
+  const restoringScroll = useRef<string | null>(null);
   const scrollKey = useRef(scrollId);
   useLayoutEffect(() => { scrollKey.current = scrollId; }, [scrollId]);
   const onBodyScroll = useCallback((event: UIEvent) => {
     const el = event.target;
-    if (!(el instanceof Element)) return;
+    if (!(el instanceof Element) || !bodyRef.current?.contains(el)) return;
+    // Loading/layout can clamp the new scroller to zero. Keep the saved place until it can be restored.
+    if (restoringScroll.current === scrollKey.current) return;
     const known = scrolls.current.get(scrollKey.current);
     if (known && known.el !== el && known.el.isConnected && known.el.contains(el)) return;
     scrolls.current.set(scrollKey.current, { el, top: el.scrollTop });
@@ -174,8 +177,7 @@ export function BoardReader({
     const body = bodyRef.current;
     if (!saved || typeof saved.top !== 'number' || saved.top < 0 || !body) return undefined;
     const want = saved.top;
-    let frame = 0;
-    let tries = 0;
+    restoringScroll.current = scrollId;
     const find = (): HTMLElement | null => {
       const walk = (node: Element): HTMLElement | null => {
         for (const child of Array.from(node.children)) {
@@ -187,19 +189,38 @@ export function BoardReader({
       };
       return walk(body);
     };
-    const stop = () => cancelAnimationFrame(frame);
-    const step = () => {
-      // Hold the place for a moment while the page settles (a diff loads, its height changes), until the person moves it
-      const el = find();
-      if (el) el.scrollTop = want;
-      if (tries++ < FOCUS_FRAMES) frame = requestAnimationFrame(step);
+    let stopped = false;
+    const resize = new ResizeObserver(() => restore());
+    const changes = new MutationObserver(() => { watchSizes(); restore(); });
+    const stop = () => {
+      stopped = true;
+      resize.disconnect();
+      changes.disconnect();
+      if (restoringScroll.current === scrollId) restoringScroll.current = null;
     };
+    const restore = () => {
+      if (stopped) return;
+      const el = find();
+      // A slow preview (or a temporarily hidden dock) may not have its full height yet.
+      if (!el || el.clientHeight === 0) return;
+      // Show the closest available place even if the file was shortened; keep the desired place for later growth.
+      el.scrollTop = Math.min(want, el.scrollHeight - el.clientHeight);
+      if (Math.abs(el.scrollTop - want) < 1) stop();
+    };
+    const watchSizes = () => {
+      resize.observe(body);
+      for (const child of body.querySelectorAll('*')) resize.observe(child);
+    };
+    watchSizes();
+    changes.observe(body, { childList: true, subtree: true, attributes: true, characterData: true });
     body.addEventListener('wheel', stop, { passive: true });
     body.addEventListener('pointerdown', stop);
     body.addEventListener('keydown', stop);
-    step();
-    return () => { stop(); body.removeEventListener('wheel', stop); body.removeEventListener('pointerdown', stop); body.removeEventListener('keydown', stop); };
-  }, [scrollId]);
+    // Assistive activation can send a click without pointer/key events first.
+    body.addEventListener('click', stop);
+    restore();
+    return () => { stop(); body.removeEventListener('wheel', stop); body.removeEventListener('pointerdown', stop); body.removeEventListener('keydown', stop); body.removeEventListener('click', stop); };
+  }, [scrollId, portalHost]);
 
   // An answer opens its file at the part a card is from: once the text is drawn, the heading of that part is scrolled to the top.
   // It waits a moment for the page to settle, and stops as soon as the person scrolls.
@@ -207,7 +228,8 @@ export function BoardReader({
   const loaded = Boolean(data);
   useEffect(() => {
     const body = bodyRef.current;
-    if (!wantedHeading || !loaded || !body) return undefined;
+    // Returning to a place keeps its saved scroll, rather than repeating its initial heading jump.
+    if (!wantedHeading || !loaded || !body || scrolls.current.has(scrollId)) return undefined;
     const want = wantedHeading.trim();
     let frame = 0;
     let tries = 0;
@@ -227,7 +249,7 @@ export function BoardReader({
     body.addEventListener('keydown', stop);
     step();
     return () => { stop(); body.removeEventListener('wheel', stop); body.removeEventListener('pointerdown', stop); body.removeEventListener('keydown', stop); };
-  }, [wantedHeading, loaded, open, request]);
+  }, [wantedHeading, loaded, open, request, scrollId]);
 
   const toggleMaximized = useCallback(() => {
     pendingFullscreenFocus.current = true;
@@ -362,12 +384,15 @@ export function BoardReader({
     cancelAnimationFrame(frame.current);
     let tries = 0;
     const step = () => {
+      // An input or menu chosen since opening owns the keyboard, even if our first effect/frame was delayed.
+      const held = document.activeElement;
+      if (tries > 0 && held && held !== title.current && (panel.current?.contains(held) || held.closest('[data-slot="menu-popup"]'))) return;
       title.current?.focus({ preventScroll: true });
       if (document.activeElement !== title.current && tries++ < FOCUS_FRAMES) frame.current = requestAnimationFrame(step);
     };
     step();
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return undefined;
     take();
     return () => cancelAnimationFrame(frame.current);
@@ -428,7 +453,7 @@ export function BoardReader({
     >
       <header
         // With a trail the Back button has a row of its own where the window is narrow (the title would have no room), and the start of the line where it is wide
-        className={cn('flex shrink-0 items-center gap-2 border-b border-border pl-3 pr-2 select-none', back ? 'h-auto min-h-12 flex-wrap py-1 @[44rem]:h-12 @[44rem]:flex-nowrap @[44rem]:py-0' : 'h-12')}
+        className="flex h-auto min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border py-1 pl-3 pr-2 select-none @[44rem]:h-12 @[44rem]:flex-nowrap @[44rem]:py-0"
         onDoubleClick={(e) => {
           if ((e.target as HTMLElement).closest('button, a, [role="button"], [role="menu"], input')) return;
           toggleMaximized();
@@ -448,7 +473,7 @@ export function BoardReader({
           </button>
           </div>
         )}
-        <div className="order-1 min-w-0 flex-1">
+        <div className="order-1 min-w-0 flex-[1_1_8rem]">
           <h2
             ref={title}
             tabIndex={-1}

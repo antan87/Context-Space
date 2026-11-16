@@ -611,6 +611,21 @@ describe('answersThatFit: the answers that are whole buttons on the one line of 
     expect(room(cjk)).toBeGreaterThan(room(latin));
   });
 
+  it('uses rendered fractional widths when a platform font is wider than the estimate', () => {
+    const options = ['🚀🚀🚀', 'Y', 'No'];
+    const fit = answersThatFit(options, 500, { line: 300.25, buttons: [360.5, 45.25, 100.5], ghost: 90.25, gap: 6 });
+    expect(fit).toEqual({ shown: ['Y', 'No'], hidden: 1, ghost: 'All answers…' });
+    expect(answersThatFit(options, 500).shown).toContain(options[0]);
+  });
+
+  it('keeps measured buttons in order and never admits a partly fitting button', () => {
+    const options = ['A', 'B', 'C'];
+    expect(answersThatFit(options, 500, { line: 212.5, buttons: [60.25, 60.25, 20], ghost: 80, gap: 6 }))
+      .toEqual({ shown: ['A', 'B'], hidden: 1, ghost: 'All answers…' });
+    expect(answersThatFit(options, 500, { line: 212.49, buttons: [60.25, 60.25, 20], ghost: 80, gap: 6 }))
+      .toEqual({ shown: ['A'], hidden: 2, ghost: 'All answers…' });
+  });
+
   it('has no answers to show when there are no suggestions, and a ghost button for a free answer', () => {
     expect(answersThatFit([], 500)).toEqual({ shown: [], hidden: 0, ghost: 'Other answer…' });
   });

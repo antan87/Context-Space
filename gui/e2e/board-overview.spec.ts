@@ -673,7 +673,12 @@ test.describe('Board, a quiet frame and a readable overview', () => {
       for (const element of Array.from(area.querySelectorAll<HTMLElement>('*'))) {
         const own = Array.from(element.childNodes).filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent!.trim()).join('');
         if (!own || element.offsetWidth === 0) continue;
-        const zoom = element.getBoundingClientRect().width / element.offsetWidth;
+        // offsetWidth rounds fractional font metrics; transforms give the actual drawn scale.
+        let zoom = 1;
+        for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+          const transform = getComputedStyle(ancestor).transform;
+          if (transform !== 'none') zoom *= new DOMMatrixReadOnly(transform).a;
+        }
         const size = parseFloat(getComputedStyle(element).fontSize) * zoom;
         sizes.push({ text: own, size });
         if (!areaTitleFound && element.hasAttribute('title') && element.getAttribute('title') === own) {

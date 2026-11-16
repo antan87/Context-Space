@@ -124,7 +124,9 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
       test('Back and Escape return to the page as it was left, scroll included; a second Escape closes and the card has the keyboard', async ({ page }) => {
         await originButton(page).click();
         await expect(title(page, ORIGIN)).toBeVisible();
-        await scroller(page).evaluate((el) => { el.scrollTop = 160; });
+        // The header arrives before the preview; wait for a scrollable page before setting its place.
+        await expect.poll(() => scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThanOrEqual(160);
+        await scroller(page).evaluate((el) => { el.scrollTop = 160; el.dispatchEvent(new Event('scroll')); });
         await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
         const left = await scroller(page).evaluate((el) => el.scrollTop);
 
@@ -416,3 +418,65 @@ for (const size of [{ width: 1280, height: 800, mode: 'split' as const }, { widt
     });
   }
 }
+
+
+test.describe('reader layout readiness', () => {
+  test.use({ viewport: { width: 1100, height: 700 } });
+
+  test('Back restores a page whose content becomes tall after more than 30 frames', async ({ page }) => {
+    await open(page, 'split', 'side');
+    await originButton(page).click();
+    await expect.poll(() => scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThanOrEqual(160);
+    await scroller(page).evaluate((el) => { el.scrollTop = 160; el.dispatchEvent(new Event('scroll')); });
+    await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBe(160);
+    await reader(page).getByRole('link', { name: 'export.png', exact: true }).evaluate((el: HTMLElement) => el.click());
+    await expect(title(page, 'export.png')).toBeVisible();
+    // Model late preview/layout without a wall-clock sleep. The saved page cannot scroll until its content is drawn.
+    const delayed = await page.addStyleTag({ content: '[data-reader-doc="file::start-here.md"] :is(.overflow-auto, .overflow-y-auto) > * { display: none !important; }' });
+    await backButton(page, ORIGIN).click();
+    await expect(title(page, ORIGIN)).toBeVisible();
+    await expect.poll(() => scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      let frames = 0;
+      const next = () => { if (++frames > 40) resolve(); else requestAnimationFrame(next); };
+      requestAnimationFrame(next);
+    }));
+    await delayed.evaluate((el) => el.remove());
+    await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBeGreaterThanOrEqual(158);
+  });
+
+  for (const intent of ['wheel', 'pointerdown', 'keydown', 'click']) {
+    test(`a pending scroll restore yields to ${intent} before late content arrives`, async ({ page }) => {
+      await open(page, 'split', 'side');
+      await originButton(page).click();
+      await expect.poll(() => scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThanOrEqual(160);
+      await scroller(page).evaluate((el) => { el.scrollTop = 160; el.dispatchEvent(new Event('scroll')); });
+      await reader(page).getByRole('link', { name: 'export.png', exact: true }).evaluate((el: HTMLElement) => el.click());
+      await expect(title(page, 'export.png')).toBeVisible();
+      const delayed = await page.addStyleTag({ content: '[data-reader-doc="file::start-here.md"] :is(.overflow-auto, .overflow-y-auto) > * { display: none !important; }' });
+      await backButton(page, ORIGIN).click();
+      await expect(title(page, ORIGIN)).toBeVisible();
+      await expect.poll(() => scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
+      await scroller(page).dispatchEvent(intent);
+      await delayed.evaluate((el) => el.remove());
+      await expect.poll(() => scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThanOrEqual(160);
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      expect(await scroller(page).evaluate((el) => el.scrollTop)).toBe(0);
+      // After cancellation it records and respects the person's new place, too.
+      await scroller(page).evaluate((el) => { el.scrollTop = 80; el.dispatchEvent(new Event('scroll')); });
+      await expect.poll(() => scroller(page).evaluate((el) => el.scrollTop)).toBe(80);
+    });
+  }
+
+  test('a narrow reader keeps its title and all header controls visible', async ({ page }) => {
+    await open(page, 'split', 'side');
+    await originButton(page).click();
+    await expect(title(page, ORIGIN)).toBeVisible();
+    await reader(page).evaluate((el: HTMLElement) => { el.style.width = '260px'; });
+    await expect(title(page, ORIGIN)).toBeVisible();
+    expect((await title(page, ORIGIN).boundingBox())!.width).toBeGreaterThanOrEqual(100);
+    for (const name of ['More actions', 'Full screen', 'Close']) await expect(reader(page).getByRole('button', { name, exact: true })).toBeVisible();
+    await expect(reader(page).getByRole('group', { name: 'Item navigation' })).toBeVisible();
+    expect(await reader(page).evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  });
+});

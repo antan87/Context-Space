@@ -684,8 +684,8 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
             fetching,
             state: fetching ? 'checking' : 'ok',
             message: null,
-            behind: 0,
-            commits: [],
+            behind: 1,
+            commits: [{ sha: SHA_NEW, author: 'Maria', subject: `Applied ${phase} read ${cycleReads}`, at: minutesAgo(1) }],
             more: 0,
           }],
         };
@@ -707,17 +707,17 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
     await expect(checkBtn).toHaveText('Checking…');
     await expect(checkBtn).toHaveAttribute('aria-disabled', 'true');
 
-    await page.clock.runFor(50);
+    await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied ${phase} read ${cycleReads}`);
     await page.clock.fastForward(5_000);
     await expect.poll(() => cycleReads).toBe(2);
     await expect(checkBtn).toHaveText('Checking…');
 
-    await page.clock.runFor(50);
+    await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied ${phase} read ${cycleReads}`);
     await page.clock.fastForward(5_000);
     await expect.poll(() => cycleReads).toBe(3);
     await expect(checkBtn).toHaveText('Checking…');
 
-    await page.clock.runFor(50);
+    await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied ${phase} read ${cycleReads}`);
     await page.clock.fastForward(5_000);
     await expect.poll(() => cycleReads).toBe(4);
     await expect(checkBtn).toHaveText('Check now');
@@ -732,14 +732,14 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
     await expect(checkBtn).toHaveText('Checking…');
 
     for (let retry = 1; retry <= 8; retry += 1) {
-      await page.clock.runFor(50);
+      await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied ${phase} read ${cycleReads}`);
       await page.clock.fastForward(5_000);
       await expect.poll(() => cycleReads).toBe(1 + retry);
     }
 
-    await page.clock.runFor(50);
+    await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied ${phase} read ${cycleReads}`);
     await page.clock.fastForward(5_000);
-    await page.clock.runFor(50);
+    await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied ${phase} read ${cycleReads}`);
     await page.clock.fastForward(5_000);
     await page.clock.runFor(50);
     expect(cycleReads).toBe(9);
@@ -754,7 +754,7 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
     await expect.poll(() => cycleReads).toBe(1);
     await expect(checkBtn).toHaveText('Checking…');
 
-    await page.clock.runFor(50);
+    await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied ${phase} read ${cycleReads}`);
     await page.clock.fastForward(5_000);
     await expect.poll(() => cycleReads).toBe(2);
     await expect(checkBtn).toHaveText('Check now');
@@ -766,9 +766,11 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
 
     let fetchingPhase = false;
     let refreshCount = 0;
+    let reads = 0;
 
     await setupBase(page, {
       incoming: (refresh) => {
+        reads += 1;
         if (refresh) {
           refreshCount += 1;
           fetchingPhase = true;
@@ -784,8 +786,8 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
             fetching: fetchingPhase,
             state: fetchingPhase ? 'checking' : 'ok',
             message: null,
-            behind: 0,
-            commits: [],
+            behind: 1,
+            commits: [{ sha: SHA_NEW, author: 'Maria', subject: `Applied focus read ${reads}`, at: minutesAgo(1) }],
             more: 0,
           }],
         };
@@ -822,6 +824,7 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
     expect(refreshCount).toBe(1);
     await expect(checkBtn).toBeFocused();
 
+    await expect(commitsTree(page).getByTestId('commit-tree-item')).toContainText(`Applied focus read ${reads}`);
     fetchingPhase = false;
     await page.clock.fastForward(5_000);
     await expect(checkBtn).toHaveText('Check now');

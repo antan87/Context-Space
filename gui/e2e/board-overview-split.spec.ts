@@ -92,7 +92,12 @@ async function facts(page: Page) {
       const r = el.getBoundingClientRect();
       if (style.display === 'none' || style.visibility === 'hidden' || !r.width || !r.height || el.closest('.sr-only')) continue;
       if (r.bottom > box.bottom || r.top < box.top) continue;
-      const scale = el.offsetWidth ? r.width / el.offsetWidth : 1;
+      // offsetWidth rounds fractional font metrics; transforms give the actual drawn scale.
+      let scale = 1;
+      for (let ancestor: Element | null = el; ancestor; ancestor = ancestor.parentElement) {
+        const transform = getComputedStyle(ancestor).transform;
+        if (transform !== 'none') scale *= new DOMMatrixReadOnly(transform).a;
+      }
       const px = parseFloat(style.fontSize) * scale;
       if (px < 11.95) small.push(`${px.toFixed(1)}px "${text.textContent.trim().slice(0, 24)}"`);
     }
@@ -119,6 +124,23 @@ test.describe('FT1: the overview in Split', () => {
     expect(shown.some((label) => label.startsWith(WAITING))).toBe(true);
     expect(shown.some((label) => label.startsWith(ANSWER_QUESTION)), `Areas shown: ${shown.join(' | ')}`).toBe(true);
     expect(small, `text under 12 px: ${small.join(', ')}`).toEqual([]);
+  });
+
+  test('fractional label widths use the actual transform and still reject truly small text', async ({ page }) => {
+    await page.goto('/#/workspaces/demo/board');
+    await viewAtRest(page);
+    await board(page).evaluate((region) => {
+      region.style.position = 'relative';
+      const sample = document.createElement('span');
+      sample.id = 'fractional-font-sample';
+      sample.textContent = 'Metric sample';
+      sample.style.cssText = 'position:absolute;left:2px;top:40px;display:block;width:17.51px;font-size:13.333333px;transform:scale(.9);transform-origin:top left';
+      region.append(sample);
+    });
+    // 13.333333 * .9 = 12; the old rounded-width estimate is only 11.67.
+    expect((await facts(page)).small).toEqual([]);
+    await page.locator('#fractional-font-sample').evaluate((el: HTMLElement) => { el.style.fontSize = '13px'; });
+    expect((await facts(page)).small).toContain('11.7px "Metric sample"');
   });
 
   test('a subtitle that is not drawn stays in the card\'s accessible name and its tooltip', async ({ page }) => {

@@ -252,21 +252,24 @@ export interface AnswersFit { shown: string[]; hidden: number; ghost: string }
  * The suggested answers that fit whole on the one line of a waiting decision's card of `width`, in order, with the ghost button at the end
  * of the line ("All answers…" when some did not fit, else "Other answer…"). An answer that could not fit even alone goes only in the dialog;
  * the first one that does not fit in what is left ends the line, so the order is never changed. A guess made without the browser, with a margin
- * on the width of the words (`textEm`, as the cards of the overview do).
+ * on the width of the words (`textEm`, as the cards of the overview do). The browser supplies rendered measurements once laid out.
  */
-export function answersThatFit(options: ReadonlyArray<string>, width: number): AnswersFit {
-  const line = width - DECISION_SIDES;
+export function answersThatFit(options: ReadonlyArray<string>, width: number, measured?: {
+  line: number; buttons: readonly number[]; ghost: number; gap: number;
+}): AnswersFit {
+  const line = measured?.line ?? width - DECISION_SIDES;
   const wide = (text: string, size: number, pad: number) => Math.ceil(answerEm(text) * size * ANSWER.margin) + pad;
   const ghost = (label: string) => wide(label, ANSWER.ghostSize, ANSWER.ghostPad);
-  const room = line - ghost('All answers…') - ANSWER.gap;
+  const gap = measured?.gap ?? ANSWER.gap;
+  const room = line - (measured?.ghost ?? ghost('All answers…')) - gap;
   const shown: string[] = [];
   let used = 0;
   let ended = false;
-  for (const option of options) {
-    const button = wide(option, ANSWER.size, ANSWER.pad);
+  for (const [index, option] of options.entries()) {
+    const button = measured?.buttons[index] ?? wide(option, ANSWER.size, ANSWER.pad);
     if (button > room) continue;
-    if (ended || used + (shown.length > 0 ? ANSWER.gap : 0) + button > room) { ended = true; continue; }
-    used += (shown.length > 0 ? ANSWER.gap : 0) + button;
+    if (ended || used + (shown.length > 0 ? gap : 0) + button > room) { ended = true; continue; }
+    used += (shown.length > 0 ? gap : 0) + button;
     shown.push(option);
   }
   const hidden = options.length - shown.length;
