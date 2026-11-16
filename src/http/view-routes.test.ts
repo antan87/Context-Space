@@ -340,7 +340,8 @@ describe('view-routes', () => {
         expect(await requestRaw(`/view/${rootToken}/%2e%2e/index.html`)).toBe(404);
         expect(await requestRaw(`/view/${rootToken}/design%2fplan.html`)).toBe(404);
         expect(await requestRaw(`/view/${rootToken}/design%2Fplan.html`)).toBe(404);
-        expect(await requestRaw(`/view/${rootToken}/design\\plan.html`)).toBe(404);
+        // A raw backslash never reaches the route: @hono/node-server 2.1.8 refuses it as a bad request (GHSA-jpvv-r467-5p4w).
+        expect(await requestRaw(`/view/${rootToken}/design\\plan.html`)).toBe(400);
         expect(await requestRaw(`/view/${rootToken}/design%5cplan.html`)).toBe(404);
         expect(await requestRaw(`/view/${rootToken}/design%5Cplan.html`)).toBe(404);
         expect(await requestRaw(`/view/${rootToken}/index%00.html`)).toBe(404);
