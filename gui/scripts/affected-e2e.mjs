@@ -46,6 +46,25 @@ export const APP_WIDE_FILES = new Set([
 
 export const APP_WIDE_PREFIXES = ['gui/src/components/ui/'];
 
+/**
+ * Files no browser can see: the design module's written guide, its style-guard
+ * test and the guard's baseline (DS2a). A change to only these runs unit tests
+ * and no Playwright spec (`getAffectedSpecs` returns an empty list).
+ * `gui/src/design/index.ts` is NOT here: it stays APP_WIDE.
+ */
+export const NO_BROWSER_FILES = new Set([
+  'gui/src/design/designGuard.test.ts',
+  'gui/src/design/design-baseline.json',
+]);
+
+export function isNoBrowserFile(file) {
+  if (!file) return false;
+  const normalized = normalizeInputPath(file);
+  if (!normalized) return false;
+  const repoRel = toRepoRelPath(normalized);
+  return NO_BROWSER_FILES.has(repoRel) || /^gui\/src\/design\/(?:[^/]+\/)*[^/]+\.md$/.test(repoRel);
+}
+
 export function isAppWideFile(file) {
   if (!file) return false;
   const normalized = normalizeInputPath(file);
@@ -582,11 +601,17 @@ export function getAffectedSpecs(changedFiles) {
 
   const resultSpecs = new Set();
   let needsAllBoard = false;
+  let sawNoBrowserFile = false;
 
   for (const rawFile of changedFiles) {
     const file = normalizeInputPath(rawFile);
     if (!file) continue;
     const repoRelPath = toRepoRelPath(file);
+
+    if (isNoBrowserFile(file)) {
+      sawNoBrowserFile = true;
+      continue;
+    }
 
     // Direct spec file change: if it exists under gui/, run it; if deleted, ignore it
     const specMatch = repoRelPath.match(/^gui\/(e2e\/[a-zA-Z0-9._-]+\.spec\.ts)$/);
@@ -665,6 +690,8 @@ export function getAffectedSpecs(changedFiles) {
   }
 
   if (resultSpecs.size === 0) {
+    // Only files no browser can see changed: nothing to run (unit tests cover them).
+    if (sawNoBrowserFile) return [];
     return ['e2e/board'];
   }
 
@@ -829,6 +856,13 @@ if (isMain) {
 
   const changedFiles = resolveChangedFiles(targetInputs, baseRef);
   const specs = getAffectedSpecs(changedFiles);
+
+  if (specs.length === 0) {
+    // Playwright with no spec arguments would run everything, so never call it with none.
+    console.log('');
+    if (runPlaywright && !dryRun) console.error('No browser spec is affected by this change (unit tests only).');
+    process.exit(0);
+  }
 
   if (runPlaywright && !dryRun) {
     const cmd = ['playwright', 'test', ...specs, ...playwrightArgs];

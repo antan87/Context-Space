@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
@@ -94,6 +95,30 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['gui/src/design/CardFrame.tsx'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src/features/chat/ChatPanel.tsx'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src/core/workspace.ts'])).toEqual(['e2e']);
+  });
+
+  it('runs no browser spec for the design guide, guard test and baseline (DS2a)', () => {
+    for (const file of [
+      'gui/src/design/README.md',
+      'src/design/README.md',
+      'gui/src/design/designGuard.test.ts',
+      'src/design/designGuard.test.ts',
+      'gui/src/design/design-baseline.json',
+      'src\\design\\README.md',
+    ]) {
+      expect(getAffectedSpecs([file]), file).toEqual([]);
+    }
+    expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/src/design/designGuard.test.ts'])).toEqual([]);
+    // A real change next to them still decides what runs.
+    expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/src/features/board/unmapped.tsx'])).toEqual(['e2e/board']);
+    expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/src/design/CardFrame.tsx'])).toEqual(['e2e']);
+    // index.ts stays app-wide; a spec edit beside the docs still runs that spec.
+    expect(getAffectedSpecs(['gui/src/design/index.ts', 'gui/src/design/README.md'])).toEqual(['e2e']);
+    expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/e2e/board-press.spec.ts'])).toEqual(['e2e/board-press.spec.ts']);
+    // The CLI prints nothing and never starts Playwright with no spec.
+    const run = spawnSync(process.execPath, ['gui/scripts/affected-e2e.mjs', 'gui/src/design/README.md'], { encoding: 'utf8' });
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim()).toBe('');
   });
 
   it('routes every APP_WIDE file to all of e2e', () => {
