@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CENTRAL_BOARD_FILES,
@@ -51,6 +51,25 @@ const BOARD_SIDEBAR_SPECS = [
   'e2e/board-reader.spec.ts',
 ];
 
+/** Whether a source file draws the shared card parts: by their own files, or by name through the design barrel. */
+function consumesCardParts(source: string): boolean {
+  if (/from\s+'[^']*(CardFrame|cardParts)(\.js)?'/.test(source)) return true;
+  for (const match of source.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'[^']*\/design(?:\/index)?(?:\.js)?'/g)) {
+    if (/\b(CardFrame|CARD_BRICK|CARD_FOCUS)\b/.test(match[1]!)) return true;
+  }
+  return false;
+}
+
+function findCardPartsImporters(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...findCardPartsImporters(file));
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) && consumesCardParts(readFileSync(file, 'utf8'))) found.push(file);
+  }
+  return found;
+}
+
 describe('affected e2e specs', () => {
   it('selects every existing spec directly, including the app shell outside Board', () => {
     const specs = readdirSync('gui/e2e').filter((name) => name.endsWith('.spec.ts'));
@@ -92,7 +111,7 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['gui/src/unmapped.tsx'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src/unmapped.tsx'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src/design/x.tsx'])).toEqual(['e2e']);
-    expect(getAffectedSpecs(['gui/src/design/CardFrame.tsx'])).toEqual(['e2e']);
+    expect(getAffectedSpecs(['gui/src/design/FuturePiece.tsx'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src/features/chat/ChatPanel.tsx'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src/core/workspace.ts'])).toEqual(['e2e']);
   });
@@ -111,7 +130,7 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/src/design/designGuard.test.ts'])).toEqual([]);
     // A real change next to them still decides what runs.
     expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/src/features/board/unmapped.tsx'])).toEqual(['e2e/board']);
-    expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/src/design/CardFrame.tsx'])).toEqual(['e2e']);
+    expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/src/design/FuturePiece.tsx'])).toEqual(['e2e']);
     // index.ts stays app-wide; a spec edit beside the docs still runs that spec.
     expect(getAffectedSpecs(['gui/src/design/index.ts', 'gui/src/design/README.md'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['gui/src/design/README.md', 'gui/e2e/board-press.spec.ts'])).toEqual(['e2e/board-press.spec.ts']);
@@ -222,11 +241,40 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['gui/src/features/other/BoardSection.tsx'])).toEqual(['e2e']);
   });
 
+  it('maps the shared card parts (DS2b) to all of e2e/board and the page scan, and only BoardNodes imports them', () => {
+    const rowOf = (path: string) => FOLDER_SPECS.find((entry) => entry.path === path);
+    const cardFrame = rowOf('gui/src/design/CardFrame.tsx');
+    const cardParts = rowOf('gui/src/features/board/cards/cardParts.tsx');
+    expect(cardFrame).toBeDefined();
+    expect(cardParts).toBeDefined();
+    for (const row of [cardFrame!, cardParts!]) {
+      expect(row.specs).toEqual(expect.arrayContaining(['e2e/board', 'e2e/accessibility.spec.ts']));
+    }
+    expect(getAffectedSpecs(['gui/src/design/CardFrame.tsx'])).toEqual(cardFrame!.specs);
+    expect(getAffectedSpecs(['gui/src/features/board/cards/cardParts.tsx'])).toEqual(cardParts!.specs);
+    // Not the whole app: that is only for design/index.ts, which exports CardFrame.
+    expect(getAffectedSpecs(['gui/src/design/CardFrame.tsx'])).not.toEqual(['e2e']);
+    expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
+
+    // The row is safe only while nothing outside the Board draws them: a new importer must extend the row first.
+    expect(findCardPartsImporters('gui/src').sort()).toEqual(['gui/src/design/index.ts', 'gui/src/features/board/BoardNodes.tsx']);
+    // The guard sees direct imports and consumers through the design barrel, in any spelling
+    const consumes = (source: string) => consumesCardParts(source);
+    expect(consumes("import { CardFrame } from '../../design/CardFrame.js';")).toBe(true);
+    expect(consumes("import { Anchors } from './cards/cardParts.js';")).toBe(true);
+    expect(consumes("import { Button, CardFrame } from '../../design/index.js';")).toBe(true);
+    expect(consumes("import {\n  Button,\n  CardFrame as Frame,\n} from '../../design';")).toBe(true);
+    expect(consumes("import { Button } from '../../design/index.js';")).toBe(false);
+    expect(consumes("import { Card } from '../../components/ui/card.js';")).toBe(false);
+  });
+
   it('covers every row in FOLDER_SPECS, its src/ and test variants, and existing specs', () => {
     expect(FOLDER_SPECS.length).toBeGreaterThan(20);
     for (const entry of FOLDER_SPECS) {
       expect(new Set(entry.specs).size, `${entry.path} duplicate specs`).toBe(entry.specs.length);
       for (const spec of entry.specs) {
+        // 'e2e/board' is a filter for the whole Board folder, not a file
+        if (spec === 'e2e/board') continue;
         expect(existsSync(`gui/${spec}`), `${entry.path} -> ${spec}`).toBe(true);
       }
       // knowledgeIndex is a central Board file: it runs all of e2e/board plus its non-Board specs.

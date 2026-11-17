@@ -252,6 +252,15 @@ const COMMIT_CARD_BOARD_SPECS = [
   'e2e/board-workspace-files.spec.ts',
 ];
 
+/**
+ * The shared pieces of every Board card (DS2b): `cards/cardParts.tsx` (Anchors, the press of a compact card, the cut text,
+ * Read all, the byline and the mark) and `design/CardFrame.tsx` (the card's article and its states). Every card kind draws
+ * them, and a hand-picked list missed real specs (reader-nav, reader-back, terminal-coworking, commit-notes), so a change
+ * runs all of e2e/board plus the whole-page accessibility scan outside it. Not all of e2e: only BoardNodes.tsx imports
+ * them (a unit test checks that, also through design/index), and design/index.ts, which exports CardFrame, is APP_WIDE.
+ */
+const CARD_PARTS_SPECS = ['e2e/board', 'e2e/accessibility.spec.ts'];
+
 const FOLDER_ROWS = [
   ...['lib/diagram.ts', 'lib/diagramFrame.ts', 'lib/diagramSafety.ts', 'diagram-frame.ts', 'components/Diagram.tsx', 'components/diagramFixContext.ts'].map((file) => ({
     folder: `src/${file.replace(/\.tsx?$/, '')}`,
@@ -561,6 +570,21 @@ const FOLDER_ROWS = [
       'e2e/board-overview.spec.ts',
     ],
     safety: 'Reads the answers (GET /questions) for the Board with its own refresh rules; verified by board-questions, board-overview-split, and board-overview specs.',
+  },
+  // The shared card parts (DS2b)
+  {
+    folder: 'src/features/board/cards/cardParts',
+    path: 'gui/src/features/board/cards/cardParts.tsx',
+    bareNames: ['cardParts', 'cardParts.tsx'],
+    specs: CARD_PARTS_SPECS,
+    safety: 'Anchors, the press of a compact card, the cut text, Read all, the byline and the mark, drawn by every card kind; verified by cardParts.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  {
+    folder: 'src/design/CardFrame',
+    path: 'gui/src/design/CardFrame.tsx',
+    bareNames: ['CardFrame', 'CardFrame.tsx'],
+    specs: CARD_PARTS_SPECS,
+    safety: 'The card article and its archived, pinned, fresh, reading and pressable states, drawn by every Board card that has one; only BoardNodes.tsx imports it, so it is not APP_WIDE (design/index.ts, which exports it, is); verified by cardParts.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
   },
 ];
 

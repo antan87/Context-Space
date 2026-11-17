@@ -1,6 +1,6 @@
 import { Diagram } from '../../components/Diagram.js';
-import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode } from 'react';
+import { type NodeProps } from '@xyflow/react';
 import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, StickyNote, Terminal, TriangleAlert, type LucideIcon } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
@@ -18,29 +18,21 @@ import { suggestedAnswers } from '../plan/planView.js';
 import { plainText, stripHeadingColon } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
 import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } from './commitNotes.js';
-import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, bylineText, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
 import { AREA_ROW, areaCountItems, areaCounts, areaFocusWord, areaRowSecondaryRoom, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
-import { BOARD_SIZE, imageAlt, moreText, type AnswerNode, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
+import { BOARD_SIZE, imageAlt, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
+import { CardFrame, CARD_BRICK as BRICK, CARD_FOCUS } from '../../design/index.js';
+import { Anchors, brickPress, Byline, CardMark, CardText, ReadAll, TITLE_BUTTON, useCut } from './cards/cardParts.js';
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
 const STATUS_BADGE = { draft: 'warning', approved: 'success', superseded: 'secondary' } as const;
-
-const SIDES = [[Position.Top, 'top'], [Position.Right, 'right'], [Position.Bottom, 'bottom'], [Position.Left, 'left']] as const;
-
-/**
- * Where a line to this node can end: one invisible point on each side, so a line leaves and enters by the sides that
- * face each other. They are the line's anchors and nothing else: nothing can be connected by hand.
- */
-function Anchors() {
-  return <>{SIDES.map(([position, id]) => <Handle key={id} id={id} type="source" position={position} isConnectable={false} className="board-handle" />)}</>;
-}
 
 /** What names a folded group to those who cannot see it: what it says of itself. That it can be opened is said by its state (aria-expanded). */
 const summaryLabel = (parts: Array<string | false | undefined>) => parts.filter(Boolean).join(', ');
@@ -901,26 +893,6 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
   </article>;
 }
 
-/**
- * A press anywhere on a compact card does the card's main action, which is what its own button does (`find` names that button). It is not
- * a button itself (a button cannot hold buttons and links), so a press on one of those keeps its own action, and a press that ends the
- * selection of some text does nothing: the text of a card can be selected.
- */
-function brickPress(event: MouseEvent<HTMLElement>, find: (card: HTMLElement) => HTMLElement | null) {
-  const target = event.target;
-  // A press inside a dialog that the card opened bubbles up through React's tree, but is not on the card
-  if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
-  if (target.closest('button, a, input, textarea, select, [role="button"]')) return;
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && selection.toString() && event.currentTarget.contains(selection.anchorNode) && event.currentTarget.contains(selection.focusNode)) return;
-  find(event.currentTarget)?.click();
-}
-const BRICK = 'board-brick cursor-pointer';
-/** The keyboard on a compact card shows as a ring around the whole card, not around its title. */
-const CARD_FOCUS = 'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring';
-/** The title of a compact card that opens, which is the card's one stop for the keyboard. The press of the whole card does what it does. */
-const TITLE_BUTTON = 'nodrag nopan flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none';
-
 /** The title row of a card that opens: the whole row is the button, and a small icon at its end says where it opens. */
 const OPENER = 'nodrag nopan flex h-5 w-full items-center gap-1.5 rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none';
 
@@ -1262,110 +1234,6 @@ export function BoardPlaceholder({ data }: NodeProps<PlaceholderNode>) {
 const FILE_LABEL: Record<FileType, string> = { image: 'Picture', html: 'HTML page', pdf: 'PDF', markdown: 'Markdown', other: 'File' };
 const FILE_ICON: Record<FileType, LucideIcon> = { image: FileImage, html: Globe, pdf: FileText, markdown: FileCode, other: File };
 
-/**
- * Whether the text in an element is cut off by its line clamp. Measured again when `key` changes and whenever the element
- * changes size: a card that arrives while the board is hidden behind another part has no size yet, and is measured when it
- * is shown.
- */
-function useCut<T extends HTMLElement>(key: string): [(element: T | null) => void, boolean] {
-  // The element is state, not a ref object, so a title that becomes a button (a new element) is measured as soon as it is there
-  const [element, setElement] = useState<T | null>(null);
-  const [cut, setCut] = useState(false);
-  useLayoutEffect(() => {
-    if (!element) return;
-    const measure = () => setCut(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [element, key]);
-  return [setElement, cut];
-}
-
-/**
- * The text of a card as Markdown, so its links work: one to the web opens in a new tab, one to a file of the workspace in
- * the reader. A press on a link is only a press: it does not move the card or the view. `cut` is whether the card shows only
- * the start of the text: the links are then not stops for the keyboard, since some may be in the part that cannot be seen, and
- * "Read all" shows them all.
- */
-function CardText({ text, cut, className, ref }: { text: string; cut: boolean; className?: string; ref?: Ref<HTMLDivElement> }) {
-  const actions = useContext(BoardActionsContext);
-  const links = useMemo(() => actions && cardLinks(actions), [actions]);
-  return <div ref={ref} className={cn('board-text break-words', className)}>
-    <ChatMarkdown content={text} links={links ?? undefined} onCard cut={cut} />
-  </div>;
-}
-
-/** The whole text of a card, for when the card shows only the start of it. A link in it that opens in the reader gives way to it. */
-function ReadAll({ data, title }: { data: CardData; /** The title of a compact card: it is the trigger then, as a button named "Read <title>", and not a "Read all" button. */ title?: ReactNode }) {
-  const actions = useContext(BoardActionsContext);
-  const [open, setOpen] = useState(false);
-  const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
-  // Whether the dialog closes to hand the keyboard to the reader, which takes it itself.
-  const [handingOver, setHandingOver] = useState(false);
-  const links = useMemo(() => actions && cardLinks(actions, trigger, () => { setHandingOver(true); setOpen(false); }), [actions, trigger]);
-  return <Dialog open={open} onOpenChange={(next) => { if (next) setHandingOver(false); setOpen(next); }}>
-    <DialogTrigger render={title
-      ? <button ref={setTrigger} type="button" data-card-main className={TITLE_BUTTON} aria-label={`Read ${data.title}`} />
-      : <Button ref={setTrigger} size="xs" variant="ghost" className="nodrag nopan text-[13px]" aria-label={`Read all of ${data.title}`} />}>{title ?? 'Read all'}</DialogTrigger>
-    <DialogPopup className="max-w-lg" finalFocus={() => !handingOver}>
-      <DialogHeader>
-        <DialogTitle className="break-words pr-8 text-base leading-snug">{data.title}</DialogTitle>
-        <DialogDescription>{bylineText(data)}</DialogDescription>
-      </DialogHeader>
-      <DialogPanel>
-        <div className="board-text break-words text-sm leading-6 text-foreground"><ChatMarkdown content={data.text} links={links ?? undefined} onCard /></div>
-      </DialogPanel>
-    </DialogPopup>
-  </Dialog>;
-}
-
-/** The line under a card's text: who put it there and when, and whether it is pinned or put away. */
-function Byline({ data, children }: { data: CardData; children?: ReactNode }) {
-  const byline = bylineText(data);
-  return <div className="flex h-6 shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-    {data.pinned && <Pin aria-hidden="true" className="size-3 shrink-0 text-primary" />}
-    {data.pinned && <span className="sr-only">Pinned. </span>}
-    <span className="min-w-0 flex-1 truncate" title={byline}>{byline}</span>
-    {data.archived && <Badge variant="secondary" size="sm">Archived</Badge>}
-    {children}
-  </div>;
-}
-
-/** The top right of a compact card: whether it is pinned or put away, and a mark for who made it ("you" or "AI"). The whole byline is the mark's tooltip, and what the card is described by. */
-function CardMark({ data, markId }: { data: CardData; markId: string }) {
-  const byline = bylineText(data);
-  // Who made it; who changed it since is in the byline
-  const ai = data.by !== 'user';
-  return <div className="flex min-h-7 shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-    {data.pinned && <Pin aria-hidden="true" className="size-3 shrink-0 text-primary" />}
-    {data.pinned && <span className="sr-only">Pinned. </span>}
-    {data.archived && <span>Archived</span>}
-    {data.fresh && (
-      <>
-        <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
-        <span className="sr-only">New since you looked. </span>
-      </>
-    )}
-    <span id={markId} title={byline} className={cn('rounded-full px-1.5 text-[12.5px] leading-4', ai ? 'bg-state-ai/12 font-medium text-state-ai' : 'text-muted-foreground')}>
-      <span aria-hidden="true">{ai ? 'AI' : 'you'}</span><span className="sr-only">{byline}</span>
-    </span>
-  </div>;
-}
-
-/** The frame every card shares. A card that is new, or was just changed by someone else, glows for a moment; the one open in the reader has a ring. */
-function CardFrame({ data, labelledBy, describedBy, reading = false, compact = false, onPress, onDoubleClick, children }: { data: CardData; labelledBy: string; describedBy?: string; reading?: boolean; compact?: boolean; onPress?: (event: MouseEvent<HTMLElement>) => void; onDoubleClick?: (event: MouseEvent<HTMLElement>) => void; children: ReactNode }) {
-  return <article
-    aria-labelledby={labelledBy} aria-describedby={describedBy} aria-current={reading ? 'true' : undefined} onClick={onPress} onDoubleClick={onDoubleClick}
-    className={cn('group relative flex h-full w-full flex-col overflow-hidden rounded-xl border px-3.5 shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80', compact ? 'py-2' : 'py-2.5', compact && CARD_FOCUS, onPress && BRICK,
-      data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
-  >
-    <Anchors />
-    {data.fresh && <span key={data.updatedAt} aria-hidden="true" className="board-fresh" />}
-    {children}
-  </article>;
-}
-
 /** A note someone put on the board: its title, the start of its text (Markdown, with links that work), who wrote it and when. The whole text is one button away. */
 export function BoardNote({ id, data }: NodeProps<NoteNode>) {
   const titleId = useId();
@@ -1475,7 +1343,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
     return (
       <>
         <CardFrame
-          data={data}
+          archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />}
           labelledBy={titleId}
           describedBy={markId}
           compact
@@ -1523,7 +1391,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
   return (
     <>
       <CardFrame
-        data={data}
+        archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />}
         labelledBy={titleId}
         onDoubleClick={(event) => {
           if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
@@ -1699,7 +1567,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
     const Icon = FILE_ICON[data.fileType];
     const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
     const describedBy = !data.readOnly || data.age ? markId : undefined;
-    return <CardFrame data={data} labelledBy={titleId} describedBy={describedBy} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
+    return <CardFrame archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />} labelledBy={titleId} describedBy={describedBy} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
       <div className="flex min-h-0 flex-1 gap-3">
         <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
           {picture
@@ -1729,7 +1597,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
       </div>
     </CardFrame>;
   }
-  return <CardFrame data={data} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
+  return <CardFrame archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
     <div className="flex shrink-0 items-start justify-between gap-1.5">
       <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-[13px] font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
       <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">

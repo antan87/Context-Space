@@ -253,6 +253,42 @@ test.describe('Slice I1: Everything you see on the board can be pressed', () => 
     await expect(thumb).toBeFocused();
   });
 
+  test('pressing the plain text of a note card and of a file card does what the card shows (the whole card is the press)', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // A note long enough to be cut, so that the card reads it whole when pressed; set after the shared mocks, so it wins
+    const longNote = boardNote(700, {
+      title: 'Long press note',
+      body: 'Line 1: Detailed specification requirements\n\nLine 2: Additional design considerations\n\nLine 3: Edge cases and failure modes\n\nLine 4: Implementation details',
+      step: undefined,
+      area: AREA_ID,
+      at: minutesAgo(1),
+      updatedAt: minutesAgo(1),
+    });
+    const fileCard = boardFileCard(701, 'files/press-me.csv', { title: 'Press me CSV', description: 'The plain words of a file card.', step: undefined, area: AREA_ID, at: minutesAgo(2), updatedAt: minutesAgo(2) });
+    await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [longNote, fileCard] }) }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.getByTestId('view-mode-board').click();
+    await atRest(page);
+    await page.locator('#board-overview button.board-area').filter({ hasText: AREA_TITLE }).first().click();
+    const area = page.locator('#board-area');
+    await expect(area).toBeVisible();
+
+    // The note: a press on its plain text (not on a button) reads the whole note
+    const note = area.locator('article').filter({ hasText: 'Long press note' });
+    await expect(note).toBeVisible();
+    await note.locator('.board-text-compact').click();
+    await expect(page.getByRole('dialog', { name: 'Long press note', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    // The file: it is on the Media tab; a press on its plain words opens it in the reader
+    await page.getByRole('tab', { name: /Media/i }).click();
+    const file = area.locator('article').filter({ hasText: 'Press me CSV' });
+    await expect(file).toBeVisible();
+    await file.getByText('The plain words of a file card.').click();
+    await expect(page.locator('[data-board-reader]')).toBeVisible();
+  });
+
   for (const mode of [
     { name: '1280x800 Split', width: 1280, height: 800, split: true },
     { name: '1440x900 Board', width: 1440, height: 900, split: false },
