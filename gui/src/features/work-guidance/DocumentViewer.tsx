@@ -8,6 +8,7 @@ import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from '../../
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
+import type { ReaderLineTools } from '../board/ReaderLines.js';
 import { DocumentPreview, type DocumentPreviewData } from './DocumentPreview.js';
 
 /** Matches the app's existing overlay idiom (dialog.tsx, PluggableDiffViewer, WorktreeTitleModal). */
@@ -15,6 +16,7 @@ const OVERLAY = 'fixed inset-0 z-[100] flex flex-col bg-background';
 
 export interface DocumentViewerProps {
   title: string;
+  lineTools?: ReaderLineTools;
   /** Null while the preview request is in flight; `status` is shown in the body instead. */
   preview: DocumentPreviewData | null;
   status?: ReactNode;
@@ -72,7 +74,7 @@ export interface DocumentViewerProps {
  * browser Fullscreen API — so Download and the raw toggle stay reachable, and
  * docked side panels like the chat cannot overlap it.
  */
-export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['View source', 'View page'], onClose, compact = false, fill = false, fillFrame = false, chromeless = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false, onImageClick, imageExpanded }: DocumentViewerProps) {
+export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['View source', 'View page'], onClose, compact = false, fill = false, fillFrame = false, chromeless = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false, onImageClick, imageExpanded, lineTools }: DocumentViewerProps) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(initialEditing);
   const [editContent, setEditContent] = useState('');
@@ -286,6 +288,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
     ? editorView
     : preview
       ? <DocumentPreview
+          lineTools={lineTools}
           preview={preview}
           fileUrl={fileUrl}
           raw={raw}

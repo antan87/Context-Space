@@ -5,6 +5,7 @@ import { resolveFileReference } from './core/file-reference-resolve.js';
 import { registerTerminalRoutes, terminalManager } from './terminal/routes.js';
 import { registerWorkGuidanceRoutes } from './http/work-guidance-routes.js';
 import { registerPlanFileRoutes } from './http/plan-file-routes.js';
+import { registerLineNoteRoutes } from './http/line-note-routes.js';
 import { registerNewsRoutes } from './http/news-routes.js';
 import { registerIncomingRoutes } from './http/incoming-routes.js';
 import { registerCommitRoutes } from './http/commit-routes.js';
@@ -2666,6 +2667,10 @@ registerWorkGuidanceRoutes(app, async (id) => {
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
 registerPlanFileRoutes(app, async (id) => {
+  const config = await loadConfig();
+  return resolveExactWorkspaceById(config.workspacesDir, id);
+});
+registerLineNoteRoutes(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });

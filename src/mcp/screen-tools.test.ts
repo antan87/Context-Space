@@ -164,6 +164,24 @@ describe('show_in_reader', () => {
 });
 
 describe('annotate_document', () => {
+  it('PA1 saves a range and its anchor while preserving the screen event', async () => {
+    const result = await call('annotate_document', { path: 'plan.md', line: 3, endLine: 4, text: 'Range answer', harness: 'codex' });
+    expect(result.isError).toBe(false);
+    const stored = JSON.parse(await fs.readFile(path.join(dir, '.contextspace/line-notes.json'), 'utf8'));
+    expect(stored.notes[0]).toMatchObject({ line: 3, endLine: 4, anchor: 'Step one\nStep two', harness: 'codex' });
+    expect((await screenLines())[0]).toMatchObject({ event: 'annotate', payload: { line: 3, endLine: 4 } });
+  });
+  it.each([[3, 2], [3, 99]])('PA1 rejects invalid range %i..%i with a range error', async (line, endLine) => {
+    const result = await call('annotate_document', { path: 'plan.md', line, endLine, text: 'Invalid' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/before|has 4 lines/);
+  });
+  it('PA1 old single-line calls also save a lasting anchor', async () => {
+    await call('annotate_document', { path: 'plan.md', line: 3, text: 'Old call' });
+    const stored = JSON.parse(await fs.readFile(path.join(dir, '.contextspace/line-notes.json'), 'utf8'));
+    expect(stored.notes[0]).toMatchObject({ line: 3, endLine: 3, anchor: 'Step one' });
+  });
+
   it('leaves a note on a real line, defaulting to a question', async () => {
     const { body } = await call('annotate_document', { path: 'plan.md', line: 3, text: 'Does this break the order?' });
     expect(body).toMatchObject({ status: 'shown', path: 'plan.md', line: 3 });

@@ -13,6 +13,9 @@ export interface ReaderTarget {
   /** The file, for a source document the name it is kept under, or for a commit a short label (`repo · sha`). */
   path: string;
   title: string;
+  line?: number;
+  endLine?: number;
+  lineNoteId?: string;
   card?: string;
   /** The id of a source document: it is read by the work route, through the storage port, and not from the workspace folder by `path`. */
   source?: string;

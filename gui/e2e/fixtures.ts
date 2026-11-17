@@ -174,6 +174,8 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/workspace/*/incoming**', (route) => route.fulfill({ json: { at: new Date().toISOString(), repos: [] } }));
     // Nothing has been put on the board; a spec about the board routes its own.
     await page.route('**/api/workspace/*/board', json(boardFile()));
+    // Durable reader notes are empty unless a spec supplies its own notes.
+    await page.route('**/api/workspace/*/line-notes', json({ notes: [] }));
     // No workspace files by default; specs about Workspace files register their own listing route.
     await page.route('**/api/workspace/*/files', json({ files: [], truncated: false, errors: [] }));
     // Nothing is moved on the board either: a place that is sent anyway is refused. A spec about moving things routes its own.

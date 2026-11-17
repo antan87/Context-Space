@@ -3,6 +3,9 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy, ExternalLink } from 'lucide-react';
 import { safeCopyToClipboard } from '../lib/clipboard.js';
+import { SourceBlock } from './sourceLines.js';
+import type { Element, Root } from 'hast';
+import { sourceLineRange, type LineRange } from '../features/board/lineNotes.js';
 import { Diagram } from './Diagram.js';
 import { cn } from '../lib/utils.js';
 import { classifyMarkdownLink, headingSlug, type MarkdownLinkContext } from './markdownLinks.js';
@@ -19,7 +22,10 @@ export interface MarkdownDocumentLinks extends MarkdownLinkContext {
   fileUrl: (path: string) => string;
 }
 
+type SourceLayout = (blocks: LineRange[], children: React.ReactNode) => React.ReactNode;
+
 interface ChatMarkdownProps {
+  renderSource?: SourceLayout;
   content: string;
   links?: MarkdownDocumentLinks;
   /**
@@ -105,6 +111,7 @@ function LocalPath({ label, children }: { label: string; children: React.ReactNo
 }
 
 interface MarkdownRenderConfig {
+  renderSource?: SourceLayout;
   links?: MarkdownDocumentLinks;
   onCard: boolean;
   cut: boolean;
@@ -120,8 +127,7 @@ const MarkdownRenderContext = createContext<MarkdownRenderConfig>({
 });
 
 function makeHeading(Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  return function MarkdownHeading({ node: _node, children, className, ...props }: React.ComponentProps<typeof Tag> & { node?: unknown }) {
+  return function MarkdownHeading({ node, children, className, ...props }: React.ComponentProps<typeof Tag> & { node?: Element }) {
     const { onCard, compact } = useContext(MarkdownRenderContext);
     // On a card a heading is only a bold line: the card has its own title, and its ids would repeat from card to card.
     if (onCard) return <p className="font-semibold">{children}</p>;
@@ -130,7 +136,7 @@ function makeHeading(Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') {
         ? 'mt-3 mb-1 first:mt-0 text-[15px] font-semibold leading-5 text-foreground'
         : 'mt-2.5 mb-1 first:mt-0 text-[14px] font-semibold leading-5 text-foreground'
       : undefined;
-    return <Tag id={headingSlug(nodeText(children)) || undefined} {...props} className={cn(className, compactClass)}>{children}</Tag>;
+    return <SourceBlock node={node}><Tag id={headingSlug(nodeText(children)) || undefined} {...props} className={cn(className, compactClass)}>{children}</Tag></SourceBlock>;
   };
 }
 
@@ -173,14 +179,41 @@ function MarkdownImage({ node: _node, src, alt, ...props }: React.ComponentProps
   return <LocalPath label={target.kind === 'inert' ? target.label : ''}>{`[image${alt ? `: ${alt}` : ''}]`}</LocalPath>;
 }
 
-function MarkdownPre(props: React.ComponentProps<'pre'> & { node?: unknown }) {
+function MarkdownPre(props: React.ComponentProps<'pre'> & { node?: Element }) {
   const { onCard, cut } = useContext(MarkdownRenderContext);
   const code = React.Children.toArray(props.children)[0];
   if (React.isValidElement<{ className?: string }>(code) && code.props.className?.split(' ').includes('language-mermaid')) {
-    return <Diagram source={nodeText(props.children).replace(/\r?\n$/, '')} cut={cut}
-      code={<CodeBlock {...props} onCard={onCard} cut={cut} />} />;
+    return <SourceBlock node={props.node}><Diagram source={nodeText(props.children).replace(/\r?\n$/, '')} cut={cut}
+      code={<CodeBlock {...props} onCard={onCard} cut={cut} />} /></SourceBlock>;
   }
-  return <CodeBlock {...props} onCard={onCard} cut={cut} />;
+  return <SourceBlock node={props.node}><CodeBlock {...props} onCard={onCard} cut={cut} /></SourceBlock>;
+}
+
+// Read the same HAST that is about to render, stopping where SourceBlock owns a whole block.
+type SourceLayoutData = NonNullable<Element['data']> & { readerSourceBlocks?: LineRange[] };
+const sourceBlockTags = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'hr', 'blockquote', 'ul', 'ol', 'table']);
+function rehypeSourceLayout() {
+  return (tree: Root) => {
+    const blocks: LineRange[] = [];
+    const visit = (node: Root['children'][number]) => {
+      if (node.type !== 'element') return;
+      const range = sourceBlockTags.has(node.tagName) ? sourceLineRange(node.position) : null;
+      if (range) blocks.push(range);
+      else node.children.forEach(visit);
+    };
+    tree.children.forEach(visit);
+    blocks.sort((a, b) => a.line - b.line);
+    const data: SourceLayoutData = { readerSourceBlocks: blocks };
+    tree.children = [{ type: 'element', tagName: 'div', properties: {}, data, children: tree.children.filter(node => node.type !== 'doctype') }];
+  };
+}
+const sourceLayoutPlugins = [rehypeSourceLayout];
+function MarkdownSourceLayout({ node, children, ...props }: React.ComponentProps<'div'> & { node?: Element }) {
+  const { renderSource } = useContext(MarkdownRenderContext);
+  const blocks = (node?.data as SourceLayoutData | undefined)?.readerSourceBlocks;
+  // This provider boundary adds no wrapper to the rendered document.
+  if (renderSource && Array.isArray(blocks)) return <>{renderSource(blocks, children)}</>;
+  return <div {...props}>{children}</div>;
 }
 
 // Keep components identity constant across prop/link updates so live links are not unmounted while focused or returning focus.
@@ -194,22 +227,30 @@ const MARKDOWN_COMPONENTS: Components = {
   a: MarkdownAnchor,
   img: MarkdownImage,
   pre: MarkdownPre,
+  hr: ({ node, ...props }) => <SourceBlock node={node}><hr {...props} /></SourceBlock>,
+  p: ({ node, children, ...props }) => <SourceBlock node={node}><p {...props}>{children}</p></SourceBlock>,
+  blockquote: ({ node, children, ...props }) => <SourceBlock node={node}><blockquote {...props}>{children}</blockquote></SourceBlock>,
+  ul: ({ node, children, ...props }) => <SourceBlock node={node}><ul {...props}>{children}</ul></SourceBlock>,
+  ol: ({ node, children, ...props }) => <SourceBlock node={node}><ol {...props}>{children}</ol></SourceBlock>,
+  table: ({ node, children, ...props }) => <SourceBlock node={node}><table {...props}>{children}</table></SourceBlock>,
 };
 
-export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCard = false, cut = false, compact = false }) => {
+const SOURCE_MARKDOWN_COMPONENTS: Components = { ...MARKDOWN_COMPONENTS, div: MarkdownSourceLayout };
+
+export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ content, links, onCard = false, cut = false, compact = false, renderSource }) => {
   const container = useRef<HTMLDivElement>(null);
   const scrollToAnchor = useCallback((id: string) => {
     container.current?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'start' });
   }, []);
   const renderConfig = useMemo<MarkdownRenderConfig>(
-    () => ({ links, onCard, cut, compact, scrollToAnchor }),
-    [links, onCard, cut, compact, scrollToAnchor],
+    () => ({ links, onCard, cut, compact, scrollToAnchor, renderSource }),
+    [links, onCard, cut, compact, scrollToAnchor, renderSource],
   );
 
   return (
     <div ref={container} className="prose prose-sm max-w-none text-foreground prose-a:text-primary prose-code:text-foreground prose-headings:text-foreground prose-pre:border prose-pre:border-border prose-pre:bg-muted/50 prose-strong:text-foreground prose-li:marker:text-muted-foreground">
       <MarkdownRenderContext.Provider value={renderConfig}>
-        <ReactMarkdown remarkPlugins={remarkPlugins} urlTransform={keepUrl} components={MARKDOWN_COMPONENTS}>
+        <ReactMarkdown rehypePlugins={renderSource ? sourceLayoutPlugins : undefined} remarkPlugins={remarkPlugins} urlTransform={keepUrl} components={renderSource ? SOURCE_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}>
           {content}
         </ReactMarkdown>
       </MarkdownRenderContext.Provider>

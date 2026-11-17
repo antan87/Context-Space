@@ -31,6 +31,7 @@ import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit } from './commit-log-format.js';
 import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from './incoming-commits.js';
 import { BoardWorkspaceError } from './board.js';
+import { readLineNotes, type LineNote } from './line-notes.js';
 import { listCommitNotes } from './commit-notes.js';
 import { readQuestions, type QuestionAnswer } from './questions.js';
 
@@ -68,6 +69,7 @@ export interface SeenRecord {
   documents: string[];
   /** The ids of commit notes seen then. */
   notes?: string[];
+  lineNotes?: string[];
   answers?: Array<{ path: string; broken: string[]; at?: string }>;
 }
 
@@ -175,6 +177,7 @@ export interface WhatsNew {
   knowledge: NewsSection<NewsKnowledge>;
   /** Newest first. */
   notes?: NewsSection<NewsCommitNote>;
+  lineNotes?: NewsSection<LineNote>;
   answers?: NewsSection<NewsAnswer>;
   commits: NewsRepo[];
   /** Unseen commits sitting on local remote-tracking refs (never fetched during news). */
@@ -218,6 +221,7 @@ function recordFrom(value: unknown): SeenRecord | null {
     knowledge: strings(value.knowledge, KEPT_KNOWLEDGE),
     documents: strings(value.documents, KEPT_DOCUMENTS),
     ...(notes !== undefined ? { notes } : {}),
+    ...(Array.isArray(value.lineNotes) ? { lineNotes: strings(value.lineNotes, KEPT_NOTES) } : {}),
     ...(Array.isArray(value.answers) ? { answers: value.answers.slice(0, KEPT_NOTES).flatMap((entry) => isObject(entry) && typeof entry.path === 'string' ? [{ path: entry.path, broken: strings(entry.broken, 20000), ...(typeof entry.at === 'string' && !Number.isNaN(Date.parse(entry.at)) ? { at: entry.at } : {}) }] : []) } : {}),
   };
 }
@@ -302,6 +306,7 @@ interface Snapshot {
   documents: DocumentFile[];
   knowledge: NewsKnowledge[];
   notes: NewsCommitNote[];
+  lineNotes: LineNote[];
   answers: QuestionAnswer[];
   problems: string[];
 }
@@ -371,7 +376,7 @@ async function takeSnapshot(root: string): Promise<Snapshot> {
   };
   const repos = await getWorkspaceRepoPaths(root).catch(unreadable('The list of repositories', []));
   const readNotes = unreadable('Commit notes', [] as NewsCommitNote[]);
-  const [heads, documents, knowledge, notes, answers] = await Promise.all([
+  const [heads, documents, knowledge, notes, answers, lineNotes] = await Promise.all([
     Promise.all(repos.map(repoHead)),
     readDocuments(root, repos).catch(unreadable('The documents', [])),
     readKnowledge(root).catch(unreadable('The knowledge', [])),
@@ -379,8 +384,9 @@ async function takeSnapshot(root: string): Promise<Snapshot> {
       items.map(({ id, repo, sha, shortSha, title, body, by, at }) => ({ id, repo, sha, shortSha, title, body, by, at })),
     ).catch((error) => (error instanceof BoardWorkspaceError ? [] : readNotes(error))),
     readQuestions(root).catch(unreadable('Answers', [] as QuestionAnswer[])),
+    readLineNotes(root).catch(unreadable('Line notes', [] as LineNote[])),
   ]);
-  return { heads, documents, knowledge, notes, answers, problems };
+  return { heads, documents, knowledge, notes, answers, lineNotes, problems };
 }
 
 function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, string> = {}, previous: SeenRecord | null = null, unavailable: Set<string> = new Set()): SeenRecord {
@@ -391,6 +397,7 @@ function recordOf(snapshot: Snapshot, at: string, incomingRefs: Record<string, s
     ...(incomingEntries.length > 0 ? { incoming: Object.fromEntries(incomingEntries) } : {}),
     knowledge: snapshot.knowledge.slice(0, KEPT_KNOWLEDGE).map((entry) => entry.id),
     documents: snapshot.documents.slice(0, KEPT_DOCUMENTS).map((document) => document.name),
+    lineNotes: snapshot.lineNotes.map(note => note.id),
     notes: snapshot.notes.slice(0, KEPT_NOTES).map((note) => note.id),
     answers: [...snapshot.answers.map((answer) => ({ path: answer.path, broken: brokenCopies(answer, previous?.answers?.find((entry) => entry.path === answer.path)?.broken) })), ...[...unavailable].map((name) => { const old = previous?.answers?.find((entry) => entry.path === name); return { path: name, broken: old?.broken ?? [], at: old?.at ?? previous?.at ?? new Date(0).toISOString() }; })].slice(0, KEPT_NOTES),
   };
@@ -631,6 +638,8 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
   const documents = documentNews(snapshot.documents.filter((document) => !/^explain\/[^/]+\.md$/i.test(document.name)), kept, fromMs, limit);
   const answers = answerNews(snapshot.answers, kept, fromMs, limit, now.toISOString());
   const knowledge = knowledgeNews(snapshot.knowledge, kept, fromMs, limit);
+  const knownLines = new Set(kept?.lineNotes ?? []);
+  const lineNotes = capped(snapshot.lineNotes.filter(n => !n.doneAt && (kept?.lineNotes ? !knownLines.has(n.id) : afterTime(n.createdAt, fromMs))).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), limit);
   const notes = commitNoteNews(snapshot.notes, kept, fromMs, limit);
   const incomingRefs = Object.fromEntries(
     localIncoming.flatMap((entry) => (entry.trackingRefOid ? [[entry.repo, entry.trackingRefOid] as const] : [])),
@@ -672,10 +681,10 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
       return name;
     });
   }
-  const empty = [plan, documents, knowledge, notes, answers].every((section) => section.items.length === 0)
+  const empty = [plan, documents, knowledge, notes, answers, lineNotes].every((section) => section.items.length === 0)
     && commits.every((repo) => repo.commits.length === 0)
     && incoming.length === 0;
-  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, notes, answers, commits, incoming, problems, empty };
+  return { reader: name, at: now.toISOString(), from, basis, plan, documents, knowledge, notes, answers, lineNotes, commits, incoming, problems, empty };
 }
 
 /**

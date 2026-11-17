@@ -1,6 +1,7 @@
+import { type LineRange, type LineNote } from './lineNotes.js';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   ChevronLeft,
@@ -105,7 +106,7 @@ export function BoardReader({
   nextTitle?: string;
   previousTitle?: string;
   indexInfo?: { current: number; total: number };
-  onAskInCLI?: (context: string) => void | Promise<unknown>;
+  onAskInCLI?: (context: string, range?: LineRange) => void | Promise<unknown>;
   readOnly?: boolean;
 }) {
   const codeOpen = useCodeWindowOpen(workspaceId);
@@ -143,10 +144,27 @@ export function BoardReader({
       if (read.content === undefined) throw new Error('This source document is a link, not text.');
       return { name: path, kind: 'markdown', content: read.content };
     },
-    enabled: !isHtml && !isKnowledge,
+    enabled: active && !isHtml && !isKnowledge,
+    refetchInterval: active ? 5000 : false,
     retry: false,
   });
   const data = preview.data ?? null;
+  const queryClient = useQueryClient();
+  const lineNotes = useQuery({
+    queryKey: ['line-notes', workspaceId],
+    queryFn: () => apiFetch<{ notes: LineNote[] }>(`/api/workspace/${encodeURIComponent(workspaceId)}/line-notes`),
+    enabled: active && !isHtml && !isKnowledge,
+    refetchInterval: active ? 5000 : false,
+  });
+  const notes = preview.isError ? [] : lineNotes.data?.notes?.filter(n => n.path === path && (n.repo ?? '') === (repo?.name ?? '')) ?? [];
+  const askLines = useCallback((range: LineRange) => {
+    onAskInCLI?.(repo ? `${repo.name}/${path}` : path, range);
+  }, [onAskInCLI, repo, path]);
+  const finishNote = useCallback(async (id: string) => {
+    await apiFetch(`/api/workspace/${encodeURIComponent(workspaceId)}/line-notes/${encodeURIComponent(id)}/done`, { method: 'POST' });
+    queryClient.setQueryData<{ notes: LineNote[] }>(['line-notes', workspaceId], old => old ? { notes: old.notes.filter(n => n.id !== id) } : old);
+    void queryClient.invalidateQueries({ queryKey: ['line-notes', workspaceId] });
+  }, [workspaceId, queryClient]);
 
   const [maximized, setMaximized] = useState(false);
   const fullscreenToggleRef = useRef<HTMLButtonElement>(null);
@@ -344,8 +362,8 @@ export function BoardReader({
   useEffect(() => {
     if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      // The Code window over the board has these keys
-      if (isCodeWindowOpen()) return;
+      // A covering window, dialog or menu owns these keys, including while its focus is settling.
+      if (isCodeWindowOpen() || document.querySelector('[role="dialog"], [data-slot="menu-popup"]')) return;
       const target = event.target as HTMLElement | null;
       if (
         target &&
@@ -655,6 +673,7 @@ export function BoardReader({
               fillFrame
               chromeless
               title={path}
+              lineTools={!isKnowledge ? { notes, request, active, readOnly, onDone: finishNote, onAsk: !readOnly && onAskInCLI ? askLines : undefined, openNoteId: target.lineNoteId } : undefined}
               preview={data}
               raw={raw}
               fileUrl={fileUrl}

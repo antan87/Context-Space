@@ -12,3 +12,6 @@ playwright-report/
 
 # Performance run output (reports are regenerated; baselines live in docs/performance)
 perf/results/
+
+# Local workspace state (including lasting reader notes)
+.contextspace/line-notes.json*

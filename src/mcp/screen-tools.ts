@@ -8,6 +8,7 @@
 
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
+import { addLineNote, lineAnchor } from '../core/line-notes.js';
 
 import { readScreenContext } from '../core/screen-context.js';
 import {
@@ -73,8 +74,8 @@ function screenTool<T extends z.ZodObject>(
 
 const DOCUMENT_EXTENSIONS = /\.(md|markdown|txt|html?|pdf|csv|json)$/i;
 
-/** Counts lines in a text file small enough to read, or returns undefined when that is not worth doing. */
-async function lineCount(absolute: string): Promise<number | undefined> {
+/** Reads one bounded text snapshot for both line validation and the saved anchor. */
+async function lineText(absolute: string): Promise<string | undefined> {
   let handle: fs.FileHandle | undefined;
   try {
     // One open file for the check and the read, so they cannot be two different files.
@@ -83,7 +84,7 @@ async function lineCount(absolute: string): Promise<number | undefined> {
     if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return undefined;
     const content = await handle.readFile('utf8');
     if (content.includes('\u0000')) return undefined;
-    return content.split('\n').length - (content.endsWith('\n') ? 1 : 0);
+    return content;
   } catch {
     return undefined;
   } finally {
@@ -106,7 +107,8 @@ const showSchema = z.object({
 const annotateSchema = z.object({
   path: z.string().min(1).max(SCREEN_PATH_MAX_LENGTH).describe('The file or document the note is about.'),
   repo,
-  line: line.describe('The line the note is attached to.'),
+  line: line.describe('The first source line the note is attached to.'),
+  endLine: line.optional().describe('The last source line, inclusive. Defaults to line; cannot be before it or past the file.'),
   text: z.string().min(1).max(SCREEN_TEXT_LIMIT).describe('The note itself, in a few sentences at most.'),
   tag: z.enum(['question', 'risk', 'todo']).optional().describe('question for something you need decided (the default), risk for a concern, todo for something left to do.'),
   harness,
@@ -163,19 +165,26 @@ export const screenTools: NexusFlowTool[] = [
 
   screenTool(
     'annotate_document',
-    `Leave a note on one line of a file or document. The file opens at that line beside the user's chat, and the note is kept with it, labelled as yours; margin notes are not drawn yet, so also say the note in the chat. Use tag question for something you need decided, risk for a concern, todo for something left to do. It never changes the file. The file and line must exist.`,
+    `Leave a lasting note on a line or range of a file or document. The file opens beside the user's chat and the note is drawn in its margin, labelled as yours, until the user presses Done. Use tag question for something you need decided, risk for a concern, todo for something left to do. It never changes the file. The file and line must exist.`,
     annotateSchema,
     async (input, { root, workspacePath }) => {
       const resolved = await resolveScreenTarget(workspacePath, { path: input.path, repo: input.repo });
       if (resolved.isDirectory) throw new Error(`"${input.path}" is a folder. Name a file.`);
-      const lines = await lineCount(resolved.absolute);
+      const endLine = input.endLine ?? input.line;
+      if (endLine < input.line) throw new Error('endLine cannot come before line.');
+      const snapshot = await lineText(resolved.absolute);
+      const lines = snapshot === undefined ? undefined : snapshot.split('\n').length - (snapshot.endsWith('\n') ? 1 : 0);
       if (lines !== undefined && input.line > lines) throw new Error(`"${resolved.path}" has ${lines} lines, so line ${input.line} does not exist.`);
+      if (lines !== undefined && endLine > lines) throw new Error(`"${resolved.path}" has ${lines} lines, so endLine ${endLine} does not exist.`);
+      if (input.endLine !== undefined && lines === undefined) throw new Error('A range requires a readable text file under 2 MB.');
+      const content = snapshot ?? '';
+      const note = await addLineNote(root, { path: resolved.path, repo: resolved.repo, line: input.line, endLine, text: input.text, tag: input.tag ?? 'question', harness: input.harness?.trim() || 'ai', ...lineAnchor(content, input.line, endLine) });
       const { status, event } = await appendScreenEvent(root, {
         harness: input.harness,
         event: 'annotate',
-        payload: { path: resolved.path, repo: resolved.repo, line: input.line, text: input.text, tag: input.tag ?? 'question' },
+        payload: { path: resolved.path, repo: resolved.repo, line: input.line, ...(input.endLine !== undefined ? { endLine } : {}), text: input.text, tag: input.tag ?? 'question' },
       });
-      return { status, path: resolved.path, ...(resolved.repo ? { repo: resolved.repo } : {}), line: input.line, message: status === 'shown' ? 'The file is open at that line beside the user\'s chat. The note itself is not drawn there yet, so say it in the chat too.' : 'The user already has this note.', eventId: event.id };
+      return { status, path: resolved.path, ...(resolved.repo ? { repo: resolved.repo } : {}), line: input.line, endLine, noteId: note.id, message: 'The note is pinned beside those lines until the user presses Done.', eventId: event.id };
     },
   ),
 

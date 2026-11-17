@@ -146,6 +146,7 @@ async function scaffoldWorkspaceDir(
       '/.contextspace/running.json',
       '/.contextspace/analysis-cache.json',
       '/.contextspace/*.lock',
+      '/.contextspace/line-notes.json*',
       '/.contextspace-state.json',
       '/.contextspace-running.json',
       '/.contextspace-analysis-cache.json',

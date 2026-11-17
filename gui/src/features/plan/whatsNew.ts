@@ -1,3 +1,4 @@
+import type { LineNote } from '../board/lineNotes.js';
 /**
  * What changed since the user last looked, as GET /api/workspace/:id/news sends it (core/whats-new): the plan's
  * changes, the documents and images left in the workspace, the knowledge and the commits, and who made each. The
@@ -100,6 +101,7 @@ export interface WhatsNewView {
   documents: NewsSection<NewsDocument>;
   knowledge: NewsSection<NewsKnowledge>;
   notes?: NewsSection<NewsCommitNoteView>;
+  lineNotes?: NewsSection<LineNote>;
   answers?: NewsSection<{ path: string; question: string; change: 'added' | 'changed' | 'out-of-date'; copies: number; at: string }>;
   commits: NewsRepo[];
   /** Unseen commits on local remote-tracking refs (never triggers a fetch). */
@@ -470,7 +472,7 @@ export function formatCommitNoteNewsLine(note: Pick<NewsCommitNoteView, 'by' | '
 }
 
 /** What the list holds, as counts: ["3 plan changes", "1 new document", "2 commits"]. Nothing that is zero. */
-export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'knowledge' | 'notes' | 'answers' | 'commits' | 'incoming'>): string[] {
+export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'knowledge' | 'notes' | 'lineNotes' | 'answers' | 'commits' | 'incoming'>): string[] {
   const documents = news.documents.items;
   const added = documents.filter((document) => document.change === 'added').length;
   // Past the ones listed, which of the rest are new is not known, so then they are only counted.
@@ -482,13 +484,14 @@ export function newsCounts(news: Pick<WhatsNewView, 'plan' | 'documents' | 'know
   const commitsAtLeast = news.commits.some((repo) => repo.moreAtLeast);
   const knowledge = news.knowledge.items.length + news.knowledge.more;
   const notes = (news.notes?.items.length ?? 0) + (news.notes?.more ?? 0);
+  const lineNotes = (news.lineNotes?.items.length ?? 0) + (news.lineNotes?.more ?? 0);
   const answers = (news.answers?.items.length ?? 0) + (news.answers?.more ?? 0);
   const plan = news.plan.items.length + news.plan.more;
   return [
     plan ? count(plan, 'plan change', 'plan changes') : '',
     ...documentCounts,
     knowledge ? count(knowledge, 'new knowledge entry', 'new knowledge entries') : '',
-    notes ? count(notes, 'note', 'notes') : '',
+    notes + lineNotes ? count(notes + lineNotes, 'note', 'notes') : '',
     answers ? count(answers, 'answer', 'answers') : '',
     commits ? `${commits}${commitsAtLeast ? '+' : ''} ${commits === 1 && !commitsAtLeast ? 'commit' : 'commits'}` : '',
   ].filter(Boolean);
@@ -516,6 +519,7 @@ export type NewsRef =
   | { kind: 'document'; name: string }
   | { kind: 'answer'; path: string }
   | { kind: 'commit'; repo: string; sha: string }
+  | { kind: 'lineNote'; note: LineNote }
   | { kind: 'commitNote'; repo: string; sha: string; noteId: string }
   | { kind: 'incoming'; repo: string; sha: string; author: string; count: number; host: string | null }
   /** A knowledge entry by its day and title, or the knowledge in general (the line "and 3 more"). */
@@ -561,6 +565,8 @@ export function newsEntries(news: WhatsNewView, now: Date = new Date()): NewsEnt
       ref: { kind: 'commitNote', repo: note.repo, sha: note.sha, noteId: note.id },
     })),
     ...more('Notes', news.notes?.more ?? 0),
+    ...(news.lineNotes?.items ?? []).map((note): NewsEntry => ({ group: 'Notes', text: withTime(`Note on ${note.repo ? `${note.repo}/` : ''}${note.path} lines ${note.line}-${note.endLine} (${note.harness})`, note.createdAt, now), at: note.createdAt, ref: { kind: 'lineNote', note } })),
+    ...more('Notes', news.lineNotes?.more ?? 0),
     ...problems.map((text): NewsEntry => ({ group: 'Not read', text })),
   ];
 }
@@ -578,6 +584,7 @@ export function newsTotal(news: WhatsNewView | undefined): number {
   if (!news || news.empty) return 0;
   return news.plan.items.length + news.plan.more + news.documents.items.length + news.documents.more + news.knowledge.items.length + news.knowledge.more
     + (news.answers?.items.length ?? 0) + (news.answers?.more ?? 0)
+    + (news.lineNotes?.items.length ?? 0) + (news.lineNotes?.more ?? 0)
     + (news.notes?.items.length ?? 0) + (news.notes?.more ?? 0)
     + news.commits.reduce((total, repo) => total + repo.commits.length + repo.more, 0)
     + (news.incoming ?? []).reduce((total, repo) => total + repo.groups.reduce((sum, group) => sum + group.count, 0), 0);
