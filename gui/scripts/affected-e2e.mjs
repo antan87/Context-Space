@@ -261,6 +261,50 @@ const COMMIT_CARD_BOARD_SPECS = [
  */
 const CARD_PARTS_SPECS = ['e2e/board', 'e2e/accessibility.spec.ts'];
 
+/**
+ * The Note card (DS3), `cards/NoteCard.tsx`. Audited by making BoardNote render nothing and running every Board spec
+ * that creates or could show a note: these nine failed (area, area-view, live, notes, overview, press, a11y, reader,
+ * terminal-coworking). board-index is added by hand: it focuses, highlights and presses a note node, but React Flow keeps the
+ * node wrapper when the card draws nothing, so the drop-the-card audit cannot see it. The specs that create notes but did not fail (commit-list, commit-notes, index, knowledge,
+ * now-line, overview-split, step-ticking, w2-tiers, code-window, document-links, point-and-ask, review-page, back,
+ * browsing, questions) never look at a note card.
+ */
+const NOTE_CARD_SPECS = [
+  'e2e/board-notes.spec.ts',
+  'e2e/board-area.spec.ts',
+  'e2e/board-area-view.spec.ts',
+  'e2e/board-overview.spec.ts',
+  'e2e/board-reader.spec.ts',
+  'e2e/board-press.spec.ts',
+  'e2e/board-a11y.spec.ts',
+  'e2e/board-live.spec.ts',
+  'e2e/board-terminal-coworking.spec.ts',
+  'e2e/board-index.spec.ts',
+];
+
+/**
+ * The File card (DS3), `cards/FileCard.tsx`, audited the same way with BoardFile rendering nothing: these fifteen failed,
+ * and board-index is added by hand (it jumps between note and file cards through their wrappers, which stay when a card draws nothing).
+ */
+const FILE_CARD_SPECS = [
+  'e2e/board-workspace-files.spec.ts',
+  'e2e/board-area.spec.ts',
+  'e2e/board-area-view.spec.ts',
+  'e2e/board-reader.spec.ts',
+  'e2e/board-reader-nav.spec.ts',
+  'e2e/board-reader-back.spec.ts',
+  'e2e/board-a11y.spec.ts',
+  'e2e/board-press.spec.ts',
+  'e2e/board-back.spec.ts',
+  'e2e/board-browsing.spec.ts',
+  'e2e/board-code-window.spec.ts',
+  'e2e/board-document-links.spec.ts',
+  'e2e/board-point-and-ask.spec.ts',
+  'e2e/board-questions.spec.ts',
+  'e2e/board-review-page.spec.ts',
+  'e2e/board-index.spec.ts',
+];
+
 const FOLDER_ROWS = [
   ...['lib/diagram.ts', 'lib/diagramFrame.ts', 'lib/diagramSafety.ts', 'diagram-frame.ts', 'components/Diagram.tsx', 'components/diagramFixContext.ts'].map((file) => ({
     folder: `src/${file.replace(/\.tsx?$/, '')}`,
@@ -585,6 +629,21 @@ const FOLDER_ROWS = [
     bareNames: ['CardFrame', 'CardFrame.tsx'],
     specs: CARD_PARTS_SPECS,
     safety: 'The card article and its archived, pinned, fresh, reading and pressable states, drawn by every Board card that has one; only BoardNodes.tsx imports it, so it is not APP_WIDE (design/index.ts, which exports it, is); verified by cardParts.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  // The Note and File cards (DS3)
+  {
+    folder: 'src/features/board/cards/NoteCard',
+    path: 'gui/src/features/board/cards/NoteCard.tsx',
+    bareNames: ['NoteCard', 'NoteCard.tsx'],
+    specs: NOTE_CARD_SPECS,
+    safety: 'Only BoardNodes.tsx imports it (BoardSection reaches it through BoardNodes); a note is drawn only by this card, and the specs that show a note card are those listed (each failed when the card drew nothing); verified by the golden markup and those specs.',
+  },
+  {
+    folder: 'src/features/board/cards/FileCard',
+    path: 'gui/src/features/board/cards/FileCard.tsx',
+    bareNames: ['FileCard', 'FileCard.tsx'],
+    specs: FILE_CARD_SPECS,
+    safety: 'Only BoardNodes.tsx imports it; the file card shows workspace files, picture and file cards of Areas and opens the reader; the specs listed each failed when the card drew nothing; verified by the golden markup and those specs.',
   },
 ];
 

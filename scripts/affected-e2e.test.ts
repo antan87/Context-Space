@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import {
   CENTRAL_BOARD_FILES,
@@ -51,24 +52,45 @@ const BOARD_SIDEBAR_SPECS = [
   'e2e/board-reader.spec.ts',
 ];
 
+// Loaded as a plain Node module so the test runner does not try to transform (and read the source map of) the compiler
+const ts = createRequire(import.meta.url)('typescript') as typeof import('typescript');
+
+/**
+ * The module specifiers a source file imports or re-exports, read by TypeScript's own scanner: `import`, `import type`,
+ * side-effect imports, `export ... from`, `export * from` and dynamic `import("x")`, in any quotes, spacing or comments.
+ */
+const specifiers = (source: string): string[] => ts.preProcessFile(source, true, true).importedFiles.map((file) => file.fileName);
+
 /** Whether a source file draws the shared card parts: by their own files, or by name through the design barrel. */
 function consumesCardParts(source: string): boolean {
-  if (/from\s+'[^']*(CardFrame|cardParts)(\.js)?'/.test(source)) return true;
-  for (const match of source.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'[^']*\/design(?:\/index)?(?:\.js)?'/g)) {
-    if (/\b(CardFrame|CARD_BRICK|CARD_FOCUS)\b/.test(match[1]!)) return true;
-  }
-  return false;
+  return specifiers(source).some((from) =>
+    /(CardFrame|cardParts)(\.js)?$/.test(from)
+    || (/\/design(?:\/index)?(?:\.js)?$/.test(from) && /\b(CardFrame|CARD_BRICK|CARD_FOCUS)\b/.test(source)));
 }
 
-function findCardPartsImporters(dir: string): string[] {
+function sourceFiles(dir: string, withTests = false): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const file = `${dir}/${entry.name}`;
-    if (entry.isDirectory()) found.push(...findCardPartsImporters(file));
-    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) && consumesCardParts(readFileSync(file, 'utf8'))) found.push(file);
+    if (entry.isDirectory()) found.push(...sourceFiles(file, withTests));
+    else if (/\.tsx?$/.test(entry.name) && (withTests || !/\.test\.tsx?$/.test(entry.name))) found.push(file);
   }
   return found;
 }
+
+const findCardPartsImporters = (dir: string) => sourceFiles(dir).filter((file) => consumesCardParts(readFileSync(file, 'utf8')));
+
+/** Whether a source file imports or re-exports a card file (NoteCard, FileCard): by its path, or through a `cards` index. */
+function importsCardFile(source: string, names: readonly string[]): boolean {
+  return specifiers(source).some((from) =>
+    new RegExp(`(${names.join('|')})(\\.js)?$`).test(from) || /\/cards(?:\/index)?(?:\.js)?$/.test(from));
+}
+
+/** Whether a source file imports the BoardNodes barrel in any form. */
+const importsBoardNodes = (source: string): boolean => specifiers(source).some((from) => /(^|\/)BoardNodes(\.js)?$/.test(from));
+
+const findCardFileImporters = (dir: string, names: readonly string[]) => sourceFiles(dir).filter((file) => importsCardFile(readFileSync(file, 'utf8'), names));
+const findBoardNodesImporters = (dir: string) => sourceFiles(dir, true).filter((file) => importsBoardNodes(readFileSync(file, 'utf8')));
 
 describe('affected e2e specs', () => {
   it('selects every existing spec directly, including the app shell outside Board', () => {
@@ -257,7 +279,13 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
 
     // The row is safe only while nothing outside the Board draws them: a new importer must extend the row first.
-    expect(findCardPartsImporters('gui/src').sort()).toEqual(['gui/src/design/index.ts', 'gui/src/features/board/BoardNodes.tsx']);
+    // (NoteCard.tsx and FileCard.tsx are the cards themselves: they draw the frame and parts, as DS3 moved them out of BoardNodes.tsx.)
+    expect(findCardPartsImporters('gui/src').sort()).toEqual([
+      'gui/src/design/index.ts',
+      'gui/src/features/board/BoardNodes.tsx',
+      'gui/src/features/board/cards/FileCard.tsx',
+      'gui/src/features/board/cards/NoteCard.tsx',
+    ]);
     // The guard sees direct imports and consumers through the design barrel, in any spelling
     const consumes = (source: string) => consumesCardParts(source);
     expect(consumes("import { CardFrame } from '../../design/CardFrame.js';")).toBe(true);
@@ -266,6 +294,75 @@ describe('affected e2e specs', () => {
     expect(consumes("import {\n  Button,\n  CardFrame as Frame,\n} from '../../design';")).toBe(true);
     expect(consumes("import { Button } from '../../design/index.js';")).toBe(false);
     expect(consumes("import { Card } from '../../components/ui/card.js';")).toBe(false);
+  });
+
+  it('maps the Note and File cards (DS3) to the specs that show them, and only BoardNodes imports them', () => {
+    const rowOf = (path: string) => FOLDER_SPECS.find((entry) => entry.path === path);
+    const note = rowOf('gui/src/features/board/cards/NoteCard.tsx');
+    const file = rowOf('gui/src/features/board/cards/FileCard.tsx');
+    expect(note).toBeDefined();
+    expect(file).toBeDefined();
+    expect(note!.specs).toEqual(expect.arrayContaining([
+      'e2e/board-notes.spec.ts', 'e2e/board-area.spec.ts', 'e2e/board-press.spec.ts', 'e2e/board-a11y.spec.ts',
+      'e2e/board-live.spec.ts', 'e2e/board-terminal-coworking.spec.ts', 'e2e/board-index.spec.ts', 'e2e/accessibility.spec.ts',
+    ]));
+    expect(file!.specs).toEqual(expect.arrayContaining([
+      'e2e/board-workspace-files.spec.ts', 'e2e/board-area.spec.ts', 'e2e/board-reader.spec.ts', 'e2e/board-reader-nav.spec.ts',
+      'e2e/board-a11y.spec.ts', 'e2e/board-press.spec.ts', 'e2e/board-index.spec.ts', 'e2e/accessibility.spec.ts',
+    ]));
+    for (const row of [note!, file!]) {
+      expect(row.specs).not.toContain('e2e/board');
+      expect(getAffectedSpecs([row.path])).toEqual(row.specs);
+    }
+    expect(getAffectedSpecs(['gui/src/features/board/cards/NoteCard.tsx'])).not.toContain('e2e/board-files.spec.ts');
+    expect(getAffectedSpecs(['gui/src/features/board/cards/FileCard.tsx'])).not.toContain('e2e/board-notes.spec.ts');
+    // Only BoardNodes.tsx (the barrel BoardSection uses) imports the two cards, directly or through a `cards` index
+    expect(findCardFileImporters('gui/src', ['NoteCard', 'FileCard'])).toEqual(['gui/src/features/board/BoardNodes.tsx']);
+    const both = ['NoteCard', 'FileCard'];
+    expect(importsCardFile("import { BoardNote } from './cards/NoteCard.js';", both)).toBe(true);
+    expect(importsCardFile("import { BoardFile } from './cards/FileCard';", both)).toBe(true);
+    expect(importsCardFile("import { BoardFile } from './cards/index.js';", both)).toBe(true);
+    // Double quotes, `export ... from`, a multi-line clause, a bare import and a dynamic import
+    expect(importsCardFile('import { BoardNote } from "./cards/NoteCard.js";', both)).toBe(true);
+    expect(importsCardFile('export { BoardFile } from "./cards/FileCard.js";', both)).toBe(true);
+    expect(importsCardFile("export {\n  BoardFile,\n} from './cards/FileCard.js';", both)).toBe(true);
+    expect(importsCardFile('import { BoardFile } from "./cards/index.js";', both)).toBe(true);
+    expect(importsCardFile("export * from './cards';", both)).toBe(true);
+    expect(importsCardFile('import "./cards/NoteCard.js";', both)).toBe(true);
+    expect(importsCardFile("const card = import('./cards/FileCard.js');", both)).toBe(true);
+    expect(importsCardFile("import { BoardNote } from './BoardNodes.js';", both)).toBe(false);
+    // Through the BoardNodes barrel, which hands out BoardNote and BoardFile: every importer (tests included) is on a list, so a
+    // new one is added on purpose, and adding it is the moment to reconsider the rows above.
+    expect(findBoardNodesImporters('gui/src')).toEqual([
+      'gui/src/features/board/BoardCheckpoint.test.tsx',
+      'gui/src/features/board/BoardRowHead.test.tsx',
+      'gui/src/features/board/BoardSection.tsx',
+      'gui/src/features/board/cards/cardMarkup.test.tsx',
+    ]);
+    // What the scanner sees, in any spelling
+    for (const source of [
+      "import { BoardNote } from './BoardNodes.js';",
+      'import { BoardFile, BoardLane } from "../board/BoardNodes";',
+      "import {\n  BoardLane,\n  BoardNote,\n} from './BoardNodes.js';",
+      'export { BoardFile } from "./BoardNodes.js";',
+      'import * as Nodes from "./BoardNodes.js";',
+      'export * from "./BoardNodes.js";',
+      'async function load() { return await import("./BoardNodes.js"); }',
+      'import type { BoardNote } from "./BoardNodes.js";',
+      'import "./BoardNodes.js";',
+    ]) expect(importsBoardNodes(source), source).toBe(true);
+    expect(importsBoardNodes("import { BoardNote } from './cards/NoteCard.js';")).toBe(false);
+    // The comment after `from`, a comment inside the braces, and a dynamic import with a space
+    expect(importsCardFile('import { BoardFile } from /* the file card */ "./cards/FileCard.js";', both)).toBe(true);
+    expect(importsCardFile('import { /* the card */ BoardFile } from "./cards/FileCard.js";', both)).toBe(true);
+    expect(importsCardFile('const card = import ("./cards/FileCard.js");', both)).toBe(true);
+    expect(importsCardFile('import type { BoardNote } from "./cards/NoteCard.js";', both)).toBe(true);
+    expect(importsCardFile('// import "./cards/NoteCard.js";\nexport const x = 1;', both)).toBe(false);
+    // The card-parts guard reads double quotes and `export ... from` too
+    expect(consumesCardParts('import { CardFrame } from "../../design/CardFrame.js";')).toBe(true);
+    expect(consumesCardParts('export { Anchors } from "./cards/cardParts.js";')).toBe(true);
+    expect(consumesCardParts('import { Button, CardFrame } from "../../design/index.js";')).toBe(true);
+    expect(consumesCardParts('import { Button } from "../../design/index.js";')).toBe(false);
   });
 
   it('covers every row in FOLDER_SPECS, its src/ and test variants, and existing specs', () => {
