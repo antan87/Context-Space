@@ -115,6 +115,13 @@ function importsCardFile(source: string, names: readonly string[]): boolean {
 /** Whether a source file imports the BoardNodes barrel in any form. */
 const importsBoardNodes = (source: string): boolean => specifiers(source).some((from) => /(^|\/)BoardNodes(\.js)?$/.test(from));
 
+/** Whether a source file imports or re-exports a row file (RowHead, RowControls): by its path, or through a `rows` index. */
+function importsRowFile(source: string, names: readonly string[]): boolean {
+  return specifiers(source).some((from) =>
+    new RegExp(`(^|/)(${names.join('|')})(\\.js)?$`).test(from) || /(^|\/)rows(?:\/index)?(?:\.js)?$/.test(from));
+}
+
+const findRowFileImporters = (dir: string, names: readonly string[]) => sourceFiles(dir, true).filter((file) => importsRowFile(readFileSync(file, 'utf8'), names));
 const findCardFileImporters = (dir: string, names: readonly string[]) => sourceFiles(dir).filter((file) => importsCardFile(readFileSync(file, 'utf8'), names));
 const findBoardNodesImporters = (dir: string) => sourceFiles(dir, true).filter((file) => importsBoardNodes(readFileSync(file, 'utf8')));
 
@@ -219,9 +226,13 @@ describe('affected e2e specs', () => {
   });
 
   it('keeps central Board file names exact and lets central files win over mapped rows', () => {
-    for (const name of ['nodeTypes', 'areas/types', 'overview/plan', 'BoardRowHead', 'BoardCheckpoint', 'BoardNodes']) {
+    for (const name of ['nodeTypes', 'areas/types', 'overview/plan', 'BoardCheckpoint', 'BoardNodes']) {
       expect(CENTRAL_BOARD_FILES.has(name), name).toBe(true);
     }
+    // DS5a: the row header moved to rows/RowHead.tsx and no file named BoardRowHead is left, so it is no longer central
+    for (const name of ['BoardRowHead', 'BoardRowHead.tsx']) expect(CENTRAL_BOARD_FILES.has(name), name).toBe(false);
+    expect(existsSync('gui/src/features/board/BoardRowHead.tsx')).toBe(false);
+    expect(existsSync('gui/src/features/board/BoardRowHead.test.tsx')).toBe(false);
 
     const centralPaths = [
       'gui/src/features/board/BoardSection.tsx',
@@ -305,12 +316,14 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
 
     // The row is safe only while nothing outside the Board draws them: a new importer must extend the row first.
-    // (NoteCard.tsx and FileCard.tsx are the cards themselves: they draw the frame and parts, as DS3 moved them out of BoardNodes.tsx.)
+    // (NoteCard.tsx and FileCard.tsx are the cards themselves: they draw the frame and parts, as DS3 moved them out of BoardNodes.tsx; DS5a's rows/RowHead.tsx and rows/RowControls.tsx draw Anchors, brickPress and the card constants the same way.)
     expect(findCardPartsImporters('gui/src').sort()).toEqual([
       'gui/src/design/index.ts',
       'gui/src/features/board/BoardNodes.tsx',
       'gui/src/features/board/cards/FileCard.tsx',
       'gui/src/features/board/cards/NoteCard.tsx',
+      'gui/src/features/board/rows/RowControls.tsx',
+      'gui/src/features/board/rows/RowHead.tsx',
     ]);
     // The guard sees direct imports and consumers through the design barrel, in any spelling
     const consumes = (source: string) => consumesCardParts(source);
@@ -361,7 +374,6 @@ describe('affected e2e specs', () => {
     // new one is added on purpose, and adding it is the moment to reconsider the rows above.
     expect(findBoardNodesImporters('gui/src')).toEqual([
       'gui/src/features/board/BoardCheckpoint.test.tsx',
-      'gui/src/features/board/BoardRowHead.test.tsx',
       'gui/src/features/board/BoardSection.tsx',
       'gui/src/features/board/cards/cardMarkup.test.tsx',
       'gui/src/features/board/cards/freshDotPin.test.tsx',
@@ -390,6 +402,57 @@ describe('affected e2e specs', () => {
     expect(consumesCardParts('export { Anchors } from "./cards/cardParts.js";')).toBe(true);
     expect(consumesCardParts('import { Button, CardFrame } from "../../design/index.js";')).toBe(true);
     expect(consumesCardParts('import { Button } from "../../design/index.js";')).toBe(false);
+  });
+
+  it('maps the Area rows (DS5a) to the specs that show them, and only BoardNodes and their own tests import them', () => {
+    const rowOf = (path: string) => FOLDER_SPECS.find((entry) => entry.path === path);
+    const head = rowOf('gui/src/features/board/rows/RowHead.tsx');
+    const controls = rowOf('gui/src/features/board/rows/RowControls.tsx');
+    expect(head).toBeDefined();
+    expect(controls).toBeDefined();
+    expect(head!.specs).toEqual(expect.arrayContaining([
+      'e2e/board-step-ticking.spec.ts', 'e2e/board-area.spec.ts', 'e2e/board-area-view.spec.ts', 'e2e/board-now-line.spec.ts',
+      'e2e/board-back.spec.ts', 'e2e/board-press.spec.ts', 'e2e/board-reader-nav.spec.ts', 'e2e/board-a11y.spec.ts', 'e2e/accessibility.spec.ts',
+    ]));
+    expect(controls!.specs).toEqual(expect.arrayContaining([
+      'e2e/board-area.spec.ts', 'e2e/board-area-view.spec.ts', 'e2e/board-step-ticking.spec.ts', 'e2e/board-commit-list.spec.ts',
+      'e2e/board-live.spec.ts', 'e2e/board-a11y.spec.ts', 'e2e/accessibility.spec.ts',
+    ]));
+    for (const row of [head!, controls!]) {
+      expect(row.specs).not.toContain('e2e/board');
+      expect(isCentralBoardFile(row.path), row.path).toBe(false);
+      expect(getAffectedSpecs([row.path])).toEqual(row.specs);
+    }
+    // The moved test and the barrel keep their meaning: the test is for the header row, the barrel stays central
+    expect(getAffectedSpecs(['gui/src/features/board/rows/RowHead.test.tsx'])).toEqual(head!.specs);
+    expect(getAffectedSpecs(['gui/src/features/board/BoardNodes.tsx'])).toEqual(['e2e/board']);
+    // A header change does not run the controls' specs (nothing but the shared ones overlap), and the reverse
+    expect(getAffectedSpecs(['gui/src/features/board/rows/RowControls.tsx'])).not.toContain('e2e/board-press.spec.ts');
+    expect(getAffectedSpecs(['gui/src/features/board/rows/RowHead.tsx'])).not.toContain('e2e/board-live.spec.ts');
+    // The rows are safe only while nothing else imports them: a new importer must extend them first.
+    const both = ['RowHead', 'RowControls'];
+    expect(findRowFileImporters('gui/src', both)).toEqual([
+      'gui/src/features/board/BoardNodes.tsx',
+      'gui/src/features/board/rows/RowHead.test.tsx',
+    ]);
+    // What the scanner sees, in any spelling
+    for (const source of [
+      "import { BoardRowHead } from './rows/RowHead.js';",
+      'import { BoardPager } from "./rows/RowControls";',
+      "import {\n  BoardFoldRow,\n  BoardPager,\n} from './rows/RowControls.js';",
+      'export { BoardRowHead } from "./rows/RowHead.js";',
+      'export * from "./rows/RowControls.js";',
+      "import * as Rows from './rows/index.js';",
+      "export * from './rows';",
+      'import "./rows/RowHead.js";',
+      'async function load() { return await import ("./rows/RowControls.js"); }',
+      'import type { BoardRowHead } from "./rows/RowHead.js";',
+      'import { BoardRowHead } from /* the header */ "./rows/RowHead.js";',
+      'import { /* the header */ BoardRowHead } from "./rows/RowHead.js";',
+    ]) expect(importsRowFile(source, both), source).toBe(true);
+    expect(importsRowFile("import { BoardNote } from './cards/NoteCard.js';", both)).toBe(false);
+    expect(importsRowFile("import { Anchors } from '../cards/cardParts.js';", both)).toBe(false);
+    expect(importsRowFile('// import "./rows/RowHead.js";\nexport const x = 1;', both)).toBe(false);
   });
 
   it('maps Pill, Mark and FreshDot (DS4) to all of e2e/board and the page scan, and only Board files import them', () => {

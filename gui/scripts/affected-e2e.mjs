@@ -100,8 +100,6 @@ export const CENTRAL_BOARD_FILES = new Set([
   'boardView.ts',
   'boardFolds',
   'boardFolds.ts',
-  'BoardRowHead',
-  'BoardRowHead.tsx',
   'BoardCheckpoint',
   'BoardCheckpoint.tsx',
   'boardThread',
@@ -315,6 +313,63 @@ const FILE_CARD_SPECS = [
   'e2e/board-questions.spec.ts',
   'e2e/board-review-page.spec.ts',
   'e2e/board-index.spec.ts',
+];
+
+/**
+ * The step and row headers of an Area (DS5a), `rows/RowHead.tsx`: StepDetailDialog, RowTabs and BoardRowHead, the "step" node. Audited both ways.
+ * Break-it: with BoardRowHead drawing nothing these thirteen failed alone (area, area-view, step-ticking, overview, now-line, commit-list,
+ * questions, back, reader, workspace-files, w2-tiers, commit-notes, press). Grep for what the header renders or presses (the step checkbox,
+ * "Next up", "Now", the row tabs, the step dialog, `[data-row-control]`, `.react-flow__node-step`) adds board-reader-nav: it presses the
+ * row control only `if (count > 0)`, so it passes with a header that draws nothing. Not added: index (it presses note and file cards and
+ * the thread on their wrappers), terminal-coworking (its fold is the Area's own `board-area-fold`, drawn by BoardNodes), commits,
+ * browsing, assignment, code-window, review-page, overview-split, live and a11y (they passed with the header gone; a11y is added to
+ * every Board row anyway), and the specs with no hit at all (decisions, files, incoming, knowledge, notes, plan-parity,
+ * point-and-ask, document-links, reader-back). Nothing outside e2e/board draws a step row: the "Next up" chips of workspace-shell are
+ * the header's own, not this node.
+ */
+const ROW_HEAD_SPECS = [
+  'e2e/board-step-ticking.spec.ts',
+  'e2e/board-area.spec.ts',
+  'e2e/board-area-view.spec.ts',
+  'e2e/board-now-line.spec.ts',
+  'e2e/board-back.spec.ts',
+  'e2e/board-press.spec.ts',
+  'e2e/board-overview.spec.ts',
+  'e2e/board-questions.spec.ts',
+  'e2e/board-reader.spec.ts',
+  'e2e/board-reader-nav.spec.ts',
+  'e2e/board-workspace-files.spec.ts',
+  'e2e/board-w2-tiers.spec.ts',
+  'e2e/board-commit-list.spec.ts',
+  'e2e/board-commit-notes.spec.ts',
+];
+
+/**
+ * The folded row, the "+N more" tile and the pager (DS5a), `rows/RowControls.tsx`: BoardFoldRow, BoardMoreTile, BoardPager ("fold",
+ * "more", "pager"). Audited both ways. Break-it: with the three drawing nothing, these seven failed (area, area-view, overview,
+ * back, questions, workspace-files, step-ticking). Grep for the fold button ("1 more open step", "done step"), "Show N more for", the
+ * pager's "Older cards"/"Earlier questions", `.react-flow__node-more/-fold/-pager` and `[data-row-control]` adds: commit-list and
+ * commit-notes (they press `button[data-row-control^="lane:commits"]`, which the folded row and the header both draw), reader and
+ * reader-nav (`[data-row-control]` on any row), and the three that open a card behind a "+N more" through the `reveal` helper
+ * (boardHelpers: a11y, live, reader), which only presses the tile when the card is hidden. Not added: now-line, w2-tiers ("0 more" is
+ * a text check on a step row), press, commits, index and terminal-coworking (its "N more" is the Area's own fold). With the presses of the
+ * three doing nothing (toggleRow and setRowPage as no-ops), board-live also failed (it reveals a card behind a tile); commit-list,
+ * commit-notes, reader, reader-nav, now-line, w2-tiers and a11y still passed, so those listed here stay on the grep alone, and now-line and
+ * w2-tiers stay out.
+ */
+const ROW_CONTROL_SPECS = [
+  'e2e/board-area.spec.ts',
+  'e2e/board-area-view.spec.ts',
+  'e2e/board-overview.spec.ts',
+  'e2e/board-back.spec.ts',
+  'e2e/board-questions.spec.ts',
+  'e2e/board-workspace-files.spec.ts',
+  'e2e/board-step-ticking.spec.ts',
+  'e2e/board-commit-list.spec.ts',
+  'e2e/board-commit-notes.spec.ts',
+  'e2e/board-reader.spec.ts',
+  'e2e/board-reader-nav.spec.ts',
+  'e2e/board-live.spec.ts',
 ];
 
 const FOLDER_ROWS = [
@@ -678,6 +733,21 @@ const FOLDER_ROWS = [
     bareNames: ['FileCard', 'FileCard.tsx'],
     specs: FILE_CARD_SPECS,
     safety: 'Only BoardNodes.tsx imports it; the file card shows workspace files, picture and file cards of Areas and opens the reader; the specs listed each failed when the card drew nothing; verified by the golden markup and those specs.',
+  },
+  // The Area's rows (DS5a)
+  {
+    folder: 'src/features/board/rows/RowHead',
+    path: 'gui/src/features/board/rows/RowHead.tsx',
+    bareNames: ['RowHead', 'RowHead.tsx'],
+    specs: ROW_HEAD_SPECS,
+    safety: 'Only BoardNodes.tsx imports it (BoardSection reaches it through BoardNodes, as the "step" node); the specs listed each failed when the header drew nothing, and grep for the step checkbox, "Next up", the tabs, the dialog and [data-row-control] added reader-nav; verified by rows/RowHead.test.tsx, the golden markup and those specs.',
+  },
+  {
+    folder: 'src/features/board/rows/RowControls',
+    path: 'gui/src/features/board/rows/RowControls.tsx',
+    bareNames: ['RowControls', 'RowControls.tsx'],
+    specs: ROW_CONTROL_SPECS,
+    safety: 'Only BoardNodes.tsx imports it; the fold row, "+N more" tile and pager; the specs listed failed when the three drew nothing, and grep for the fold, "Show N more", the pager and [data-row-control] (and the reveal helper) added the rest; verified by the golden markup and those specs.',
   },
 ];
 
