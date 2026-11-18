@@ -547,6 +547,32 @@ describe('affected e2e specs', () => {
     expect(usesDesignPieces("import { Pill } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(false);
   });
 
+  it('maps Composer (DS6) to its exact spec list, and only the note dialog imports it', () => {
+    const row = FOLDER_SPECS.find((entry) => entry.path === 'gui/src/design/Composer.tsx');
+    expect(row).toBeDefined();
+    // The expected list is written out here on its own: a spec lost from the row, or one added to it, fails this test
+    expect(row!.specs).toEqual([
+      'e2e/board-notes.spec.ts',
+      'e2e/board-area.spec.ts',
+      'e2e/board-area-view.spec.ts',
+    ]);
+    expect(getAffectedSpecs([row!.path])).toEqual([
+      'e2e/board-notes.spec.ts',
+      'e2e/board-area.spec.ts',
+      'e2e/board-area-view.spec.ts',
+    ]);
+    expect(getAffectedSpecs(['gui/src/design/Composer.tsx'])).not.toEqual(['e2e']);
+    expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
+    // Safe only while nothing else draws it: a second user needs its specs added to the row
+    const users = sourceFiles('gui/src').filter((file) => usesDesignPieces(readFileSync(file, 'utf8'), ['Composer'])).sort();
+    expect(users).toEqual([
+      'gui/src/design/index.ts',
+      'gui/src/features/board/NoteDialog.tsx',
+    ]);
+    expect(usesDesignPieces("import { Composer } from '../../design/index.js';", ['Composer'])).toBe(true);
+    expect(usesDesignPieces("import { Button } from '../../design/index.js';", ['Composer'])).toBe(false);
+  });
+
   it('covers every row in FOLDER_SPECS, its src/ and test variants, and existing specs', () => {
     expect(FOLDER_SPECS.length).toBeGreaterThan(20);
     for (const entry of FOLDER_SPECS) {

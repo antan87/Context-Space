@@ -413,6 +413,21 @@ const ROW_SURFACE_SPECS = [
   'e2e/accessibility.spec.ts',
 ];
 
+/**
+ * The text field (DS6), `design/Composer.tsx`: the body of the note dialog (`features/board/NoteDialog.tsx`), its only user.
+ * Audited both ways. Break-it: with a Composer that reports an empty string on every change, and with one that ignores `onChange`,
+ * board-notes failed (it types into the body and checks the saved note and the kept draft) while board-area and board-area-view passed; with a
+ * Composer that draws nothing, board-area and board-area-view passed too (they only open the dialog, or fill the title, and press "Add note").
+ * Grep for the dialog (`Edit note`, `New note`, `Add a note`, `Add note`, `Note title`, the body placeholder `Write Markdown, lists, notes, or links...`)
+ * found board-notes, board-area, board-area-view, and board-questions and board-workspace-files (which only assert there is no "Add a note" button).
+ * So the row lists board-notes, plus board-area and board-area-view, the two specs that open the dialog, kept by hand although they did not fail.
+ */
+const COMPOSER_SPECS = [
+  'e2e/board-notes.spec.ts',
+  'e2e/board-area.spec.ts',
+  'e2e/board-area-view.spec.ts',
+];
+
 const FOLDER_ROWS = [
   ...['lib/diagram.ts', 'lib/diagramFrame.ts', 'lib/diagramSafety.ts', 'diagram-frame.ts', 'components/Diagram.tsx', 'components/diagramFixContext.ts'].map((file) => ({
     folder: `src/${file.replace(/\.tsx?$/, '')}`,
@@ -774,6 +789,14 @@ const FOLDER_ROWS = [
     bareNames: ['RowSurface', 'RowSurface.tsx'],
     specs: ROW_SURFACE_SPECS,
     safety: 'The Now / Next up step surface and the folded row; only rows/RowHead.tsx and rows/RowControls.tsx import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, RowHead.test.tsx and the specs listed.',
+  },
+  // The Composer (DS6)
+  {
+    folder: 'src/design/Composer',
+    path: 'gui/src/design/Composer.tsx',
+    bareNames: ['Composer', 'Composer.tsx'],
+    specs: COMPOSER_SPECS,
+    safety: 'The note dialog\'s body field; only features/board/NoteDialog.tsx imports it (design/index.ts, which exports it, is APP_WIDE); board-notes failed when it dropped typed text or ignored onChange; verified by pieces.test.tsx and those specs.',
   },
   // The Note and File cards (DS3)
   {

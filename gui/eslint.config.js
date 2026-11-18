@@ -36,7 +36,6 @@ export const LEGACY_UI_IMPORTERS = [
   'src/features/board/BoardReader.tsx',
   'src/features/board/BoardSection.tsx',
   'src/features/board/BoardSidebar.tsx',
-  'src/features/board/NoteDialog.tsx',
   'src/features/board/ReaderPage.tsx',
   'src/features/changes/CodeSection.tsx',
   'src/features/changes/CommitReviewPanel.tsx',

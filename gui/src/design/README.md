@@ -79,7 +79,7 @@ State always shows as a word, never colour alone: Now (`--state-now` dot, "Now",
 | `MetaLine` | planned | with the rows (5) or the restyle |
 | `StepCheck` (the step checkbox: `checked`, `label`, `title`, `disabled`, `busy`, `pressable`, `testId`, `onToggle`, `className`; it takes plain values, never Board data), `rowSurface(...)` and `foldSurface(...)` in `RowSurface.tsx` (class helpers for the Now/Next step surface and the folded row) | **Exist** (DS5b), drawn exactly as the rows did; the Hairline stripe and real suggested-answer buttons come with R1. Use `StepCheck` for any step checkbox, `rowSurface` for a step row's surface | 5 |
 | `ListRow` | planned | 5 |
-| `Composer` (growing text field) | planned | 6 |
+| `Composer` (a controlled multi-line text field: `value`, `onChange` (gets the string), `mono`, `className` (drawn last), and `id`, `name`, `placeholder`, `maxLength`, `rows`, `disabled`, `autoFocus`, `onKeyDown`, `aria-*` and `ref` straight to the `<textarea>`) | **Exists** (DS6), drawn exactly as the note dialog's body was. Use it for any multi-line text the Board writes. It has no auto-grow, toolbar, saving or error state yet: the in-place note, paste and drop, Sticky and the Markdown writing add them when they need them, and R1 restyles it | 6 |
 | `reference/DesignPage` (live page `#/design`) | planned | 7 |
 | `tokens.css` (moved from `index.css`) | planned | 11 |
 | The Hairline look applied | planned | R1 |
@@ -91,6 +91,7 @@ If the piece exists here, use it. Do not write these again in a screen:
 - a button, icon button, badge, input, textarea, checkbox, switch, menu, popover, tooltip, dialog or tab bar (use the export; icon-only controls need `IconButton` for its label and tooltip);
 - a card surface (border, radius, padding, hover, focus ring, archived/pinned/reading states): `CardFrame` once it exists;
 - a kind tag, a you/AI mark, a fresh dot: `Pill` (kind of a card, a state in a word), `Mark` (who made it), `FreshDot` (new since you looked); a count pill is not one of them yet;
+- a multi-line text field on the Board (a note body and what comes after it): `Composer`;
 - a step checkbox or a Now/Next row surface: `StepCheck` (the box; pass `nodrag nopan` through `className` on the Board) and `rowSurface` / `foldSurface` (the surface classes);
 - text below 12 px, a raw palette colour (`text-violet-600`, `bg-red-500/10`), a hex value, or an arbitrary `rounded-[..]` / `shadow-[..]`: use the tokens (`text-xs`, `text-muted-foreground`, `bg-primary`, `--state-*`, `rounded-lg`, `shadow-xs`). If a token is missing, add it to the tokens, not to the component.
 
@@ -122,7 +123,7 @@ Named exceptions are for content, never for styling, and each covers only the co
 
 - (a) inside `src/design/**`: no imports from `features/`, `@xyflow/react` or `@tanstack/react-query`;
 - (b) everywhere else, including `components/ui/**`: no deep `design/*` imports, only `design/index`;
-- (c) outside `design/` and `components/ui/`: no new `components/ui/*` imports, in any relative spelling (`../../components/ui/button.js`, the barrel `../components/ui`, `./ui/button.js` from inside `components/`). Files that already import them are on `LEGACY_UI_IMPORTERS` in the config (72 today). That list may only get shorter: when you touch such a file, switch it to `design/index` and remove it from the list. `designLint.test.ts` fails if the list and the real importers differ.
+- (c) outside `design/` and `components/ui/`: no new `components/ui/*` imports, in any relative spelling (`../../components/ui/button.js`, the barrel `../components/ui`, `./ui/button.js` from inside `components/`). Files that already import them are on `LEGACY_UI_IMPORTERS` in the config (71 today). That list may only get shorter: when you touch such a file, switch it to `design/index` and remove it from the list. `designLint.test.ts` fails if the list and the real importers differ.
 
 **The golden markup test** (`features/board/cards/cardMarkup.test.tsx`) renders every Board node kind from fixtures and compares it with committed snapshots. A move into the module must leave the snapshots byte for byte the same. Only a restyle slice may update them, and it says so.
 

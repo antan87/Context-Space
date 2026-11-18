@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Button } from '../../components/ui/button.js';
-import { Checkbox } from '../../components/ui/checkbox.js';
 import {
+  Button,
+  Checkbox,
+  Composer,
   Dialog,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogPanel,
   DialogPopup,
   DialogTitle,
-  DialogDescription,
-} from '../../components/ui/dialog.js';
-import { Input } from '../../components/ui/input.js';
-import { Spinner } from '../../components/ui/spinner.js';
+  Input,
+  Spinner,
+} from '../../design/index.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
-import { cn } from '../../lib/utils.js';
 
 export interface NoteDialogAreaOption {
   id: string;
@@ -276,19 +276,15 @@ export function NoteDialog({
                   )}
                 </div>
               ) : (
-                <textarea
+                <Composer
                   id={bodyId}
                   name="body"
                   value={body}
-                  onChange={(e) => setBody(e.target.value)}
+                  onChange={setBody}
                   placeholder="Write Markdown, lists, notes, or links..."
                   maxLength={4000}
                   rows={5}
-                  className={cn(
-                    'w-full min-h-[140px] max-h-[260px] rounded-lg border border-input bg-background p-3 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/72 outline-none transition-shadow',
-                    'focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/20 resize-y',
-                    font === 'mono' ? 'font-mono text-[12.5px]' : 'font-sans',
-                  )}
+                  mono={font === 'mono'}
                 />
               )}
 

@@ -1,8 +1,8 @@
-import { createElement } from 'react';
+import { createElement, createRef, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { cn } from '../lib/utils.js';
-import { foldSurface, FreshDot, Mark, Pill, PILL_LEGACY, rowSurface, StepCheck, type PillTone } from './index.js';
+import { Composer, foldSurface, FreshDot, Mark, Pill, PILL_LEGACY, rowSurface, StepCheck, type PillTone } from './index.js';
 
 const html = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element);
 
@@ -158,5 +158,72 @@ describe('RowSurface (DS5b)', () => {
       expect(set(now[key]), key).toEqual(set(was[key]));
     }
     expect(set(was.head)).toContain('border-l-state-now');
+  });
+});
+
+/**
+ * Composer (DS6). The note dialog's body was a hand-built textarea; these strings are copied from that code at HEAD (565857e), so
+ * the piece must draw exactly what the dialog drew. No test renders the dialog itself (its portal draws nothing on the server);
+ * the real app's `outerHTML` before and after is the second proof (DS6 report).
+ */
+describe('Composer (DS6)', () => {
+  const BASE = 'w-full min-h-[140px] max-h-[260px] rounded-lg border border-input bg-background p-3 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/72 outline-none transition-shadow';
+  const FOCUS = 'focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/20 resize-y';
+  const dialog = { id: 'body-1', name: 'body', placeholder: 'Write Markdown, lists, notes, or links...', maxLength: 4000, rows: 5, onChange: () => undefined };
+  // What the dialog wrote, class order and all (cn of the three strings, the font last)
+  const wasClass = (mono: boolean) => cn(BASE, FOCUS, mono ? 'font-mono text-[12.5px]' : 'font-sans');
+
+  it('draws the note dialog\'s body textarea byte for byte, in sans', () => {
+    expect(html(createElement(Composer, { ...dialog, value: 'Hello' })))
+      .toBe(`<textarea id="body-1" name="body" placeholder="Write Markdown, lists, notes, or links..." maxLength="4000" rows="5" class="${wasClass(false)}">Hello</textarea>`);
+    expect(wasClass(false)).toBe(`${BASE} ${FOCUS} font-sans`);
+  });
+
+  it('draws the mono font as the dialog did: the font-mono class and 12.5 px replace the 13 px, the rest stays', () => {
+    const out = html(createElement(Composer, { ...dialog, value: '', mono: true }));
+    expect(out).toBe(`<textarea id="body-1" name="body" placeholder="Write Markdown, lists, notes, or links..." maxLength="4000" rows="5" class="${wasClass(true)}"></textarea>`);
+    expect(wasClass(true)).toContain('font-mono text-[12.5px]');
+    expect(wasClass(true)).not.toContain('text-[13px]');
+    expect(wasClass(true)).not.toContain('font-sans');
+  });
+
+  it('shows the value it is given, escaped, and nothing it was not given (no default rows, no default length)', () => {
+    expect(html(createElement(Composer, { value: 'a <b> & c', onChange: () => undefined })))
+      .toBe(`<textarea class="${wasClass(false)}">a &lt;b&gt; &amp; c</textarea>`);
+  });
+
+  it('passes disabled, required, aria-*, key handlers and autoFocus through', () => {
+    const onKeyDown = () => undefined;
+    const out = html(createElement(Composer, { value: '', onChange: () => undefined, disabled: true, 'aria-label': 'Your note', 'aria-describedby': 'hint', onKeyDown, required: true }));
+    expect(out).toContain(' disabled=""');
+    expect(out).toContain(' aria-label="Your note"');
+    expect(out).toContain(' aria-describedby="hint"');
+    expect(out).toContain(' required=""');
+    const element = Composer({ value: '', onChange: () => undefined, onKeyDown, autoFocus: true }) as ReactElement<Record<string, unknown>>;
+    expect(element.props.onKeyDown).toBe(onKeyDown);
+    expect(element.props.autoFocus).toBe(true);
+  });
+
+  it('gives onChange the new text as a string, not the event', () => {
+    const got: unknown[] = [];
+    const element = Composer({ value: 'old', onChange: (value) => got.push(value) }) as ReactElement<{ onChange: (event: { target: { value: string } }) => void; value: string }>;
+    expect(element.props.value).toBe('old');
+    element.props.onChange({ target: { value: 'new text\nsecond line' } });
+    element.props.onChange({ target: { value: '' } });
+    expect(got).toEqual(['new text\nsecond line', '']);
+  });
+
+  it('hands the ref to the textarea (React 19 takes ref as a prop)', () => {
+    const ref = createRef<HTMLTextAreaElement>();
+    const element = Composer({ value: '', onChange: () => undefined, ref }) as ReactElement<{ ref: unknown }>;
+    expect(element.type).toBe('textarea');
+    expect(element.props.ref).toBe(ref);
+  });
+
+  it('draws a caller\'s class last, where it wins over the field\'s own', () => {
+    expect(html(createElement(Composer, { value: '', onChange: () => undefined, className: 'min-h-[200px] extra' })))
+      .toBe(`<textarea class="${cn(wasClass(false), 'min-h-[200px] extra')}"></textarea>`);
+    expect(cn(wasClass(false), 'min-h-[200px] extra')).toContain('min-h-[200px]');
+    expect(cn(wasClass(false), 'min-h-[200px] extra')).not.toContain('min-h-[140px]');
   });
 });
