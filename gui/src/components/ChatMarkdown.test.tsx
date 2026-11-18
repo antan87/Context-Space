@@ -133,4 +133,21 @@ describe('ChatMarkdown - text on a card of the board', () => {
     expect(html).toContain('href="/file?name=docs/spec.md"');
     expect(html).not.toContain('nodrag');
   });
+
+  it('scales headings calmly in compact mode while keeping semantic headings and links intact', () => {
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, {
+      content: '# Title\n\n## Section\n\n### Subsection\n\n[spec](docs/spec.md) [web](https://example.com)',
+      links,
+      compact: true,
+    }));
+    expect(html).toMatch(/<h1[^>]*class="[^"]*text-\[15px\][^"]*font-semibold/);
+    expect(html).toMatch(/<h2[^>]*class="[^"]*text-\[14px\][^"]*font-semibold/);
+    expect(html).toMatch(/<h3[^>]*class="[^"]*text-\[14px\][^"]*font-semibold/);
+    expect(html).toContain('href="/file?name=docs/spec.md"');
+    expect(html).toContain('href="https://example.com/"');
+
+    const normal = renderToStaticMarkup(createElement(ChatMarkdown, { content: '# Title\n\n## Section' }));
+    expect(normal).not.toContain('text-[15px]');
+    expect(normal).not.toContain('text-[14px]');
+  });
 });

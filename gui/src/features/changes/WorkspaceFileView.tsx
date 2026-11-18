@@ -1,3 +1,4 @@
+import type { LineRange } from '../board/lineNotes.js';
 import { useEffect, useState, type ReactNode } from 'react';
 import { apiFetch } from '../../lib/api/client.js';
 import type { WorkspaceFile } from '../workspace-shell/openRequests.js';
@@ -6,7 +7,7 @@ import { MonacoFileViewer } from './adapters/MonacoFileViewer.js';
 type ReadResult = { content: string; omitted?: 'binary' | 'too-large' };
 
 /** A workspace file has no Git actions, repository selector or cross-file repository opener. */
-export function WorkspaceFileView({ file, requestId, backAction, breadcrumb }: { file: WorkspaceFile; requestId: number; backAction: ReactNode; breadcrumb?: ReactNode }) {
+export function WorkspaceFileView({ file, requestId, backAction, breadcrumb, onAskInCLI }: { onAskInCLI?: (path: string, range: LineRange) => void | Promise<unknown>; file: WorkspaceFile; requestId: number; backAction: ReactNode; breadcrumb?: ReactNode }) {
   const [retry, setRetry] = useState(0);
   const [state, setState] = useState<{ key: string; result?: ReadResult; error?: string }>({ key: '' });
   const key = JSON.stringify([file.workspaceId, file.file, requestId, retry]);
@@ -31,6 +32,6 @@ export function WorkspaceFileView({ file, requestId, backAction, breadcrumb }: {
     {!current && <p className="p-3 text-xs" role="status">Loading workspace file…</p>}
     {current?.error && <div className="p-3 text-xs"><p role="alert">{current.error}</p><button className="mt-2 rounded border px-2 py-1" onClick={() => setRetry((n) => n + 1)}>Retry</button></div>}
     {current?.result?.omitted && <p className="p-3 text-xs" role="status">{current.result.omitted === 'binary' ? 'Binary file: text preview omitted.' : 'File exceeds the 1 MiB preview limit.'}</p>}
-    {current?.result && !current.result.omitted && <div className="min-h-0 flex-1"><MonacoFileViewer workspaceId={file.workspaceId} filePath={file.file} content={current.result.content} targetLine={file.line} jumpKey={requestId} /></div>}
+    {current?.result && !current.result.omitted && <div className="min-h-0 flex-1"><MonacoFileViewer onAskInCLI={onAskInCLI} openNoteId={file.lineNoteId} workspaceId={file.workspaceId} filePath={file.file} content={current.result.content} targetLine={file.line} jumpKey={requestId} /></div>}
   </div>;
 }

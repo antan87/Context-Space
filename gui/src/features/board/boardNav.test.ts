@@ -632,4 +632,20 @@ describe('with the areas the Board builds', () => {
       expect(item.readerTarget?.card).toBe(item.nodeId);
     }
   });
+
+  it('labels the recent-work focus Area "Last worked on" with an outline badge in the index', () => {
+    const recentPlan: PlanFileView = {
+      title: 'P', file: 'PLAN.md', source: 'file', intro: '', sections: [],
+      checkpoints: [
+        { key: 'one', title: 'First', done: false, steps: [{ key: 's1', text: 'Step 1', done: false }], decisions: [] },
+        { key: 'two', title: 'Second', done: false, steps: [{ key: 's2', text: 'Step 2', done: false }], decisions: [] },
+      ],
+      steps: [], decisions: [], waiting: [],
+      changes: [{ at: '2026-11-16T12:00:00Z', by: 'claude', action: 'added', kind: 'step', key: 's2', text: 'Step 2' }],
+    };
+    const areas = buildBoardAreas({ plan: recentPlan });
+    const areaSection = buildBoardNav(areas, { mode: 'category' }).find((s) => s.id === 'category:areas');
+    const second = areaSection?.items.find((i) => i.areaId === 'checkpoint:two');
+    expect(second?.badge).toEqual({ text: 'Last worked on', variant: 'outline' });
+  });
 });

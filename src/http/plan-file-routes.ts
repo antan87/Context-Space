@@ -6,25 +6,37 @@
 import type { Hono, Context, Handler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
-import { PLAN_FILE, PlanFileError } from '../core/plan-file.js';
+import { PLAN_FILE, PLAN_LINE_MAX, PlanFileError } from '../core/plan-file.js';
 import { changePlanFileForApp, planFileForApp } from '../core/plan-file-app.js';
 
 const key = z.string().min(1).max(100);
 const words = (max: number) => z.string().trim().min(1).max(max);
+/** `expected` echoes the item's text exactly as the server gave it to the app, so a line of any length must pass: the body limit (64 kB) is the only ceiling. */
+const echoed = () => z.string().trim().min(1);
+const REOPENED = 'Reopened: ';
+
+/** What a person is told when a request fails validation: a too-long string says what the plan itself says. */
+function validationMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (issue?.code === 'too_big' && 'maximum' in issue && (('origin' in issue && issue.origin === 'string') || ('type' in issue && issue.type === 'string'))) {
+    return `Keep it to ${issue.maximum} characters or fewer.`;
+  }
+  return issue?.message ?? 'Invalid change.';
+}
 
 /** The changes a person can make in the tab. */
 export const planFileChangeSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('tick'), key, done: z.boolean(), expected: words(300) }).strict(),
-  z.object({ type: z.literal('answer'), key, answer: words(2000), expected: words(300) }).strict(),
-  z.object({ type: z.literal('add'), step: words(300), checkpoint: key.optional() }).strict(),
+  z.object({ type: z.literal('tick'), key, done: z.boolean(), expected: echoed() }).strict(),
+  z.object({ type: z.literal('answer'), key, answer: words(PLAN_LINE_MAX), expected: echoed() }).strict(),
+  z.object({ type: z.literal('add'), step: words(PLAN_LINE_MAX), checkpoint: key.optional() }).strict(),
   z.object({
     type: z.literal('decide'), checkpoint: key.optional(),
     decision: z.object({
-      question: words(300), suggested: z.array(words(200)).max(6).optional(), ifNoAnswer: words(300).optional(), detail: z.string().max(4000).optional(),
+      question: words(PLAN_LINE_MAX), suggested: z.array(words(PLAN_LINE_MAX)).max(6).optional(), ifNoAnswer: words(PLAN_LINE_MAX).optional(), detail: z.string().max(4000).optional(),
     }).strict(),
   }).strict(),
   z.object({ type: z.literal('check'), key }).strict(),
-  z.object({ type: z.literal('reopen'), key, reason: words(300), expected: words(300) }).strict(),
+  z.object({ type: z.literal('reopen'), key, reason: words(PLAN_LINE_MAX - REOPENED.length), expected: echoed() }).strict(),
 ]);
 
 const STATUS_FOR: Record<PlanFileError['code'], number> = { not_found: 404, invalid: 400, conflict: 409 };
@@ -37,7 +49,7 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
       if (!root) return c.json({ error: 'Workspace not found.' }, 404);
       return c.json(await action(root, c));
     } catch (error) {
-      if (error instanceof z.ZodError) return c.json({ error: error.issues[0]?.message ?? 'Invalid change.' }, 400);
+      if (error instanceof z.ZodError) return c.json({ error: validationMessage(error) }, 400);
       const message = error instanceof Error ? error.message : String(error);
       const status = error instanceof PlanFileError ? STATUS_FOR[error.code] : /busy in another session/.test(message) ? 409 : 400;
       return c.json({ error: message }, status as 400);
@@ -54,7 +66,7 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
 
   app.post('/api/workspace/:id/plan/decisions/:key/answer', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
     const decisionKey = key.parse(c.req.param('key'));
-    const body = z.object({ answer: words(2000), expected: words(300).optional() }).strict().parse(await c.req.json());
+    const body = z.object({ answer: words(PLAN_LINE_MAX), expected: echoed().optional() }).strict().parse(await c.req.json());
     let expected = body.expected;
     if (!expected) {
       const currentPlan = await planFileForApp(root);
@@ -68,7 +80,7 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
 
   app.post('/api/workspace/:id/plan/steps/:key/tick', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
     const stepKey = key.parse(c.req.param('key'));
-    const body = z.object({ done: z.boolean(), expected: words(300).optional() }).strict().parse(await c.req.json());
+    const body = z.object({ done: z.boolean(), expected: echoed().optional() }).strict().parse(await c.req.json());
     let expected = body.expected;
     if (!expected) {
       const currentPlan = await planFileForApp(root);

@@ -1,3 +1,4 @@
+import { pointAndAskText, type LineRange } from '../features/board/lineNotes.js';
 import { lazy, Suspense, useState, useEffect, useCallback, type ComponentProps } from 'react';
 import {
   Archive,
@@ -267,8 +268,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     });
   }, [selected, roomBeside, layout.hidden, subTab, onSelectTab]);
 
-  const askInCLI = useCallback((context: string) => {
-    void sendToSession(`Regarding ${context}: `);
+  const askInCLI = useCallback((context: string, range?: LineRange) => {
+    return sendToSession(range ? pointAndAskText(context, range.line, range.endLine) : `Regarding ${context}: `);
   }, [sendToSession]);
 
   useEffect(() => {
@@ -945,6 +946,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               cover={body}
               sectionProps={codeSectionProps as never}
               showToast={showToast}
+              askInCLI={askInCLI}
               askAI={(message) => sendToSession(message, true)}
               returnTo={subTab === 'chat' ? 'terminal' : 'board'}
               onOpenStep={(step: CommitStepLink) => {

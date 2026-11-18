@@ -1,3 +1,4 @@
+import type { LineNote } from './lineNotes.js';
 /**
  * The Now line: the one line above the Board that says what is happening and what waits for you. What it shows, and where each part
  * goes, is decided here from the plan's focus, the Areas and the news, so that it is tested without the screen.
@@ -12,8 +13,8 @@ import type { KnowledgeEntry } from '../knowledge/knowledgeEntries.js';
 import { buildBoardNav, type NavItem } from './boardNav.js';
 
 export interface NowLineParts {
-  /** "Now" when someone said which step is worked on, "Next up" for the plan's order, none when nothing is open. */
-  word: 'Now' | 'Next up' | null;
+  /** "Now" when someone said which step is worked on, "Last worked on" for recent work, "Next up" for the plan's order, none when nothing is open. */
+  word: 'Now' | 'Last worked on' | 'Next up' | null;
   /** The step, else its checkpoint; the full words (the line cuts them with an ellipsis and keeps them in the title). */
   text: string;
   /** The Area the focus is in. */
@@ -73,6 +74,7 @@ export interface NewsLine {
   reviewCommit?: { repo: string; sha: string };
   /** With `reviewCommit`: the line is a commit note, so Review scrolls the commit's Notes into view. */
   notesInView?: boolean;
+  lineNote?: LineNote;
 }
 
 /** How many of the newest things the list shows. */
@@ -97,7 +99,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
       const item = items.find((candidate) => (candidate.category === 'documents' || candidate.category === 'pictures') && (candidate.readerTarget?.path === ref.name || candidate.title === ref.name));
       return item?.nodeId ? { areaId: item.areaId, nodeId: item.nodeId } : undefined;
     }
-    if (ref.kind === 'knowledge' || ref.kind === 'incoming' || ref.kind === 'commitNote') return undefined;
+    if (ref.kind === 'lineNote' || ref.kind === 'knowledge' || ref.kind === 'incoming' || ref.kind === 'commitNote') return undefined;
     if (ref.removed) return undefined;
     if (ref.item === 'checkpoint') {
       const area = areas.find((candidate) => candidate.checkpointKey === ref.key);
@@ -116,6 +118,7 @@ export function newsLines(news: WhatsNewView, areas: BoardArea[], now?: Date, kn
   const undated = newsEntries(news, now).filter((entry) => !entry.at);
   const shown = [...dated, ...undated].slice(0, NEWS_SHOWN);
   const lines = shown.map((entry): NewsLine => {
+    if (entry.ref?.kind === 'lineNote') return { text: entry.text, lineNote: entry.ref.note };
     if (entry.ref?.kind === 'knowledge') return { text: entry.text, knowledge: { entry: entry.ref.title ? newsEntryKey(knowledge, { title: entry.ref.title, date: entry.ref.date ?? null }) : null } };
     if (entry.ref?.kind === 'commitNote') return { text: entry.text, reviewCommit: { repo: entry.ref.repo, sha: entry.ref.sha }, notesInView: true };
     if (entry.ref?.kind === 'incoming') return { text: entry.text, reviewCommit: { repo: entry.ref.repo, sha: entry.ref.sha } };

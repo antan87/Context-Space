@@ -103,6 +103,8 @@ export function renderNews(report: WhatsNew, now: Date = new Date()): string {
     ),
   ]);
   section('Notes', [
+    ...(report.lineNotes?.items ?? []).map(note => `Note on ${note.repo ? `${note.repo}/` : ''}${note.path} lines ${note.line}-${note.endLine} (${note.harness}) · ${when(note.createdAt, now)}`),
+    ...(report.lineNotes?.more ? [more(report.lineNotes.more, 'more')] : []),
     ...(report.notes?.items ?? []).map((note) => `${formatCommitNoteNewsLine(note)} · ${when(note.at, now)}`),
     ...(report.notes?.more ? [more(report.notes.more, 'more')] : []),
   ]);

@@ -83,6 +83,18 @@ describe('areaBoardLayout v2: which row is which', () => {
     expect(rows.some((r) => r.state === 'current' || r.title === 'Now')).toBe(false);
   });
 
+  it('calls the first open step Next up inside an Area chosen by recent work', () => {
+    const base = planOf(2, 0);
+    const recentPlan: PlanFileView = {
+      ...base,
+      changes: [{ at: '2026-11-16T12:00:00Z', by: 'claude', action: 'added', kind: 'step', key: 's0', text: 'Step 0' }],
+    };
+    const area = buildBoardAreas({ plan: recentPlan }).find((a) => a.data.current)!;
+    expect(area.data).toMatchObject({ current: true, nowSet: false, focusSource: 'recent' });
+    const rows = areaRows(area, { size: big });
+    expect(rows[0]).toMatchObject({ id: 'row:step:s0', state: 'next', title: 'Next up' });
+  });
+
   it('says "Next step" and never "Current" in an Area that is not the current one', () => {
     const plan = planOf(2, 0);
     plan.checkpoints[0]!.done = false;

@@ -3,9 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactFlowProvider } from '@xyflow/react';
-import { BoardRowHead } from './BoardNodes.js';
-import { BoardActionsContext } from './boardActions.js';
-import type { RowHeadNode } from './boardLayout.js';
+import { BoardRowHead } from './RowHead.js';
+import { BoardActionsContext } from '../boardActions.js';
+import type { RowHeadNode } from '../boardLayout.js';
 
 describe('BoardRowHead static step component', () => {
   const queryClient = new QueryClient();

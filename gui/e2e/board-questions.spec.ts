@@ -1,4 +1,5 @@
 import { test, expect, type Page } from './fixtures';
+import type { Request } from '@playwright/test';
 import { board, minutesAgo, node, PICTURE, routeBoard, routeCards, routeWorkspaceDocumentReferences, stepIntoArea, viewAtRest, workspace } from './boardHelpers';
 import { boardFile, checkpoint, planFile, step, whatsNew } from './planData';
 
@@ -426,13 +427,14 @@ test('a picture card shows the picture and opens it; a picture that is missing s
   await expect(node(page, 'qcard:explain/how-do-we-enforce-security.md#9').locator('img')).toHaveCount(0);
 });
 
-test('a diagram card shows its source as text and opens it in the reader', async ({ page }) => {
+test('a diagram card shows its drawing and opens it in the reader', async ({ page }) => {
   await stepIntoAnswer(page);
   await rowControl(page, 'row:q:3').click();
   await viewAtRest(page);
   const diagram = node(page, 'qcard:explain/how-do-we-enforce-security.md#11');
   await expect(diagram).toContainText('Diagram');
-  await expect(diagram.locator('pre')).toContainText('graph TD');
+  await loaded(diagram.locator('img'));
+  await expect(diagram.locator('pre')).toHaveCount(0);
   await diagram.getByRole('button', { name: 'Read the diagram' }).click();
   await expect(readerOf(page)).toBeVisible();
   await expect(readerOf(page).getByRole('heading', { name: 'What you see' })).toBeVisible();
@@ -482,7 +484,7 @@ test('answers read again on focus: an open reader, the keyboard and an opened ro
 });
 
 test('the Board index lists answers under Questions in both modes, and in the 420 px pane', async ({ page }) => {
-  await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); });
+  await page.addInitScript(() => { if (window !== window.top) return; window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); });
   await page.goto('/#/workspaces/demo/board');
   await viewAtRest(page);
   const nav = page.getByRole('navigation', { name: 'Board index' });
@@ -709,7 +711,7 @@ test.describe('beside its Area, at 1440 Board', () => {
 
   test('two answers about one Area: "2 questions" opens the newest, and the index lists both under the Area and under Questions', async ({ page }) => {
     answers = [about(SECURITY, HOST), about(OTHER, HOST)];
-    await page.addInitScript(() => { window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); });
+    await page.addInitScript(() => { if (window !== window.top) return; window.localStorage.setItem('contextspace_board_nav_open_v1', 'open'); });
     await page.goto('/#/workspaces/demo/board');
     await viewAtRest(page);
     const ids = (await nodeIds(page)).filter((id): id is string => Boolean(id));
@@ -1020,4 +1022,310 @@ test('answer title stays in place and exposes the full question', async ({ page 
   await title.click();
   await expect(title).toBeVisible();
   await expect(title.locator('button')).toHaveCount(0);
+});
+
+// E4: these exercise real Mermaid, rather than mocking the image or renderer.
+const DRAWN_SOURCE = 'flowchart LR\naccTitle: Security request path\nA[Request] --> B[Check]\nB --> C[Handler]';
+async function diagramAnswer(page: Page, source = DRAWN_SOURCE) {
+  const answer = structuredClone(OTHER);
+  answer.parts = [
+    { title: 'In short', heading: null, cards: [{ kind: 'text', text: 'With one command.' }] },
+    { title: 'Request path', heading: 'Request path', cards: [
+      { kind: 'diagram', source },
+      { kind: 'text', text: 'The handler runs after checking.' },
+    ] },
+  ] as unknown as typeof answer.parts;
+  answers = [answer];
+  await page.route('**/api/workspace/demo/documents/preview?*', (route) => route.fulfill({ json: {
+    name: OTHER.path, kind: 'markdown', modifiedAt: OTHER.modifiedAt,
+    content: `# ${OTHER.question}\n\nWith one command.\n\n## Request path\n\n\`\`\`mermaid\n${source}\n\`\`\``,
+  } }));
+  await stepIntoAnswer(page, OTHER.question);
+  const row = rowControl(page, 'row:q:1');
+  if (await row.getAttribute('aria-expanded') !== 'true') await row.click();
+  await viewAtRest(page);
+  return board(page).locator('[data-answer-card="diagram"]');
+}
+const loaded = async (image: ReturnType<Page['locator']>) => {
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+};
+
+test('E4 drawn card fits its neighbours and opens the titled diagram and Source toggle', async ({ page }) => {
+  const card = await diagramAnswer(page);
+  await loaded(card.locator('img'));
+  await expect(card.locator('img')).toHaveAttribute('alt', '');
+  await expect(card.locator('pre')).toHaveCount(0);
+  await expect(card.locator('button')).toHaveCount(1);
+  const neighbour = board(page).locator('[data-answer-card="text"]').last();
+  expect((await card.boundingBox())!.height).toBe((await neighbour.boundingBox())!.height);
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  await expect(reader.getByRole('heading', { name: 'Request path' })).toBeInViewport();
+  await loaded(reader.getByRole('img', { name: 'Security request path' }));
+  const toggle = reader.getByRole('button', { name: 'Source', exact: true });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(await toggle.evaluate((el) => parseFloat(getComputedStyle(el).borderTopWidth))).toBeGreaterThanOrEqual(1);
+  expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(24);
+  await expect(reader.locator('pre')).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toBeFocused();
+  await expect(reader.locator('pre')).toContainText(DRAWN_SOURCE);
+  await expect(reader.getByRole('button', { name: 'Copy code block' })).toBeVisible();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(reader.locator('pre')).toHaveCount(0);
+});
+
+for (const source of ['flowchart TD\nA[Save (draft)] --> B[End]', 'notADiagram\nhello']) {
+  test(`E4 broken diagram stays quiet with source: ${source.split('\n')[0]}`, async ({ page }) => {
+    const card = await diagramAnswer(page, source);
+    await expect(card.getByRole('status')).toHaveText(source.startsWith('flowchart') ? "Can't draw this diagram · line 2" : "Can't draw this diagram");
+    await expect(card.locator('pre')).toContainText(source);
+    await expect(card.locator('img')).toHaveCount(0);
+    await card.getByRole('button', { name: 'Read the diagram' }).click();
+    await expect(readerOf(page).getByRole('status').filter({ hasText: "Can't draw this diagram" })).toHaveText(source.startsWith('flowchart')
+      ? "Can't draw this diagram: line 2 has a mistake"
+      : "Can't draw this diagram: Mermaid does not know this kind of diagram");
+    await expect(readerOf(page).getByRole('button', { name: 'Ask the AI to fix it' })).toBeVisible();
+    await expect(readerOf(page).locator('pre')).toContainText(source);
+    await expect(page.locator('svg[aria-roledescription="error"], .error-icon, .error-text, [data-diagram-render-host]')).toHaveCount(0);
+  });
+}
+
+test('E4 hostile labels and links cannot execute or escape the image', async ({ page }) => {
+  const source = `%%{init: {"securityLevel":"loose","htmlLabels":true,"flowchart":{"htmlLabels":true},"suppressErrorRendering":false}}%%
+flowchart LR
+accTitle: Untrusted answer
+A["<img src=x onerror='window.e4Pwned=1'>"] --> B["<script>window.e4Pwned=2</script>"]
+click A href "javascript:window.e4Pwned=3"`;
+  const card = await diagramAnswer(page, source);
+  await expect(card).toContainText('It asks to load something from outside.');
+  await expect(card.locator('img')).toHaveCount(0);
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  await expect(readerOf(page)).toContainText('It asks to load something from outside.');
+  await expect(readerOf(page).locator('img')).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(window, 'e4Pwned'))).toBeUndefined();
+  await expect(page.locator('img[src="x"], script:not([src]):has-text("e4Pwned"), a[href^="javascript:"], foreignObject, [data-diagram-render-host]')).toHaveCount(0);
+  await expect(readerOf(page).locator('pre')).toContainText(source);
+});
+
+test('E4 hostile HTML labels remain inert even without a resource link', async ({ page }) => {
+  const source = `%%{init: {"securityLevel":"loose","htmlLabels":true,"flowchart":{"htmlLabels":true},"suppressErrorRendering":false}}%%
+flowchart LR
+accTitle: Untrusted answer
+A["<img src=x onerror='window.e4Pwned=1'>"] --> B["<script>window.e4Pwned=2</script>"]`;
+  const card = await diagramAnswer(page, source);
+  await loaded(card.locator('img'));
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  await loaded(readerOf(page).getByRole('img', { name: 'Untrusted answer' }));
+  expect(await page.evaluate(() => Reflect.get(window, 'e4Pwned'))).toBeUndefined();
+  await expect(page.locator('img[src="x"], script:not([src]):has-text("e4Pwned"), a[href^="javascript:"], foreignObject, [data-diagram-render-host]')).toHaveCount(0);
+  const url = await readerOf(page).getByRole('img', { name: 'Untrusted answer' }).getAttribute('src');
+  expect(decodeURIComponent(url!)).not.toMatch(/<foreignObject/i);
+});
+
+test('E4 theme redraws while the same-answer poll preserves image, Source, focus and scroll', async ({ page }) => {
+  const card = await diagramAnswer(page);
+  await loaded(card.locator('img'));
+  const first = await card.locator('img').getAttribute('src');
+  // ThemeProvider applies the same root class; this also covers external theme changes.
+  await page.evaluate(() => document.documentElement.classList.toggle('dark'));
+  await expect(card.locator('img')).not.toHaveAttribute('src', first!);
+  await loaded(card.locator('img'));
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  await loaded(reader.getByRole('img', { name: 'Security request path' }));
+  const toggle = reader.getByRole('button', { name: 'Source', exact: true });
+  await toggle.click();
+  const url = await reader.locator('img').getAttribute('src');
+  const scroll = await reader.locator('.overflow-auto').first().evaluate((el) => el.scrollTop);
+  const before = reads;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await expect(reader.locator('img')).toHaveAttribute('src', url!);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toBeFocused();
+  expect(await reader.locator('.overflow-auto').first().evaluate((el) => el.scrollTop)).toBe(scroll);
+});
+
+test('E4 fix1 Mermaid diagnostic goes to the terminal without submitting and focus returns to Fix', async ({ page }) => {
+  const typed: string[] = [];
+  await page.route('**/api/terminals/*/status', (route) => route.fulfill({ json: { available: true, sessions: [{ id: 'term-demo', workspace: 'demo', target: 'shell', label: 'bash', cwd: '/tmp/demo', state: 'running' }], targets: [{ id: 'shell', name: 'Shell', available: true, reason: null }] } }));
+  await page.routeWebSocket('**/ws/terminal', (socket) => {
+    socket.onMessage((message) => {
+      const parsed = JSON.parse(String(message));
+      if (parsed.type === 'input') typed.push(parsed.data);
+      if (parsed.type === 'attach') {
+        socket.send(JSON.stringify({ type: 'ready', terminal: { id: parsed.id, workspace: parsed.workspace, target: 'shell', label: 'bash', cwd: '/tmp/demo', state: 'running' }, truncated: false }));
+        socket.send(JSON.stringify({ type: 'replayed' }));
+      }
+    });
+  });
+  const card = await diagramAnswer(page, 'flowchart TD\nA[Save (draft)] --> B[End]');
+  await expect(card.getByRole('status')).toHaveText("Can't draw this diagram · line 2");
+  await expect(card.locator('button')).toHaveCount(1);
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  const diagnostic = reader.locator('[data-diagram-error]');
+  await expect(diagnostic).toHaveText("Can't draw this diagram: line 2 has a mistake");
+  await expect(reader.locator('[data-diagram-error-line]')).toHaveText('A[Save (draft)] --> B[End]');
+  await expect(diagnostic).not.toContainText('Expecting');
+  expect(await diagnostic.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12);
+  const fix = reader.getByRole('button', { name: 'Ask the AI to fix it' });
+  await fix.click();
+  const prefix = `Regarding Fix the diagram in ${OTHER.path} ("${OTHER.question}"), part "Request path": Mermaid says: `;
+  const suffix = '. Follow the diagram rules of the contextspace-explain skill.: ';
+  await expect.poll(() => typed.at(-1)).toMatch(/Mermaid says: Parse error on line 2: Expecting .*got 'PS'/);
+  const sent = typed.at(-1)!;
+  expect(sent.startsWith(prefix)).toBe(true);
+  expect(sent.endsWith(suffix)).toBe(true);
+  const error = sent.slice(prefix.length, -suffix.length);
+  expect(error.length).toBeLessThanOrEqual(200);
+  expect(error).not.toContain('---^');
+  expect(error).not.toContain('Save (draft)');
+  expect(typed.join('')).not.toMatch(/[\r\n]/);
+  await expect(fix).toBeFocused();
+  expect(await noSideways(page)).toBe(true);
+});
+
+test('E4 fix1 a broken diagram in another document has no repair button', async ({ page }) => {
+  const broken = 'flowchart TD\nA[Save (draft)] --> B[End]';
+  await routeWorkspaceDocumentReferences(page, () => [OTHER.path, 'docs/diagram.md'], workspace.workspacePath);
+  const card = await diagramAnswer(page, broken);
+  await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
+    const name = new URL(route.request().url()).searchParams.get('name')!;
+    return route.fulfill({ json: { name, kind: 'markdown', content: name === OTHER.path
+      ? ['# ' + OTHER.question, '', '## Request path', '', '[Other notes](../docs/diagram.md)', '', '```mermaid', broken, '```'].join(String.fromCharCode(10))
+      : ['# Other notes', '', '```mermaid', broken, '```'].join(String.fromCharCode(10)) } });
+  });
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  await expect(reader.getByRole('button', { name: 'Ask the AI to fix it' })).toBeVisible();
+  await reader.getByRole('link', { name: 'Other notes', exact: true }).click();
+  await expect(reader.getByRole('heading', { name: 'Other notes', exact: true }).last()).toBeVisible();
+  await expect(reader.locator('[data-diagram-error]')).toHaveText("Can't draw this diagram: line 2 has a mistake");
+  await expect(reader.getByRole('button', { name: 'Ask the AI to fix it' })).toHaveCount(0);
+  await expect(reader.getByRole('status').filter({ hasText: "Can't draw this diagram" })).toBeVisible();
+});
+
+
+test('E4 fix2 a large card diagram stays readable and cropped', async ({ page }) => {
+  const large = 'flowchart TD\naccTitle: Long flow\n' + Array.from({ length: 8 }, (_, i) => `N${i}["Step ${i}"]`).join('\n')
+    + '\n' + Array.from({ length: 7 }, (_, i) => `N${i} --> N${i + 1}`).join('\n');
+  const card = await diagramAnswer(page, large);
+  const image = card.locator('img');
+  await loaded(image);
+  await expect.poll(() => image.evaluate((el) => el.getBoundingClientRect().height / (el as HTMLImageElement).naturalHeight)).toBeGreaterThanOrEqual(0.7499);
+  expect(await image.evaluate((el) => el.getBoundingClientRect().width / (el as HTMLImageElement).naturalWidth)).toBeGreaterThanOrEqual(0.7499);
+  const box = card.locator('[data-diagram-viewport]');
+  const bounds = (await box.boundingBox())!;
+  const drawn = (await image.boundingBox())!;
+  expect(Math.abs(drawn.x - bounds.x)).toBeLessThan(1);
+  expect(Math.abs(drawn.y - bounds.y)).toBeLessThan(1);
+  await expect(card.locator('[data-diagram-fade="bottom"]')).toBeVisible();
+  await expect(card.locator('button')).toHaveCount(1);
+  expect(await noSideways(page)).toBe(true);
+
+});
+
+test('E4 fix2 a small card diagram stays whole without upscaling', async ({ page }) => {
+  const small = 'flowchart LR\naccTitle: Small flow\nA["A"] --> B["B"]';
+  const smallCard = await diagramAnswer(page, small);
+  const smallImage = smallCard.locator('img');
+  await loaded(smallImage);
+  await expect(smallCard.locator('[data-diagram-fade]')).toHaveCount(0);
+  const smallBox = (await smallCard.locator('[data-diagram-viewport]').boundingBox())!;
+  const whole = (await smallImage.boundingBox())!;
+  const natural = await smallImage.evaluate((el) => ({ width: (el as HTMLImageElement).naturalWidth, height: (el as HTMLImageElement).naturalHeight }));
+  expect(whole.width / natural.width).toBeGreaterThanOrEqual(0.7499);
+  expect(whole.width / natural.width).toBeLessThanOrEqual(1.0001);
+  expect(whole.height / natural.height).toBeLessThanOrEqual(1.0001);
+  expect(whole.x).toBeGreaterThanOrEqual(smallBox.x - 1);
+  expect(whole.y).toBeGreaterThanOrEqual(smallBox.y - 1);
+  expect(whole.x + whole.width).toBeLessThanOrEqual(smallBox.x + smallBox.width + 1);
+  expect(whole.y + whole.height).toBeLessThanOrEqual(smallBox.y + smallBox.height + 1);
+});
+
+const RESOURCE_SOURCES = [
+  ['img metadata', 'flowchart TD\nA@{ img: "https://example.invalid/e4-review-canary", h: 40, w: 40 }'],
+  ['classDef URL', 'flowchart TD\nA["A"]\nclassDef x fill:url(https://example.invalid/e4-review-canary)\nclass A x'],
+  ['style URL', 'flowchart TD\nA["A"]\nstyle A background:url(https://example.invalid/e4-review-canary)'],
+  ['CSS import', 'flowchart TD\nA["A"]\nclassDef x fill:red; @import "https://example.invalid/e4-review-canary";'],
+  ['click href', 'flowchart TD\nA["A"]\nclick A href "https://example.invalid/e4-review-canary"'],
+] as const;
+
+async function watchDiagramRequests(page: Page) {
+  const requests: string[] = [];
+  const routed: string[] = [];
+  const attempts: Request[] = [];
+  const finished: string[] = [];
+  page.on('request', (request) => { if (new URL(request.url()).hostname === 'example.invalid') { attempts.push(request); requests.push(request.url()); console.log('outside diagram request:', request.url()); } });
+  page.on('requestfinished', (request) => { if (new URL(request.url()).hostname === 'example.invalid') finished.push(request.url()); });
+  await page.route('**/*', (route) => {
+    if (new URL(route.request().url()).hostname !== 'example.invalid') return route.fallback();
+    routed.push(route.request().url());
+    // Even an unfixed implementation must never really contact the outside server during this test.
+    return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"/>' });
+  });
+  return { requests, routed, attempts, finished };
+}
+
+for (const [name, source] of RESOURCE_SOURCES) {
+  test(`E4 fix3 never requests an outside resource while drawing: ${name}`, async ({ page }) => {
+    const observed = await watchDiagramRequests(page);
+    const card = await diagramAnswer(page, source);
+    await expect(card.getByRole('status')).toHaveText("Can't draw this diagram");
+    await expect(card).toContainText('It asks to load something from outside.');
+    await expect(card.locator('img')).toHaveCount(0);
+    await card.getByRole('button', { name: 'Read the diagram' }).click();
+    await expect(readerOf(page)).toContainText('It asks to load something from outside.');
+    await expect(readerOf(page).locator('pre')).toContainText(source);
+    expect(observed.requests).toEqual([]);
+    expect(observed.routed).toEqual([]);
+  });
+}
+
+test('E4 fix3 the opaque renderer CSP blocks network independently of the source precheck', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  const observed = await watchDiagramRequests(page);
+  const card = await diagramAnswer(page);
+  await loaded(card.locator('img'));
+  const iframe = page.locator('iframe[data-diagram-frame]');
+  await expect(iframe).toHaveCount(1);
+  await expect(iframe).toHaveAttribute('sandbox', 'allow-scripts');
+  await expect(iframe).toHaveAttribute('aria-hidden', 'true');
+  await expect(iframe).toHaveAttribute('tabindex', '-1');
+  await expect(iframe).toHaveAttribute('inert', '');
+  const element = await iframe.elementHandle();
+  const frame = await element!.contentFrame();
+  expect(frame).not.toBeNull();
+  const violations = await frame!.evaluate(async () => {
+    const blocked: string[] = [];
+    document.addEventListener('securitypolicyviolation', (event) => blocked.push(event.violatedDirective));
+    const image = new Image();
+    image.src = 'https://example.invalid/e4-review-canary-image';
+    const style = document.createElement('style');
+    style.textContent = '@import "https://example.invalid/e4-review-canary-css";';
+    document.head.append(style);
+    await fetch('https://example.invalid/e4-review-canary-fetch').catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return blocked;
+  });
+  expect(violations).toContain('img-src');
+  expect(violations.some((directive) => directive.startsWith('style-src'))).toBe(true);
+  expect(violations).toContain('connect-src');
+  // Playwright can report CSP-blocked attempts as requests. None may reach routing or finish.
+  for (const request of observed.attempts) {
+    await expect.poll(() => request.failure()?.errorText ?? '').toMatch(/csp|content.security.policy/i);
+  }
+  expect(observed.finished).toEqual([]);
+  expect(observed.routed).toEqual([]);
+  // More diagrams reuse that one frame; it is not a focus/key target inside any card.
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  await loaded(readerOf(page).getByRole('img', { name: 'Security request path' }));
+  await expect(iframe).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
 });

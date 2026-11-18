@@ -1,6 +1,7 @@
+import { type LineRange, type LineNote } from './lineNotes.js';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   ChevronLeft,
@@ -29,6 +30,8 @@ import type { DiffViewMode } from '../changes/types.js';
 import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
+import { DiagramFixContext } from '../../components/diagramFixContext.js';
+import { diagramFixRequest, isQuestionFile } from './questionsArea.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { isKnowledgeFile } from '../knowledge/knowledgeIndex.js';
 import { BoardKnowledge } from './BoardKnowledge.js';
@@ -77,6 +80,7 @@ export function BoardReader({
   previousTitle,
   indexInfo,
   onAskInCLI,
+  readOnly = false,
 }: {
   /** Whether the board section is currently active and visible. */
   active?: boolean;
@@ -102,7 +106,8 @@ export function BoardReader({
   nextTitle?: string;
   previousTitle?: string;
   indexInfo?: { current: number; total: number };
-  onAskInCLI?: (context: string) => void;
+  onAskInCLI?: (context: string, range?: LineRange) => void | Promise<unknown>;
+  readOnly?: boolean;
 }) {
   const codeOpen = useCodeWindowOpen(workspaceId);
   const title = useRef<HTMLHeadingElement>(null);
@@ -115,6 +120,9 @@ export function BoardReader({
   // The canvas is out of reach, under the reader: in the window, and where the dock covers it.
   const covering = large || covers;
   const { path, source, repo } = target;
+  const fixDiagram = useMemo(() => !readOnly && !source && !repo && isQuestionFile(path) && onAskInCLI
+    ? (error: string) => onAskInCLI(diagramFixRequest({ path, question: target.title, heading: target.heading }, error))
+    : undefined, [readOnly, source, repo, path, onAskInCLI, target.title, target.heading]);
   // Knowledge is read as entries, not as a document: the target says so, and so does a link to the knowledge file of the workspace
   const isKnowledge = Boolean(target.knowledge) || (!source && !repo && !target.commit && isKnowledgeFile(path, workspacePath));
   const shownTitle = isKnowledge ? 'Knowledge' : target.title;
@@ -136,10 +144,27 @@ export function BoardReader({
       if (read.content === undefined) throw new Error('This source document is a link, not text.');
       return { name: path, kind: 'markdown', content: read.content };
     },
-    enabled: !isHtml && !isKnowledge,
+    enabled: active && !isHtml && !isKnowledge,
+    refetchInterval: active ? 5000 : false,
     retry: false,
   });
   const data = preview.data ?? null;
+  const queryClient = useQueryClient();
+  const lineNotes = useQuery({
+    queryKey: ['line-notes', workspaceId],
+    queryFn: () => apiFetch<{ notes: LineNote[] }>(`/api/workspace/${encodeURIComponent(workspaceId)}/line-notes`),
+    enabled: active && !isHtml && !isKnowledge,
+    refetchInterval: active ? 5000 : false,
+  });
+  const notes = preview.isError ? [] : lineNotes.data?.notes?.filter(n => n.path === path && (n.repo ?? '') === (repo?.name ?? '')) ?? [];
+  const askLines = useCallback((range: LineRange) => {
+    onAskInCLI?.(repo ? `${repo.name}/${path}` : path, range);
+  }, [onAskInCLI, repo, path]);
+  const finishNote = useCallback(async (id: string) => {
+    await apiFetch(`/api/workspace/${encodeURIComponent(workspaceId)}/line-notes/${encodeURIComponent(id)}/done`, { method: 'POST' });
+    queryClient.setQueryData<{ notes: LineNote[] }>(['line-notes', workspaceId], old => old ? { notes: old.notes.filter(n => n.id !== id) } : old);
+    void queryClient.invalidateQueries({ queryKey: ['line-notes', workspaceId] });
+  }, [workspaceId, queryClient]);
 
   const [maximized, setMaximized] = useState(false);
   const fullscreenToggleRef = useRef<HTMLButtonElement>(null);
@@ -337,8 +362,8 @@ export function BoardReader({
   useEffect(() => {
     if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      // The Code window over the board has these keys
-      if (isCodeWindowOpen()) return;
+      // A covering window, dialog or menu owns these keys, including while its focus is settling.
+      if (isCodeWindowOpen() || document.querySelector('[role="dialog"], [data-slot="menu-popup"]')) return;
       const target = event.target as HTMLElement | null;
       if (
         target &&
@@ -641,26 +666,29 @@ export function BoardReader({
             onViewUrlReady={handleViewUrlReady}
           />
         ) : (
-          <DocumentViewer
-            key={open}
-            fill
-            fillFrame
-            chromeless
-            title={path}
-            preview={data}
-            raw={raw}
-            fileUrl={fileUrl}
-            links={links}
-            imageExpanded={maximized}
-            onImageClick={toggleMaximized}
-            status={<>
-              {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
-              {preview.isError && <p role="alert" className="text-sm text-destructive">
-                {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
-                <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
-              </p>}
-            </>}
-          />
+          <DiagramFixContext value={fixDiagram}>
+            <DocumentViewer
+              key={open}
+              fill
+              fillFrame
+              chromeless
+              title={path}
+              lineTools={!isKnowledge ? { notes, request, active, readOnly, onDone: finishNote, onAsk: !readOnly && onAskInCLI ? askLines : undefined, openNoteId: target.lineNoteId } : undefined}
+              preview={data}
+              raw={raw}
+              fileUrl={fileUrl}
+              links={links}
+              imageExpanded={maximized}
+              onImageClick={toggleMaximized}
+              status={<>
+                {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
+                {preview.isError && <p role="alert" className="text-sm text-destructive">
+                  {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
+                  <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
+                </p>}
+              </>}
+            />
+          </DiagramFixContext>
         )}
       </div>
       {(target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">

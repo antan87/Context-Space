@@ -1,3 +1,4 @@
+import type { LineRange } from '../board/lineNotes.js';
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -94,6 +95,7 @@ export interface CodeSectionProps {
    * none to take it (nothing open, disconnected, or a plain shell), and then the request is copied instead.
    */
   onAskAI?: (message: string) => Promise<boolean>;
+  onAskInCLI?: (path: string, range: LineRange) => void | Promise<unknown>;
   /** Back-to-Board control placed at the left of the Review toolbar. */
   backAction?: ReactNode;
   /** Breadcrumb trail shown next to Back when the viewport allows. */
@@ -341,7 +343,7 @@ export function CodeSection(props: CodeSectionProps) {
     setCommits((current) => (current.open ? { ...current, open: false } : current));
     if (commit.open) patchCommit({ open: false });
     if (!sameFile(target, selection)) setDiffError('');
-    setSelection({ repoName: target.repoName, repoPath: target.repoPath, file: target.file, line: options.line, jump: jumpCounter.current, pinned: options.pinned ?? false });
+    setSelection({ repoName: target.repoName, repoPath: target.repoPath, file: target.file, lineNoteId: target.lineNoteId, line: options.line, jump: jumpCounter.current, pinned: options.pinned ?? false });
     revealInTree(target);
   };
 
@@ -1117,7 +1119,7 @@ export function CodeSection(props: CodeSectionProps) {
                 ) : (
                   <>
                     {fileNotice && <p role="note" className="shrink-0 border-b border-border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">{fileNotice}</p>}
-                    {shownDiff.diff && !shownDiff.diffOmitted ? (
+                    {shownDiff.diff && !shownDiff.diffOmitted && !selection.lineNoteId ? (
                       <DiffErrorBoundary key={`${workspace}/${selection.repoName}/${selection.file}`} filePath={selection.file} fallbackContent={shownDiff.diff}>
                         <PluggableDiffViewer
                           filePath={selection.file}
@@ -1147,11 +1149,11 @@ export function CodeSection(props: CodeSectionProps) {
                           }}
                         />
                       </DiffErrorBoundary>
-                    ) : shownDiff.fileContent ? (
+                    ) : shownDiff.fileContent !== undefined ? (
                       <div className="min-h-0 flex-1">
                         <Suspense fallback={<p role="status" className="p-3 text-xs text-muted-foreground">Opening the viewer…</p>}>
                           <MonacoFileViewer filePath={selection.file} repoName={selection.repoName} repoPath={selection.repoPath}
-                            content={shownDiff.fileContent} targetLine={selection.line} jumpKey={selection.jump} onOpenFile={openDefinition} />
+                            notesWorkspaceId={workspace} active={active} openNoteId={selection.lineNoteId} onAskInCLI={props.onAskInCLI} content={shownDiff.fileContent} targetLine={selection.line} jumpKey={selection.jump} onOpenFile={openDefinition} />
                         </Suspense>
                       </div>
                     ) : !fileNotice ? (

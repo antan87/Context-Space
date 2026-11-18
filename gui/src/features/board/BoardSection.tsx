@@ -1,3 +1,7 @@
+import { lineNoteViewer } from '../changes/codeLineNotes.js';
+import { apiFetch } from '../../lib/api/client.js';
+import type { ReferenceTarget } from '../workspace-shell/openRequests.js';
+import type { LineRange } from './lineNotes.js';
 import { useOpenFileReference } from '../workspace-shell/useOpenFileReference.js';
 import '@xyflow/react/dist/style.css';
 
@@ -21,7 +25,7 @@ import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.
 import { boardNews, useIncomingCommits, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
-import { boardStepRequests, documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useBoardStepRequest, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
+import { boardStepRequests, codeRequests, documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useBoardStepRequest, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
 import { filesChangedText } from '../changes/changeSummary.js';
 import { useRepoChanges } from '../changes/useRepoChanges.js';
 import { BoardActionsContext, BoardReadingContext, firstControl, knowledgeTarget, type BoardActions, type ReaderTarget } from './boardActions.js';
@@ -230,7 +234,7 @@ function useLayoutElementSize(element: HTMLElement | null): { width: number; hei
 const nodeHolds = (node: BoardNode): string[] | undefined =>
   node.type === 'fold' || node.type === 'more' || node.type === 'pager' || node.type === 'step' ? node.data.holds : node.type === 'lane' ? node.data.group?.holds : undefined;
 
-export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false, askInCLI }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean; askInCLI?: (context: string) => void }) {
+export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false, askInCLI }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean; askInCLI?: (context: string, range?: LineRange) => void }) {
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
   const news = useWhatsNew(workspaceId);
@@ -851,9 +855,36 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       jumpToItem(waiting, false);
     }
   }, [areas, jumpToItem, recordBoardJump]);
-  const goToNews = useCallback((line: NewsLine) => {
+  const goToNews = useCallback(async (line: NewsLine) => {
     const originBtn = root.current?.querySelector<HTMLElement>('[data-testid="board-now-news"]');
     // A knowledge line opens Knowledge in the reader, on its entry or at the top
+    if (line.lineNote) {
+      const note = line.lineNote;
+      if (lineNoteViewer(note.path) === 'reader') {
+        invalidateReferenceIntent();
+        show({ path: note.path, title: fileTitle(note.path), line: note.line, endLine: note.endLine, lineNoteId: note.id, ...(note.repo ? { repo: { name: note.repo, path: '' } } : {}) }, originBtn ?? null);
+      } else if (!note.repo) {
+        openCodeWindow(workspaceId, { opener: originBtn, workspaceFile: { workspaceId, file: note.path, line: note.line, lineNoteId: note.id } });
+      } else {
+        // Resolve the actual checkout (including in-place repositories), never guess its path.
+        const intent = invalidateReferenceIntent();
+        const named = `${note.repo}/${note.path}`;
+        codeRequests.open(workspaceId, { kind: 'locating', path: named, line: note.line, intent });
+        openCodeWindow(workspaceId, { opener: originBtn, preserveIntent: true });
+        try {
+          const result = await apiFetch<{ status: string; target?: ReferenceTarget }>(`/api/workspace/${encodeURIComponent(workspaceId)}/files/reference?${new URLSearchParams({ path: named })}`);
+          if (!referenceIntentIsCurrent(intent) || !root.current?.isConnected) return;
+          if (result.status === 'found' && result.target?.origin.kind === 'repository') {
+            const target = result.target;
+            const origin = target.origin as Extract<ReferenceTarget['origin'], { kind: 'repository' }>;
+            openCodeWindow(workspaceId, { opener: originBtn, preserveIntent: true, file: { repoName: origin.repoName, repoPath: origin.repoPath, file: target.file, line: note.line, lineNoteId: note.id } });
+          } else codeRequests.open(workspaceId, { kind: 'not-found', path: named, line: note.line, reason: 'missing', intent });
+        } catch (error) {
+          if (referenceIntentIsCurrent(intent) && root.current?.isConnected) codeRequests.open(workspaceId, { kind: 'not-found', path: named, line: note.line, reason: 'error', message: error instanceof Error ? error.message : 'Could not locate this file.', intent });
+        }
+      }
+      return;
+    }
     if (line.knowledge) {
       invalidateReferenceIntent();
       show(knowledgeTarget(line.knowledge.entry), originBtn ?? null);
@@ -2513,6 +2544,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 previousTitle={previousTarget?.title}
                 indexInfo={readerIndexInfo}
                 onAskInCLI={askInCLI}
+                readOnly={readOnly}
               />
             )}
           </div>
@@ -2840,6 +2872,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     previousTitle={previousTarget?.title}
                     indexInfo={readerIndexInfo}
                     onAskInCLI={askInCLI}
+                    readOnly={readOnly}
                   />
                 )}
               </div>

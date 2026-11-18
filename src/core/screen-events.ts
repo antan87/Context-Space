@@ -72,7 +72,7 @@ const MILESTONE_EVENT_STATES: readonly string[] = ['in_progress', 'blocked', 'do
 interface Base { id: string; timestamp: string; harness: string }
 export type ScreenEvent = Base & (
   | { event: 'show'; payload: { view: ScreenReaderView; path?: string; repo?: string; line?: number; endLine?: number; note?: string } }
-  | { event: 'annotate'; payload: { path: string; repo?: string; line: number; text: string; tag: AnnotationTag } }
+  | { event: 'annotate'; payload: { path: string; repo?: string; line: number; endLine?: number; text: string; tag: AnnotationTag } }
   | { event: 'next'; payload: { title: string; reason: string; path?: string; repo?: string; line?: number } }
   | { event: 'milestone'; payload: { stepId: string; state: MilestoneEventState; note?: string } }
   | { event: 'milestone_proposal'; payload: { stepId: string; proposal: MilestoneProposalKind; reason: string } }
@@ -125,7 +125,7 @@ function cleanPayload(event: ScreenEventName, raw: unknown): ScreenEvent['payloa
       const body = text(p.text, SCREEN_TEXT_LIMIT);
       const tag = p.tag === 'risk' || p.tag === 'todo' ? p.tag : 'question';
       if (!target || line === undefined || !body) return null;
-      return { path: target, line, text: body, tag, ...optional('repo', repoName(p.repo)) };
+      return { path: target, line, ...optional('endLine', lineNumber(p.endLine) !== undefined && Number(p.endLine) >= line ? lineNumber(p.endLine) : undefined), text: body, tag, ...optional('repo', repoName(p.repo)) };
     }
     case 'next': {
       const title = text(p.title, SCREEN_TITLE_LIMIT);

@@ -1,6 +1,7 @@
-import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode, type Ref } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, File, FileCode, FileImage, FileText, Globe, GitCommitHorizontal, GitCompare, MoreHorizontal, PanelRightOpen, Pencil, Pin, Plus, ShieldCheck, StickyNote, Terminal, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { Diagram } from '../../components/Diagram.js';
+import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type MutableRefObject, type ReactNode } from 'react';
+import { type NodeProps } from '@xyflow/react';
+import { Check, ChevronDown, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, FileText, GitCommitHorizontal, GitCompare, PanelRightOpen, Plus, ShieldCheck, StickyNote, TriangleAlert } from 'lucide-react';
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
@@ -8,41 +9,37 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { cn } from '../../lib/utils.js';
-import { NoteDialog } from './NoteDialog.js';
 import { useAnswerDecision, useChangePlanFile } from '../plan/planFile.js';
 import { suggestedAnswers } from '../plan/planView.js';
-import { plainText, stripHeadingColon } from '../../lib/plainText.js';
+import { plainText } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
 import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } from './commitNotes.js';
-import { BoardActionsContext, BoardReadingContext, bylineText, cardLinks, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, firstControl, parseCommitNodeId, pictureSrc } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
-import { areaCountItems, areaCounts, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
+import { AREA_ROW, areaCountItems, areaCounts, areaFocusWord, areaRowSecondaryRoom, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLines, readableText, type AnswerCardData } from './questionsArea.js';
-import { answersThatFit, ROW_SIZE, type AnswersFit } from './boardRows.js';
-import { BOARD_SIZE, imageAlt, moreText, type AnswerNode, type BoardDecision, type CardData, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type FileType, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type NoteNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
+import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
+import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode, type UncommittedNode } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
+import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, Pill, StepCheck } from '../../design/index.js';
+import { Anchors, brickPress, TITLE_BUTTON } from './cards/cardParts.js';
+import { summaryLabel } from './summaryLabel.js';
+import { BoardNote } from './cards/NoteCard.js';
+import { BoardFile } from './cards/FileCard.js';
+
+import { BoardRowHead } from './rows/RowHead.js';
+import { BoardFoldRow, BoardMoreTile, BoardPager } from './rows/RowControls.js';
+
+export { BoardNote, BoardFile, BoardRowHead, BoardFoldRow, BoardMoreTile, BoardPager };
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
 const STATUS_BADGE = { draft: 'warning', approved: 'success', superseded: 'secondary' } as const;
 
-const SIDES = [[Position.Top, 'top'], [Position.Right, 'right'], [Position.Bottom, 'bottom'], [Position.Left, 'left']] as const;
-
-/**
- * Where a line to this node can end: one invisible point on each side, so a line leaves and enters by the sides that
- * face each other. They are the line's anchors and nothing else: nothing can be connected by hand.
- */
-function Anchors() {
-  return <>{SIDES.map(([position, id]) => <Handle key={id} id={id} type="source" position={position} isConnectable={false} className="board-handle" />)}</>;
-}
-
-/** What names a folded group to those who cannot see it: what it says of itself. That it can be opened is said by its state (aria-expanded). */
-const summaryLabel = (parts: Array<string | false | undefined>) => parts.filter(Boolean).join(', ');
 
 /** The ref for a group's button, which puts the keyboard on it when it takes the place of the one that was pressed (BoardActions.keepFocus). */
 function useKeepFocus(id: string) {
@@ -198,6 +195,25 @@ function guardPress(event: { type: string; nativeEvent: Event; target: EventTarg
 }
 const decisions = new WeakMap<Event, boolean>();
 
+/** Whether a box can scroll, kept up to date when it or its content changes size (a font loads, the window is resized). */
+function useScrolls<T extends HTMLElement>(): [(el: T | null) => void, boolean, MutableRefObject<T | null>] {
+  const ref = useRef<T | null>(null);
+  const [scrolls, setScrolls] = useState(false);
+  const observer = useRef<ResizeObserver | null>(null);
+  const attach = useCallback((el: T | null) => {
+    observer.current?.disconnect();
+    ref.current = el;
+    if (!el) return;
+    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    observer.current = new ResizeObserver(measure);
+    observer.current.observe(el);
+    for (const child of Array.from(el.children)) observer.current.observe(child);
+  }, []);
+  return [attach, scrolls, ref];
+}
+
 /** What answering a decision takes: its suggested answers, a free answer, and whether the last try failed. */
 function useDecisionAnswer({ decision, onAnswer }: WaitingDecisionCardProps) {
   const actions = useContext(BoardActionsContext);
@@ -331,7 +347,8 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
   const [open, setOpen] = useState(false);
   const card = useRef<HTMLLIElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const question = useRef<HTMLDivElement>(null);
+  const [questionRef, questionScrolls, question] = useScrolls<HTMLDivElement>();
+  const [answersRef, answersScroll] = useScrolls<HTMLDivElement>();
   // "Other answer…" opens on the free answer; "All answers…" opens on the question, so that neither a second Enter nor a space answers by
   // accident: an answer needs a press of its own. The question is read first by a screen reader, and Tab reaches the answers from it.
   const allAnswers = fit.hidden > 0;
@@ -392,40 +409,61 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
         )}
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger render={<button type="button" data-testid="decision-more-answers" className={cn(GHOST_BUTTON, 'ml-auto')} aria-haspopup="dialog" />}>{fit.ghost}</DialogTrigger>
-          <DialogPopup className="max-w-lg" data-testid="decision-dialog" initialFocus={allAnswers ? question : input} onClick={(e) => e.stopPropagation()}>
-            <DialogHeader>
+          <DialogPopup
+            className="max-w-lg max-h-[min(85dvh,calc(100dvh-2rem))] overflow-y-auto [--decision-room:calc(min(85dvh,_100dvh_-_2rem)_-_11rem)]"
+            bottomStickOnMobile={false}
+            data-testid="decision-dialog"
+            initialFocus={allAnswers ? question : input}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DialogHeader className="shrink-0 pb-2">
               <DialogTitle className="text-sm font-semibold text-muted-foreground">Waits for you</DialogTitle>
               <DialogDescription className="sr-only">Answer this question with a suggestion or in your own words</DialogDescription>
             </DialogHeader>
-            <DialogPanel>
-              <div className="space-y-3">
-                <div ref={question} tabIndex={-1} className="select-text break-words text-base font-medium leading-relaxed text-foreground outline-none"><InlinePlanMarkdown content={decision.question} /></div>
-                {decision.detail && <div className="board-text select-text break-words text-sm leading-6 text-muted-foreground"><ChatMarkdown content={decision.detail} /></div>}
-                {options.length > 0 && (
-                  <div role="group" aria-label="All suggested answers" className="flex flex-wrap gap-1.5">
-                    {options.map((option) => (
-                      <button key={option} type="button" disabled={saving} onClick={() => void submitAnswer(option, true, card.current)} className={cn(ANSWER_BUTTON, 'h-auto min-h-7 whitespace-normal py-1 text-left')}>{option}</button>
-                    ))}
-                  </div>
-                )}
-                <form aria-busy={saving} onSubmit={(e) => { e.preventDefault(); void submitAnswer(customAnswer, true, card.current); }} className="flex items-center gap-1.5">
-                  <input
-                    ref={input}
-                    type="text"
-                    value={customAnswer}
-                    readOnly={saving}
-                    onChange={(e) => setCustomAnswer(e.target.value)}
-                    placeholder="Your answer"
-                    aria-label={`Your answer to ${plain}`}
-                    className="h-8 min-w-0 flex-1 rounded border border-input bg-background px-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-50"
-                  />
-                  <Button type="submit" size="sm" disabled={saving || !customAnswer.trim()}>{saving ? 'Saving…' : 'Answer'}</Button>
-                </form>
-                {saving && <p role="status" className="text-sm text-muted-foreground">Saving…</p>}
-                {displayError && <p role="alert" className="break-words text-sm text-destructive">{displayError}</p>}
+            <div
+              ref={questionRef}
+              tabIndex={questionScrolls ? 0 : -1}
+              data-testid="decision-question"
+              aria-label={questionScrolls ? 'The question, scrolls' : undefined}
+              className="shrink-0 select-text overflow-y-auto break-words px-6 pb-3 text-base font-medium leading-relaxed text-foreground outline-none [overflow-wrap:anywhere] max-h-[max(4.5rem,calc(var(--decision-room)_*_0.35))] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            ><InlinePlanMarkdown content={decision.question} /></div>
+            {decision.detail && (
+              <div
+                tabIndex={0}
+                aria-label="Decision details"
+                data-testid="decision-detail"
+                className="min-h-[4.5rem] min-w-0 shrink overflow-y-auto px-6 py-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              >
+                <div className="board-text select-text min-w-0 [overflow-wrap:anywhere] text-sm leading-6 text-muted-foreground">
+                  <ChatMarkdown content={decision.detail} compact />
+                </div>
               </div>
-            </DialogPanel>
-            <DialogFooter variant="bare">
+            )}
+            <div className={cn('shrink-0 space-y-3 px-6 pb-1', decision.detail && 'pt-3')}>
+              {options.length > 0 && (
+                <div ref={answersRef} tabIndex={answersScroll ? 0 : undefined} role="group" aria-label="All suggested answers" className="-m-0.5 flex max-h-[max(4rem,calc(var(--decision-room)_*_0.25))] flex-wrap gap-1.5 overflow-y-auto p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {options.map((option) => (
+                    <button key={option} type="button" title={option} disabled={saving} onClick={() => void submitAnswer(option, true, card.current)} className={cn(ANSWER_BUTTON, 'h-auto min-h-7 max-w-full whitespace-normal break-words py-1 text-left [overflow-wrap:anywhere]')}>{option}</button>
+                  ))}
+                </div>
+              )}
+              <form aria-busy={saving} onSubmit={(e) => { e.preventDefault(); void submitAnswer(customAnswer, true, card.current); }} className="flex items-center gap-1.5">
+                <input
+                  ref={input}
+                  type="text"
+                  value={customAnswer}
+                  readOnly={saving}
+                  onChange={(e) => setCustomAnswer(e.target.value)}
+                  placeholder="Your answer"
+                  aria-label={`Your answer to ${plain}`}
+                  className="h-8 min-w-0 flex-1 rounded border border-input bg-background px-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-50"
+                />
+                <Button type="submit" size="sm" disabled={saving || !customAnswer.trim()}>{saving ? 'Saving…' : 'Answer'}</Button>
+              </form>
+              {saving && <p role="status" className="text-sm text-muted-foreground">Saving…</p>}
+              {displayError && <p role="alert" title={displayError} className="max-h-24 overflow-y-auto break-words text-sm text-destructive">{displayError}</p>}
+            </div>
+            <DialogFooter variant="bare" className="shrink-0 pt-3">
               <AskInCliButton question={decision.question} />
               <DialogClose render={<Button type="button" variant="ghost" size="sm" />}>Close</DialogClose>
             </DialogFooter>
@@ -700,11 +738,16 @@ export function AddStepInline({
     submittingRef.current = true;
     setError(null);
     try {
-      await changePlan.mutateAsync({
-        type: 'add',
-        step,
-        ...(checkpointKey ? { checkpoint: checkpointKey } : {}),
-      });
+      if (actions?.addStep) {
+        // The page around the card owns the write (the design page's is inert).
+        if (!(await actions.addStep({ step, ...(checkpointKey ? { checkpoint: checkpointKey } : {}) }))) throw new Error('Could not add step.');
+      } else {
+        await changePlan.mutateAsync({
+          type: 'add',
+          step,
+          ...(checkpointKey ? { checkpoint: checkpointKey } : {}),
+        });
+      }
       setText('');
       setOpen(false);
     } catch (err) {
@@ -837,35 +880,17 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
           const stepError = actions?.stepErrors?.[step.key];
           return (
             <li key={step.key} className="flex items-center gap-2 text-[12.5px]" style={{ height: BOARD_SIZE.stepRow }}>
-              <button
-                type="button"
-                role="checkbox"
-                data-testid={`checkpoint-step-checkbox-${step.key}`}
-                aria-checked={step.done}
-                aria-label={step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`}
+              <StepCheck
+                testId={`checkpoint-step-checkbox-${step.key}`}
+                checked={step.done}
+                label={step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`}
                 title={stepError ?? (step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`)}
                 disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!isBusy) {
-                    void actions?.toggleStep?.(step.key, !step.done, step.text);
-                  }
-                }}
-                className={cn(
-                  'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-                  step.done
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-muted-foreground/40 bg-background hover:border-primary',
-                  isBusy && 'opacity-50 cursor-not-allowed',
-                  !isBusy && actions?.toggleStep && 'cursor-pointer'
-                )}
-              >
-                {step.done ? (
-                  <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-                    <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-                  </svg>
-                ) : null}
-              </button>
+                busy={isBusy}
+                pressable={Boolean(actions?.toggleStep)}
+                className="nodrag nopan"
+                onToggle={() => { void actions?.toggleStep?.(step.key, !step.done, step.text); }}
+              />
               <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={plainText(step.text)}>
                 <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span><InlinePlanMarkdown content={step.text} />
               </span>
@@ -885,26 +910,6 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
   </article>;
 }
 
-/**
- * A press anywhere on a compact card does the card's main action, which is what its own button does (`find` names that button). It is not
- * a button itself (a button cannot hold buttons and links), so a press on one of those keeps its own action, and a press that ends the
- * selection of some text does nothing: the text of a card can be selected.
- */
-function brickPress(event: MouseEvent<HTMLElement>, find: (card: HTMLElement) => HTMLElement | null) {
-  const target = event.target;
-  // A press inside a dialog that the card opened bubbles up through React's tree, but is not on the card
-  if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
-  if (target.closest('button, a, input, textarea, select, [role="button"]')) return;
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && selection.toString() && event.currentTarget.contains(selection.anchorNode) && event.currentTarget.contains(selection.focusNode)) return;
-  find(event.currentTarget)?.click();
-}
-const BRICK = 'board-brick cursor-pointer';
-/** The keyboard on a compact card shows as a ring around the whole card, not around its title. */
-const CARD_FOCUS = 'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring';
-/** The title of a compact card that opens, which is the card's one stop for the keyboard. The press of the whole card does what it does. */
-const TITLE_BUTTON = 'nodrag nopan flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none';
-
 /** The title row of a card that opens: the whole row is the button, and a small icon at its end says where it opens. */
 const OPENER = 'nodrag nopan flex h-5 w-full items-center gap-1.5 rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none';
 
@@ -923,7 +928,7 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
     <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold inline-flex items-center gap-1.5', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
       {data.fresh && (
         <>
-          <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+          <FreshDot />
           <span className="sr-only">New since you looked. </span>
         </>
       )}
@@ -1051,7 +1056,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
         {data.fresh && (
           <>
-            <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+            <FreshDot />
             <span className="sr-only">New since you looked. </span>
           </>
         )}
@@ -1088,7 +1093,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
               }}
             >
               <img
-                src={documentFileUrl(actions.workspaceId, pic.path)}
+                src={pictureSrc(actions, pic.path)}
                 alt=""
                 aria-hidden="true"
                 loading="lazy"
@@ -1120,7 +1125,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         <code id={shaId} className="shrink-0 font-mono text-primary font-medium">{data.sha}</code>
         {data.fresh && (
           <>
-            <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+            <FreshDot />
             <span className="sr-only">New since you looked. </span>
           </>
         )}
@@ -1128,7 +1133,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
         <CommitNoteMarker id={id} subject={data.subject} commit={commit} />
       </div>
-      <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">commit</span>
+      <Pill className="shrink-0">commit</Pill>
     </div>
     {commit ? (
       <button
@@ -1159,7 +1164,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
             }}
           >
             <img
-              src={documentFileUrl(actions.workspaceId, pic.path)}
+              src={pictureSrc(actions, pic.path)}
               alt=""
               aria-hidden="true"
               title={pic.title}
@@ -1242,526 +1247,6 @@ export function BoardPlaceholder({ data }: NodeProps<PlaceholderNode>) {
 }
 
 // ─── Cards ──────────────────────────────────────────────────────────────────
-
-const FILE_LABEL: Record<FileType, string> = { image: 'Picture', html: 'HTML page', pdf: 'PDF', markdown: 'Markdown', other: 'File' };
-const FILE_ICON: Record<FileType, LucideIcon> = { image: FileImage, html: Globe, pdf: FileText, markdown: FileCode, other: File };
-
-/**
- * Whether the text in an element is cut off by its line clamp. Measured again when `key` changes and whenever the element
- * changes size: a card that arrives while the board is hidden behind another part has no size yet, and is measured when it
- * is shown.
- */
-function useCut<T extends HTMLElement>(key: string): [(element: T | null) => void, boolean] {
-  // The element is state, not a ref object, so a title that becomes a button (a new element) is measured as soon as it is there
-  const [element, setElement] = useState<T | null>(null);
-  const [cut, setCut] = useState(false);
-  useLayoutEffect(() => {
-    if (!element) return;
-    const measure = () => setCut(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [element, key]);
-  return [setElement, cut];
-}
-
-/**
- * The text of a card as Markdown, so its links work: one to the web opens in a new tab, one to a file of the workspace in
- * the reader. A press on a link is only a press: it does not move the card or the view. `cut` is whether the card shows only
- * the start of the text: the links are then not stops for the keyboard, since some may be in the part that cannot be seen, and
- * "Read all" shows them all.
- */
-function CardText({ text, cut, className, ref }: { text: string; cut: boolean; className?: string; ref?: Ref<HTMLDivElement> }) {
-  const actions = useContext(BoardActionsContext);
-  const links = useMemo(() => actions && cardLinks(actions), [actions]);
-  return <div ref={ref} className={cn('board-text break-words', className)}>
-    <ChatMarkdown content={text} links={links ?? undefined} onCard cut={cut} />
-  </div>;
-}
-
-/** The whole text of a card, for when the card shows only the start of it. A link in it that opens in the reader gives way to it. */
-function ReadAll({ data, title }: { data: CardData; /** The title of a compact card: it is the trigger then, as a button named "Read <title>", and not a "Read all" button. */ title?: ReactNode }) {
-  const actions = useContext(BoardActionsContext);
-  const [open, setOpen] = useState(false);
-  const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
-  // Whether the dialog closes to hand the keyboard to the reader, which takes it itself.
-  const [handingOver, setHandingOver] = useState(false);
-  const links = useMemo(() => actions && cardLinks(actions, trigger, () => { setHandingOver(true); setOpen(false); }), [actions, trigger]);
-  return <Dialog open={open} onOpenChange={(next) => { if (next) setHandingOver(false); setOpen(next); }}>
-    <DialogTrigger render={title
-      ? <button ref={setTrigger} type="button" data-card-main className={TITLE_BUTTON} aria-label={`Read ${data.title}`} />
-      : <Button ref={setTrigger} size="xs" variant="ghost" className="nodrag nopan text-[13px]" aria-label={`Read all of ${data.title}`} />}>{title ?? 'Read all'}</DialogTrigger>
-    <DialogPopup className="max-w-lg" finalFocus={() => !handingOver}>
-      <DialogHeader>
-        <DialogTitle className="break-words pr-8 text-base leading-snug">{data.title}</DialogTitle>
-        <DialogDescription>{bylineText(data)}</DialogDescription>
-      </DialogHeader>
-      <DialogPanel>
-        <div className="board-text break-words text-sm leading-6 text-foreground"><ChatMarkdown content={data.text} links={links ?? undefined} onCard /></div>
-      </DialogPanel>
-    </DialogPopup>
-  </Dialog>;
-}
-
-/** The line under a card's text: who put it there and when, and whether it is pinned or put away. */
-function Byline({ data, children }: { data: CardData; children?: ReactNode }) {
-  const byline = bylineText(data);
-  return <div className="flex h-6 shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-    {data.pinned && <Pin aria-hidden="true" className="size-3 shrink-0 text-primary" />}
-    {data.pinned && <span className="sr-only">Pinned. </span>}
-    <span className="min-w-0 flex-1 truncate" title={byline}>{byline}</span>
-    {data.archived && <Badge variant="secondary" size="sm">Archived</Badge>}
-    {children}
-  </div>;
-}
-
-/** The top right of a compact card: whether it is pinned or put away, and a mark for who made it ("you" or "AI"). The whole byline is the mark's tooltip, and what the card is described by. */
-function CardMark({ data, markId }: { data: CardData; markId: string }) {
-  const byline = bylineText(data);
-  // Who made it; who changed it since is in the byline
-  const ai = data.by !== 'user';
-  return <div className="flex min-h-7 shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-    {data.pinned && <Pin aria-hidden="true" className="size-3 shrink-0 text-primary" />}
-    {data.pinned && <span className="sr-only">Pinned. </span>}
-    {data.archived && <span>Archived</span>}
-    {data.fresh && (
-      <>
-        <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
-        <span className="sr-only">New since you looked. </span>
-      </>
-    )}
-    <span id={markId} title={byline} className={cn('rounded-full px-1.5 text-[12.5px] leading-4', ai ? 'bg-state-ai/12 font-medium text-state-ai' : 'text-muted-foreground')}>
-      <span aria-hidden="true">{ai ? 'AI' : 'you'}</span><span className="sr-only">{byline}</span>
-    </span>
-  </div>;
-}
-
-/** The frame every card shares. A card that is new, or was just changed by someone else, glows for a moment; the one open in the reader has a ring. */
-function CardFrame({ data, labelledBy, describedBy, reading = false, compact = false, onPress, onDoubleClick, children }: { data: CardData; labelledBy: string; describedBy?: string; reading?: boolean; compact?: boolean; onPress?: (event: MouseEvent<HTMLElement>) => void; onDoubleClick?: (event: MouseEvent<HTMLElement>) => void; children: ReactNode }) {
-  return <article
-    aria-labelledby={labelledBy} aria-describedby={describedBy} aria-current={reading ? 'true' : undefined} onClick={onPress} onDoubleClick={onDoubleClick}
-    className={cn('group relative flex h-full w-full flex-col overflow-hidden rounded-xl border px-3.5 shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80', compact ? 'py-2' : 'py-2.5', compact && CARD_FOCUS, onPress && BRICK,
-      data.archived ? 'border-dashed border-border bg-muted text-muted-foreground' : data.pinned ? 'border-primary/50 bg-card text-card-foreground' : 'border-border bg-card text-card-foreground', reading && 'ring-2 ring-primary')}
-  >
-    <Anchors />
-    {data.fresh && <span key={data.updatedAt} aria-hidden="true" className="board-fresh" />}
-    {children}
-  </article>;
-}
-
-/** A note someone put on the board: its title, the start of its text (Markdown, with links that work), who wrote it and when. The whole text is one button away. */
-export function BoardNote({ id, data }: NodeProps<NoteNode>) {
-  const titleId = useId();
-  const markId = useId();
-  const actions = useContext(BoardActionsContext);
-  const [editOpen, setEditOpen] = useState(false);
-  const [titleRef, titleCut] = useCut<HTMLElement>(data.title);
-  const [bodyRef, bodyCut] = useCut<HTMLDivElement>(data.text);
-  // A body press reads; a double press edits. Wait briefly for the second press
-  // before the modal can cover the card and swallow its double-click.
-  const readTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(readTimer.current), []);
-  useEffect(() => { if (editOpen) clearTimeout(readTimer.current); }, [editOpen]);
-
-  const noteActionsMenu = actions && !actions.readOnly && (
-    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity pointer-coarse:opacity-100">
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        className="size-6 nodrag nopan text-muted-foreground hover:text-foreground"
-        aria-label={`Edit ${data.title}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          setEditOpen(true);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.stopPropagation();
-            setEditOpen(true);
-          }
-        }}
-      >
-        <Pencil className="size-3" aria-hidden="true" />
-      </Button>
-      <Menu>
-        <MenuTrigger
-          className="size-6 nodrag nopan inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
-          aria-label={`Actions for ${data.title}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MoreHorizontal className="size-3.5" aria-hidden="true" />
-        </MenuTrigger>
-        <MenuPopup align="end" className="w-36 p-1">
-          <MenuItem
-            onClick={() => setEditOpen(true)}
-            className="flex items-center gap-2 text-[12.5px]"
-          >
-            <Pencil className="size-3.5" aria-hidden="true" />
-            <span>Edit note</span>
-          </MenuItem>
-          <MenuItem
-            onClick={() => void actions.updateNote?.(id, { pinned: !data.pinned })}
-            className="flex items-center gap-2 text-[12.5px]"
-          >
-            <Pin className="size-3.5" aria-hidden="true" />
-            <span>{data.pinned ? 'Unpin note' : 'Pin note'}</span>
-          </MenuItem>
-          <MenuItem
-            onClick={() => void actions.updateNote?.(id, { archived: !data.archived })}
-            className="flex items-center gap-2 text-[12.5px]"
-          >
-            <Archive className="size-3.5" aria-hidden="true" />
-            <span>{data.archived ? 'Restore note' : 'Archive note'}</span>
-          </MenuItem>
-          {actions.askInCLI && (
-            <MenuItem
-              onClick={() => {
-                const noteSummary = data.title?.trim() || data.text?.slice(0, 60).trim() || 'note';
-                actions.askInCLI?.(noteSummary);
-              }}
-              className="flex items-center gap-2 text-[12.5px]"
-            >
-              <Terminal className="size-3.5" aria-hidden="true" />
-              <span>Ask in CLI</span>
-            </MenuItem>
-          )}
-        </MenuPopup>
-      </Menu>
-    </div>
-  );
-
-  const dialog = actions && (
-    <NoteDialog
-      open={editOpen}
-      onOpenChange={setEditOpen}
-      note={{
-        id,
-        title: data.title,
-        body: data.text,
-        pinned: data.pinned,
-        archived: data.archived,
-        area: data.area,
-        step: data.step,
-      }}
-      areas={actions.availableAreas}
-      onSave={async (updates) => {
-        const ok = await actions.updateNote?.(id, updates);
-        return ok;
-      }}
-    />
-  );
-
-  if (data.compact) {
-    const cut = titleCut || bodyCut;
-    const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
-    return (
-      <>
-        <CardFrame
-          data={data}
-          labelledBy={titleId}
-          describedBy={markId}
-          compact
-          onPress={cut ? (event) => {
-            clearTimeout(readTimer.current);
-            brickPress(event, (card) => {
-              const trigger = firstControl(card, '[data-card-main]');
-              // Read opens only if the card is still shown and nothing else opened in the meantime (the Board left, a menu or a dialog)
-              // Only an overlay that opened after the press stops it: one already there (the terminal's Copy menu) does not
-              const overlays = '[role="dialog"], [role="menu"], [role="alertdialog"]';
-              const before = new Set(document.querySelectorAll(overlays));
-              readTimer.current = setTimeout(() => {
-                if (!trigger?.isConnected || trigger.offsetParent === null || trigger.getAttribute('aria-expanded') === 'true') return;
-                if ([...document.querySelectorAll(overlays)].some((overlay) => !before.has(overlay))) return;
-                trigger.click();
-              }, 250);
-              return null;
-            });
-          } : undefined}
-          onDoubleClick={(event) => {
-            // A double press inside a dialog the card opened bubbles up through React's tree, but is not on the card
-            if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
-            clearTimeout(readTimer.current);
-            if (actions?.readOnly) return;
-            event.stopPropagation();
-            setEditOpen(true);
-          }}
-        >
-          <div className="flex shrink-0 items-start gap-1.5">
-            <h2 className={cn('flex min-h-7 min-w-0 flex-1 items-center text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')}>
-              {cut ? <ReadAll data={data} title={title} /> : title}
-            </h2>
-            <div className="flex items-center gap-1 shrink-0">
-              <CardMark data={data} markId={markId} />
-              {noteActionsMenu}
-            </div>
-          </div>
-          <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="board-text-compact line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
-        </CardFrame>
-        {dialog}
-      </>
-    );
-  }
-
-  return (
-    <>
-      <CardFrame
-        data={data}
-        labelledBy={titleId}
-        onDoubleClick={(event) => {
-          if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
-          if (actions?.readOnly) return;
-          event.stopPropagation();
-          setEditOpen(true);
-        }}
-      >
-        <div className="flex shrink-0 items-start justify-between gap-1.5">
-          <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
-            {data.title}
-          </h2>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">note</span>
-            {noteActionsMenu}
-          </div>
-        </div>
-        <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="mt-1 line-clamp-4 shrink-0 text-[12.5px] leading-[18px]" />
-        <div className="mt-auto" />
-        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-border/40">
-          <Byline data={data}>{(titleCut || bodyCut) && <ReadAll data={data} />}</Byline>
-          {actions?.askInCLI && !actions.readOnly && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                const noteSummary = data.title?.trim() || data.text?.slice(0, 60).trim() || 'note';
-                actions.askInCLI?.(noteSummary);
-              }}
-              className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] shrink-0 items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
-              title={`Ask about "${data.title || 'note'}" in CLI`}
-            >
-              <span>Ask in CLI</span>
-              <span aria-hidden="true">↗</span>
-            </button>
-          )}
-        </div>
-      </CardFrame>
-      {dialog}
-    </>
-  );
-}
-
-/** What stands in a file card where a picture would: the kind of file, and where it is. */
-function FileKind({ type, path }: { type: FileType; path: string }) {
-  const Icon = FILE_ICON[type];
-  return <div className="flex size-full flex-col items-center justify-center gap-1 px-3 text-center">
-    <Icon aria-hidden="true" className="size-8 text-muted-foreground" />
-    <span className="text-xs font-medium">{FILE_LABEL[type]}</span>
-    <code className="max-w-full truncate font-mono text-[12.5px] text-muted-foreground" title={path}>{path}</code>
-  </div>;
-}
-
-/** A file someone put on the board: a picture shows itself; anything else shows its kind. Open shows it in the reader beside the board. */
-export function BoardFile({ id, data }: NodeProps<FileNode>) {
-  const titleId = useId();
-  const markId = useId();
-  const actions = useContext(BoardActionsContext);
-  const reading = useContext(BoardReadingContext) === id;
-  // The path of a picture that would not load, so a card that now names another file tries it.
-  const [brokenPath, setBrokenPath] = useState<string | null>(null);
-  const [titleRef, titleCut] = useCut<HTMLElement>(data.title);
-  const [textRef, textCut] = useCut<HTMLDivElement>(data.text);
-  const picture = data.fileType === 'image' && actions && brokenPath !== data.path;
-  if (data.compact && (data.group === 'documents' || data.group === 'pages')) {
-    const Icon = FILE_ICON[data.fileType];
-    const folderLabel = data.folder || 'Workspace root';
-    const openItem = (event: MouseEvent<HTMLElement>) => actions?.openInReader(
-      { path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) },
-      event.currentTarget,
-    );
-    const content = (
-      <>
-        <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-        <span id={titleId} className="min-w-0 max-w-[52%] shrink-0 truncate text-[13.5px] font-medium leading-5 text-foreground" title={data.title}>
-          {data.title}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] leading-4 text-muted-foreground" title={folderLabel}>
-          {folderLabel}
-        </span>
-        {data.age && (
-          <span id={markId} className="shrink-0 whitespace-nowrap text-[13px] leading-4 text-muted-foreground tabular-nums">
-            {data.age}
-          </span>
-        )}
-      </>
-    );
-    return (
-      <article
-        aria-labelledby={titleId}
-        aria-describedby={data.age ? markId : undefined}
-        aria-current={reading ? 'true' : undefined}
-        onClick={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}
-        className={cn(
-          'group relative flex h-full w-full items-center overflow-hidden rounded-lg border bg-card text-card-foreground shadow-xs transition-colors hover:bg-accent/35 hover:border-border/80 border-border',
-          CARD_FOCUS,
-          actions && BRICK,
-          reading && 'ring-2 ring-primary',
-        )}
-      >
-        <Anchors />
-        {actions ? (
-          <button
-            type="button"
-            data-card-main
-            aria-label={`Open ${data.title}`}
-            onClick={openItem}
-            className="nodrag nopan flex h-full w-full min-w-0 items-center gap-2.5 px-3 text-left outline-hidden hover:no-underline cursor-pointer"
-          >
-            {content}
-          </button>
-        ) : (
-          <div className="flex h-full w-full min-w-0 items-center gap-2.5 px-3">{content}</div>
-        )}
-      </article>
-    );
-  }
-  if (data.compact && data.group === 'pictures') {
-    const Icon = FILE_ICON[data.fileType];
-    const title = <span ref={titleRef} id={titleId} className="min-w-0 truncate" title={data.title}>{data.title}</span>;
-    return (
-      <article
-        aria-labelledby={titleId}
-        aria-describedby={data.age ? markId : undefined}
-        aria-current={reading ? 'true' : undefined}
-        onClick={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}
-        className={cn(
-          'group relative flex h-full w-full flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80',
-          CARD_FOCUS,
-          actions && BRICK,
-          reading && 'ring-2 ring-primary',
-        )}
-      >
-        <Anchors />
-        <div className="min-h-0 flex-1 w-full overflow-hidden border-b border-border/60 bg-black/40">
-          {picture
-            ? <img
-              src={documentFileUrl(actions.workspaceId, data.path)}
-              alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
-              loading="lazy"
-              decoding="async"
-              draggable={false}
-              onError={() => setBrokenPath(data.path)}
-              className="size-full object-cover transition-transform duration-200 group-hover:scale-105"
-            />
-            : <div className="flex size-full flex-col items-center justify-center gap-0.5 px-2 text-center">
-              <Icon aria-hidden="true" className="size-6 text-muted-foreground" />
-              <span className="text-[12.5px] font-medium leading-4">{FILE_LABEL[data.fileType]}</span>
-            </div>}
-        </div>
-        <div className="flex shrink-0 items-center justify-between gap-1.5 px-2.5 py-0.5">
-          <h2 className="flex min-h-7 min-w-0 flex-1 items-center text-[13.5px] font-medium leading-5 text-foreground">
-            {actions
-              ? <button
-                type="button"
-                data-card-main
-                className={cn(TITLE_BUTTON, 'flex min-h-7 items-center text-[13.5px] font-medium')}
-                aria-label={`Open ${data.title}`}
-                onClick={(event) => actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) }, event.currentTarget)}
-              >{title}</button>
-              : title}
-          </h2>
-          {data.age && (
-            <span id={markId} className="shrink-0 whitespace-nowrap text-[13px] leading-4 text-muted-foreground tabular-nums">
-              {data.age}
-            </span>
-          )}
-        </div>
-      </article>
-    );
-  }
-  if (data.compact) {
-    const Icon = FILE_ICON[data.fileType];
-    const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
-    const describedBy = !data.readOnly || data.age ? markId : undefined;
-    return <CardFrame data={data} labelledBy={titleId} describedBy={describedBy} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
-      <div className="flex min-h-0 flex-1 gap-3">
-        <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
-          {picture
-            ? <img
-              src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
-              loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-cover"
-            />
-            : <div className="flex size-full flex-col items-center justify-center gap-0.5 px-1 text-center">
-              <Icon aria-hidden="true" className="size-6 text-muted-foreground" />
-              <span className="text-[12.5px] font-medium leading-4">{FILE_LABEL[data.fileType]}</span>
-              <span className="sr-only">{data.path}</span>
-            </div>}
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 items-start gap-1.5">
-          <h2 className={cn('flex min-h-7 min-w-0 flex-1 items-center text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')}>
-            {actions
-              ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} onClick={(event) => actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)}>{title}</button>
-              : title}
-          </h2>
-          {data.readOnly
-            ? (data.age ? <span id={markId} className="shrink-0 whitespace-nowrap pt-1 text-xs leading-4 text-muted-foreground tabular-nums">{data.age}</span> : null)
-            : <CardMark data={data} markId={markId} />}
-          </div>
-          <CardText ref={textRef} text={data.text} cut={textCut} className="board-text-compact line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
-        </div>
-      </div>
-    </CardFrame>;
-  }
-  return <CardFrame data={data} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
-    <div className="flex shrink-0 items-start justify-between gap-1.5">
-      <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-[13px] font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
-      <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">
-        {data.fileType === 'image' ? 'picture' : data.fileType}
-      </span>
-    </div>
-    <div className="group/thumb relative mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
-      {picture
-        ? <>
-          <img
-            src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
-            loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-cover transition-transform duration-200 group-hover/thumb:scale-105 cursor-pointer"
-            onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}
-          />
-          <span className="absolute bottom-1 right-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover/thumb:opacity-100 pointer-events-none">
-            Double-click to enlarge
-          </span>
-        </>
-        : <FileKind type={data.fileType} path={data.path} />}
-    </div>
-    {data.text && <CardText ref={textRef} text={data.text} cut={textCut} className="mt-1 line-clamp-2 shrink-0 text-xs leading-[16px]" />}
-    <div className="mt-auto" />
-    <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-border/40">
-      <span className="truncate text-xs text-muted-foreground" title={data.readOnly ? (data.age ?? '') : (bylineText(data) || 'live visual snapshot')}>
-        {data.readOnly ? (data.age ?? '') : (bylineText(data) || 'live visual snapshot')}
-      </span>
-      <div className="flex items-center gap-1 shrink-0">
-        <Button size="xs" variant="ghost" className="nodrag nopan h-6 px-1.5 text-xs" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" className="size-3" />Open</Button>
-        {(titleCut || textCut) && <ReadAll data={data} />}
-        {actions?.askInCLI && !actions.readOnly && !data.readOnly && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              const fileSummary = data.title?.trim() || data.path?.trim() || 'file';
-              actions.askInCLI?.(fileSummary);
-            }}
-            className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
-            title={`Ask about "${data.title || data.path || 'file'}" in CLI`}
-          >
-            <span>Ask in CLI</span>
-            <span aria-hidden="true">↗</span>
-          </button>
-        )}
-      </div>
-    </div>
-  </CardFrame>;
-}
 
 const ANSWER_CARD = 'group relative flex h-full w-full flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80';
 const ANSWER_MAIN = 'nodrag nopan flex h-full w-full min-w-0 flex-col gap-1 px-3 py-2 text-left outline-hidden cursor-pointer';
@@ -1890,7 +1375,7 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
   if (data.variant === 'diagram') {
     return frame('Read the diagram', undefined, <>
       <span id={titleId} className="truncate text-[12px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground">Diagram</span>
-      <pre className="h-12 overflow-hidden whitespace-pre font-mono text-[12px] leading-4 text-foreground">{data.source.split('\n').slice(0, 3).join('\n')}</pre>
+      <Diagram source={data.source} card cardZoom={READABLE_ZOOM} />
     </>, readAnswer);
   }
 
@@ -1905,7 +1390,7 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
     return frame(`Open ${data.title}`, undefined, <>
       <span className="relative min-h-0 w-full flex-1 overflow-hidden rounded-md border border-border/60 bg-black/40">
         <img
-          src={documentFileUrl(actions.workspaceId, data.src!)}
+          src={pictureSrc(actions, data.src!)}
           alt=""
           loading="lazy"
           decoding="async"
@@ -1991,7 +1476,7 @@ function areaLabel(data: AreaData, hiddenSubtitle?: string): string {
   const counts = areaCounts(data);
   return summaryLabel([
     data.title,
-    data.done ? 'done' : data.nowSet ? 'now' : data.current ? 'next up' : data.kind === 'checkpoint' ? 'not done' : undefined,
+    data.done ? 'done' : data.current ? areaFocusWord(data).toLowerCase() : data.kind === 'checkpoint' ? 'not done' : undefined,
     !isStepless(data.kind) ? areaSteps(data).toLowerCase() : undefined,
     data.waitingCount > 0 ? (data.waitingCount === 1 ? 'waits for you' : `${data.waitingCount} wait for you`) : undefined,
     counts.length > 0 ? counts.join(', ') : undefined,
@@ -2044,7 +1529,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
               data.done ? (
                 <Badge variant="success" className="board-area-badge sm:h-5 sm:text-[13.5px]">Done</Badge>
               ) : data.current ? (
-                <Badge variant={data.nowSet ? 'default' : 'outline'} className="board-area-badge sm:h-5 sm:text-[13.5px]">{data.nowSet ? 'Now' : 'Next up'}</Badge>
+                <Badge variant={data.nowSet ? 'default' : 'outline'} className="board-area-badge sm:h-5 sm:text-[13.5px]">{areaFocusWord(data)}</Badge>
               ) : null
             )}
             {data.kind === 'plan' && <Badge variant="outline" className="board-area-badge sm:h-5 sm:text-[13.5px]">Plan</Badge>}
@@ -2054,7 +1539,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
 
           <span className="mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
             {data.fresh && !data.current && !data.done && (
-              <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+              <FreshDot inline />
             )}
             {data.title}
           </span>
@@ -2126,7 +1611,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                 className="nodrag nopan relative h-full w-20 shrink-0 overflow-hidden rounded border border-border/50 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:opacity-85 transition-opacity"
               >
                 <img
-                  src={documentFileUrl(actions.workspaceId, pic.path)}
+                  src={pictureSrc(actions, pic.path)}
                   alt=""
                   aria-hidden="true"
                   loading="lazy"
@@ -2193,13 +1678,13 @@ function AnswerCountLine({ data }: { data: AreaData }) {
 const newsLabelWidth = (label: string) => Math.ceil(textEm(label) * 12) + 8;
 
 /**
- * "1 question" on the card of an Area: the answers about it, as a button of its own that opens the newest answer. Not drawn where the card
- * already has its buttons for what is new (`newsItems` of tier 3: it stands among them), nor for an Area without answers.
+ * "1 question" on a row or card of an Area: the answers about it, as a button of its own that opens the newest answer.
+ * On `BoardAreaRow`, this always renders as its own non-shrinking button so disposable secondary news never clips it.
  */
 function QuestionCount({ id, data, className }: { id: string; data: AreaData; className?: string }) {
   const actions = useContext(BoardActionsContext);
   const item = data.questionItem;
-  if (!item || (data.tier === 3 && (data.newsItems?.length ?? 0) > 0)) return null;
+  if (!item) return null;
   return (
     <button
       type="button"
@@ -2232,10 +1717,34 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
   const isNotStarted = !isStepless(data.kind) && data.stepsTotal > 0 && data.stepsDone === 0;
   const listArea = data.kind === 'files' || data.kind === 'questions';
-  // The buttons for what is new stand in 45% of the row; one that cannot show its whole words is left out, with its comma
-  const newsShown = fitNewsItems(data.newsItems ?? [], (width ?? 400) * 0.45 * 0.92, newsLabelWidth);
   const fileCounts = data.kind === 'files' ? formatWorkspaceFileCounts(data, { compact: true }).join(' · ') : data.kind === 'questions' ? areaCounts(data).join(' · ') : '';
   const fileFullCounts = listArea ? areaCounts(data).join(' · ') : '';
+  const rowWidth = width ?? AREA_ROW.minWidth;
+  const rowLayout = areaRowSecondaryRoom(data, rowWidth, { fileCounts });
+
+  // Disposable news buttons stand in at most 45% of the row and never squeeze the title or "1 question" (rendered separately via QuestionCount)
+  const rawNewsItems = data.newsItems ?? [];
+  const disposableNews = rawNewsItems.filter((item) => item.kind !== 'question');
+  const newsBudget = Math.max(0, Math.min(rowWidth * 0.45 * 0.92, rowLayout.room));
+  let newsShown: typeof rawNewsItems = [];
+  if (rowLayout.showSecondary && disposableNews.length > 0) {
+    const hasQuestionNews = rawNewsItems.some((item) => item.kind === 'question');
+    const questionNewsReserve = hasQuestionNews && data.questionItem ? newsLabelWidth(data.questionItem.label) + 10 : 0;
+    newsShown = hasQuestionNews
+      ? fitNewsItems(rawNewsItems, newsBudget + questionNewsReserve, newsLabelWidth).filter((item) => item.kind !== 'question')
+      : [...disposableNews];
+    while (newsShown.length > 0) {
+      const used = newsShown.reduce((sum, item, idx) => sum + newsLabelWidth(item.label) + (idx > 0 ? 8 : 0), 0);
+      if (used <= newsBudget) break;
+      newsShown = newsShown.slice(0, -1);
+    }
+  }
+
+  const waitingTextValue = data.waitingQuestion ?? (data.waitingCount > 0 ? waitingText(data.waitingCount) : undefined);
+  const hiddenSubtitle =
+    !rowLayout.showSecondary && data.tier === 2 ? waitingTextValue
+      : !rowLayout.showSecondary && data.tier === 4 ? data.nextOpenStep
+        : undefined;
 
   return (
     <div
@@ -2253,30 +1762,36 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
       <button
         type="button"
         onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
-        aria-label={areaLabel(data)}
+        aria-label={areaLabel(data, hiddenSubtitle)}
         className={cn(
           'board-area nodrag nopan flex items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded',
-          listArea ? 'min-w-0 shrink' : 'min-w-0 flex-1',
+          listArea
+            ? (rowLayout.showSecondary ? 'shrink-0' : 'min-w-0 shrink')
+            : (rowLayout.showSecondary ? 'grow shrink-0' : 'min-w-0 flex-auto'),
         )}
       >
         <AreaMark data={data} />
-        <span className={cn('text-sm font-medium leading-5 text-foreground', listArea ? 'truncate whitespace-nowrap' : 'min-w-0 flex-1 truncate')} title={data.title}>
+        <span className={cn('text-sm font-medium leading-5 text-foreground', listArea ? 'min-w-0 truncate whitespace-nowrap' : 'min-w-0 flex-auto truncate')} title={data.title}>
           {data.fresh && !data.current && !data.done && (
-            <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+            <FreshDot inline />
           )}
           {data.title}
         </span>
       </button>
       {/* Tier 2: Waits for you, with the question's first words */}
-      {data.tier === 2 && (data.waitingQuestion || data.waitingCount > 0) && (
-        <span className="min-w-0 max-w-[24ch] truncate text-xs font-medium text-state-needs" title={data.waitingQuestion ?? waitingText(data.waitingCount)}>
-          <span aria-hidden="true" className="mr-1 inline-block size-1.5 rounded-full bg-state-needs" />
-          {data.waitingQuestion ?? waitingText(data.waitingCount)}
-        </span>
+      {data.tier === 2 && waitingTextValue && (
+        rowLayout.showSecondary ? (
+          <span className="min-w-0 max-w-[24ch] shrink-[100] truncate text-xs font-medium text-state-needs" title={waitingTextValue}>
+            <span aria-hidden="true" className="mr-1 inline-block size-1.5 rounded-full bg-state-needs" />
+            {waitingTextValue}
+          </span>
+        ) : (
+          <span className="sr-only">{waitingTextValue}</span>
+        )
       )}
       {/* Tier 3: Moved since you looked, saying what ("2 commits, 1 picture") */}
       {data.tier === 3 && newsShown.length > 0 ? (
-        <span className="flex min-w-0 max-w-[45%] items-center gap-1 overflow-hidden text-xs" title={data.newsSummary}>
+        <span className="flex min-w-0 max-w-[45%] shrink-[100] items-center gap-1 overflow-hidden text-xs" title={data.newsSummary}>
           {newsShown.map((item, idx) => (
             <Fragment key={item.kind}>
               {idx > 0 && <span aria-hidden="true" className="-ml-1 shrink-0 select-none text-muted-foreground/60">,</span>}
@@ -2296,26 +1811,26 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
             </Fragment>
           ))}
         </span>
-      ) : data.tier === 3 && data.newsSummary ? (
-        <span className="min-w-0 max-w-[45%] truncate text-xs text-muted-foreground" title={data.newsSummary}>
+      ) : data.tier === 3 && rawNewsItems.length === 0 && data.newsSummary && rowLayout.showSecondary ? (
+        <span className="min-w-0 max-w-[45%] shrink-[100] truncate text-xs text-muted-foreground" title={data.newsSummary}>
           {data.newsSummary}
         </span>
       ) : null}
       {/* Tier 4: its next open step in place of a bare count, and 0 of 4 quietly at the end */}
-      {data.tier === 4 && data.nextOpenStep && (
-        <span className="min-w-0 max-w-[28ch] truncate text-xs text-muted-foreground" title={data.nextOpenStep}>
+      {data.tier === 4 && data.nextOpenStep && rowLayout.showSecondary && (
+        <span className="min-w-0 max-w-[28ch] shrink-[100] truncate text-xs text-muted-foreground" title={data.nextOpenStep}>
           {data.nextOpenStep}
         </span>
       )}
-      {!data.done && data.current && !isStepless(data.kind) && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{data.nowSet ? 'Now' : 'Next up'}</span>}
-      {data.waitingCount > 0 && data.tier !== 2 && (
+      {!data.done && data.current && !isStepless(data.kind) && <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>{areaFocusWord(data)}</span>}
+      {data.waitingCount > 0 && (data.tier !== 2 || !rowLayout.showSecondary) && (
         <span aria-hidden="true" title={waitingText(data.waitingCount)} className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-state-needs">
           <span className="size-1.5 shrink-0 rounded-full bg-state-needs" />Waiting
         </span>
       )}
       <QuestionCount id={id} data={data} />
-      {fileCounts && data.tier !== 2 && data.tier !== 3 && (
-        <span className="min-w-0 flex-1 truncate text-right text-xs leading-4 text-muted-foreground" title={fileFullCounts || fileCounts}>
+      {fileCounts && data.tier !== 2 && data.tier !== 3 && rowLayout.showSecondary && (
+        <span className="min-w-0 flex-1 shrink-[100] truncate text-right text-xs leading-4 text-muted-foreground" title={fileFullCounts || fileCounts}>
           {data.kind === 'questions' ? <AnswerCountLine data={data} /> : fileCounts}
         </span>
       )}
@@ -2371,7 +1886,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
   const subtitleText = !statusLine && data.tier === 2 ? data.waitingQuestion : data.tier === 4 ? data.nextOpenStep : undefined;
   const otherPx = statusLine ? 0
     : (data.tier === 3 ? Math.min(120, newsShown.length > 0 ? newsShown.reduce((sum, item) => sum + newsLabelWidth(item.label) + 4, 0) : Math.ceil(textEm(data.newsSummary ?? '') * 12)) : 0)
-      + (!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' ? Math.ceil(textEm(data.nowSet ? 'Now' : 'Next up') * 12) + 8 : 0)
+      + (!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' ? Math.ceil(textEm(areaFocusWord(data)) * 12) + 8 : 0)
       + (data.tier !== 2 && data.waitingCount > 0 ? 72 : 0);
   const secondLine = miniSecondLine({
     room: (width ?? 240) - 24 - (showPicture ? 92 : 0) - (showQuestion ? questionRoom : 0) - (data.tier === 2 && subtitleText ? 10 : 0),
@@ -2410,6 +1925,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
     data.stepsTotal,
     data.waitingCount,
     data.nowSet,
+    data.focusSource,
     data.done,
     hasStatus,
     showPicture,
@@ -2476,7 +1992,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
                 )}
               >
                 <img
-                  src={documentFileUrl(actions.workspaceId, pic.path)}
+                  src={pictureSrc(actions, pic.path)}
                   alt=""
                   aria-hidden="true"
                   loading="lazy"
@@ -2535,7 +2051,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       ) : null}
       {!data.done && data.tier !== 2 && data.tier !== 3 && data.current && data.kind !== 'work' && (
         <span className={cn('shrink-0 whitespace-nowrap text-xs font-medium leading-4', data.nowSet ? 'text-state-now' : 'text-muted-foreground')}>
-          {data.nowSet ? 'Now' : 'Next up'}
+          {areaFocusWord(data)}
         </span>
       )}
       {data.tier !== 2 && data.waitingCount > 0 && (
@@ -2568,7 +2084,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
               <span className="mt-0.5"><AreaMark data={data} /></span>
               <span className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-foreground" title={data.title}>
                 {data.fresh && !data.current && !data.done && (
-                  <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+                  <FreshDot inline />
                 )}
                 {data.title}
               </span>
@@ -2598,7 +2114,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
         </span>
         {showPicture && picture && actions && (
           <img
-            src={documentFileUrl(actions.workspaceId, picture.path)}
+            src={pictureSrc(actions, picture.path)}
             alt=""
             aria-hidden="true"
             loading="lazy"
@@ -2687,463 +2203,4 @@ export function BoardAreaFold({ data }: NodeProps<AreaFoldNode>) {
       {foldLabel(data)}
     </button>
   );
-}
-
-
-// ─── Rows inside an Area ────────────────────────────────────────────────────
-
-const STATE_LABEL = { current: 'Now', next: 'Next', open: 'Step', done: 'Done', plain: '' } as const;
-/** What a step row calls itself: the plan's first step in the focus Area is "Next up", not "Next". */
-const stateWord = (data: { state: keyof typeof STATE_LABEL; title: string }) => (data.state === 'next' && data.title === 'Next up' ? 'Next up' : STATE_LABEL[data.state]);
-
-/** A dialog showing the untruncated step title, its status, and controls to toggle or close. */
-function StepDetailDialog({
-  stepKey,
-  title,
-  state,
-  stepError,
-  isDone,
-  isBusy,
-  onToggle,
-  label,
-  main = true,
-  rowFallback = false,
-  className,
-  children,
-}: {
-  stepKey?: string;
-  title: string;
-  state: 'current' | 'next' | 'open' | 'done' | 'plain';
-  stepError?: string;
-  isDone: boolean;
-  isBusy: boolean;
-  onToggle?: () => void;
-  /** The name of the button that opens it, when it is not "View step: …". */
-  label?: string;
-  /** Whether the button is the main control of a card (`data-card-main`), which a press on the card goes to. */
-  main?: boolean;
-  /** Marks the button as where the keyboard goes when a row has no control of its own (the Now row with no step open). */
-  rowFallback?: boolean;
-  className?: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const actions = useContext(BoardActionsContext);
-  // Saying which step is worked on is for the open steps that can be worked on, not for headings or done steps
-  const canSetNow = Boolean(actions?.setNow && !actions.readOnly && stepKey && !isDone && actions.nowKeys?.has(stepKey));
-  const isNowStep = Boolean(stepKey && actions?.nowKey === stepKey);
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger
-        render={
-          <button
-            type="button"
-            {...(main ? { 'data-card-main': true } : {})}
-            {...(rowFallback ? { 'data-row-fallback': true } : {})}
-            data-testid={stepKey ? `step-trigger-${stepKey}` : 'step-trigger'}
-            className={cn("nodrag nopan flex min-w-0 flex-1 flex-col justify-center text-left rounded-md px-1 py-0.5 outline-hidden transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer", className)}
-            aria-label={label ?? `View step: ${plainText(title)}`}
-            onClick={(e) => {
-              e.stopPropagation();
-            }}
-          />
-        }
-      >
-        {children}
-      </DialogTrigger>
-      <DialogPopup className="max-w-lg" data-testid="step-detail-dialog">
-        <DialogHeader>
-          <div className="flex items-center gap-2">
-            <Badge variant={isDone ? 'success' : 'outline'}>
-              {isDone ? 'Done' : 'Open'}
-            </Badge>
-            {state === 'current' && <Badge variant="secondary">Now</Badge>}
-            <DialogTitle className="text-sm font-semibold text-muted-foreground">
-              Step details
-            </DialogTitle>
-          </div>
-          <DialogDescription className="sr-only">
-            {isDone ? 'Completed step details' : 'Open step details'}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="space-y-3">
-            <div className="break-words text-base leading-relaxed text-foreground select-text font-normal">
-              <InlinePlanMarkdown content={title} />
-            </div>
-            {stepError && (
-              <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
-                {stepError}
-              </div>
-            )}
-          </div>
-        </DialogPanel>
-        <DialogFooter variant="bare">
-          {canSetNow && (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={isBusy}
-              data-testid="step-dialog-now"
-              onClick={() => { void actions!.setNow!(isNowStep ? null : stepKey!).then((ok) => { if (ok) setOpen(false); }); }}
-            >
-              {isNowStep ? 'Stop working on this' : 'Work on this now'}
-            </Button>
-          )}
-          {onToggle && (
-            <Button
-              type="button"
-              size="sm"
-              variant={isDone ? 'outline' : 'default'}
-              disabled={isBusy}
-              data-testid="step-dialog-toggle"
-              onClick={() => {
-                onToggle();
-              }}
-            >
-              {isDone ? 'Mark as open' : 'Mark as done'}
-            </Button>
-          )}
-          <DialogClose render={<Button type="button" variant="ghost" size="sm" data-testid="step-dialog-close" />}>
-            Close
-          </DialogClose>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
-/** The tabs on the header line of the row of cards tied to no step: pictures and files, and notes. One tab stop; Left and Right move and select. */
-function RowTabs({ rowId, tabs }: { rowId: string; tabs: NonNullable<RowHeadData['tabs']> }) {
-  const actions = useContext(BoardActionsContext);
-  const list = useRef<HTMLDivElement>(null);
-  const kinds = [{ key: 'media' as const, name: 'Media', count: tabs.media }, { key: 'notes' as const, name: 'Notes', count: tabs.notes }];
-  const choose = (key: 'media' | 'notes', focus: boolean) => {
-    actions?.setRowTab?.(rowId, key);
-    if (focus) list.current?.querySelector<HTMLElement>(`[data-tab="${key}"]`)?.focus({ preventScroll: true });
-  };
-  return <div ref={list} role="tablist" aria-label="Kinds of cards" className="nodrag nopan flex shrink-0 items-center gap-0.5">
-    {kinds.map((kind) => {
-      const selected = tabs.active === kind.key;
-      return <button
-        key={kind.key} type="button" role="tab" data-tab={kind.key} aria-selected={selected} tabIndex={selected ? 0 : -1} disabled={!actions}
-        onClick={() => choose(kind.key, false)}
-        onKeyDown={(e) => {
-          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-          e.preventDefault();
-          e.stopPropagation();
-          choose(kind.key === 'media' ? 'notes' : 'media', true);
-        }}
-        className={cn('nodrag nopan inline-flex h-7 min-w-7 items-center gap-1 whitespace-nowrap rounded-md px-2 text-[13.5px] font-medium leading-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          selected ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground')}
-      >{kind.name}<span className={selected ? 'text-muted-foreground' : ''}>{kind.count}</span></button>;
-    })}
-  </div>;
-}
-
-/**
- * The header of a row, which stands above its things as a line of its own: its name and what it holds, as a button that opens the row
- * where it stands and closes it when it is open already; its chevron shows when the keyboard or the pointer is on it. The header of the
- * current step (or the next one) is the exception: it says all it can of the step, in up to two lines, and is there even when the step
- * has nothing on it yet.
- */
-export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
-  const actions = useContext(BoardActionsContext);
-  const isStep = data.text !== undefined;
-  const isDone = data.state === 'done';
-  const isBusy = Boolean(data.stepKey && actions?.busyStepKeys?.has(data.stepKey));
-  const stepError = data.stepKey ? actions?.stepErrors?.[data.stepKey] : undefined;
-  const stepPlain = plainText(data.text ?? data.title);
-  const label = [isStep ? `${stateWord(data)}: ${stepPlain}` : data.title, data.summary || data.caption].filter(Boolean).join(', ');
-  const Chevron = data.expanded ? ChevronUp : ChevronDown;
-
-  if (data.static) {
-    const stepText = stripHeadingColon(data.text ?? data.title);
-    const stepName = plainText(stepText);
-    return (
-      <div
-        className={cn(
-          'nodrag nopan relative flex h-full w-full items-center gap-2 overflow-hidden rounded-xl border border-border bg-card px-3 py-1 text-left',
-          CARD_FOCUS,
-          BRICK
-        )}
-        onClick={(e) => {
-          e.stopPropagation();
-          brickPress(e, (card) => firstControl(card, '[data-card-main]'));
-        }}
-      >
-        <Anchors />
-        {data.stepKey && (
-          <button
-            type="button"
-            role="checkbox"
-            data-testid={`step-checkbox-${data.stepKey}`}
-            aria-checked={isDone}
-            aria-label={isDone ? `Mark "${stepName}" not done` : `Mark "${stepName}" done`}
-            title={stepError ?? (isDone ? `Mark "${stepName}" not done` : `Mark "${stepName}" done`)}
-            disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (data.stepKey && !isBusy && !actions?.readOnly) {
-                void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
-              }
-            }}
-            className={cn(
-              'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-              isDone
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-muted-foreground/40 bg-background hover:border-primary',
-              isBusy && 'opacity-50 cursor-not-allowed',
-              !isBusy && actions?.toggleStep && !actions?.readOnly && 'cursor-pointer'
-            )}
-          >
-            {isDone ? (
-              <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-                <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-              </svg>
-            ) : null}
-          </button>
-        )}
-        <StepDetailDialog
-          stepKey={data.stepKey}
-          title={stepText}
-          state={data.state}
-          stepError={stepError}
-          isDone={isDone}
-          isBusy={isBusy}
-          onToggle={
-            !actions?.readOnly && data.stepKey && actions?.toggleStep
-              ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text)
-              : undefined
-          }
-        >
-          <span className="truncate text-[12.5px] leading-4 text-muted-foreground">
-            {stateWord(data)}
-            {stepError && <span role="alert" className="ml-1 text-[12.5px] text-destructive">{stepError}</span>}
-          </span>
-          <span
-            className={cn(
-              'line-clamp-1 text-[13px] font-medium leading-[17px]',
-              isDone ? 'text-muted-foreground line-through' : 'text-foreground'
-            )}
-            title={stepName}
-          >
-            <InlinePlanMarkdown content={stepText} />
-          </span>
-        </StepDetailDialog>
-      </div>
-    );
-  }
-
-  const checkboxButton = isStep && data.stepKey ? (
-    <button
-      type="button"
-      role="checkbox"
-      data-testid={`step-checkbox-${data.stepKey}`}
-      aria-checked={isDone}
-      aria-label={isDone ? `Mark "${stepPlain}" not done` : `Mark "${stepPlain}" done`}
-      title={stepError ?? (isDone ? `Mark "${stepPlain}" not done` : `Mark "${stepPlain}" done`)}
-      disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (data.stepKey && !isBusy && !actions?.readOnly) {
-          void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
-        }
-      }}
-      className={cn(
-        'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-        isDone
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-muted-foreground/40 bg-background hover:border-primary',
-        isBusy && 'opacity-50 cursor-not-allowed',
-        !isBusy && actions?.toggleStep && !actions?.readOnly && 'cursor-pointer'
-      )}
-    >
-      {isDone ? (
-        <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-          <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-        </svg>
-      ) : null}
-    </button>
-  ) : null;
-
-  const body = isStep && data.prominent
-    ? null
-    : <span className="flex min-w-0 flex-1 items-baseline gap-2">
-      <span className={cn('truncate text-[14px] font-semibold leading-5', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={isStep ? stepPlain : data.title}>{isStep ? <InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /> : data.title}</span>
-      {stepError ? (
-        <span role="alert" className="shrink-0 whitespace-nowrap text-[12.5px] leading-5 text-destructive">{stepError}</span>
-      ) : (data.summary || data.caption) && (
-        <span className="shrink-0 whitespace-nowrap text-[13px] leading-5 text-muted-foreground" title={data.caption}>{data.summary}</span>
-      )}
-    </span>;
-
-  // The current step: the state and the heading above it, then the step itself. A press on the first line opens or closes the row; a press on the
-  // words of the step opens the whole step (as a step tile does), so a long step can be read in full by keyboard and touch, and when the
-  // step has nothing on it there is no row to open: the first line is only said, and the words, named "Now: …", open the whole step.
-  if (isStep && data.prominent) {
-    const first = <>
-      <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', data.state === 'current' ? 'board-now-dot bg-state-now' : 'bg-muted-foreground/60')} />
-      <span className="shrink-0">{stateWord(data)}</span>
-      {stepError && <span role="alert" className="min-w-0 truncate text-[12.5px] font-normal text-destructive">{stepError}</span>}
-      {data.heading && !stepError && <span className="hidden min-w-0 flex-1 items-center gap-1.5 text-[12.5px] font-normal text-muted-foreground @[40rem]/now:flex"><span aria-hidden="true">·</span><span className="truncate" title={plainText(data.heading)}>{plainText(data.heading)}</span></span>}
-    </>;
-    return (
-      <div className="@container/now relative flex h-full w-full items-center gap-2 overflow-hidden rounded-xl border border-l-4 border-primary/40 border-l-state-now bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 text-left">
-        <Anchors />
-        {checkboxButton}
-        <div className="flex min-w-0 flex-1 flex-col justify-center">
-          {data.empty
-            ? <div className="flex h-7 items-center gap-1.5 whitespace-nowrap px-1 text-[13px] font-semibold leading-4 text-foreground">{first}</div>
-            : <button
-              type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
-              onClick={() => actions?.toggleRow?.(data.rowId)}
-              className="board-row-control nodrag nopan flex h-7 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-1 text-left text-[13px] font-semibold leading-4 text-foreground hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {first}
-              <Chevron aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
-            </button>}
-          <StepDetailDialog
-            main={false}
-            rowFallback={data.empty}
-            className="min-h-7"
-            label={data.empty ? label : undefined}
-            stepKey={data.stepKey}
-            title={stripHeadingColon(data.text ?? '')}
-            state={data.state}
-            stepError={stepError}
-            isDone={isDone}
-            isBusy={isBusy}
-            onToggle={!actions?.readOnly && data.stepKey && actions?.toggleStep ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text) : undefined}
-          >
-            <span className={cn('line-clamp-2 text-[14px] font-semibold leading-[18px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={stepPlain}><InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /></span>
-          </StepDetailDialog>
-        </div>
-      </div>
-    );
-  }
-
-  if (isStep) {
-    return (
-      <div
-        className={cn(
-          'relative flex h-full w-full items-center gap-2 overflow-hidden text-left',
-          data.prominent
-            ? 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 border-l-4 border-l-state-now hover:bg-primary/5'
-            : 'rounded-lg px-1'
-        )}
-      >
-        <Anchors />
-        {checkboxButton}
-        <button
-          type="button"
-          data-row-control={data.rowId}
-          aria-expanded={data.expanded}
-          aria-label={label}
-          disabled={!actions}
-          onClick={() => actions?.toggleRow?.(data.rowId)}
-          className={cn(
-            'board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            !data.prominent && 'hover:bg-accent/30'
-          )}
-        >
-          {body}
-          <Chevron aria-hidden="true" className={cn('size-4 shrink-0 text-muted-foreground', data.prominent ? 'absolute right-0 top-1/2 -translate-y-1/2' : 'board-row-chevron')} />
-        </button>
-      </div>
-    );
-  }
-
-  const toggle = (
-    <button
-      type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
-      onClick={() => actions?.toggleRow?.(data.rowId)}
-      className={cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left',
-        data.prominent ? 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 hover:bg-primary/10 border-l-4 border-l-state-now' : 'rounded-lg px-1 hover:bg-accent/30')}
-    >
-      {body}
-      <Chevron aria-hidden="true" className={cn('size-4 shrink-0 text-muted-foreground', data.prominent ? 'absolute right-3 top-1/2 -translate-y-1/2' : 'board-row-chevron')} />
-    </button>
-  );
-  if (data.tabs) {
-    return <div className="relative flex h-full w-full items-center gap-1">
-      <Anchors />
-      {toggle}
-      <RowTabs rowId={data.rowId} tabs={data.tabs} />
-    </div>;
-  }
-  return <div className="relative h-full w-full">
-    <Anchors />
-    {toggle}
-  </div>;
-}
-
-/** What a folded row says when it holds nothing: not worth a word of its own beside a preview. */
-const NOTHING = /^(No cards|Nothing attached|0 commits)$/;
-
-/** A row folded to one line: what it is, what it holds, and the first of the things it holds. Pressing it opens the row. */
-export function BoardFoldRow({ data }: NodeProps<FoldNode>) {
-  const actions = useContext(BoardActionsContext);
-  const tail = data.preview ?? data.note;
-  return <div className="relative h-full w-full">
-    <Anchors />
-    <button
-      type="button" data-row-control={data.rowId} aria-expanded="false" aria-label={summaryLabel([data.title, data.summary, data.current && 'current step', data.note, data.warning?.toLowerCase()])}
-      disabled={!actions} onClick={() => actions?.toggleRow?.(data.rowId)}
-      className={cn('board-row-control nodrag nopan flex h-full w-full items-center gap-3 rounded-xl border px-3 text-left hover:bg-accent/30',
-        data.current ? 'border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent border-l-4 border-l-state-now' : 'border-border/60 bg-card/50')}
-    >
-      <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[14px] font-semibold text-foreground" title={data.title}>{data.title}</span>
-      {data.summary && !(tail && NOTHING.test(data.summary)) && <span className="shrink-0 whitespace-nowrap text-[13px] text-muted-foreground">{data.summary.split(/(\d+ changed since)/).map((part, index) => (index % 2 === 1 ? <span key={index} className="font-medium text-warning-foreground">{part}</span> : part))}</span>}
-      {tail && <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground" title={tail}>{tail}</span>}
-      {data.warning && <span className="min-w-0 max-w-[40%] truncate text-[13px] text-destructive-foreground" title={data.warning}>{data.warning}</span>}
-      {!tail && <span className="flex-1" />}
-      <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-    </button>
-  </div>;
-}
-
-/** "+N more" at the end of the line of a row that has more than fits: a quiet button. Pressing it opens the row. */
-export function BoardMoreTile({ data }: NodeProps<MoreNode>) {
-  const actions = useContext(BoardActionsContext);
-  return <div className="relative h-full w-full">
-    <Anchors />
-    <button
-      type="button" data-row-control={data.rowId} aria-expanded="false" aria-label={`Show ${data.count} more for ${data.rowTitle}`} disabled={!actions}
-      onClick={() => actions?.toggleRow?.(data.rowId)}
-      className="board-row-control nodrag nopan flex h-full w-full items-center justify-end whitespace-nowrap rounded-lg px-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/30 hover:text-foreground"
-    >{data.title}</button>
-  </div>;
-}
-
-/** The buttons that page through an opened row, on the line of its header: "‹ 1–4 of 12 ›". The keyboard moves to the other button when the one it is on has no page left. */
-export function BoardPager({ data }: NodeProps<PagerNode>) {
-  const actions = useContext(BoardActionsContext);
-  const newer = useRef<HTMLButtonElement>(null);
-  const older = useRef<HTMLButtonElement>(null);
-  const atStart = data.page <= 0;
-  const atEnd = data.page >= data.pages - 1;
-  useEffect(() => {
-    const active = document.activeElement;
-    if (atEnd && !atStart && active === older.current) newer.current?.focus({ preventScroll: true });
-    else if (atStart && !atEnd && active === newer.current) older.current?.focus({ preventScroll: true });
-  }, [atStart, atEnd]);
-  // A live change can take the pager away while the keyboard is on it: it goes to the header of the row, and not to the page.
-  const nav = useRef<HTMLElement>(null);
-  const rowId = data.rowId;
-  useLayoutEffect(() => {
-    const element = nav.current;
-    return () => {
-      if (!element || !element.contains(document.activeElement)) return;
-      document.querySelector<HTMLElement>(`[data-row-control="${CSS.escape(rowId)}"]`)?.focus({ preventScroll: true });
-    };
-  }, [rowId]);
-  return <nav ref={nav} aria-label={`Pages of ${data.title}`} className="flex h-full w-full items-center justify-end gap-0.5">
-    <Anchors />
-    <Button ref={newer} type="button" size="icon-xs" variant="ghost" className="board-row-control nodrag nopan" aria-label={data.what === 'questions' ? 'Earlier questions' : 'Newer cards'} title={data.what === 'questions' ? 'Earlier' : 'Newer'} disabled={!actions || atStart} onClick={() => actions?.setRowPage?.(data.rowId, data.page - 1)}><ChevronLeft aria-hidden="true" /></Button>
-    <span role="status" aria-live="polite" className="whitespace-nowrap px-1 text-[13px] text-muted-foreground">{data.from}–{data.to} of {data.total}</span>
-    <Button ref={older} type="button" size="icon-xs" variant="ghost" className="board-row-control nodrag nopan" aria-label={data.what === 'questions' ? 'Later questions' : 'Older cards'} title={data.what === 'questions' ? 'Later' : 'Older'} disabled={!actions || atEnd} onClick={() => actions?.setRowPage?.(data.rowId, data.page + 1)}><ChevronRight aria-hidden="true" /></Button>
-  </nav>;
 }

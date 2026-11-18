@@ -7,6 +7,7 @@ export interface RepoFile {
   repoName: string;
   repoPath: string;
   file: string;
+  lineNoteId?: string;
 }
 export type ReferenceTarget = { origin: { kind: 'workspace'; workspacePath: string } | { kind: 'repository'; repoName: string; repoPath: string }; file: string; viewer: 'reader' | 'code' };
 let intent = 0;
@@ -203,7 +204,7 @@ export function resolveCodeWindowOpener(opener: HTMLElement | null, openerTarget
 }
 
 /** Asks for the Code window of a workspace to open. `opener` is where the keyboard returns when it closes. */
-export interface WorkspaceFile { workspaceId: string; file: string; line?: number }
+export interface WorkspaceFile { workspaceId: string; file: string; line?: number; lineNoteId?: string }
 export interface CodeWindowRequest { intent?: number; workspaceFile?: WorkspaceFile; /** Opens the window in Commits mode on this commit, with the commits of the row it came from. */ commit?: CommitOpen; /** Area name when opened from inside an Area on the Board. */ area?: string; close?: boolean; opener: HTMLElement | null; openerTarget?: OpenerTarget | null; /** When it was asked, so a window that mounts a moment later (another workspace) still opens for it. */ at: number; /** Made together with a move to this workspace, so the window that mounts there is the one asked for. */ navigated: boolean }
 export const codeWindowRequests = createRequestStore<CodeWindowRequest>();
 

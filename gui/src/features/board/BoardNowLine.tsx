@@ -38,7 +38,7 @@ export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, 
   const newsButton = useRef<HTMLButtonElement>(null);
   const newsList = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (returnNewsLine) setNewsOpen(Boolean(newsButton.current && newsLines.some((line) => line.key === returnNewsLine.key && (line.jump || line.knowledge || line.reviewCommit))));
+    if (returnNewsLine) setNewsOpen(Boolean(newsButton.current && newsLines.some((line) => line.key === returnNewsLine.key && (line.jump || line.knowledge || line.reviewCommit || line.lineNote))));
     // A return request is handled once, using the news present at that moment.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [returnNewsLine]);
@@ -119,7 +119,7 @@ export function BoardNowLine({ parts, news, newsLines, readOnly = false, gotIt, 
               <ul className="max-h-[min(50vh,20rem)] space-y-0.5 overflow-y-auto">
                 {newsLines.map((line, index) => (
                   <li key={`${index}-${line.text}`}>
-                    {line.jump || line.knowledge || line.reviewCommit ? (
+                    {line.jump || line.knowledge || line.reviewCommit || line.lineNote ? (
                       <button type="button" data-news-key={line.key} onClick={() => { setNewsOpen(false); onNewsLine(line); }} className="block min-h-6 w-full cursor-pointer rounded-md px-2 py-1 text-left text-[13px] leading-[18px] text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring">{line.text}</button>
                     ) : (
                       <span className="block min-h-6 px-2 py-1 text-[13px] leading-[18px] text-muted-foreground">{line.text}</span>

@@ -1,3 +1,4 @@
+import { ReaderLines, type ReaderLineTools } from '../board/ReaderLines.js';
 import { useMemo } from 'react';
 import DOMPurify from 'dompurify';
 import { ChatMarkdown, type MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
@@ -70,7 +71,7 @@ function collectHeadAssets(html: string, trusted: boolean): HeadAssets {
  * has an intrinsic height has to opt out of its capped height there, otherwise maximizing only
  * rescales a letterboxed frame.
  */
-export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillFrame = false, trusted = false, links, onImageClick }: { preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; fillFrame?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks; onImageClick?: () => void }) {
+export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillFrame = false, trusted = false, links, onImageClick, lineTools }: { lineTools?: ReaderLineTools; preview: DocumentPreviewData; fileUrl: string; raw: boolean; expanded?: boolean; fillFrame?: boolean; trusted?: boolean; links?: MarkdownDocumentLinks; onImageClick?: () => void }) {
   const htmlDocument = useMemo(() => {
     if (preview.kind !== 'html' || raw) return '';
     const source = preview.content ?? '';
@@ -87,6 +88,7 @@ export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillF
   // Only the trusted path may run script, and it must never be sandboxed into the app's origin.
   const sandbox = trusted ? 'allow-scripts' : '';
 
+  if (lineTools && preview.content !== undefined && (preview.kind === 'text' || preview.kind === 'markdown')) return <ReaderLines content={preview.content} markdown={preview.kind === 'markdown' && !raw} tools={lineTools} links={links} />;
   if (preview.kind === 'markdown' && !raw) return <div className={cn('rounded-lg border border-border/80 bg-card/40 p-4 sm:p-5', expanded && 'flex-1 min-h-0')}><ChatMarkdown content={preview.content ?? ''} links={links} /></div>;
   if (preview.kind === 'html' && !raw) return <iframe title={`Preview of ${preview.name}`} sandbox={sandbox} referrerPolicy="no-referrer" srcDoc={htmlDocument} className={`${height} w-full rounded-lg border border-border bg-white shadow-xs`} />;
   if (preview.content !== undefined) return <pre className={cn('whitespace-pre-wrap break-words font-mono text-xs sm:text-sm rounded-lg border border-border bg-muted/20 p-4', expanded ? 'flex-1 min-h-0 overflow-auto' : 'overflow-x-auto')}>{preview.content}</pre>;

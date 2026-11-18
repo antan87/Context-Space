@@ -224,7 +224,7 @@ describe('latestNext', () => {
 
 describe('nextAction follows the focus the strip shows', () => {
   const step = { key: 'f2', text: '**F2**: Commit, finish and sync back', done: false };
-  const focusOn = (source: 'set' | 'plan') => ({ source, step, checkpoint: null }) as never;
+  const focusOn = (source: 'set' | 'recent' | 'plan') => ({ source, step, checkpoint: null }) as never;
   const lifecycle = facts([milestone('a', 'in_progress', { title: 'A Board tab in NexusFlow' })], { currentMilestoneId: 'a' });
 
   it('continues the step someone said they work on, not the lifecycle milestone', () => {
@@ -233,7 +233,8 @@ describe('nextAction follows the focus the strip shows', () => {
     });
   });
 
-  it('starts the plan-order step when nobody said, and keeps the lifecycle only where the plan has nothing open', () => {
+  it('starts the plan-order or recent-work step when nobody said, and keeps the lifecycle only where the plan has nothing open', () => {
+    expect(nextAction(lifecycle, undefined, focusOn('recent'))).toMatchObject({ label: 'Start "F2: Commit, finish and sync back"', prompt: 'Start "F2: Commit, finish and sync back".' });
     expect(nextAction(lifecycle, undefined, focusOn('plan'))).toMatchObject({ label: 'Start "F2: Commit, finish and sync back"', prompt: 'Start "F2: Commit, finish and sync back".' });
     expect(nextAction(lifecycle, undefined, null)).toMatchObject({ label: 'Continue "A Board tab in NexusFlow"' });
     expect(nextAction(lifecycle)).toMatchObject({ label: 'Continue "A Board tab in NexusFlow"' });

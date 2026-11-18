@@ -43,6 +43,8 @@ const SkillsPage = lazy(() => import('./pages/SkillsPage.js').then((m) => ({ def
 const AgentsPage = lazy(() => import('./pages/AgentsPage.js').then((m) => ({ default: m.AgentsPage })));
 const WorkroomsPage = lazy(() => import('./pages/WorkroomsPage.js').then((m) => ({ default: m.WorkroomsPage })));
 const StartWorkPage = lazy(() => import('./pages/StartWorkPage.js').then((m) => ({ default: m.StartWorkPage })));
+// The design page: every piece and card in each state. Hidden: nothing links to it.
+const DesignPage = lazy(() => import('./pages/DesignPage.js').then((m) => ({ default: m.DesignPage })));
 
 const StrategiesPage = lazy(() => import('./pages/StrategiesPage.js').then((m) => ({ default: m.StrategiesPage })));
 const WorkspacesPage = lazy(() => import('./pages/WorkspacesPage.js').then((m) => ({ default: m.WorkspacesPage })));
@@ -1116,6 +1118,7 @@ Core Instructions:
                 <Route path="/agents" element={agentsPage} />
                 <Route path="/workrooms" element={workroomsPage} />
                 <Route path="/settings" element={settingsPage} />
+                <Route path="/design" element={<DesignPage />} />
                 <Route path="/workflows" element={workflowsPage} />
                 <Route path="/strategies" element={workflowsPage} />
                 <Route path="*" element={<Navigate to="/overview" replace />} />

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { diagramFramePlugin } from './scripts/diagram-frame-plugin.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,7 +33,7 @@ function monacoSubpathPlugin(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), monacoSubpathPlugin()],
+  plugins: [react(), tailwindcss(), monacoSubpathPlugin(), diagramFramePlugin(__dirname)],
   server: {
     proxy: {
       '/api/terminals': { target: 'http://127.0.0.1:3000', changeOrigin: false },

@@ -9,6 +9,11 @@
       "id": "GHSA-3g3m-2fjr-6pw4",
       "expires": "2026-12-16",
       "reason": "glob >=9.0.0 <=14.0.1: a cancelled glob can keep walking the filesystem after its AbortSignal fires. The only affected copy left is glob 13 in extension: a direct devDependency there (^13.0.6, not imported by the extension's code) that mocha and @vscode/vsce 3 also use to run the tests and package the extension. None of it ships, and nothing there passes an AbortSignal. Clearing it needs extension's own glob raised to ^14.0.2 and mocha and vsce releases on a patched glob (or without glob, as vsce 4 is), to do as their own change. The root package's own copy is already on the patched 14.0.6. Re-check when mocha updates."
+    },
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "expires": "2026-12-16",
+      "reason": "picomatch <=4.0.7: a regular-expression denial of service from an attacker-chosen glob pattern with repeated extglobs. There is no patched release (every version up to the latest, 4.0.7, is affected), so no update can clear it. The only copy that ships is picomatch 2.3.2 in the root package, through globby (micromatch) and pm2 (anymatch, readdirp). src/ calls globby only with fixed literal patterns and ignore lists written in src/analyzers and src/core/doctor.ts, never with gitignore files or patterns from a repository or a user, and never asks pm2 to watch files. Every other copy is build or test tooling and never ships: picomatch 4 through vite, vitest and tinyglobby in root and gui (not in the built GUI bundle), through fdir and tinyglobby in desktop, and picomatch 2 and 4 through micromatch and tinyglobby in extension. Accepted by the owner on 18 Nov. Re-check when picomatch publishes a fix."
     }
   ]
 }

@@ -39,6 +39,17 @@ describe('nowLineParts', () => {
     expect(parts.who).toBeUndefined();
   });
 
+  it('says Last worked on with the open checkpoint where work last happened and its first open step, with no one named', () => {
+    const recentPlan: PlanFileView = {
+      ...plan(null),
+      changes: [{ at: iso(4), by: 'claude', action: 'added', kind: 'step', key: 'c', text: 'F2: the Code window' }],
+    };
+    const { areas, parts } = partsFor(recentPlan);
+    expect(parts).toMatchObject({ word: 'Last worked on', text: 'F2: the Code window', area: 'Second checkpoint' });
+    expect(parts.who).toBeUndefined();
+    expect(nowLineTarget(areas, focusOf(recentPlan))).toEqual({ areaId: 'checkpoint:two', nodeId: 'row:step:c' });
+  });
+
   it('counts the questions that wait and the news, and shows neither at zero', () => {
     const { parts } = partsFor(plan(null, true), news({ plan: { items: [{ at: iso(3), by: 'claude', action: 'added', kind: 'step', key: 'b', text: 'Second step' }], more: 0 }, commits: [{ repo: 'r', more: 2, commits: [] }] }));
     expect(parts).toMatchObject({ waiting: 1, news: 3 });

@@ -1,3 +1,4 @@
+import type { LineRange } from '../board/lineNotes.js';
 import { useCallback, useEffect, useRef, type ComponentProps } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils.js';
@@ -34,6 +35,7 @@ export interface CodeWindowProps {
   showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
   /** Types a line into the AI session; true when one took it. */
   askAI: (message: string) => Promise<boolean>;
+  askInCLI?: (path: string, range: LineRange) => void | Promise<unknown>;
   onClose: () => void;
 }
 
@@ -60,7 +62,7 @@ const OWNS_ESCAPE = '[data-slot="menu-popup"], [role="dialog"], [role="menu"], .
  * The Review page over the workspace content (full-frame below WorkspaceHeader in Board, Split and phone widths).
  * It stays mounted once opened (hidden and inert while closed), so the chosen file and its scroll survive a close.
  */
-export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, area, returnTo = 'board', onOpenStep, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, onClose }: CodeWindowProps) {
+export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, area, returnTo = 'board', onOpenStep, ws, open, opener, openerTarget, cover, sectionProps, showToast, askAI, askInCLI, onClose }: CodeWindowProps) {
   const rect = useDockRect(cover);
   const panel = useRef<HTMLDivElement>(null);
   const skipFocusReturn = useRef(false);
@@ -143,6 +145,13 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, a
     return sent;
   }, [askAI, onClose]);
 
+  const askLines = useCallback(async (path: string, range: LineRange) => {
+    skipFocusReturn.current = true;
+    // The shared path reveals the terminal even when there is no session yet. Uncover it in either case.
+    try { return Boolean(await askInCLI?.(path, range)); }
+    finally { onClose(); }
+  }, [askInCLI, onClose]);
+
   const openStep = useCallback((step: CommitStepLink) => {
     skipFocusReturn.current = true;
     onOpenStep?.(step);
@@ -211,7 +220,7 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, a
         data-code-window=""
         className="@container flex h-full w-full min-h-0 flex-col overflow-hidden rounded-none border-0 bg-background outline-hidden"
       >
-        {workspaceFile && open && <WorkspaceFileView file={workspaceFile} requestId={fileRequestId} backAction={backAction} breadcrumb={breadcrumb} />}
+        {workspaceFile && open && <WorkspaceFileView file={workspaceFile} requestId={fileRequestId} backAction={backAction} breadcrumb={breadcrumb} onAskInCLI={askInCLI ? askLines : undefined} />}
         <div style={{ display: workspaceFile ? 'none' : 'contents' }} hidden={!!workspaceFile} inert={workspaceFile ? true : undefined}>
         <CodeSection
           {...sectionProps}
@@ -227,6 +236,7 @@ export default function CodeWindow({ workspaceFile, commitOpen, fileRequestId, a
           backAction={backAction}
           breadcrumb={breadcrumb}
           showToast={showToast}
+          onAskInCLI={askInCLI ? askLines : undefined}
           onAskAI={ask}
         />
         </div>

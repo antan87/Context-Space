@@ -194,7 +194,7 @@ export function nextAction(facts: ProgressFacts, suggestion?: NextEvent, focus?:
   if (focus && where) {
     return focus.source === 'set'
       ? { kind: 'prompt', source: 'facts', label: `Continue "${where}"`, reason: 'It is what the work is on.', prompt: `Continue with "${where}".` }
-      : { kind: 'prompt', source: 'facts', label: `Start "${where}"`, reason: 'It is next up in the plan.', prompt: `Start "${where}".` };
+      : { kind: 'prompt', source: 'facts', label: `Start "${where}"`, reason: focus.source === 'recent' ? 'It is next up where work last happened.' : 'It is next up in the plan.', prompt: `Start "${where}".` };
   }
   const underway = facts.milestones.find((milestone) => milestone.id === facts.currentMilestoneId && milestone.state === 'in_progress')
     ?? facts.milestones.find((milestone) => milestone.state === 'in_progress');

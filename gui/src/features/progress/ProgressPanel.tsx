@@ -9,8 +9,10 @@ import { AnswerBox } from '../plan/AnswerBox.js';
 import { checkIsFailing, formatAge, verificationLine, type ActiveProposal, type StripTone } from './progressView.js';
 import type { PlanQuestion as PlanQuestionItem } from './stripPlan.js';
 
-/** Mirrors the backend's limit on a reopen reason. */
-export const REOPEN_REASON_MAX = 500;
+/** A reopened plan step: the reason is written as "Reopened: <reason>" on one plan line of at most 2000 characters. */
+export const PLAN_REOPEN_REASON_MAX = 1990;
+/** A reopened lifecycle milestone: the backend keeps at most 500 characters (REOPEN_REASON_MAX_LENGTH in core/lifecycle.ts). */
+export const LIFECYCLE_REOPEN_REASON_MAX = 500;
 /** Most changed files listed before the rest are summed up. */
 const TOUCHED_LIST_MAX = 25;
 
@@ -31,13 +33,15 @@ export interface ReopenFormProps {
   reason: string;
   pending: boolean;
   error?: string;
+  /** The limit of the endpoint this form submits to; the milestone limit unless told otherwise. */
+  maxLength?: number;
   onChange: (reason: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }
 
 /** Asks why a finished milestone needs another go. The reason is required and travels with the milestone. */
-export function ReopenForm({ id, title, reason, pending, error, onChange, onSubmit, onCancel }: ReopenFormProps) {
+export function ReopenForm({ id, title, reason, pending, error, maxLength = LIFECYCLE_REOPEN_REASON_MAX, onChange, onSubmit, onCancel }: ReopenFormProps) {
   const field = useRef<HTMLInputElement>(null);
   useEffect(() => { field.current?.focus(); }, []);
   return (
@@ -46,7 +50,7 @@ export function ReopenForm({ id, title, reason, pending, error, onChange, onSubm
       onSubmit={(event) => { event.preventDefault(); if (reason.trim() && !pending) onSubmit(); }}
     >
       <label htmlFor={id} className="text-xs font-medium">Why does &ldquo;{title}&rdquo; need rework?</label>
-      <Input id={id} ref={field} value={reason} maxLength={REOPEN_REASON_MAX} required onChange={(event) => onChange(event.target.value)} placeholder="What is missing or wrong" />
+      <Input id={id} ref={field} value={reason} maxLength={maxLength} required onChange={(event) => onChange(event.target.value)} placeholder="What is missing or wrong" />
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
       <div className="flex gap-1.5">
         <Button type="submit" size="xs" disabled={!reason.trim() || pending}>{pending ? 'Reopening...' : 'Reopen it'}</Button>

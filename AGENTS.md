@@ -37,6 +37,10 @@ repository file; doing so leaves stale guidance on later feature branches.
 - Preserve unrelated working-tree changes and use explicit pathspecs for Git
   staging or commits.
 
+## UI
+
+- UI comes from `gui/src/design` (read its README); no text below 12 px, no raw palette colours or hex in components.
+
 ## Releasing
 
 - Release with `npm run release:ship` (details in `RELEASING.md`). It does the whole
