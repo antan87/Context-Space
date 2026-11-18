@@ -3,7 +3,7 @@ import { Handle, Position } from '@xyflow/react';
 import { Pin } from 'lucide-react';
 
 import { ChatMarkdown } from '../../../components/ChatMarkdown.js';
-import { Badge, Button, Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../../design/index.js';
+import { Badge, Button, Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger, FreshDot, Mark } from '../../../design/index.js';
 import { cn } from '../../../lib/utils.js';
 import { BoardActionsContext, bylineText, cardLinks } from '../boardActions.js';
 import type { CardData } from '../boardLayout.js';
@@ -119,12 +119,10 @@ export function CardMark({ data, markId }: { data: CardData; markId: string }) {
     {data.archived && <span>Archived</span>}
     {data.fresh && (
       <>
-        <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+        <FreshDot />
         <span className="sr-only">New since you looked. </span>
       </>
     )}
-    <span id={markId} title={byline} className={cn('rounded-full px-1.5 text-[12.5px] leading-4', ai ? 'bg-state-ai/12 font-medium text-state-ai' : 'text-muted-foreground')}>
-      <span aria-hidden="true">{ai ? 'AI' : 'you'}</span><span className="sr-only">{byline}</span>
-    </span>
+    <Mark id={markId} ai={ai} label={byline} />
   </div>;
 }

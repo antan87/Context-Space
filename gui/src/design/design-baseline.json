@@ -1,8 +1,8 @@
 {
   "scanner": 2,
-  "total": 709,
+  "total": 707,
   "byKind": {
-    "tiny": 356,
+    "tiny": 354,
     "palette": 277,
     "arbitrary": 59,
     "hex": 17
@@ -53,7 +53,6 @@
     "palette: text-slate-400": 3,
     "palette: text-violet-300": 3,
     "palette: text-violet-700": 3,
-    "tiny: text-[10.5px]": 3,
     "tiny: text-[11.5px]": 3,
     "arbitrary: rounded-[calc(var(--radius-2xl)-1px)]": 2,
     "hex: #007ACC": 2,
@@ -131,7 +130,8 @@
     "palette: to-orange-400": 1,
     "palette: to-orange-500": 1,
     "palette: via-orange-500": 1,
-    "tiny: text-[.625rem]": 1
+    "tiny: text-[.625rem]": 1,
+    "tiny: text-[10.5px]": 1
   },
   "byFolder": {
     "pages": 164,
@@ -142,7 +142,7 @@
     "features/skills": 43,
     "features/sessions": 37,
     "features/workspace-launch": 23,
-    "features/board": 21,
+    "features/board": 18,
     "features/chat": 17,
     "features/terminal": 15,
     "features/progress": 11,
@@ -154,6 +154,7 @@
     "features/workspace-shell": 2,
     ".": 1,
     "components": 1,
+    "design": 1,
     "features/overview": 1
   }
 }

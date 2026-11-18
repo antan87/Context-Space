@@ -25,7 +25,7 @@ import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLin
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
 import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type FoldNode, type LaneNode, type MoreNode, type RowHeadNode, type PagerNode, type PlaceholderNode, type UncommittedNode, type RowHeadData } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
-import { CARD_BRICK as BRICK, CARD_FOCUS } from '../../design/index.js';
+import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, Pill } from '../../design/index.js';
 import { Anchors, brickPress, TITLE_BUTTON } from './cards/cardParts.js';
 import { BoardNote } from './cards/NoteCard.js';
 import { BoardFile } from './cards/FileCard.js';
@@ -913,7 +913,7 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
     <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold inline-flex items-center gap-1.5', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
       {data.fresh && (
         <>
-          <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+          <FreshDot />
           <span className="sr-only">New since you looked. </span>
         </>
       )}
@@ -1041,7 +1041,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
         {data.fresh && (
           <>
-            <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+            <FreshDot />
             <span className="sr-only">New since you looked. </span>
           </>
         )}
@@ -1110,7 +1110,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         <code id={shaId} className="shrink-0 font-mono text-primary font-medium">{data.sha}</code>
         {data.fresh && (
           <>
-            <span className="size-1.5 shrink-0 rounded-full bg-primary" title="New since you looked" aria-hidden="true" />
+            <FreshDot />
             <span className="sr-only">New since you looked. </span>
           </>
         )}
@@ -1118,7 +1118,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
         <CommitNoteMarker id={id} subject={data.subject} commit={commit} />
       </div>
-      <span className="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">commit</span>
+      <Pill className="shrink-0">commit</Pill>
     </div>
     {commit ? (
       <button
@@ -1524,7 +1524,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
 
           <span className="mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
             {data.fresh && !data.current && !data.done && (
-              <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+              <FreshDot inline />
             )}
             {data.title}
           </span>
@@ -1758,7 +1758,7 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
         <AreaMark data={data} />
         <span className={cn('text-sm font-medium leading-5 text-foreground', listArea ? 'min-w-0 truncate whitespace-nowrap' : 'min-w-0 flex-auto truncate')} title={data.title}>
           {data.fresh && !data.current && !data.done && (
-            <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+            <FreshDot inline />
           )}
           {data.title}
         </span>
@@ -2069,7 +2069,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
               <span className="mt-0.5"><AreaMark data={data} /></span>
               <span className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-foreground" title={data.title}>
                 {data.fresh && !data.current && !data.done && (
-                  <span className="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true" />
+                  <FreshDot inline />
                 )}
                 {data.title}
               </span>

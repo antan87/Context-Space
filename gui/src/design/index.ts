@@ -11,3 +11,7 @@ export * from '../components/ui/context-ring.js';
 // The Board card's frame. `components/ui/card.tsx` has an unrelated, unused `CardFrame` (a plain div); naming the
 // export here makes this one win over that one in `export *`, so nobody who imports `CardFrame` from the design module gets it.
 export { CardFrame, CARD_BRICK, CARD_FOCUS, type CardFrameProps } from './CardFrame.js';
+// The small pieces the cards share: a kind tag, the you/AI mark, and the "new since you looked" dot.
+export { Pill, PILL_LEGACY, type PillProps, type PillTone } from './Pill.js';
+export { Mark, type MarkProps } from './Mark.js';
+export { FreshDot, type FreshDotProps } from './FreshDot.js';

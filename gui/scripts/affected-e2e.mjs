@@ -55,6 +55,7 @@ export const APP_WIDE_PREFIXES = ['gui/src/components/ui/'];
 export const NO_BROWSER_FILES = new Set([
   'gui/src/design/designGuard.test.ts',
   'gui/src/design/design-baseline.json',
+  'gui/src/design/pieces.test.tsx',
 ]);
 
 export function isNoBrowserFile(file) {
@@ -260,6 +261,17 @@ const COMMIT_CARD_BOARD_SPECS = [
  * them (a unit test checks that, also through design/index), and design/index.ts, which exports CardFrame, is APP_WIDE.
  */
 const CARD_PARTS_SPECS = ['e2e/board', 'e2e/accessibility.spec.ts'];
+
+/**
+ * The small pieces of the design module (DS4): `design/Pill.tsx` (the kind tag of the commit, note and file cards),
+ * `design/Mark.tsx` (the you/AI mark `CardMark` draws on every compact card) and `design/FreshDot.tsx` (the "New since you
+ * looked" dot of cards, step rows and Area cards). One shared row for the three, and the same specs as the card parts: the
+ * mark is on every card kind and the dot in every Area and row, so only a Board-wide run is exact, and nothing outside
+ * the Board draws them (a unit test lists their importers: BoardNodes, the two card files and cardParts). Audited by
+ * grepping every spec for "New since you looked" (board-area, board-now-line), the kind words, the mark and the note
+ * marker's name; the page scan (accessibility.spec.ts) draws a Board too. design/index.ts, which exports them, is APP_WIDE.
+ */
+const DESIGN_PIECE_SPECS = CARD_PARTS_SPECS;
 
 /**
  * The Note card (DS3), `cards/NoteCard.tsx`. Audited by making BoardNote render nothing and running every Board spec
@@ -629,6 +641,28 @@ const FOLDER_ROWS = [
     bareNames: ['CardFrame', 'CardFrame.tsx'],
     specs: CARD_PARTS_SPECS,
     safety: 'The card article and its archived, pinned, fresh, reading and pressable states, drawn by every Board card that has one; only BoardNodes.tsx imports it, so it is not APP_WIDE (design/index.ts, which exports it, is); verified by cardParts.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  // Pill, Mark and FreshDot (DS4)
+  {
+    folder: 'src/design/Pill',
+    path: 'gui/src/design/Pill.tsx',
+    bareNames: ['Pill', 'Pill.tsx'],
+    specs: DESIGN_PIECE_SPECS,
+    safety: 'The kind tag of the commit, note and file cards; only Board files import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  {
+    folder: 'src/design/Mark',
+    path: 'gui/src/design/Mark.tsx',
+    bareNames: ['Mark', 'Mark.tsx'],
+    specs: DESIGN_PIECE_SPECS,
+    safety: 'The you/AI mark CardMark draws on every compact card; only cardParts.tsx imports it; verified by pieces.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  {
+    folder: 'src/design/FreshDot',
+    path: 'gui/src/design/FreshDot.tsx',
+    bareNames: ['FreshDot', 'FreshDot.tsx'],
+    specs: DESIGN_PIECE_SPECS,
+    safety: 'The "New since you looked" dot of cards, step rows and Area cards; only Board files import it; verified by pieces.test.tsx, the golden markup, freshDotPin.test.tsx, and all of e2e/board plus accessibility.spec.ts.',
   },
   // The Note and File cards (DS3)
   {

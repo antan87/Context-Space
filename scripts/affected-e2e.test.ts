@@ -68,6 +68,32 @@ function consumesCardParts(source: string): boolean {
     || (/\/design(?:\/index)?(?:\.js)?$/.test(from) && /\b(CardFrame|CARD_BRICK|CARD_FOCUS)\b/.test(source)));
 }
 
+/**
+ * The files that import one of the design pieces (`Pill`, `Mark`, `FreshDot`) by name, from the design barrel or from the piece's own
+ * file, in any spelling (an alias, a type import, a multi-line clause), and the files that re-export them: read from TypeScript's syntax tree.
+ */
+function usesDesignPieces(source: string, names: readonly string[]): boolean {
+  const file = ts.createSourceFile('x.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const fromDesign = (text: string) => /(^|\/)design(\/index)?(\.js)?$/.test(text);
+  const fromPiece = (text: string) => new RegExp(`(^|/)(${names.join('|')})(\\.js)?$`).test(text);
+  return file.statements.some((statement) => {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && fromPiece(statement.moduleSpecifier.text)) return true;
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && fromDesign(statement.moduleSpecifier.text)) {
+      const bindings = statement.importClause?.namedBindings;
+      const named = bindings && ts.isNamedImports(bindings) ? bindings.elements.map((element) => (element.propertyName ?? element.name).text) : [];
+      return named.some((name) => names.includes(name)) || (bindings !== undefined && ts.isNamespaceImport(bindings)) || statement.importClause?.name !== undefined;
+    }
+    if (ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier) && (fromPiece(statement.moduleSpecifier.text) || fromDesign(statement.moduleSpecifier.text))) {
+      const clause = statement.exportClause;
+      return !clause || ts.isNamespaceExport(clause) || clause.elements.some((element) => names.includes((element.propertyName ?? element.name).text));
+    }
+    return false;
+  });
+}
+
+const DESIGN_PIECES = ['Pill', 'Mark', 'FreshDot'] as const;
+const findDesignPieceUsers = (dir: string, names: readonly string[]) => sourceFiles(dir).filter((file) => usesDesignPieces(readFileSync(file, 'utf8'), names));
+
 function sourceFiles(dir: string, withTests = false): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -338,6 +364,7 @@ describe('affected e2e specs', () => {
       'gui/src/features/board/BoardRowHead.test.tsx',
       'gui/src/features/board/BoardSection.tsx',
       'gui/src/features/board/cards/cardMarkup.test.tsx',
+      'gui/src/features/board/cards/freshDotPin.test.tsx',
     ]);
     // What the scanner sees, in any spelling
     for (const source of [
@@ -363,6 +390,45 @@ describe('affected e2e specs', () => {
     expect(consumesCardParts('export { Anchors } from "./cards/cardParts.js";')).toBe(true);
     expect(consumesCardParts('import { Button, CardFrame } from "../../design/index.js";')).toBe(true);
     expect(consumesCardParts('import { Button } from "../../design/index.js";')).toBe(false);
+  });
+
+  it('maps Pill, Mark and FreshDot (DS4) to all of e2e/board and the page scan, and only Board files import them', () => {
+    const rowOf = (path: string) => FOLDER_SPECS.find((entry) => entry.path === path);
+    for (const piece of DESIGN_PIECES) {
+      const row = rowOf(`gui/src/design/${piece}.tsx`);
+      expect(row, piece).toBeDefined();
+      expect(row!.specs, piece).toEqual(expect.arrayContaining(['e2e/board', 'e2e/accessibility.spec.ts']));
+      expect(getAffectedSpecs([row!.path]), piece).toEqual(row!.specs);
+      // Not the whole app: that is only for design/index.ts
+      expect(getAffectedSpecs([row!.path]), piece).not.toEqual(['e2e']);
+    }
+    expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
+    // Their own test is for no browser
+    expect(getAffectedSpecs(['gui/src/design/pieces.test.tsx'])).toEqual([]);
+    // The rows are safe only while nothing outside the Board draws the pieces: a new user must extend them first.
+    expect(findDesignPieceUsers('gui/src', ['Pill']).sort()).toEqual([
+      'gui/src/design/index.ts',
+      'gui/src/features/board/BoardNodes.tsx',
+      'gui/src/features/board/cards/FileCard.tsx',
+      'gui/src/features/board/cards/NoteCard.tsx',
+    ]);
+    expect(findDesignPieceUsers('gui/src', ['Mark']).sort()).toEqual(['gui/src/design/index.ts', 'gui/src/features/board/cards/cardParts.tsx']);
+    expect(findDesignPieceUsers('gui/src', ['FreshDot']).sort()).toEqual([
+      'gui/src/design/index.ts',
+      'gui/src/features/board/BoardNodes.tsx',
+      'gui/src/features/board/cards/cardParts.tsx',
+    ]);
+    // The guard reads aliases, type imports, multi-line clauses, double quotes, the piece's own file and re-exports
+    const users = (source: string) => usesDesignPieces(source, DESIGN_PIECES);
+    expect(users("import { Button, Pill } from '../../design/index.js';")).toBe(true);
+    expect(users('import {\n  Button,\n  Mark as WhoMark,\n} from "../../design";')).toBe(true);
+    expect(users("import { FreshDot } from '../design/FreshDot.js';")).toBe(true);
+    expect(users("import type { PillProps } from '../design/Pill.js';")).toBe(true);
+    expect(users("export { Pill } from './Pill.js';")).toBe(true);
+    expect(users("export * from './design/index.js';")).toBe(true);
+    expect(users("import { Button } from '../../design/index.js';")).toBe(false);
+    expect(users("import { Pill } from './other.js';")).toBe(false);
+    expect(users("// import { Pill } from '../design/index.js';\nexport const x = 1;")).toBe(false);
   });
 
   it('covers every row in FOLDER_SPECS, its src/ and test variants, and existing specs', () => {
