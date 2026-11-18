@@ -1,8 +1,9 @@
-import { createElement } from 'react';
+import { createElement, useContext } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { DocumentViewer } from './DocumentViewer.js';
 import type { DocumentPreviewData } from './DocumentPreview.js';
+import { DiagramFullScreenContext } from '../../components/diagramFixContext.js';
 
 // DOMPurify needs a DOM, which these server renders do not have; the options it is given are pinned in previewPolicy.test.ts.
 vi.mock('dompurify', () => ({ default: { sanitize: (html: string) => html } }));
@@ -172,5 +173,19 @@ describe('DocumentViewer', () => {
       expect(html).toContain('sandbox="allow-scripts"');
       expect(html).not.toContain('allow-same-origin');
     });
+  });
+
+  it('announces full-screen Expand capability to diagrams only when its own chrome is shown', () => {
+    function Probe() {
+      return createElement('span', { 'data-screen': useContext(DiagramFullScreenContext) });
+    }
+    const withDefaultChrome = renderToStaticMarkup(createElement(DocumentViewer, { title: 'doc.md', preview: null, raw: false, status: createElement(Probe) }));
+    expect(withDefaultChrome).toContain('data-screen="available"');
+
+    const withFillChrome = renderToStaticMarkup(createElement(DocumentViewer, { title: 'doc.md', preview: null, raw: false, fill: true, chromeless: false, status: createElement(Probe) }));
+    expect(withFillChrome).toContain('data-screen="available"');
+
+    const chromelessFill = renderToStaticMarkup(createElement(DocumentViewer, { title: 'doc.md', preview: null, raw: false, fill: true, chromeless: true, status: createElement(Probe) }));
+    expect(chromelessFill).toContain('data-screen="none"');
   });
 });

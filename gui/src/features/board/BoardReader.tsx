@@ -30,7 +30,7 @@ import type { DiffViewMode } from '../changes/types.js';
 import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
-import { DiagramFixContext } from '../../components/diagramFixContext.js';
+import { DiagramFixContext, DiagramFullScreenContext } from '../../components/diagramFixContext.js';
 import { diagramFixRequest, isQuestionFile } from './questionsArea.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { isKnowledgeFile } from '../knowledge/knowledgeIndex.js';
@@ -654,42 +654,44 @@ export function BoardReader({
         )}
       </header>
       <div ref={bodyRef} onScrollCapture={onBodyScroll} className="min-h-0 flex-1 overflow-hidden">
-        {isKnowledge ? (
-          <BoardKnowledge key={open} workspaceId={workspaceId} entry={target.knowledge?.entry} request={request} />
-        ) : isHtml ? (
-          <ReaderPage
-            key={open}
-            workspaceId={workspaceId}
-            path={path}
-            repo={repo?.name}
-            raw={raw}
-            onViewUrlReady={handleViewUrlReady}
-          />
-        ) : (
-          <DiagramFixContext value={fixDiagram}>
-            <DocumentViewer
+        <DiagramFullScreenContext value={maximized ? 'fullscreen' : 'available'}>
+          {isKnowledge ? (
+            <BoardKnowledge key={open} workspaceId={workspaceId} entry={target.knowledge?.entry} request={request} />
+          ) : isHtml ? (
+            <ReaderPage
               key={open}
-              fill
-              fillFrame
-              chromeless
-              title={path}
-              lineTools={!isKnowledge ? { notes, request, active, readOnly, onDone: finishNote, onAsk: !readOnly && onAskInCLI ? askLines : undefined, openNoteId: target.lineNoteId } : undefined}
-              preview={data}
+              workspaceId={workspaceId}
+              path={path}
+              repo={repo?.name}
               raw={raw}
-              fileUrl={fileUrl}
-              links={links}
-              imageExpanded={maximized}
-              onImageClick={toggleMaximized}
-              status={<>
-                {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
-                {preview.isError && <p role="alert" className="text-sm text-destructive">
-                  {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
-                  <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
-                </p>}
-              </>}
+              onViewUrlReady={handleViewUrlReady}
             />
-          </DiagramFixContext>
-        )}
+          ) : (
+            <DiagramFixContext value={fixDiagram}>
+              <DocumentViewer
+                key={open}
+                fill
+                fillFrame
+                chromeless
+                title={path}
+                lineTools={!isKnowledge ? { notes, request, active, readOnly, onDone: finishNote, onAsk: !readOnly && onAskInCLI ? askLines : undefined, openNoteId: target.lineNoteId } : undefined}
+                preview={data}
+                raw={raw}
+                fileUrl={fileUrl}
+                links={links}
+                imageExpanded={maximized}
+                onImageClick={toggleMaximized}
+                status={<>
+                  {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
+                  {preview.isError && <p role="alert" className="text-sm text-destructive">
+                    {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
+                    <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
+                  </p>}
+                </>}
+              />
+            </DiagramFixContext>
+          )}
+        </DiagramFullScreenContext>
       </div>
       {(target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">
         {target.text && <div

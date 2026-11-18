@@ -6,6 +6,7 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, Dia
 import { Input } from '../../components/ui/input.js';
 import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
+import { DiagramFullScreenContext } from '../../components/diagramFixContext.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
 import type { ReaderLineTools } from '../board/ReaderLines.js';
@@ -284,21 +285,27 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
 
   // The frame of a page or a PDF that has the body to itself, in a body that does not scroll.
   const framed = fill && fillFrame && !editing && !raw && (preview?.kind === 'html' || (preview?.kind === 'pdf' && preview.content === undefined));
-  const body = (expandedNow: boolean) => editing
-    ? editorView
-    : preview
-      ? <DocumentPreview
-          lineTools={lineTools}
-          preview={preview}
-          fileUrl={fileUrl}
-          raw={raw}
-          expanded={expandedNow || isImageExpanded}
-          fillFrame={framed && !expandedNow}
-          trusted
-          links={links}
-          onImageClick={preview.kind === 'image' ? handleImageClick : undefined}
-        />
-      : <>{status}</>;
+  const hasExpand = !fill || !chromeless;
+  const body = (expandedNow: boolean) => {
+    const content = editing
+      ? editorView
+      : preview
+        ? <DocumentPreview
+            lineTools={lineTools}
+            preview={preview}
+            fileUrl={fileUrl}
+            raw={raw}
+            expanded={expandedNow || isImageExpanded}
+            fillFrame={framed && !expandedNow}
+            trusted
+            links={links}
+            onImageClick={preview.kind === 'image' ? handleImageClick : undefined}
+          />
+        : <>{status}</>;
+    return hasExpand
+      ? <DiagramFullScreenContext value={expandedNow ? 'fullscreen' : 'available'}>{content}</DiagramFullScreenContext>
+      : content;
+  };
 
   const folder = (preview?.name ?? title).includes('/') ? (preview?.name ?? title).slice(0, (preview?.name ?? title).lastIndexOf('/') + 1) : '';
   /** A document with nothing to preview (a .docx): the body only offers the download, so the row does too. */
