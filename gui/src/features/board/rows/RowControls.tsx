@@ -2,7 +2,7 @@ import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { type NodeProps } from '@xyflow/react';
 import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 
-import { Button } from '../../../design/index.js';
+import { Button, foldSurface } from '../../../design/index.js';
 import { cn } from '../../../lib/utils.js';
 import { BoardActionsContext } from '../boardActions.js';
 import type { FoldNode, MoreNode, PagerNode } from '../boardLayout.js';
@@ -20,8 +20,7 @@ export function BoardFoldRow({ data }: NodeProps<FoldNode>) {
     <button
       type="button" data-row-control={data.rowId} aria-expanded="false" aria-label={summaryLabel([data.title, data.summary, data.current && 'current step', data.note, data.warning?.toLowerCase()])}
       disabled={!actions} onClick={() => actions?.toggleRow?.(data.rowId)}
-      className={cn('board-row-control nodrag nopan flex h-full w-full items-center gap-3 rounded-xl border px-3 text-left hover:bg-accent/30',
-        data.current ? 'border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent border-l-4 border-l-state-now' : 'border-border/60 bg-card/50')}
+      className={cn('board-row-control nodrag nopan flex h-full w-full items-center gap-3', foldSurface(Boolean(data.current)))}
     >
       <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[14px] font-semibold text-foreground" title={data.title}>{data.title}</span>
       {data.summary && !(tail && NOTHING.test(data.summary)) && <span className="shrink-0 whitespace-nowrap text-[13px] text-muted-foreground">{data.summary.split(/(\d+ changed since)/).map((part, index) => (index % 2 === 1 ? <span key={index} className="font-medium text-warning-foreground">{part}</span> : part))}</span>}

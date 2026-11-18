@@ -25,7 +25,7 @@ import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLin
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
 import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode, type UncommittedNode } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
-import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, Pill } from '../../design/index.js';
+import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, Pill, StepCheck } from '../../design/index.js';
 import { Anchors, brickPress, TITLE_BUTTON } from './cards/cardParts.js';
 import { summaryLabel } from './summaryLabel.js';
 import { BoardNote } from './cards/NoteCard.js';
@@ -849,35 +849,17 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
           const stepError = actions?.stepErrors?.[step.key];
           return (
             <li key={step.key} className="flex items-center gap-2 text-[12.5px]" style={{ height: BOARD_SIZE.stepRow }}>
-              <button
-                type="button"
-                role="checkbox"
-                data-testid={`checkpoint-step-checkbox-${step.key}`}
-                aria-checked={step.done}
-                aria-label={step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`}
+              <StepCheck
+                testId={`checkpoint-step-checkbox-${step.key}`}
+                checked={step.done}
+                label={step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`}
                 title={stepError ?? (step.done ? `Mark "${plainText(step.text)}" not done` : `Mark "${plainText(step.text)}" done`)}
                 disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!isBusy) {
-                    void actions?.toggleStep?.(step.key, !step.done, step.text);
-                  }
-                }}
-                className={cn(
-                  'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-                  step.done
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-muted-foreground/40 bg-background hover:border-primary',
-                  isBusy && 'opacity-50 cursor-not-allowed',
-                  !isBusy && actions?.toggleStep && 'cursor-pointer'
-                )}
-              >
-                {step.done ? (
-                  <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-                    <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-                  </svg>
-                ) : null}
-              </button>
+                busy={isBusy}
+                pressable={Boolean(actions?.toggleStep)}
+                className="nodrag nopan"
+                onToggle={() => { void actions?.toggleStep?.(step.key, !step.done, step.text); }}
+              />
               <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={plainText(step.text)}>
                 <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span><InlinePlanMarkdown content={step.text} />
               </span>

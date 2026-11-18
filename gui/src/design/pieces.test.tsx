@@ -1,7 +1,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { FreshDot, Mark, Pill, PILL_LEGACY, type PillTone } from './index.js';
+import { cn } from '../lib/utils.js';
+import { foldSurface, FreshDot, Mark, Pill, PILL_LEGACY, rowSurface, StepCheck, type PillTone } from './index.js';
 
 const html = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element);
 
@@ -66,5 +67,96 @@ describe('FreshDot', () => {
   it('keeps its title and aria-hidden in the inline form', () => {
     expect(html(createElement(FreshDot, { inline: true })))
       .toBe('<span class="mr-1.5 inline-block size-1.5 shrink-0 rounded-full bg-primary align-middle" title="New since you looked" aria-hidden="true"></span>');
+  });
+});
+
+describe('StepCheck (DS5b)', () => {
+  const base = { label: 'Mark "Ship" done', title: 'Mark "Ship" done', disabled: false, busy: false, pressable: true, testId: 'step-checkbox-ship', onToggle: () => {} };
+  const FRAME = 'flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
+  const CHECK = '<svg class="size-3.5" fill="none" height="24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewBox="0 0 24 24" width="24"><path d="M5.252 12.7 10.2 18.63 18.748 5.37"></path></svg>';
+
+  it('draws the unchecked box as the rows do today, with the caller\'s classes first', () => {
+    expect(html(createElement(StepCheck, { ...base, checked: false, className: 'nodrag nopan' })))
+      .toBe(`<button type="button" role="checkbox" data-testid="step-checkbox-ship" aria-checked="false" aria-label="Mark &quot;Ship&quot; done" title="Mark &quot;Ship&quot; done" class="nodrag nopan ${FRAME} border-muted-foreground/40 bg-background hover:border-primary cursor-pointer"></button>`);
+  });
+
+  it('draws the checked box with the check icon', () => {
+    expect(html(createElement(StepCheck, { ...base, checked: true, label: 'Mark "Ship" not done', title: 'Mark "Ship" not done' })))
+      .toBe(`<button type="button" role="checkbox" data-testid="step-checkbox-ship" aria-checked="true" aria-label="Mark &quot;Ship&quot; not done" title="Mark &quot;Ship&quot; not done" class="${FRAME} border-primary bg-primary text-primary-foreground cursor-pointer">${CHECK}</button>`);
+  });
+
+  it('dims and never shows a pointer while busy, even when pressable', () => {
+    const out = html(createElement(StepCheck, { ...base, checked: false, busy: true, disabled: true }));
+    expect(out).toContain('opacity-50 cursor-not-allowed');
+    expect(out).not.toContain('cursor-pointer');
+    expect(out).toContain(' disabled=""');
+  });
+
+  it('has a pointer only when pressable, and is disabled only when told', () => {
+    const quiet = html(createElement(StepCheck, { ...base, checked: false, pressable: false }));
+    expect(quiet).not.toContain('cursor-pointer');
+    expect(quiet).not.toContain('disabled');
+    expect(html(createElement(StepCheck, { ...base, checked: false, disabled: true }))).toContain(' disabled=""');
+  });
+
+  it('shows the label as the name and the title as the tooltip, which can differ', () => {
+    const out = html(createElement(StepCheck, { ...base, checked: false, title: 'Could not save' }));
+    expect(out).toContain('aria-label="Mark &quot;Ship&quot; done"');
+    expect(out).toContain('title="Could not save"');
+  });
+
+  it('presses through onToggle and stops the click from reaching the row, but not while busy', () => {
+    const press = (props: { busy: boolean }) => {
+      const calls: string[] = [];
+      const element = StepCheck({ ...base, checked: false, busy: props.busy, onToggle: () => calls.push('toggle') });
+      const onClick = (element.props as { onClick: (event: { stopPropagation: () => void }) => void }).onClick;
+      onClick({ stopPropagation: () => calls.push('stop') });
+      return calls;
+    };
+    expect(press({ busy: false })).toEqual(['stop', 'toggle']);
+    expect(press({ busy: true })).toEqual(['stop']);
+  });
+});
+
+describe('RowSurface (DS5b)', () => {
+  const NOW = 'rounded-xl border border-l-4 border-primary/40 border-l-state-now bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3';
+  const set = (value: string) => value.split(/\s+/).sort();
+
+  it('draws the Now surface with its left rule, and a quiet row without one', () => {
+    expect(rowSurface({ now: true })).toBe(NOW);
+    expect(rowSurface({ now: false })).toBe('rounded-lg px-1');
+    expect(rowSurface({ now: false })).not.toContain('border-l-state-now');
+    expect(rowSurface({ now: true, hover: 'hover:bg-primary/5' })).toBe(`${NOW} hover:bg-primary/5`);
+  });
+
+  it('keeps the stripe: twMerge drops no class of the Now surface, in any caller\'s composition', () => {
+    expect(set(cn('relative flex', rowSurface({ now: true }), 'text-left'))).toEqual(set(`relative flex ${NOW} text-left`));
+    expect(rowSurface({ now: true })).toContain('border-l-4 border-primary/40 border-l-state-now');
+  });
+
+  it('draws the folded row in the order the fold has always had', () => {
+    expect(foldSurface(true)).toBe('rounded-xl border px-3 text-left hover:bg-accent/30 border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent border-l-4 border-l-state-now');
+    expect(foldSurface(false)).toBe('rounded-xl border px-3 text-left hover:bg-accent/30 border-border/60 bg-card/50');
+  });
+
+  // The two step-row sites that write the Now surface in a different order than the helper (not in any golden snapshot): the class SET after
+  // twMerge must be the same as before. (Proof (a) of the packet; computed style and pictures are proofs (b) and (c).)
+  it('keeps each moved site\'s class set after twMerge (the class-order proof)', () => {
+    const was = {
+      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 border-l-4 border-l-state-now hover:bg-primary/5'),
+      headQuiet: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-lg px-1'),
+      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 hover:bg-primary/10 border-l-4 border-l-state-now'),
+      toggleQuiet: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-lg px-1 hover:bg-accent/30'),
+    };
+    const now = {
+      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-primary/5' })),
+      headQuiet: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: false })),
+      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-primary/10' })),
+      toggleQuiet: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: false, hover: 'hover:bg-accent/30' })),
+    };
+    for (const key of Object.keys(was) as (keyof typeof was)[]) {
+      expect(set(now[key]), key).toEqual(set(was[key]));
+    }
+    expect(set(was.head)).toContain('border-l-state-now');
   });
 });

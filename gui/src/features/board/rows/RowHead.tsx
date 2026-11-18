@@ -5,7 +5,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { InlinePlanMarkdown } from '../../../components/InlinePlanMarkdown.js';
 import { cn } from '../../../lib/utils.js';
 import { plainText, stripHeadingColon } from '../../../lib/plainText.js';
-import { Badge, Button, CARD_BRICK as BRICK, CARD_FOCUS, Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../../design/index.js';
+import { Badge, Button, CARD_BRICK as BRICK, CARD_FOCUS, Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger, rowSurface, StepCheck } from '../../../design/index.js';
 import { BoardActionsContext, firstControl } from '../boardActions.js';
 import type { RowHeadData, RowHeadNode } from '../boardLayout.js';
 import { Anchors, brickPress } from '../cards/cardParts.js';
@@ -194,35 +194,21 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       >
         <Anchors />
         {data.stepKey && (
-          <button
-            type="button"
-            role="checkbox"
-            data-testid={`step-checkbox-${data.stepKey}`}
-            aria-checked={isDone}
-            aria-label={isDone ? `Mark "${stepName}" not done` : `Mark "${stepName}" done`}
+          <StepCheck
+            testId={`step-checkbox-${data.stepKey}`}
+            checked={isDone}
+            label={isDone ? `Mark "${stepName}" not done` : `Mark "${stepName}" done`}
             title={stepError ?? (isDone ? `Mark "${stepName}" not done` : `Mark "${stepName}" done`)}
             disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (data.stepKey && !isBusy && !actions?.readOnly) {
+            busy={isBusy}
+            pressable={Boolean(actions?.toggleStep && !actions?.readOnly)}
+            className="nodrag nopan"
+            onToggle={() => {
+              if (data.stepKey && !actions?.readOnly) {
                 void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
               }
             }}
-            className={cn(
-              'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-              isDone
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-muted-foreground/40 bg-background hover:border-primary',
-              isBusy && 'opacity-50 cursor-not-allowed',
-              !isBusy && actions?.toggleStep && !actions?.readOnly && 'cursor-pointer'
-            )}
-          >
-            {isDone ? (
-              <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-                <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-              </svg>
-            ) : null}
-          </button>
+          />
         )}
         <StepDetailDialog
           stepKey={data.stepKey}
@@ -256,35 +242,21 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   }
 
   const checkboxButton = isStep && data.stepKey ? (
-    <button
-      type="button"
-      role="checkbox"
-      data-testid={`step-checkbox-${data.stepKey}`}
-      aria-checked={isDone}
-      aria-label={isDone ? `Mark "${stepPlain}" not done` : `Mark "${stepPlain}" done`}
+    <StepCheck
+      testId={`step-checkbox-${data.stepKey}`}
+      checked={isDone}
+      label={isDone ? `Mark "${stepPlain}" not done` : `Mark "${stepPlain}" done`}
       title={stepError ?? (isDone ? `Mark "${stepPlain}" not done` : `Mark "${stepPlain}" done`)}
       disabled={!actions?.toggleStep || isBusy || Boolean(actions?.readOnly)}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (data.stepKey && !isBusy && !actions?.readOnly) {
+      busy={isBusy}
+      pressable={Boolean(actions?.toggleStep && !actions?.readOnly)}
+      className="nodrag nopan"
+      onToggle={() => {
+        if (data.stepKey && !actions?.readOnly) {
           void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
         }
       }}
-      className={cn(
-        'nodrag nopan flex size-6 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-        isDone
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-muted-foreground/40 bg-background hover:border-primary',
-        isBusy && 'opacity-50 cursor-not-allowed',
-        !isBusy && actions?.toggleStep && !actions?.readOnly && 'cursor-pointer'
-      )}
-    >
-      {isDone ? (
-        <svg className="size-3.5" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" viewBox="0 0 24 24" width="24">
-          <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-        </svg>
-      ) : null}
-    </button>
+    />
   ) : null;
 
   const body = isStep && data.prominent
@@ -309,7 +281,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       {data.heading && !stepError && <span className="hidden min-w-0 flex-1 items-center gap-1.5 text-[12.5px] font-normal text-muted-foreground @[40rem]/now:flex"><span aria-hidden="true">·</span><span className="truncate" title={plainText(data.heading)}>{plainText(data.heading)}</span></span>}
     </>;
     return (
-      <div className="@container/now relative flex h-full w-full items-center gap-2 overflow-hidden rounded-xl border border-l-4 border-primary/40 border-l-state-now bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 text-left">
+      <div className={cn('@container/now relative flex h-full w-full items-center gap-2 overflow-hidden', rowSurface({ now: true }), 'text-left')}>
         <Anchors />
         {checkboxButton}
         <div className="flex min-w-0 flex-1 flex-col justify-center">
@@ -348,9 +320,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       <div
         className={cn(
           'relative flex h-full w-full items-center gap-2 overflow-hidden text-left',
-          data.prominent
-            ? 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 border-l-4 border-l-state-now hover:bg-primary/5'
-            : 'rounded-lg px-1'
+          rowSurface({ now: Boolean(data.prominent), hover: data.prominent ? 'hover:bg-primary/5' : undefined })
         )}
       >
         <Anchors />
@@ -379,7 +349,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
       onClick={() => actions?.toggleRow?.(data.rowId)}
       className={cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left',
-        data.prominent ? 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 hover:bg-primary/10 border-l-4 border-l-state-now' : 'rounded-lg px-1 hover:bg-accent/30')}
+        rowSurface({ now: Boolean(data.prominent), hover: data.prominent ? 'hover:bg-primary/10' : 'hover:bg-accent/30' }))}
     >
       {body}
       <Chevron aria-hidden="true" className={cn('size-4 shrink-0 text-muted-foreground', data.prominent ? 'absolute right-3 top-1/2 -translate-y-1/2' : 'board-row-chevron')} />

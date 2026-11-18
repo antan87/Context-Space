@@ -72,10 +72,23 @@ function consumesCardParts(source: string): boolean {
  * The files that import one of the design pieces (`Pill`, `Mark`, `FreshDot`) by name, from the design barrel or from the piece's own
  * file, in any spelling (an alias, a type import, a multi-line clause), and the files that re-export them: read from TypeScript's syntax tree.
  */
-function usesDesignPieces(source: string, names: readonly string[]): boolean {
+function usesDesignPieces(source: string, names: readonly string[], files: readonly string[] = names): boolean {
   const file = ts.createSourceFile('x.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const fromDesign = (text: string) => /(^|\/)design(\/index)?(\.js)?$/.test(text);
-  const fromPiece = (text: string) => new RegExp(`(^|/)(${names.join('|')})(\\.js)?$`).test(text);
+  const fromPiece = (text: string) => new RegExp(`(^|/)(${files.join('|')})(\\.js)?$`).test(text);
+  // A dynamic `import('…/design/index.js')` or `import('…/StepCheck.js')` anywhere in the file (a lazy screen, `.then(m => m.StepCheck)`):
+  // the names it takes cannot be told, so it counts as a user (DS4's review found this missing).
+  let dynamic = false;
+  const visit = (node: import('typescript').Node): void => {
+    if (dynamic) return;
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const [argument] = node.arguments;
+      if (argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) && (fromDesign(argument.text) || fromPiece(argument.text))) dynamic = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  if (dynamic) return true;
   return file.statements.some((statement) => {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && fromPiece(statement.moduleSpecifier.text)) return true;
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && fromDesign(statement.moduleSpecifier.text)) {
@@ -92,6 +105,8 @@ function usesDesignPieces(source: string, names: readonly string[]): boolean {
 }
 
 const DESIGN_PIECES = ['Pill', 'Mark', 'FreshDot'] as const;
+const ROW_PIECE_NAMES = ['StepCheck', 'rowSurface', 'foldSurface'] as const;
+const ROW_PIECE_FILES = ['StepCheck', 'RowSurface'] as const;
 const findDesignPieceUsers = (dir: string, names: readonly string[]) => sourceFiles(dir).filter((file) => usesDesignPieces(readFileSync(file, 'utf8'), names));
 
 function sourceFiles(dir: string, withTests = false): string[] {
@@ -492,6 +507,44 @@ describe('affected e2e specs', () => {
     expect(users("import { Button } from '../../design/index.js';")).toBe(false);
     expect(users("import { Pill } from './other.js';")).toBe(false);
     expect(users("// import { Pill } from '../design/index.js';\nexport const x = 1;")).toBe(false);
+    // ... and a dynamic import of the barrel or of a piece's file (DS5b), also deep inside a function or a `.then`
+    expect(users("const lazy = () => import('../../design/index.js');")).toBe(true);
+    expect(users('async function load() { const { Pill } = await import("../design/index.js"); return Pill; }')).toBe(true);
+    expect(users("export const x = import('../design/Mark.js').then((m) => m.Mark);")).toBe(true);
+    expect(users("const x = import('./other.js');")).toBe(false);
+    expect(users("// const x = import('../design/index.js');\nexport const y = 1;")).toBe(false);
+  });
+
+  it('maps StepCheck and RowSurface (DS5b) to the specs that tick steps or show the Now row, and only Board row files import them', () => {
+    const rowOf = (path: string) => FOLDER_SPECS.find((entry) => entry.path === path);
+    for (const piece of ROW_PIECE_FILES) {
+      const row = rowOf(`gui/src/design/${piece}.tsx`);
+      expect(row, piece).toBeDefined();
+      expect(row!.specs, piece).toEqual(expect.arrayContaining(['e2e/board-step-ticking.spec.ts', 'e2e/board-area.spec.ts', 'e2e/board-a11y.spec.ts', 'e2e/accessibility.spec.ts']));
+      expect(getAffectedSpecs([row!.path]), piece).toEqual(row!.specs);
+      // Not the whole app: that is only for design/index.ts
+      expect(getAffectedSpecs([row!.path]), piece).not.toEqual(['e2e']);
+      // None of the rows maps the whole Board folder by accident: the lists are exact
+      expect(row!.specs, piece).not.toContain('e2e/board');
+    }
+    expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
+    // The rows are safe only while nothing outside the Board's row files and the Checkpoint card draws them
+    const users = (names: readonly string[], files: readonly string[]) => sourceFiles('gui/src').filter((file) => usesDesignPieces(readFileSync(file, 'utf8'), names, files)).sort();
+    expect(users(['StepCheck'], ['StepCheck'])).toEqual([
+      'gui/src/design/index.ts',
+      'gui/src/features/board/BoardNodes.tsx',
+      'gui/src/features/board/rows/RowHead.tsx',
+    ]);
+    expect(users(['rowSurface', 'foldSurface'], ['RowSurface'])).toEqual([
+      'gui/src/design/index.ts',
+      'gui/src/features/board/rows/RowControls.tsx',
+      'gui/src/features/board/rows/RowHead.tsx',
+    ]);
+    expect(usesDesignPieces("import { StepCheck } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);
+    expect(usesDesignPieces("import { rowSurface as surface } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);
+    expect(usesDesignPieces("import { foldSurface } from '../design/RowSurface.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);
+    expect(usesDesignPieces("const lazy = import('../design/index.js');", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);
+    expect(usesDesignPieces("import { Pill } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(false);
   });
 
   it('covers every row in FOLDER_SPECS, its src/ and test variants, and existing specs', () => {

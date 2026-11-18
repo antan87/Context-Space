@@ -372,6 +372,47 @@ const ROW_CONTROL_SPECS = [
   'e2e/board-live.spec.ts',
 ];
 
+/**
+ * The step checkbox (DS5b), `design/StepCheck.tsx`: the Checkpoint card's step list and the two copies in the Area's step rows (`rows/RowHead.tsx`).
+ * Audited both ways. Break-it: with StepCheck drawing nothing, these three failed alone (area, area-view, step-ticking); with a press that never
+ * calls `onToggle`, step-ticking and area-view failed (area passed). Grep for `step-checkbox-`, `checkpoint-step-checkbox-`, `Mark "…" done` and the
+ * checkbox role found only step-ticking and area-view among the Board specs (the other `checkbox` hits are the commit panel's "Include …" boxes, the
+ * archive dialog and the settings pages, which are not this piece); no spec uses `checkpoint-step-checkbox-` at all (the Checkpoint card's step list is
+ * covered by the golden markup only). Fifteen other Board specs that show step rows (overview, now-line, back, questions, w2-tiers, assignment,
+ * decisions, terminal-coworking, press, reader, commit-list, commit-notes, workspace-files, live, code-window) passed with the box drawing nothing, so
+ * they stay out. board-a11y and accessibility are added by hand: the box is a named control on every step row, and both scan the whole page.
+ */
+const STEP_CHECK_SPECS = [
+  'e2e/board-step-ticking.spec.ts',
+  'e2e/board-area-view.spec.ts',
+  'e2e/board-area.spec.ts',
+  'e2e/board-a11y.spec.ts',
+  'e2e/accessibility.spec.ts',
+];
+
+/**
+ * The step row surface (DS5b), `design/RowSurface.tsx` (`rowSurface`, `foldSurface`): the Now / Next up step and the folded row.
+ * No browser spec fails when the surface loses its left rule, nor when `rowSurface` and `foldSurface` return nothing at all (checked on area,
+ * area-view, now-line, step-ticking, w2-tiers, overview, back, questions, assignment, decisions and terminal-coworking for the first, and on
+ * area, now-line, w2-tiers, a11y and back for the second): the surface is a look, which only the golden markup and pieces.test.tsx pin (with the
+ * rule gone, the "step" and "fold" snapshots and the RowSurface cases failed). So the row lists the specs that show the Now / Next up row and the
+ * folded row by grep ("Next up", "Now", the step row and the fold button), and the whole-page scan, which reads the contrast of text on the tint:
+ * area, area-view, now-line, step-ticking, back, overview, questions, w2-tiers, a11y, accessibility. Not added: assignment (its "Now line" is the
+ * overview's own), decisions ("Now answer"), terminal-coworking ("Now" is not a row there).
+ */
+const ROW_SURFACE_SPECS = [
+  'e2e/board-area.spec.ts',
+  'e2e/board-area-view.spec.ts',
+  'e2e/board-now-line.spec.ts',
+  'e2e/board-step-ticking.spec.ts',
+  'e2e/board-back.spec.ts',
+  'e2e/board-overview.spec.ts',
+  'e2e/board-questions.spec.ts',
+  'e2e/board-w2-tiers.spec.ts',
+  'e2e/board-a11y.spec.ts',
+  'e2e/accessibility.spec.ts',
+];
+
 const FOLDER_ROWS = [
   ...['lib/diagram.ts', 'lib/diagramFrame.ts', 'lib/diagramSafety.ts', 'diagram-frame.ts', 'components/Diagram.tsx', 'components/diagramFixContext.ts'].map((file) => ({
     folder: `src/${file.replace(/\.tsx?$/, '')}`,
@@ -718,6 +759,21 @@ const FOLDER_ROWS = [
     bareNames: ['FreshDot', 'FreshDot.tsx'],
     specs: DESIGN_PIECE_SPECS,
     safety: 'The "New since you looked" dot of cards, step rows and Area cards; only Board files import it; verified by pieces.test.tsx, the golden markup, freshDotPin.test.tsx, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  // StepCheck and RowSurface (DS5b)
+  {
+    folder: 'src/design/StepCheck',
+    path: 'gui/src/design/StepCheck.tsx',
+    bareNames: ['StepCheck', 'StepCheck.tsx'],
+    specs: STEP_CHECK_SPECS,
+    safety: 'The step checkbox of the Checkpoint card and the Area step rows; only BoardNodes.tsx and rows/RowHead.tsx import it (design/index.ts, which exports it, is APP_WIDE); the specs listed each failed when the box drew nothing or never ticked; verified by pieces.test.tsx, the golden markup, RowHead.test.tsx and those specs.',
+  },
+  {
+    folder: 'src/design/RowSurface',
+    path: 'gui/src/design/RowSurface.tsx',
+    bareNames: ['RowSurface', 'RowSurface.tsx'],
+    specs: ROW_SURFACE_SPECS,
+    safety: 'The Now / Next up step surface and the folded row; only rows/RowHead.tsx and rows/RowControls.tsx import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, RowHead.test.tsx and the specs listed.',
   },
   // The Note and File cards (DS3)
   {

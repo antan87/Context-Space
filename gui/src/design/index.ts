@@ -15,3 +15,6 @@ export { CardFrame, CARD_BRICK, CARD_FOCUS, type CardFrameProps } from './CardFr
 export { Pill, PILL_LEGACY, type PillProps, type PillTone } from './Pill.js';
 export { Mark, type MarkProps } from './Mark.js';
 export { FreshDot, type FreshDotProps } from './FreshDot.js';
+// The step checkbox of the Area's rows and the Checkpoint card, and the Now/Next step surface of the rows (DS5b).
+export { StepCheck, type StepCheckProps } from './StepCheck.js';
+export { rowSurface, foldSurface, type RowSurfaceOptions } from './RowSurface.js';

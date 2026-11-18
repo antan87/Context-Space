@@ -77,7 +77,8 @@ State always shows as a word, never colour alone: Now (`--state-now` dot, "Now",
 | `CardFrame` (the card's `<article>`) | planned | 2b |
 | `Pill` (a kind tag or state word, with tones `neutral`, `accent`, `ai`, `needs`, `done`, `reopened`, `warning`), `Mark` (who made a card: "AI" in the AI's tone or "you"), `FreshDot` (the "New since you looked" dot, block or inline) | **Exist** (DS4), with the legacy look (today's classes) until the restyle; `look="hairline"` is the target look of `Pill` | 4 |
 | `MetaLine` | planned | with the rows (5) or the restyle |
-| `StepCheck`, `RowSurface`, `ListRow` | planned | 5 |
+| `StepCheck` (the step checkbox: `checked`, `label`, `title`, `disabled`, `busy`, `pressable`, `testId`, `onToggle`, `className`; it takes plain values, never Board data), `rowSurface(...)` and `foldSurface(...)` in `RowSurface.tsx` (class helpers for the Now/Next step surface and the folded row) | **Exist** (DS5b), drawn exactly as the rows did; the Hairline stripe and real suggested-answer buttons come with R1. Use `StepCheck` for any step checkbox, `rowSurface` for a step row's surface | 5 |
+| `ListRow` | planned | 5 |
 | `Composer` (growing text field) | planned | 6 |
 | `reference/DesignPage` (live page `#/design`) | planned | 7 |
 | `tokens.css` (moved from `index.css`) | planned | 11 |
@@ -90,7 +91,7 @@ If the piece exists here, use it. Do not write these again in a screen:
 - a button, icon button, badge, input, textarea, checkbox, switch, menu, popover, tooltip, dialog or tab bar (use the export; icon-only controls need `IconButton` for its label and tooltip);
 - a card surface (border, radius, padding, hover, focus ring, archived/pinned/reading states): `CardFrame` once it exists;
 - a kind tag, a you/AI mark, a fresh dot: `Pill` (kind of a card, a state in a word), `Mark` (who made it), `FreshDot` (new since you looked); a count pill is not one of them yet;
-- a step checkbox or a Now/Next row surface: `StepCheck` and `RowSurface` once they exist;
+- a step checkbox or a Now/Next row surface: `StepCheck` (the box; pass `nodrag nopan` through `className` on the Board) and `rowSurface` / `foldSurface` (the surface classes);
 - text below 12 px, a raw palette colour (`text-violet-600`, `bg-red-500/10`), a hex value, or an arbitrary `rounded-[..]` / `shadow-[..]`: use the tokens (`text-xs`, `text-muted-foreground`, `bg-primary`, `--state-*`, `rounded-lg`, `shadow-xs`). If a token is missing, add it to the tokens, not to the component.
 
 ## Add a card kind
