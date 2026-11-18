@@ -80,9 +80,22 @@ State always shows as a word, never colour alone: Now (`--state-now` dot, "Now",
 | `StepCheck` (the step checkbox: `checked`, `label`, `title`, `disabled`, `busy`, `pressable`, `testId`, `onToggle`, `className`; it takes plain values, never Board data), `rowSurface(...)` and `foldSurface(...)` in `RowSurface.tsx` (class helpers for the Now/Next step surface and the folded row) | **Exist** (DS5b), drawn exactly as the rows did; the Hairline stripe and real suggested-answer buttons come with R1. Use `StepCheck` for any step checkbox, `rowSurface` for a step row's surface | 5 |
 | `ListRow` | planned | 5 |
 | `Composer` (a controlled multi-line text field: `value`, `onChange` (gets the string), `mono`, `className` (drawn last), and `id`, `name`, `placeholder`, `maxLength`, `rows`, `disabled`, `autoFocus`, `onKeyDown`, `aria-*` and `ref` straight to the `<textarea>`) | **Exists** (DS6), drawn exactly as the note dialog's body was. Use it for any multi-line text the Board writes. It has no auto-grow, toolbar, saving or error state yet: the in-place note, paste and drop, Sticky and the Markdown writing add them when they need them, and R1 restyles it | 6 |
-| `reference/DesignPage` (live page `#/design`) | planned | 7 |
+| The live design page `#/design` (`src/pages/DesignPage.tsx`, `DesignPieces.tsx`) | **Exists** (DS7). See "The design page" below | 7 |
 | `tokens.css` (moved from `index.css`) | planned | 11 |
 | The Hairline look applied | planned | R1 |
+
+## The design page
+
+Open **`#/design`** (for example `http://localhost:3100/#/design`). It is a hidden address: no link, menu item or Settings entry points to it, and it loads only when opened (its own chunk). It draws:
+
+- **Every piece** `design/index` exports, each under its own heading and in each state it has: Button and the other controls, `CardFrame` (normal, fresh, pinned, archived, reading, compact, pressable), `Pill` (the legacy tag, and each tone of the Hairline look), `Mark` (you and AI), `FreshDot` (block and inline), `StepCheck` (unchecked, checked, busy, disabled), `rowSurface` and `foldSurface` (Now, Next up, quiet, folded, current fold), and `Composer` (empty, typed, mono, disabled). The one piece it does not draw is `Sidebar`, the app shell's own rail.
+- **Every kind of Board card** (all 17 the Board registers), in each state that applies: normal, fresh, pinned, archived, reading, compact and long text. Each card is a real node of its own React Flow at the Area's zoom (0.9), inside the Board's providers, so it looks as it does on the Board. The data is fixture data (`features/board/cards/cardFixtures.ts`, the same cards the golden markup test renders), the Board's actions are all no-ops, and the page makes no request that writes. Light and dark and the active palette follow the app.
+
+It lives under `pages/` and not in `design/`: `design/` may not import from `features/`, and the page draws the real cards from `features/board`. It takes the pieces only through `design/index`.
+
+**R1 checks each piece there.** When you change a piece, open `#/design` in light and dark and look at every state of it and at every card that draws it. `e2e/design-page.spec.ts` checks that each piece and card kind draws, that the page writes nothing, and that it has no text under 12 px on screen (zoom included) beyond `e2e/design-page-small-text.ts`, today's list. That list may only shrink: the spec fails on a new text and on a stale entry. R1 empties it.
+
+When you add a piece, draw it in `pages/DesignPieces.tsx` (a unit test fails on a design export the page does not draw); when you add a card kind or a card state, add its fixture in `cardFixtures.ts`.
 
 ## Do not hand-build
 
@@ -102,7 +115,7 @@ A card kind is a Board node type. Today they live in `features/board/BoardNodes.
 1. Add its node type (data shape) to `features/board/boardLayout.ts` and place it in the layout code that builds the overview or Area.
 2. Write the component with `CardFrame` (once it exists) and design pieces only. No hand-built surface, tag or mark. Board passes React Flow's `Anchors` in as a child; `design/` never imports React Flow.
 3. Register it in `OVERVIEW_NODE_TYPES` or `AREA_NODE_TYPES` (`BoardSection.tsx`, later `nodeTypes.ts`).
-4. Add it to `features/board/cards/cardMarkup.test.tsx` with fixture data. That test reads the registered node types and fails until the new kind has a golden snapshot.
+4. Add its fixture data to `features/board/cards/cardFixtures.ts` and a case for it to `features/board/cards/cardMarkup.test.tsx`. That test reads the registered node types and fails until the new kind has a golden snapshot. Add the kind to `CARD_KINDS` (`pages/designPageLists.ts`) and its keys to `e2e/design-page.spec.ts`, so the design page draws it.
 5. Add a row to `gui/scripts/affected-e2e.mjs` for the specs that draw it, with a mutation test in `scripts/affected-e2e.test.ts`.
 6. Check the guard (below) did not go up, and look at it in the real app at 1100, 1280, 1440 and 420 px, light and dark.
 

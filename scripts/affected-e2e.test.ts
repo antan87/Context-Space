@@ -339,7 +339,11 @@ describe('affected e2e specs', () => {
       'gui/src/features/board/cards/NoteCard.tsx',
       'gui/src/features/board/rows/RowControls.tsx',
       'gui/src/features/board/rows/RowHead.tsx',
+      // The design page (DS7) draws CardFrame in each of its states; its spec is on the row.
+      'gui/src/pages/DesignPieces.tsx',
     ]);
+    expect(cardFrame!.specs).toContain('e2e/design-page.spec.ts');
+    expect(cardParts!.specs).toContain('e2e/design-page.spec.ts');
     // The guard sees direct imports and consumers through the design barrel, in any spelling
     const consumes = (source: string) => consumesCardParts(source);
     expect(consumes("import { CardFrame } from '../../design/CardFrame.js';")).toBe(true);
@@ -390,7 +394,8 @@ describe('affected e2e specs', () => {
     expect(findBoardNodesImporters('gui/src')).toEqual([
       'gui/src/features/board/BoardCheckpoint.test.tsx',
       'gui/src/features/board/BoardSection.tsx',
-      'gui/src/features/board/cards/cardMarkup.test.tsx',
+      // The golden test and the design page draw their cards from the shared fixtures, which are the importer now.
+      'gui/src/features/board/cards/cardFixtures.ts',
       'gui/src/features/board/cards/freshDotPin.test.tsx',
     ]);
     // What the scanner sees, in any spelling
@@ -479,6 +484,7 @@ describe('affected e2e specs', () => {
       expect(getAffectedSpecs([row!.path]), piece).toEqual(row!.specs);
       // Not the whole app: that is only for design/index.ts
       expect(getAffectedSpecs([row!.path]), piece).not.toEqual(['e2e']);
+      expect(row!.specs, piece).toContain('e2e/design-page.spec.ts');
     }
     expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
     // Their own test is for no browser
@@ -489,12 +495,15 @@ describe('affected e2e specs', () => {
       'gui/src/features/board/BoardNodes.tsx',
       'gui/src/features/board/cards/FileCard.tsx',
       'gui/src/features/board/cards/NoteCard.tsx',
+      // The design page (DS7) draws each piece in every state; its spec is on each piece's row.
+      'gui/src/pages/DesignPieces.tsx',
     ]);
-    expect(findDesignPieceUsers('gui/src', ['Mark']).sort()).toEqual(['gui/src/design/index.ts', 'gui/src/features/board/cards/cardParts.tsx']);
+    expect(findDesignPieceUsers('gui/src', ['Mark']).sort()).toEqual(['gui/src/design/index.ts', 'gui/src/features/board/cards/cardParts.tsx', 'gui/src/pages/DesignPieces.tsx']);
     expect(findDesignPieceUsers('gui/src', ['FreshDot']).sort()).toEqual([
       'gui/src/design/index.ts',
       'gui/src/features/board/BoardNodes.tsx',
       'gui/src/features/board/cards/cardParts.tsx',
+      'gui/src/pages/DesignPieces.tsx',
     ]);
     // The guard reads aliases, type imports, multi-line clauses, double quotes, the piece's own file and re-exports
     const users = (source: string) => usesDesignPieces(source, DESIGN_PIECES);
@@ -526,6 +535,7 @@ describe('affected e2e specs', () => {
       expect(getAffectedSpecs([row!.path]), piece).not.toEqual(['e2e']);
       // None of the rows maps the whole Board folder by accident: the lists are exact
       expect(row!.specs, piece).not.toContain('e2e/board');
+      expect(row!.specs, piece).toContain('e2e/design-page.spec.ts');
     }
     expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
     // The rows are safe only while nothing outside the Board's row files and the Checkpoint card draws them
@@ -534,11 +544,13 @@ describe('affected e2e specs', () => {
       'gui/src/design/index.ts',
       'gui/src/features/board/BoardNodes.tsx',
       'gui/src/features/board/rows/RowHead.tsx',
+      'gui/src/pages/DesignPieces.tsx',
     ]);
     expect(users(['rowSurface', 'foldSurface'], ['RowSurface'])).toEqual([
       'gui/src/design/index.ts',
       'gui/src/features/board/rows/RowControls.tsx',
       'gui/src/features/board/rows/RowHead.tsx',
+      'gui/src/pages/DesignPieces.tsx',
     ]);
     expect(usesDesignPieces("import { StepCheck } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);
     expect(usesDesignPieces("import { rowSurface as surface } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);
@@ -555,11 +567,13 @@ describe('affected e2e specs', () => {
       'e2e/board-notes.spec.ts',
       'e2e/board-area.spec.ts',
       'e2e/board-area-view.spec.ts',
+      'e2e/design-page.spec.ts',
     ]);
     expect(getAffectedSpecs([row!.path])).toEqual([
       'e2e/board-notes.spec.ts',
       'e2e/board-area.spec.ts',
       'e2e/board-area-view.spec.ts',
+      'e2e/design-page.spec.ts',
     ]);
     expect(getAffectedSpecs(['gui/src/design/Composer.tsx'])).not.toEqual(['e2e']);
     expect(getAffectedSpecs(['gui/src/design/index.ts'])).toEqual(['e2e']);
@@ -568,9 +582,45 @@ describe('affected e2e specs', () => {
     expect(users).toEqual([
       'gui/src/design/index.ts',
       'gui/src/features/board/NoteDialog.tsx',
+      'gui/src/pages/DesignPieces.tsx',
     ]);
     expect(usesDesignPieces("import { Composer } from '../../design/index.js';", ['Composer'])).toBe(true);
     expect(usesDesignPieces("import { Button } from '../../design/index.js';", ['Composer'])).toBe(false);
+  });
+
+  it('maps the design page (DS7), its fixtures and the readable check to exact spec lists', () => {
+    const row = (path: string) => FOLDER_SPECS.find((entry) => entry.path === path);
+    // The page's own files: the page's spec and nothing else (the whole row is written out here, on its own)
+    for (const path of ['gui/src/pages/DesignPage.tsx', 'gui/src/pages/DesignPieces.tsx', 'gui/src/pages/designPageLists.ts', 'gui/e2e/design-page-small-text.ts']) {
+      expect(row(path), path).toBeDefined();
+      expect(row(path)!.specs, path).toEqual(['e2e/design-page.spec.ts']);
+      expect(getAffectedSpecs([path]), path).toEqual(['e2e/design-page.spec.ts']);
+    }
+    // The fixtures are under the Board folder, so the whole-page scans are added to every leaf there; their own test maps to the same row
+    const fixtures = ['e2e/design-page.spec.ts', 'e2e/board-a11y.spec.ts', 'e2e/accessibility.spec.ts'];
+    expect(row('gui/src/features/board/cards/cardFixtures.ts')!.specs).toEqual(fixtures);
+    expect(getAffectedSpecs(['gui/src/features/board/cards/cardFixtures.ts'])).toEqual(fixtures);
+    expect(getAffectedSpecs(['gui/src/features/board/cards/cardFixtures.test.ts'])).toEqual(fixtures);
+    // The readable check lists every spec that imports it
+    expect(row('gui/e2e/readable.ts')!.specs).toEqual(['e2e/board-overview-split.spec.ts', 'e2e/design-page.spec.ts']);
+    expect(getAffectedSpecs(['gui/e2e/readable.ts'])).toEqual(['e2e/board-overview-split.spec.ts', 'e2e/design-page.spec.ts']);
+    expect(getAffectedSpecs(['e2e/readable.ts'])).toEqual(['e2e/board-overview-split.spec.ts', 'e2e/design-page.spec.ts']);
+    const importers = readdirSync('gui/e2e').filter((file) => file.endsWith('.spec.ts')
+      && /from\s+['"]\.\/readable(?:\.[jt]s)?['"]/.test(readFileSync(`gui/e2e/${file}`, 'utf8'))).map((file) => `e2e/${file}`).sort();
+    expect(importers).toEqual(['e2e/board-overview-split.spec.ts', 'e2e/design-page.spec.ts']);
+    // The page's unit test is for no browser, and App.tsx, which has its route, is APP_WIDE
+    expect(getAffectedSpecs(['gui/src/pages/designPage.test.ts'])).toEqual([]);
+    expect(getAffectedSpecs(['gui/src/App.tsx'])).toEqual(['e2e']);
+    // The pieces and the cards the page draws have its spec on their rows (lists written out in each piece's own test above)
+    for (const path of [
+      'gui/src/design/CardFrame.tsx', 'gui/src/design/Pill.tsx', 'gui/src/design/Mark.tsx', 'gui/src/design/FreshDot.tsx', 'gui/src/design/StepCheck.tsx',
+      'gui/src/design/RowSurface.tsx', 'gui/src/design/Composer.tsx', 'gui/src/features/board/cards/cardParts.tsx', 'gui/src/features/board/cards/NoteCard.tsx',
+      'gui/src/features/board/cards/FileCard.tsx', 'gui/src/features/board/rows/RowHead.tsx', 'gui/src/features/board/rows/RowControls.tsx',
+    ]) expect(getAffectedSpecs([path]), path).toContain('e2e/design-page.spec.ts');
+    // The page's files are imported only where they should be: DesignPage by App.tsx, DesignPieces by DesignPage
+    const files = sourceFiles('gui/src');
+    expect(files.filter((file) => /from\s+['"][^'"]*\/DesignPage(?:\.js)?['"]|import\(\s*['"][^'"]*\/DesignPage(?:\.js)?['"]/.test(readFileSync(file, 'utf8'))).sort()).toEqual(['gui/src/App.tsx']);
+    expect(files.filter((file) => /from\s+['"]\.\/DesignPieces(?:\.js)?['"]/.test(readFileSync(file, 'utf8'))).sort()).toEqual(['gui/src/pages/DesignPage.tsx']);
   });
 
   it('covers every row in FOLDER_SPECS, its src/ and test variants, and existing specs', () => {

@@ -16,7 +16,7 @@ import { suggestedAnswers } from '../plan/planView.js';
 import { plainText } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
 import { CommitNotesContext, noteCountText, notesOfCommit, requestNotesView } from './commitNotes.js';
-import { BoardActionsContext, BoardReadingContext, documentFileUrl, firstControl, parseCommitNodeId } from './boardActions.js';
+import { BoardActionsContext, BoardReadingContext, firstControl, parseCommitNodeId, pictureSrc } from './boardActions.js';
 import { ANSWER_HOLD_OFF_MS } from './answerHoldOff.js';
 import { fitNewsItems, newsButtonFit } from './boardCountNav.js';
 import { AREA_ROW, areaCountItems, areaCounts, areaFocusWord, areaRowSecondaryRoom, foldLabel, isStepless, MINI_STATUS_LINE, miniSecondLine, miniShowsPicture, stepsText, textEm, waitingText, type AreaData, type AreaFoldNode, type AreaMiniNode, type AreaNode, type AreaRowNode } from './boardAreas.js';
@@ -712,11 +712,16 @@ export function AddStepInline({
     submittingRef.current = true;
     setError(null);
     try {
-      await changePlan.mutateAsync({
-        type: 'add',
-        step,
-        ...(checkpointKey ? { checkpoint: checkpointKey } : {}),
-      });
+      if (actions?.addStep) {
+        // The page around the card owns the write (the design page's is inert).
+        if (!(await actions.addStep({ step, ...(checkpointKey ? { checkpoint: checkpointKey } : {}) }))) throw new Error('Could not add step.');
+      } else {
+        await changePlan.mutateAsync({
+          type: 'add',
+          step,
+          ...(checkpointKey ? { checkpoint: checkpointKey } : {}),
+        });
+      }
       setText('');
       setOpen(false);
     } catch (err) {
@@ -1062,7 +1067,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
               }}
             >
               <img
-                src={documentFileUrl(actions.workspaceId, pic.path)}
+                src={pictureSrc(actions, pic.path)}
                 alt=""
                 aria-hidden="true"
                 loading="lazy"
@@ -1133,7 +1138,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
             }}
           >
             <img
-              src={documentFileUrl(actions.workspaceId, pic.path)}
+              src={pictureSrc(actions, pic.path)}
               alt=""
               aria-hidden="true"
               title={pic.title}
@@ -1359,7 +1364,7 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
     return frame(`Open ${data.title}`, undefined, <>
       <span className="relative min-h-0 w-full flex-1 overflow-hidden rounded-md border border-border/60 bg-black/40">
         <img
-          src={documentFileUrl(actions.workspaceId, data.src!)}
+          src={pictureSrc(actions, data.src!)}
           alt=""
           loading="lazy"
           decoding="async"
@@ -1580,7 +1585,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                 className="nodrag nopan relative h-full w-20 shrink-0 overflow-hidden rounded border border-border/50 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:opacity-85 transition-opacity"
               >
                 <img
-                  src={documentFileUrl(actions.workspaceId, pic.path)}
+                  src={pictureSrc(actions, pic.path)}
                   alt=""
                   aria-hidden="true"
                   loading="lazy"
@@ -1961,7 +1966,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
                 )}
               >
                 <img
-                  src={documentFileUrl(actions.workspaceId, pic.path)}
+                  src={pictureSrc(actions, pic.path)}
                   alt=""
                   aria-hidden="true"
                   loading="lazy"
@@ -2083,7 +2088,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
         </span>
         {showPicture && picture && actions && (
           <img
-            src={documentFileUrl(actions.workspaceId, picture.path)}
+            src={pictureSrc(actions, picture.path)}
             alt=""
             aria-hidden="true"
             loading="lazy"

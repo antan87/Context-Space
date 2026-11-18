@@ -5,6 +5,7 @@
  */
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { smallTexts } from './readable';
 import { board, minutesAgo, PICTURE, viewAtRest, workspace } from './boardHelpers';
 import { boardFile, boardFileCard, boardNote, checkpoint, decision, planFile, step, whatsNew } from './planData';
 
@@ -75,32 +76,13 @@ const split = async (page: Page) => page.addInitScript(() => {
 /** The Area cards drawn whole above the bottom of the board, by title, and the text under 12 px anywhere on the Board's overview, its index badge and its Archived button included (font size x zoom). */
 async function facts(page: Page) {
   await viewAtRest(page);
-  return board(page).evaluate((region) => {
+  const { shown, cut } = await board(page).evaluate((region) => {
     const box = region.getBoundingClientRect();
     const plane = region.querySelector('.board-overview-plane')!;
     const shown = [...plane.querySelectorAll<HTMLElement>('.react-flow__node-areaMini, .react-flow__node-areaRow')].filter((node) => {
       const r = node.getBoundingClientRect();
       return r.bottom <= box.bottom + 1 && r.top >= box.top && r.right <= box.right + 1;
     }).map((node) => (node.querySelector('button.board-area')?.getAttribute('aria-label') ?? '').split(',')[0]!);
-    const small: string[] = [];
-    const walker = document.createTreeWalker(region, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      const text = walker.currentNode;
-      const el = text.parentElement;
-      if (!el || !text.textContent?.trim()) continue;
-      const style = getComputedStyle(el);
-      const r = el.getBoundingClientRect();
-      if (style.display === 'none' || style.visibility === 'hidden' || !r.width || !r.height || el.closest('.sr-only')) continue;
-      if (r.bottom > box.bottom || r.top < box.top) continue;
-      // offsetWidth rounds fractional font metrics; transforms give the actual drawn scale.
-      let scale = 1;
-      for (let ancestor: Element | null = el; ancestor; ancestor = ancestor.parentElement) {
-        const transform = getComputedStyle(ancestor).transform;
-        if (transform !== 'none') scale *= new DOMMatrixReadOnly(transform).a;
-      }
-      const px = parseFloat(style.fontSize) * scale;
-      if (px < 11.95) small.push(`${px.toFixed(1)}px "${text.textContent.trim().slice(0, 24)}"`);
-    }
     // A subtitle is drawn with about 12 characters before its ellipsis or not at all, and a bar only from 32 px
     const cut: string[] = [];
     for (const el of plane.querySelectorAll<HTMLElement>('[data-area-subtitle]')) {
@@ -108,8 +90,10 @@ async function facts(page: Page) {
       if (text.scrollWidth > text.clientWidth + 1 && text.clientWidth < 78) cut.push(`subtitle ${text.clientWidth}px "${text.textContent?.slice(0, 20)}"`);
     }
     for (const el of plane.querySelectorAll<HTMLElement>('[data-area-progress]')) if (el.getBoundingClientRect().width < 31.5) cut.push(`bar ${Math.round(el.getBoundingClientRect().width)}px`);
-    return { shown, small, cut };
+    return { shown, cut };
   });
+  const small = await smallTexts(board(page), { clipToRegion: true });
+  return { shown, small, cut };
 }
 
 test.describe('FT1: the overview in Split', () => {

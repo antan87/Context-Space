@@ -48,7 +48,7 @@ export const APP_WIDE_PREFIXES = ['gui/src/components/ui/'];
 
 /**
  * Files no browser can see: the design module's written guide, its style-guard
- * test and the guard's baseline (DS2a). A change to only these runs unit tests
+ * test and the guard's baseline (DS2a), and the design page's own unit test (DS7). A change to only these runs unit tests
  * and no Playwright spec (`getAffectedSpecs` returns an empty list).
  * `gui/src/design/index.ts` is NOT here: it stays APP_WIDE.
  */
@@ -56,6 +56,7 @@ export const NO_BROWSER_FILES = new Set([
   'gui/src/design/designGuard.test.ts',
   'gui/src/design/design-baseline.json',
   'gui/src/design/pieces.test.tsx',
+  'gui/src/pages/designPage.test.ts',
 ]);
 
 export function isNoBrowserFile(file) {
@@ -252,13 +253,26 @@ const COMMIT_CARD_BOARD_SPECS = [
 ];
 
 /**
+ * The design page (DS7), `#/design`: every piece of the design module and every kind of Board card, in each state, from fixture data
+ * (`pages/DesignPage.tsx`, `pages/DesignPieces.tsx`, the cards' fixtures in `features/board/cards/cardFixtures.ts`). Its spec,
+ * `e2e/design-page.spec.ts`, checks that each piece and each card kind draws, that the page makes no request that writes, and that it has
+ * no text under 12 px but the known list. So it is added to the row of every piece and card the page draws, and is the whole row of the
+ * page's own files. It is not added to the central Board files (BoardNodes and the rest run all of e2e/board): a card that breaks
+ * there breaks the Board's own specs first.
+ */
+const DESIGN_PAGE_SPEC = 'e2e/design-page.spec.ts';
+
+/** The readable check (`e2e/readable.ts`) and every spec that imports it. */
+const READABLE_SPECS = ['e2e/board-overview-split.spec.ts', DESIGN_PAGE_SPEC];
+
+/**
  * The shared pieces of every Board card (DS2b): `cards/cardParts.tsx` (Anchors, the press of a compact card, the cut text,
  * Read all, the byline and the mark) and `design/CardFrame.tsx` (the card's article and its states). Every card kind draws
  * them, and a hand-picked list missed real specs (reader-nav, reader-back, terminal-coworking, commit-notes), so a change
  * runs all of e2e/board plus the whole-page accessibility scan outside it. Not all of e2e: only BoardNodes.tsx imports
  * them (a unit test checks that, also through design/index), and design/index.ts, which exports CardFrame, is APP_WIDE.
  */
-const CARD_PARTS_SPECS = ['e2e/board', 'e2e/accessibility.spec.ts'];
+const CARD_PARTS_SPECS = ['e2e/board', 'e2e/accessibility.spec.ts', DESIGN_PAGE_SPEC];
 
 /**
  * The small pieces of the design module (DS4): `design/Pill.tsx` (the kind tag of the commit, note and file cards),
@@ -290,6 +304,7 @@ const NOTE_CARD_SPECS = [
   'e2e/board-live.spec.ts',
   'e2e/board-terminal-coworking.spec.ts',
   'e2e/board-index.spec.ts',
+  DESIGN_PAGE_SPEC,
 ];
 
 /**
@@ -313,6 +328,7 @@ const FILE_CARD_SPECS = [
   'e2e/board-questions.spec.ts',
   'e2e/board-review-page.spec.ts',
   'e2e/board-index.spec.ts',
+  DESIGN_PAGE_SPEC,
 ];
 
 /**
@@ -342,6 +358,7 @@ const ROW_HEAD_SPECS = [
   'e2e/board-w2-tiers.spec.ts',
   'e2e/board-commit-list.spec.ts',
   'e2e/board-commit-notes.spec.ts',
+  DESIGN_PAGE_SPEC,
 ];
 
 /**
@@ -370,6 +387,7 @@ const ROW_CONTROL_SPECS = [
   'e2e/board-reader.spec.ts',
   'e2e/board-reader-nav.spec.ts',
   'e2e/board-live.spec.ts',
+  DESIGN_PAGE_SPEC,
 ];
 
 /**
@@ -388,6 +406,7 @@ const STEP_CHECK_SPECS = [
   'e2e/board-area.spec.ts',
   'e2e/board-a11y.spec.ts',
   'e2e/accessibility.spec.ts',
+  DESIGN_PAGE_SPEC,
 ];
 
 /**
@@ -411,6 +430,7 @@ const ROW_SURFACE_SPECS = [
   'e2e/board-w2-tiers.spec.ts',
   'e2e/board-a11y.spec.ts',
   'e2e/accessibility.spec.ts',
+  DESIGN_PAGE_SPEC,
 ];
 
 /**
@@ -426,6 +446,7 @@ const COMPOSER_SPECS = [
   'e2e/board-notes.spec.ts',
   'e2e/board-area.spec.ts',
   'e2e/board-area-view.spec.ts',
+  DESIGN_PAGE_SPEC,
 ];
 
 const FOLDER_ROWS = [
@@ -797,6 +818,49 @@ const FOLDER_ROWS = [
     bareNames: ['Composer', 'Composer.tsx'],
     specs: COMPOSER_SPECS,
     safety: 'The note dialog\'s body field; only features/board/NoteDialog.tsx imports it (design/index.ts, which exports it, is APP_WIDE); board-notes failed when it dropped typed text or ignored onChange; verified by pieces.test.tsx and those specs.',
+  },
+  // The design page (DS7)
+  {
+    folder: 'src/pages/DesignPage',
+    path: 'gui/src/pages/DesignPage.tsx',
+    bareNames: ['DesignPage', 'DesignPage.tsx'],
+    specs: [DESIGN_PAGE_SPEC],
+    safety: 'The hidden page at #/design: the card sections (each card in its own React Flow at the Area\'s zoom); only App.tsx (a lazy route, and APP_WIDE) imports it; verified by pages/designPage.test.ts and e2e/design-page.spec.ts.',
+  },
+  {
+    folder: 'src/pages/DesignPieces',
+    path: 'gui/src/pages/DesignPieces.tsx',
+    bareNames: ['DesignPieces', 'DesignPieces.tsx'],
+    specs: [DESIGN_PAGE_SPEC],
+    safety: 'The pieces section of the design page, which draws every design piece in each state; only DesignPage.tsx imports it; verified by pages/designPage.test.ts and e2e/design-page.spec.ts.',
+  },
+  {
+    folder: 'src/pages/designPageLists',
+    path: 'gui/src/pages/designPageLists.ts',
+    bareNames: ['designPageLists', 'designPageLists.ts'],
+    specs: [DESIGN_PAGE_SPEC],
+    safety: 'The card kinds the design page has a section for; only DesignPage.tsx and its unit test import it; verified by pages/designPage.test.ts and e2e/design-page.spec.ts.',
+  },
+  {
+    folder: 'src/features/board/cards/cardFixtures',
+    path: 'gui/src/features/board/cards/cardFixtures.ts',
+    bareNames: ['cardFixtures', 'cardFixtures.ts'],
+    specs: [DESIGN_PAGE_SPEC],
+    safety: 'The cards\' fixture data, shared by the golden markup test and the design page; no Board spec imports it (the golden snapshots and cardFixtures.test.ts pin what it makes); only the page shows it in a browser; verified by those and e2e/design-page.spec.ts.',
+  },
+  {
+    folder: 'e2e/readable',
+    path: 'gui/e2e/readable.ts',
+    bareNames: ['readable', 'readable.ts'],
+    specs: READABLE_SPECS,
+    safety: 'The readable check (text under 12 px once the transforms are applied): it decides the pass or fail of the two specs that import it, listed here, and nothing else imports it (a unit test lists the importers); verified by those specs.',
+  },
+  {
+    folder: 'e2e/design-page-small-text',
+    path: 'gui/e2e/design-page-small-text.ts',
+    bareNames: ['design-page-small-text', 'design-page-small-text.ts'],
+    specs: [DESIGN_PAGE_SPEC],
+    safety: 'The list of texts under 12 px that the design page has today; only e2e/design-page.spec.ts imports it, and it fails on a new text and on a stale one; verified by that spec.',
   },
   // The Note and File cards (DS3)
   {

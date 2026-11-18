@@ -106,6 +106,10 @@ export interface BoardActions {
   }>;
   /** Prefills the CLI terminal with a card context and switches to split view if needed. */
   askInCLI?: (context: string) => void;
+  /** Adds a step to a checkpoint (`checkpoint` is its key; none: the plan's own frame) from the card's own "Add step" form. Without it the form writes to the plan itself, as the Board does. Returns true if it worked. */
+  addStep?: (change: { step: string; checkpoint?: string }) => Promise<boolean>;
+  /** Where a card's picture comes from, when it is not the workspace's own file (the design page's made-up cards have none). Default: the server's file route. */
+  pictureUrl?: (path: string) => string;
 }
 
 export const BoardActionsContext = createContext<BoardActions | null>(null);
@@ -114,6 +118,10 @@ export const BoardActionsContext = createContext<BoardActions | null>(null);
 export const BoardReadingContext = createContext<string | null>(null);
 
 /** Where the app serves a file of the workspace from, as the documents panel reads it. */
+/** The address of a picture a card draws: the page's own resolver when it gives one, else the workspace's file. */
+export const pictureSrc = (actions: Pick<BoardActions, 'workspaceId' | 'pictureUrl'>, path: string) =>
+  actions.pictureUrl ? actions.pictureUrl(path) : documentFileUrl(actions.workspaceId, path);
+
 export const documentFileUrl = (workspaceId: string, path: string, repo?: string) =>
   `${API_BASE}/api/workspace/${encodeURIComponent(workspaceId)}/documents/file?name=${encodeURIComponent(path)}${repo ? `&repo=${encodeURIComponent(repo)}` : ''}`;
 

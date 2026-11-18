@@ -4,7 +4,7 @@ import { File, FileCode, FileImage, FileText, Globe, PanelRightOpen, type Lucide
 
 import { Button, CardFrame, CARD_BRICK as BRICK, CARD_FOCUS, Pill } from '../../../design/index.js';
 import { cn } from '../../../lib/utils.js';
-import { BoardActionsContext, BoardReadingContext, bylineText, documentFileUrl, firstControl } from '../boardActions.js';
+import { BoardActionsContext, BoardReadingContext, bylineText, firstControl, pictureSrc } from '../boardActions.js';
 import { imageAlt, type FileNode, type FileType } from '../boardLayout.js';
 import { Anchors, brickPress, CardMark, CardText, ReadAll, TITLE_BUTTON, useCut } from './cardParts.js';
 
@@ -105,7 +105,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
         <div className="min-h-0 flex-1 w-full overflow-hidden border-b border-border/60 bg-black/40">
           {picture
             ? <img
-              src={documentFileUrl(actions.workspaceId, data.path)}
+              src={pictureSrc(actions, data.path)}
               alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
               loading="lazy"
               decoding="async"
@@ -148,7 +148,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
         <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
           {picture
             ? <img
-              src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
+              src={pictureSrc(actions, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
               loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-cover"
             />
             : <div className="flex size-full flex-col items-center justify-center gap-0.5 px-1 text-center">
@@ -184,7 +184,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
       {picture
         ? <>
           <img
-            src={documentFileUrl(actions.workspaceId, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
+            src={pictureSrc(actions, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
             loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-cover transition-transform duration-200 group-hover/thumb:scale-105 cursor-pointer"
             onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}
           />
