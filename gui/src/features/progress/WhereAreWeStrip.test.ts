@@ -230,6 +230,10 @@ describe('ReopenForm', () => {
     expect(html).toContain('required');
   });
 
+  it('takes the limit of the endpoint it submits to: 1,990 for a plan step', () => {
+    expect(form({ maxLength: 1990 })).toContain('maxLength="1990"');
+  });
+
   it('will not submit without a reason, or while sending', () => {
     expect(form()).toMatch(/<button type="submit"[^>]* disabled=""/);
     expect(form({ reason: '   ' })).toMatch(/<button type="submit"[^>]* disabled=""/);

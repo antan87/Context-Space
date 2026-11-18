@@ -213,6 +213,127 @@ test.describe('Board Decision Answering (Milestone 1, Slice 1.1)', () => {
     ]);
   });
 
+  test('answers a decision whose question is over 300 characters and echoes all of it as `expected`', async ({ page }) => {
+    const question = `Which time zone should export timestamps use ${'when the reader is in another country and the file is opened later, '.repeat(8)}?`;
+    expect(question.length).toBeGreaterThan(500);
+    const tracker = await routeBoard(page, { decisions: [decision(question, { suggested: ['UTC', 'Local time (browser)'] })] });
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' }).click();
+    const stepped = page.locator('#board-area');
+    const frame = stepped.getByRole('article', { name: 'Waits for you' });
+    await frame.getByRole('button', { name: 'UTC' }).click();
+    await expect(stepped.getByRole('article', { name: 'Waits for you' })).toHaveCount(0);
+    expect(tracker.getAnswers().map((a) => [a.answer, a.expected])).toEqual([['UTC', question]]);
+  });
+
+  for (const [width, height] of [[1100, 700], [1280, 800], [420, 800], [1280, 500], [420, 600]] as const) {
+    test(`a 2,000-character question, four long suggested answers and a long detail keep every part usable at ${width}x${height}`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      const question = `Which way should the whole export work ${'and what must it keep for the person who opens it later, '.repeat(40)}`.slice(0, 1990).trim() + '?';
+      const suggested = ['One', 'Two', 'Three', 'Four'].map((n) => `${n}: ${'a long suggested answer that goes on and on about the details, '.repeat(8)}`.trim());
+      const detail = Array.from({ length: 30 }, (_, i) => `Detail paragraph ${i + 1}: what the person needs to know before choosing, written out so that it runs for a while.`).join('\n\n');
+      const tracker = await routeBoard(page, { decisions: [{ ...decision(question, { suggested }), detail }] });
+      await page.goto('/#/workspaces/demo/board');
+      await page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' }).click();
+      // in a short window the Area is a list of rows: the waiting row opens first
+      const row = page.getByRole('button', { name: /^Waits for you/ });
+      if (await row.count()) await row.first().click();
+      const frame = page.locator('#board-area').getByRole('article', { name: 'Waits for you' });
+      const dialog = await openAnswerDialog(page, frame);
+      await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)));
+      const input = dialog.getByPlaceholder('Your answer');
+      await input.fill('My own answer');
+      const answer = dialog.getByRole('button', { name: 'Answer', exact: true });
+      for (const target of [input, answer]) {
+        await expect(target).toBeInViewport();
+        const hit = await target.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+          return Boolean(top && (top === el || el.contains(top)));
+        });
+        expect(hit).toBe(true);
+      }
+      const box = await dialog.boundingBox();
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(height);
+
+      // every part keeps readable room: about three lines each
+      const heights = await dialog.evaluate((root) => {
+        const h = (sel: string) => (root.querySelector(sel) as HTMLElement).clientHeight;
+        return { question: h('[data-testid="decision-question"]'), detail: h('[data-testid="decision-detail"]'), answers: h('[aria-label="All suggested answers"]') };
+      });
+      expect(heights.question, 'question room').toBeGreaterThanOrEqual(64);
+      expect(heights.detail, 'detail room').toBeGreaterThanOrEqual(64);
+      expect(heights.answers, 'suggestions room').toBeGreaterThanOrEqual(56);
+
+      // the keyboard reaches each scrolling region and scrolls it to its end, with no script scrolling
+      const seen = new Set<string>();
+      const regionOf = () => page.evaluate(() => {
+        const a = document.activeElement as HTMLElement | null;
+        if (!a) return null;
+        const id = a.getAttribute('data-testid') === 'decision-question' ? 'question' : a.getAttribute('data-testid') === 'decision-detail' ? 'detail' : a.getAttribute('aria-label') === 'All suggested answers' ? 'answers' : null;
+        return id;
+      });
+      for (let i = 0; i < 25 && seen.size < 3; i += 1) {
+        const region = await regionOf();
+        if (region && !seen.has(region)) {
+          seen.add(region);
+          await page.keyboard.press('End');
+          await expect.poll(() => page.evaluate(() => { const a = document.activeElement as HTMLElement; return a.scrollHeight > a.clientHeight && a.scrollTop + a.clientHeight >= a.scrollHeight - 1; }), { message: `${region} scrolls to its end by keyboard` }).toBe(true);
+        }
+        await page.keyboard.press('Tab');
+      }
+      expect([...seen].sort()).toEqual(['answers', 'detail', 'question']);
+
+      await answer.click();
+      await expect(page.getByTestId('decision-dialog')).toHaveCount(0);
+      expect(tracker.getAnswers().map((a) => [a.answer, a.expected])).toEqual([['My own answer', question]]);
+    });
+  }
+
+  const reachable = (target: Locator) => target.evaluate((el) => {
+    el.scrollIntoView({ block: 'nearest' });
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return r.top >= 0 && r.bottom <= innerHeight && Boolean(top && (top === el || el.contains(top)));
+  });
+  const longDialogCase = async (page: Page, fail?: (question: string) => string) => {
+    await page.setViewportSize({ width: 420, height: 600 });
+    const question = `Which way should the whole export work ${'and what must it keep for the person who opens it later, '.repeat(40)}`.slice(0, 1990).trim() + '?';
+    const suggested = ['One', 'Two', 'Three', 'Four'].map((n) => `${n}: ${'a long suggested answer that goes on and on about the details, '.repeat(8)}`.trim());
+    const detail = Array.from({ length: 30 }, (_, i) => `Detail paragraph ${i + 1}: what the person needs to know before choosing, written out so that it runs for a while.`).join('\n\n');
+    const tracker = await routeBoard(page, { decisions: [{ ...decision(question, { suggested }), detail }] });
+    if (fail) await page.route('**/api/workspace/demo/plan/decisions/*/answer', (route) => route.fulfill({ status: 409, json: { error: fail(question) } }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('#board-overview button.board-area').filter({ hasText: 'Reports export to CSV' }).click();
+    await page.evaluate(() => { document.documentElement.style.fontSize = '24px'; });
+    const frame = page.locator('#board-area').getByRole('article', { name: 'Waits for you' });
+    const dialog = await openAnswerDialog(page, frame);
+    await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)));
+    return { dialog, question, tracker };
+  };
+
+  test('with a 24 px root font the detail keeps room and nothing in the dialog is out of reach', async ({ page }) => {
+    const { dialog } = await longDialogCase(page);
+    await dialog.getByPlaceholder('Your answer').fill('My own answer');
+    expect(await dialog.getByTestId('decision-detail').evaluate((el) => el.clientHeight), 'detail room').toBeGreaterThanOrEqual(64);
+    expect(await reachable(dialog.getByRole('button', { name: 'Answer', exact: true }))).toBe(true);
+    expect(await reachable(dialog.getByRole('button', { name: 'Close', exact: true }).last())).toBe(true);
+  });
+
+  test('a 409 that repeats a 2,000-character question keeps its alert small and the buttons reachable', async ({ page }) => {
+    const { dialog } = await longDialogCase(page, (q) => `"${q}" changed in PLAN.md since it was read. Read the plan again.`);
+    await dialog.getByPlaceholder('Your answer').fill('My own answer');
+    await dialog.getByRole('button', { name: 'Answer', exact: true }).click();
+    const alert = dialog.getByRole('alert');
+    await expect(alert).toContainText('changed in PLAN.md since it was read');
+    expect(await alert.evaluate((el) => el.clientHeight), 'alert height is capped (6rem)').toBeLessThanOrEqual(150);
+    expect(await alert.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    expect(await reachable(dialog.getByRole('button', { name: 'Answer', exact: true }))).toBe(true);
+    expect(await reachable(dialog.getByRole('button', { name: 'Close', exact: true }).last())).toBe(true);
+    expect(await dialog.getByTestId('decision-detail').evaluate((el) => el.clientHeight), 'detail room').toBeGreaterThanOrEqual(64);
+  });
+
   test('answers a decision via typing custom text in the input and clicking Answer', async ({ page }) => {
     const tracker = await routeBoard(page);
     await page.goto('/#/workspaces/demo/board');

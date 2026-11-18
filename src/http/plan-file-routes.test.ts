@@ -234,4 +234,109 @@ describe('plan routes', () => {
     const cleared = await (await postNow({ clear: true })).json();
     expect(cleared.plan.now).toBeNull();
   });
+
+  describe('an item longer than 300 characters', () => {
+    const long = (label: string) => `${label} ${'and the long tail of what it must cover, '.repeat(30)}end`.slice(0, 1200);
+    const LONG_STEP = long('Write the long step');
+    const LONG_DECISION = long('Decide the long question');
+    const LONG_CP = long('Long checkpoint');
+    const LONG_PLAN = `# Reports
+
+## Checkpoints
+
+- [ ] ${LONG_CP}
+  - [ ] ${LONG_STEP}
+  - [ ] Decide: ${LONG_DECISION}
+    Suggested: Yes · No
+`;
+    const keys = async () => {
+      const plan = await get();
+      return { step: plan.checkpoints[0].steps[0].key as string, decision: plan.checkpoints[0].decisions[0].key as string, checkpoint: plan.checkpoints[0].key as string };
+    };
+    const raw = (url: string, body: unknown) => app.request(`/api/workspace/reports/plan${url}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    beforeEach(async () => { await fs.writeFile(path.join(root, 'PLAN.md'), LONG_PLAN); });
+
+    it('ticks, answers and reopens through the change route with the full text echoed', async () => {
+      expect(LONG_STEP.length).toBeGreaterThan(1000);
+      const k = await keys();
+      expect((await post({ type: 'tick', key: k.step, done: true, expected: LONG_STEP })).status).toBe(200);
+      expect((await post({ type: 'answer', key: k.decision, answer: 'Yes', expected: LONG_DECISION })).status).toBe(200);
+      const done = await file();
+      expect(done.checkpoints[0]!.steps[0]!.done).toBe(true);
+      expect(done.checkpoints[0]!.decisions[0]!.answer).toBe('Yes');
+      await fs.writeFile(path.join(root, 'PLAN.md'), LONG_PLAN.replace('- [ ] ' + LONG_CP, '- [x] ' + LONG_CP));
+      const reopened = await post({ type: 'reopen', key: k.checkpoint, reason: 'Needs another look', expected: LONG_CP });
+      expect(reopened.status).toBe(200);
+      expect((await file()).checkpoints[0]!.done).toBe(false);
+    });
+
+    it('answers and ticks through the direct routes with the full text echoed, and without it', async () => {
+      const k = await keys();
+      expect((await raw(`/decisions/${k.decision}/answer`, { answer: 'Yes', expected: LONG_DECISION })).status).toBe(200);
+      expect((await raw(`/steps/${k.step}/tick`, { done: true, expected: LONG_STEP })).status).toBe(200);
+      expect((await raw(`/steps/${k.step}/tick`, { done: false })).status).toBe(200);
+      const plan = await file();
+      expect(plan.checkpoints[0]!.decisions[0]!.answer).toBe('Yes');
+      expect(plan.checkpoints[0]!.steps[0]!.done).toBe(false);
+    });
+
+    it('still answers 409 when a long line changed since it was read', async () => {
+      const k = await keys();
+      await fs.writeFile(path.join(root, 'PLAN.md'), LONG_PLAN.replace(`- [ ] ${LONG_STEP}`, `- [ ] ${LONG_STEP} (changed)`));
+      expect((await raw(`/steps/${k.step}/tick`, { done: true, expected: LONG_STEP })).status).toBe(409);
+      expect((await post({ type: 'tick', key: k.step, done: true, expected: LONG_STEP })).status).toBe(409);
+      await fs.writeFile(path.join(root, 'PLAN.md'), LONG_PLAN.replace(`Decide: ${LONG_DECISION}`, `Decide: ${LONG_DECISION} (changed)`));
+      expect((await raw(`/decisions/${k.decision}/answer`, { answer: 'Yes', expected: LONG_DECISION })).status).toBe(409);
+      expect((await post({ type: 'answer', key: k.decision, answer: 'Yes', expected: LONG_DECISION })).status).toBe(409);
+      await fs.writeFile(path.join(root, 'PLAN.md'), LONG_PLAN.replace('- [ ] ' + LONG_CP, '- [x] ' + LONG_CP + ' (changed)'));
+      expect((await post({ type: 'reopen', key: k.checkpoint, reason: 'x', expected: LONG_CP })).status).toBe(409);
+    });
+
+    it('adds a step, a decision and a reopen reason of about 1,200 characters, whole', async () => {
+      const k = await keys();
+      const text = (label: string) => `${label} ${'spelled out in full, '.repeat(60)}`.slice(0, 1200).trim();
+      const step = text('A typed long step');
+      expect((await post({ type: 'add', step, checkpoint: k.checkpoint })).status).toBe(200);
+      const decision = { question: text('A typed long question'), ifNoAnswer: text('Then do the long default'), suggested: [text('A long suggested answer')] };
+      expect((await post({ type: 'decide', decision, checkpoint: k.checkpoint })).status).toBe(200);
+      const cp = (await file()).checkpoints[0]!;
+      expect(cp.steps.map((s) => s.text)).toContain(step);
+      const added = cp.decisions.find((d) => d.question === decision.question)!;
+      expect(added.suggested).toEqual(decision.suggested);
+      expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toContain(`If no answer: ${decision.ifNoAnswer}`);
+      await fs.writeFile(path.join(root, 'PLAN.md'), LONG_PLAN.replace('- [ ] ' + LONG_CP, '- [x] ' + LONG_CP));
+      const reason = text('What is wrong');
+      expect((await post({ type: 'reopen', key: k.checkpoint, reason, expected: LONG_CP })).status).toBe(200);
+      expect((await file()).checkpoints[0]!.steps.map((s) => s.text)).toContain(`Reopened: ${reason}`);
+    });
+
+    it('says "Keep it to 2000 characters or fewer." for any typed string over the limit, on every route', async () => {
+      const k = await keys();
+      const tooLong = 'y'.repeat(2001);
+      const message = 'Keep it to 2000 characters or fewer.';
+      const cases = [
+        await post({ type: 'add', step: tooLong }),
+        await post({ type: 'decide', decision: { question: tooLong } }),
+        await post({ type: 'decide', decision: { question: 'ok', suggested: [tooLong] } }),
+        await post({ type: 'answer', key: k.decision, answer: tooLong, expected: LONG_DECISION }),
+        { status: (await raw(`/decisions/${k.decision}/answer`, { answer: tooLong })).status, body: { error: message } },
+      ];
+      for (const c of cases) { expect(c.status).toBe(400); expect(c.body.error).toBe(message); }
+      // a reopen reason is written as "Reopened: <reason>" on one line, so it keeps 10 characters back and says the true number
+      const reopen = await post({ type: 'reopen', key: k.checkpoint, reason: tooLong, expected: LONG_CP });
+      expect(reopen).toMatchObject({ status: 400, body: { error: 'Keep it to 1990 characters or fewer.' } });
+      const direct = await (await raw(`/decisions/${k.decision}/answer`, { answer: tooLong })).json();
+      expect(direct.error).toBe(message);
+    });
+
+    it('still refuses a body over the 64 kB limit', async () => {
+      const k = await keys();
+      const huge = 'x'.repeat(70_000);
+      expect((await raw(`/steps/${k.step}/tick`, { done: true, expected: huge })).status).toBe(413);
+      expect((await raw('', { change: { type: 'tick', key: k.step, done: true, expected: huge } })).status).toBe(413);
+      expect((await raw(`/decisions/${k.decision}/answer`, { answer: 'Yes', expected: huge })).status).toBe(413);
+    });
+  });
 });

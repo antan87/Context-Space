@@ -5,7 +5,7 @@ import { IconButton } from '../../components/ui/icon-button.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { AnswerBox } from '../plan/AnswerBox.js';
 import { questionWhy, whenText, whoName } from '../plan/planView.js';
-import { ReopenForm } from './ProgressPanel.js';
+import { PLAN_REOPEN_REASON_MAX, ReopenForm } from './ProgressPanel.js';
 import type { PlanClose, PlanQuestion } from './stripPlan.js';
 
 export interface PlanQuestionBarProps {
@@ -87,7 +87,7 @@ export function AiClosedBar({ workspace, entry, title, more, onReopen, onSeen, o
       </div>
       {reopening && (
         <ReopenForm
-          id={`${workspace}-strip-reopen-${entry.itemId}`} title={title} reason={reason} pending={pending} error={error}
+          id={`${workspace}-strip-reopen-${entry.itemId}`} title={title} reason={reason} pending={pending} error={error} maxLength={PLAN_REOPEN_REASON_MAX}
           onChange={setReason}
           onSubmit={() => {
             setPending(true);

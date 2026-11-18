@@ -282,6 +282,15 @@ describe('set_current_step', () => {
     await expect(fs.access(nowFile())).rejects.toThrow();
   });
 
+  it('takes the full words of a step over 300 characters', async () => {
+    const long = `Build the long thing ${'with every part spelled out, '.repeat(40)}done`;
+    expect(long.length).toBeGreaterThan(1000);
+    await fs.writeFile(planFile(), `# Plan\n\n## Checkpoints\n\n- [ ] One\n  - [ ] ${long}\n`);
+    const set = await call('set_current_step', { step: long });
+    expect(set.body).toMatchObject({ step: long });
+    expect(JSON.parse(await fs.readFile(nowFile(), 'utf8'))).toMatchObject({ by: 'ai' });
+  });
+
   it('says why when the step is unknown or missing', async () => {
     await fs.writeFile(planFile(), '# Plan\n\n## Checkpoints\n\n- [ ] One\n  - [ ] Build the thing\n');
     expect((await call('set_current_step', { step: 'nothing like it' })).isError).toBe(true);

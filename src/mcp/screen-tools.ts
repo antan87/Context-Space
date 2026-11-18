@@ -15,7 +15,7 @@ import {
   SCREEN_NOTE_LIMIT, SCREEN_REASON_LIMIT, SCREEN_TEXT_LIMIT, SCREEN_TITLE_LIMIT,
   appendScreenEvent,
 } from '../core/screen-events.js';
-import { findPlanItem } from '../core/plan-file.js';
+import { PLAN_LINE_MAX, findPlanItem } from '../core/plan-file.js';
 import { clearPlanNow, readPlanFile, setPlanNow } from '../core/plan-file-store.js';
 import { resolveScreenRepo, resolveScreenTarget, SCREEN_PATH_MAX_LENGTH } from '../core/screen-paths.js';
 import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
@@ -126,7 +126,7 @@ const nextSchema = z.object({
 const contextSchema = z.object({ harness });
 
 const currentStepSchema = z.object({
-  step: z.string().min(1).max(300).optional().describe('The step you are starting, as its key or the start of its words in PLAN.md.'),
+  step: z.string().min(1).max(PLAN_LINE_MAX).optional().describe('The step you are starting, as its key or the start of its words in PLAN.md.'),
   clear: z.boolean().optional().describe('true says no step is being worked on.'),
   harness,
 });

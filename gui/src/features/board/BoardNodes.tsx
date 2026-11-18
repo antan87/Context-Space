@@ -1,5 +1,5 @@
 import { Diagram } from '../../components/Diagram.js';
-import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type MouseEvent, type MutableRefObject, type ReactNode } from 'react';
 import { type NodeProps } from '@xyflow/react';
 import { Check, ChevronDown, ChevronRight, ChevronUp, CircleCheck, Circle, CircleHelp, ExternalLink, FileText, GitCommitHorizontal, GitCompare, PanelRightOpen, Plus, ShieldCheck, StickyNote, TriangleAlert } from 'lucide-react';
 
@@ -195,6 +195,25 @@ function guardPress(event: { type: string; nativeEvent: Event; target: EventTarg
 }
 const decisions = new WeakMap<Event, boolean>();
 
+/** Whether a box can scroll, kept up to date when it or its content changes size (a font loads, the window is resized). */
+function useScrolls<T extends HTMLElement>(): [(el: T | null) => void, boolean, MutableRefObject<T | null>] {
+  const ref = useRef<T | null>(null);
+  const [scrolls, setScrolls] = useState(false);
+  const observer = useRef<ResizeObserver | null>(null);
+  const attach = useCallback((el: T | null) => {
+    observer.current?.disconnect();
+    ref.current = el;
+    if (!el) return;
+    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    observer.current = new ResizeObserver(measure);
+    observer.current.observe(el);
+    for (const child of Array.from(el.children)) observer.current.observe(child);
+  }, []);
+  return [attach, scrolls, ref];
+}
+
 /** What answering a decision takes: its suggested answers, a free answer, and whether the last try failed. */
 function useDecisionAnswer({ decision, onAnswer }: WaitingDecisionCardProps) {
   const actions = useContext(BoardActionsContext);
@@ -328,7 +347,8 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
   const [open, setOpen] = useState(false);
   const card = useRef<HTMLLIElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const question = useRef<HTMLDivElement>(null);
+  const [questionRef, questionScrolls, question] = useScrolls<HTMLDivElement>();
+  const [answersRef, answersScroll] = useScrolls<HTMLDivElement>();
   // "Other answer…" opens on the free answer; "All answers…" opens on the question, so that neither a second Enter nor a space answers by
   // accident: an answer needs a press of its own. The question is read first by a screen reader, and Tab reaches the answers from it.
   const allAnswers = fit.hidden > 0;
@@ -390,7 +410,7 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger render={<button type="button" data-testid="decision-more-answers" className={cn(GHOST_BUTTON, 'ml-auto')} aria-haspopup="dialog" />}>{fit.ghost}</DialogTrigger>
           <DialogPopup
-            className="max-w-lg max-h-[min(85dvh,calc(100dvh-2rem))]"
+            className="max-w-lg max-h-[min(85dvh,calc(100dvh-2rem))] overflow-y-auto [--decision-room:calc(min(85dvh,_100dvh_-_2rem)_-_11rem)]"
             bottomStickOnMobile={false}
             data-testid="decision-dialog"
             initialFocus={allAnswers ? question : input}
@@ -400,13 +420,19 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
               <DialogTitle className="text-sm font-semibold text-muted-foreground">Waits for you</DialogTitle>
               <DialogDescription className="sr-only">Answer this question with a suggestion or in your own words</DialogDescription>
             </DialogHeader>
-            <div ref={question} tabIndex={-1} className="shrink-0 select-text break-words px-6 pb-3 text-base font-medium leading-relaxed text-foreground outline-none"><InlinePlanMarkdown content={decision.question} /></div>
+            <div
+              ref={questionRef}
+              tabIndex={questionScrolls ? 0 : -1}
+              data-testid="decision-question"
+              aria-label={questionScrolls ? 'The question, scrolls' : undefined}
+              className="shrink-0 select-text overflow-y-auto break-words px-6 pb-3 text-base font-medium leading-relaxed text-foreground outline-none [overflow-wrap:anywhere] max-h-[max(4.5rem,calc(var(--decision-room)_*_0.35))] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            ><InlinePlanMarkdown content={decision.question} /></div>
             {decision.detail && (
               <div
                 tabIndex={0}
                 aria-label="Decision details"
                 data-testid="decision-detail"
-                className="min-h-0 min-w-0 shrink overflow-y-auto px-6 py-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                className="min-h-[4.5rem] min-w-0 shrink overflow-y-auto px-6 py-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 <div className="board-text select-text min-w-0 [overflow-wrap:anywhere] text-sm leading-6 text-muted-foreground">
                   <ChatMarkdown content={decision.detail} compact />
@@ -415,9 +441,9 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
             )}
             <div className={cn('shrink-0 space-y-3 px-6 pb-1', decision.detail && 'pt-3')}>
               {options.length > 0 && (
-                <div role="group" aria-label="All suggested answers" className="flex flex-wrap gap-1.5">
+                <div ref={answersRef} tabIndex={answersScroll ? 0 : undefined} role="group" aria-label="All suggested answers" className="-m-0.5 flex max-h-[max(4rem,calc(var(--decision-room)_*_0.25))] flex-wrap gap-1.5 overflow-y-auto p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   {options.map((option) => (
-                    <button key={option} type="button" disabled={saving} onClick={() => void submitAnswer(option, true, card.current)} className={cn(ANSWER_BUTTON, 'h-auto min-h-7 whitespace-normal py-1 text-left')}>{option}</button>
+                    <button key={option} type="button" title={option} disabled={saving} onClick={() => void submitAnswer(option, true, card.current)} className={cn(ANSWER_BUTTON, 'h-auto min-h-7 max-w-full whitespace-normal break-words py-1 text-left [overflow-wrap:anywhere]')}>{option}</button>
                   ))}
                 </div>
               )}
@@ -435,7 +461,7 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
                 <Button type="submit" size="sm" disabled={saving || !customAnswer.trim()}>{saving ? 'Saving…' : 'Answer'}</Button>
               </form>
               {saving && <p role="status" className="text-sm text-muted-foreground">Saving…</p>}
-              {displayError && <p role="alert" className="break-words text-sm text-destructive">{displayError}</p>}
+              {displayError && <p role="alert" title={displayError} className="max-h-24 overflow-y-auto break-words text-sm text-destructive">{displayError}</p>}
             </div>
             <DialogFooter variant="bare" className="shrink-0 pt-3">
               <AskInCliButton question={decision.question} />

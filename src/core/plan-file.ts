@@ -288,8 +288,11 @@ export function findPlanItem(plan: PlanFile, words: string, only?: 'checkpoint' 
   return matches[0]!;
 }
 
+/** The most a typed line of the plan (a step, a question, an answer, a suggestion) may hold. */
+export const PLAN_LINE_MAX = 2000;
+
 /** One line of text, safe to put on a line of the file. */
-export function oneLine(text: string, max = 2000): string {
+export function oneLine(text: string, max = PLAN_LINE_MAX): string {
   // eslint-disable-next-line no-control-regex
   const clean = text.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) throw new PlanFileError('Say it in words.', 'invalid');
@@ -360,7 +363,7 @@ export interface NewDecision {
 export function addToPlan(text: string, entry: { step: string } | { decision: NewDecision }, options: { checkpoint?: string } = {}): { text: string; key: string } {
   const plan = parsePlanFile(text);
   const lines = text.split('\n');
-  const body = 'step' in entry ? [oneLine(entry.step, 300)] : decisionLines(entry.decision);
+  const body = 'step' in entry ? [oneLine(entry.step)] : decisionLines(entry.decision);
   let at: number;
   let indent: string;
   if (options.checkpoint) {
@@ -390,10 +393,10 @@ export function addToPlan(text: string, entry: { step: string } | { decision: Ne
 
 function decisionLines(decision: NewDecision): string[] {
   return [
-    `Decide: ${oneLine(decision.question, 300)}`,
+    `Decide: ${oneLine(decision.question)}`,
     ...(decision.detail?.trim() ? decision.detail.trim().split('\n').map((line) => line.trim()).filter(Boolean) : []),
-    ...(decision.suggested?.length ? [`Suggested: ${decision.suggested.map((answer) => oneLine(answer, 200)).join(' · ')}`] : []),
-    ...(decision.ifNoAnswer?.trim() ? [`If no answer: ${oneLine(decision.ifNoAnswer, 300)}`] : []),
+    ...(decision.suggested?.length ? [`Suggested: ${decision.suggested.map((answer) => oneLine(answer)).join(' · ')}`] : []),
+    ...(decision.ifNoAnswer?.trim() ? [`If no answer: ${oneLine(decision.ifNoAnswer)}`] : []),
   ];
 }
 
