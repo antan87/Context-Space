@@ -282,16 +282,18 @@ test.describe('Linux native clipboard', () => {
   // Desktop Chrome's bundled descriptor advertises Windows even on the Linux runner.
   // Monaco intentionally copies CRLF on Windows. Use the runner's OS for the exact LF contract;
   // do not trim spaces or normalize the copied value to hide a source/selection error.
+  // The copy key is the runner's own: Control+C is not copy in macOS Chromium (Command+C is), and the forced user agent
+  // only decides what Monaco believes about line endings, not which key the browser treats as copy.
   test.use({ userAgent: devices['Desktop Chrome'].userAgent.replace('Windows NT 10.0; Win64; x64', 'X11; Linux x86_64') });
   test('Monaco copies its native selection without margin note text', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await setupCodeNotes(page);
     await selectMonaco(page);
-    await page.keyboard.press('Control+c');
+    await page.keyboard.press('ControlOrMeta+c');
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('const value2 = 2;\nconst value3 = 3;');
     await page.locator('[data-code-line-note]').getByRole('button', { name: 'Close', exact: true }).click();
     await selectMonaco(page);
-    await page.keyboard.press('Control+c');
+    await page.keyboard.press('ControlOrMeta+c');
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('const value2 = 2;\nconst value3 = 3;');
   });
 
@@ -299,7 +301,7 @@ test.describe('Linux native clipboard', () => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await setupCodeNotes(page, { content: code.replace('const value2 = 2;', 'const value2 = 2;    ') });
     await selectMonaco(page);
-    await page.keyboard.press('Control+c');
+    await page.keyboard.press('ControlOrMeta+c');
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('const value2 = 2;    \nconst value3 = 3;');
   });
 });

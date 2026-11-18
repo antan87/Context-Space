@@ -1543,16 +1543,24 @@ test.describe('Board, a quiet frame and a readable overview', () => {
 
     // 2. 1280x800 Split keeps the next-step words (both in minis and when rows are forced)
     await page.setViewportSize({ width: 1280, height: 800 });
+    // The docked sidebar settles only after the resize; checking at once can miss its Collapse button, and a sidebar left open
+    // takes ~200 px from the Board, so minis shrink and the Order mini loses its next-step words (macOS CI). Wait for it.
     const collapseSidebar = page.getByRole('button', { name: /^Collapse/ });
-    if (await collapseSidebar.isVisible()) await collapseSidebar.click();
+    await expect(collapseSidebar).toBeVisible();
+    await collapseSidebar.click();
+    await expect(collapseSidebar).toHaveCount(0);
     await page.evaluate(() => {
       try { window.localStorage.setItem('contextspace_chat_layout_v1', JSON.stringify({ hidden: false, percent: 50 })); } catch { /* no storage */ }
     });
     await page.reload();
     await viewAtRest(page);
+    await expect(collapseSidebar).toHaveCount(0);
     await expect(overview.locator('.react-flow__node-areaMini', { hasText: 'After the merge' })).toBeVisible();
     const splitFold = overview.locator('button.board-area-fold');
-    if (!(await overview.locator('.react-flow__node-areaMini', { hasText: 'Order, from your answer' }).isVisible()) && await splitFold.isVisible()) {
+    const orderMini = overview.locator('.react-flow__node-areaMini', { hasText: 'Order, from your answer' });
+    // Settled means the Area is in view or the fold that holds it is: a one-shot check can run before the layout settles and skip the fold.
+    await expect(orderMini.or(splitFold).first()).toBeVisible();
+    if (!(await orderMini.isVisible())) {
       await splitFold.click();
       await viewAtRest(page);
     }
