@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { CommitDetail, CommitDetailFile } from '../board/commitContext.js';
-import type { RecentCommits } from '../plan/whatsNew.js';
+import type { IncomingCommitsReport, RecentCommits } from '../plan/whatsNew.js';
 import {
+  ancestorGroupIdsForCommit,
   applyCommitTreeKey,
   buildCommitListGroups,
+  buildCommitRepoGroups,
   commitItemId,
   fileItemId,
   firstDescriptionLine,
   flattenCommitTree,
+  flattenRepoGroupCommits,
   formatCommitStepLabel,
+  remoteRepoDisplayName,
   splitFilePath,
   statusCode,
 } from './commitListModel.js';
@@ -308,6 +312,283 @@ describe('buildCommitListGroups with incoming commits', () => {
     expect(buildCommitListGroups(null, singleRepoRecent, null, null, multiIncoming).map((g) => g.label)).toEqual([
       'api · On GitHub, not in your copy yet',
       'web · Not in your copy yet',
+    ]);
+  });
+});
+
+describe('buildCommitRepoGroups, remoteRepoDisplayName, and collapsed group tree navigation', () => {
+  it('shows owner/repo only when remote repo leaf name differs from local folder name', () => {
+    expect(remoteRepoDisplayName('NexusFlow', 'antan87/Context-Space')).toBe('antan87/Context-Space');
+    expect(remoteRepoDisplayName('billing', 'acme/billing')).toBeNull();
+    expect(remoteRepoDisplayName('billing', null)).toBeNull();
+  });
+
+  it('groups by repo -> branch -> PR with incoming first in repo, unassigned branch commits first, PRs, and onBase last', () => {
+    const recent: RecentCommits = {
+      at: '2026-11-10T12:00:00Z',
+      from: '2026-11-07T12:00:00Z',
+      commits: [
+        {
+          repo: 'NexusFlow',
+          remoteRepo: 'antan87/Context-Space',
+          branch: 'feat/cl1',
+          base: 'main',
+          pullRequests: [
+            { number: 485, title: 'Open follow-up', state: 'OPEN', url: 'https://github.com/antan87/Context-Space/pull/485' },
+            { number: 482, title: 'Merged notes', state: 'MERGED', url: 'https://github.com/antan87/Context-Space/pull/482' },
+            { number: 470, title: 'Empty old PR', state: 'CLOSED', url: 'https://github.com/antan87/Context-Space/pull/470' },
+          ],
+          more: 0,
+          commits: [
+            { sha: 'unpr001', author: 'A', subject: 'Local commit after PR', at: '2026-11-10T11:30:00Z', pushed: false },
+            { sha: 'open001', author: 'A', subject: 'Open PR commit', at: '2026-11-10T11:00:00Z', pushed: true, prNumber: 485 },
+            { sha: 'merg001', author: 'A', subject: 'Merged PR commit', at: '2026-11-10T09:00:00Z', pushed: true, prNumber: 482 },
+            { sha: 'base001', author: 'M', subject: 'Already merged from main', at: '2026-11-10T08:00:00Z', pushed: true, onBase: true },
+          ],
+        },
+        {
+          repo: 'billing',
+          remoteRepo: 'acme/billing',
+          branch: null,
+          base: null,
+          more: 0,
+          commits: [
+            { sha: 'det0001', author: 'B', subject: 'Detached commit', at: '2026-11-10T10:00:00Z', pushed: true },
+          ],
+        },
+      ],
+    };
+    const incoming: IncomingCommitsReport = {
+      at: '2026-11-10T12:00:00Z',
+      repos: [
+        {
+          repo: 'NexusFlow',
+          remote: 'origin',
+          ref: 'origin/main',
+          remoteRepo: 'antan87/Context-Space',
+          branch: 'main',
+          host: { kind: 'github', name: 'GitHub' },
+          lastFetchAt: '2026-11-10T11:59:00Z',
+          fetching: false,
+          state: 'ok',
+          message: null,
+          behind: 1,
+          commits: [
+            { sha: 'inc0001', author: 'Maria', subject: 'Remote fix on main', at: '2026-11-10T11:45:00Z', incoming: true },
+          ],
+          more: 0,
+        },
+      ],
+    };
+
+    const held: CommitSequence = {
+      label: 'Area',
+      commits: [{ repo: 'billing', sha: 'det0001' }],
+    };
+
+    const repoGroups = buildCommitRepoGroups(held, recent, { repo: 'billing', sha: 'det0001' }, null, incoming);
+    // Held repo comes first, then incoming repo
+    expect(repoGroups.map((r) => [r.repo, r.remoteRepoLabel])).toEqual([
+      ['billing', null],
+      ['NexusFlow', 'antan87/Context-Space'],
+    ]);
+
+    const billingBranch = repoGroups[0]!.branches[0]!;
+    expect(billingBranch.label).toBe('Detached HEAD');
+    expect(billingBranch.sections.map((s) => s.kind)).toEqual(['direct']);
+
+    const nexusBranches = repoGroups[1]!.branches;
+    expect(nexusBranches.map((b) => [b.kind, b.label])).toEqual([
+      ['incoming', 'origin/main'],
+      ['local', 'feat/cl1 → main'],
+    ]);
+    expect(nexusBranches[0]!.statusLabel).toBe('On GitHub, not in your copy yet');
+    expect(nexusBranches[1]!.sections.map((s) => [s.kind, s.label, s.pr?.number])).toEqual([
+      ['unassigned-pr', 'Not in a pull request yet', undefined],
+      ['pr', 'Open follow-up', 485],
+      ['pr', 'Merged notes', 482],
+      ['on-base', 'Already on main', undefined],
+    ]);
+
+    // Drawn order matches [ / ] sequence
+    const drawn = flattenRepoGroupCommits(repoGroups);
+    expect(drawn.map((c) => c.sha)).toEqual(['det0001', 'inc0001', 'unpr001', 'open001', 'merg001', 'base001']);
+
+    // Ancestors of a PR commit include repo, branch, and PR section
+    expect(ancestorGroupIdsForCommit(repoGroups, { repo: 'NexusFlow', sha: 'open001' })).toEqual([
+      'repo:NexusFlow',
+      'branch:NexusFlow:local:feat/cl1',
+      'section:NexusFlow:pr:485',
+    ]);
+
+    // Collapsing a PR section skips its commits in flattenCommitTree & keyboard ArrowDown moves across visible groups
+    const rowsWithCollapsedPr = flattenCommitTree(repoGroups, null, [], undefined, { 'section:NexusFlow:pr:485': true });
+    expect(rowsWithCollapsedPr.map((r) => r.commit.sha)).toEqual(['det0001', 'inc0001', 'unpr001', 'merg001', 'base001']);
+
+    const moved = applyCommitTreeKey(
+      rowsWithCollapsedPr,
+      { commit: { repo: 'NexusFlow', sha: 'unpr001' }, expanded: null, file: null, focusId: commitItemId({ repo: 'NexusFlow', sha: 'unpr001' }) },
+      'ArrowDown',
+    );
+    expect(moved.commit).toEqual({ repo: 'NexusFlow', sha: 'merg001' });
+
+    // Collapsing a branch or repository skips all nested commits in flattenCommitTree
+    const rowsWithCollapsedBranch = flattenCommitTree(repoGroups, null, [], undefined, { 'branch:NexusFlow:incoming:origin/main': true });
+    expect(rowsWithCollapsedBranch.map((r) => r.commit.sha)).toEqual(['det0001', 'unpr001', 'open001', 'merg001', 'base001']);
+
+    const rowsWithCollapsedRepo = flattenCommitTree(repoGroups, null, [], undefined, { 'repo:NexusFlow': true });
+    expect(rowsWithCollapsedRepo.map((r) => r.commit.sha)).toEqual(['det0001']);
+  });
+
+  it('puts a commit the current branch does not list into a neutral "Other commits" group with no branch, and never claims the branch for it', () => {
+    const recent: RecentCommits = {
+      at: '2026-11-10T12:00:00Z',
+      from: '2026-11-07T12:00:00Z',
+      commits: [{
+        repo: 'NexusFlow',
+        remoteRepo: 'antan87/Context-Space',
+        branch: 'feat/cl1',
+        base: 'main',
+        pullRequests: [
+          { number: 482, title: 'Merged notes', state: 'MERGED', url: 'https://github.com/antan87/Context-Space/pull/482' },
+        ],
+        more: 12,
+        commits: [
+          { sha: 'merg001', author: 'A', subject: 'Merged PR commit', at: '2026-11-10T09:00:00Z', pushed: true, prNumber: 482 },
+        ],
+      }],
+    };
+    // Opened from an earlier branch, after switching to feat/cl1: the current branch's results do not list it.
+    const held: CommitSequence = {
+      label: 'Older news',
+      commits: [{ repo: 'NexusFlow', sha: 'old9999', subject: 'Commit from 10 days ago', author: 'A', at: '2026-10-31T10:00:00Z' }],
+    };
+
+    const groups = buildCommitRepoGroups(held, recent, { repo: 'NexusFlow', sha: 'cap8888' }, {
+      repo: 'NexusFlow',
+      sha: 'cap8888',
+      shortSha: 'cap8888',
+      author: 'A',
+      at: '2026-10-30T10:00:00Z',
+      subject: 'Commit past 50-commit cap',
+      body: '',
+      parents: [],
+      files: [],
+      moreFiles: 0,
+      additions: 0,
+      deletions: 0,
+      pushed: true,
+    });
+    const [local, other] = groups[0]!.branches;
+    expect(local!.kind).toBe('local');
+    expect(local!.label).toBe('feat/cl1 → main');
+    expect(local!.sections.map((s) => [s.kind, s.label])).toEqual([['pr', 'Merged notes']]);
+    expect(local!.sections.flatMap((s) => s.commits.map((c) => c.sha))).toEqual(['merg001']);
+
+    expect(other!.kind).toBe('other');
+    expect(other!.label).toBe('Other commits');
+    expect(other!.branch).toBeNull();
+    expect(other!.base).toBeNull();
+    expect(other!.sections.flatMap((s) => s.commits.map((c) => c.sha))).toEqual(['old9999', 'cap8888']);
+    // No branch, base or PR is claimed on the commits themselves (the header reads them).
+    for (const commit of other!.sections.flatMap((s) => s.commits)) {
+      expect(commit.branch).toBeUndefined();
+      expect(commit.base).toBeUndefined();
+      expect(commit.prNumber).toBeUndefined();
+    }
+    expect(ancestorGroupIdsForCommit(groups, { repo: 'NexusFlow', sha: 'old9999' })).toEqual([
+      'repo:NexusFlow',
+      'branch:NexusFlow:other',
+    ]);
+    const collapsedOther = flattenCommitTree(groups, null, [], undefined, { 'branch:NexusFlow:other': true });
+    expect(collapsedOther.map((r) => r.commit.sha)).toEqual(['merg001']);
+  });
+
+  it('puts an incoming commit that lies in an open PR range under that PR', () => {
+    const prUrl = 'https://github.com/antan87/Context-Space/pull/7';
+    const recent: RecentCommits = {
+      at: '2026-11-10T12:00:00Z',
+      from: '2026-11-07T12:00:00Z',
+      commits: [{
+        repo: 'NexusFlow',
+        branch: 'feat/x',
+        base: 'main',
+        pullRequests: [{ number: 7, title: 'Shared PR', state: 'OPEN', url: prUrl }],
+        incomingPrs: { 'cccc0001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': 7 },
+        more: 0,
+        commits: [{ sha: 'loca001', author: 'Me', subject: 'Mine', at: '2026-11-10T09:00:00Z' }],
+      }],
+    };
+    const incoming: IncomingCommitsReport = {
+      at: '2026-11-10T12:00:00Z',
+      repos: [{
+        repo: 'NexusFlow', remote: 'origin', ref: 'origin/feat/x', branch: 'feat/x', host: { kind: 'github', name: 'GitHub' },
+        lastFetchAt: null, fetching: false, state: 'ok', message: null, behind: 2, more: 0,
+        commits: [
+          { sha: 'cccc0001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', author: 'Sam', subject: 'Colleague push', at: '2026-11-10T11:00:00Z', incoming: true },
+          { sha: 'dddd0002bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', author: 'Sam', subject: 'Unrelated push', at: '2026-11-10T11:30:00Z', incoming: true },
+        ],
+      }],
+    };
+    const groups = buildCommitRepoGroups(null, recent, null, null, incoming);
+    const incomingBranch = groups[0]!.branches.find((b) => b.kind === 'incoming')!;
+    expect(incomingBranch.sections.map((s) => [s.kind, s.pr?.number ?? null, s.commits.map((c) => c.subject)])).toEqual([
+      ['direct', null, ['Unrelated push']],
+      ['pr', 7, ['Colleague push']],
+    ]);
+    const colleague = incomingBranch.sections[1]!.commits[0]!;
+    expect(colleague.prNumber).toBe(7);
+    expect(colleague.pr?.url).toBe(prUrl);
+    expect(flattenRepoGroupCommits(groups).map((c) => c.subject)).toEqual(['Unrelated push', 'Colleague push', 'Mine']);
+  });
+
+  it('propagates prsPending from recent repo onto local branch group', () => {
+    const recent = {
+      at: '2026-11-10T12:00:00Z',
+      from: '2026-11-07T12:00:00Z',
+      commits: [{
+        repo: 'NexusFlow',
+        branch: 'feat/cl1',
+        base: 'main',
+        prsPending: true as const,
+        more: 0,
+        commits: [
+          { sha: 'aaa1111', author: 'A', subject: 'Recent commit', at: '2026-11-10T09:00:00Z', pushed: true },
+        ],
+      }],
+    } as RecentCommits;
+    const groups = buildCommitRepoGroups(null, recent, null);
+    expect((groups[0]!.branches[0] as { prsPending?: boolean }).prsPending).toBe(true);
+    expect(groups[0]!.branches[0]!.sections.map((s) => s.kind)).toEqual(['direct']);
+  });
+
+  it('keeps Not in a pull request yet visible while prsPending is true whenever cached PR sections exist', () => {
+    const recent: RecentCommits = {
+      at: '2026-11-10T12:00:00Z',
+      from: '2026-11-07T12:00:00Z',
+      commits: [{
+        repo: 'NexusFlow',
+        branch: 'feat/cl1',
+        base: 'main',
+        prsPending: true,
+        pullRequests: [
+          { number: 482, title: 'Merged notes', state: 'MERGED', url: 'https://github.com/antan87/Context-Space/pull/482' },
+        ],
+        more: 0,
+        commits: [
+          { sha: 'unpr001', author: 'A', subject: 'Local commit after PR', at: '2026-11-10T11:30:00Z', pushed: false },
+          { sha: 'merg001', author: 'A', subject: 'Merged PR commit', at: '2026-11-10T09:00:00Z', pushed: true, prNumber: 482 },
+          { sha: 'base001', author: 'M', subject: 'Already merged from main', at: '2026-11-10T08:00:00Z', pushed: true, onBase: true },
+        ],
+      }],
+    };
+    const groups = buildCommitRepoGroups(null, recent, { repo: 'NexusFlow', sha: 'merg001' });
+    const branch = groups[0]!.branches[0]!;
+    expect(branch.prsPending).toBe(true);
+    expect(branch.sections.map((s) => [s.id, s.kind, s.label])).toEqual([
+      ['section:NexusFlow:unassigned-pr', 'unassigned-pr', 'Not in a pull request yet'],
+      ['section:NexusFlow:pr:482', 'pr', 'Merged notes'],
+      ['section:NexusFlow:on-base', 'on-base', 'Already on main'],
     ]);
   });
 });

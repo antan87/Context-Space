@@ -1329,3 +1329,234 @@ test('E4 fix3 the opaque renderer CSP blocks network independently of the source
   await expect(iframe).toHaveCount(1);
   expect(pageErrors).toEqual([]);
 });
+
+const WIDE_SEQUENCE_SOURCE = `sequenceDiagram
+  autonumber
+  actor Admin as Payroll admin
+  participant UI as OpenHR Lön
+  participant F as FUNC_PaymentReportsService
+  participant DB as Cosmos paymentreports
+  participant LDS as LonDataService
+  participant RIS as ReportingInformationService
+  Admin->>UI: Send to MyPayslip + publish time
+  UI->>F: POST paymentreportsexport (all payslips as JSON)
+  F-->>UI: 202 Accepted, header id
+  F->>DB: Save header (status Received)
+  F->>DB: Save payslips, 50 per batch, pk = SSN
+  DB-->>DB: Change feed copies each payslip to paymentreportexports
+  F->>DB: Poll counts every 15 s, max 5 min
+  F->>LDS: Schedule "new payslip" email at publish time
+  F->>RIS: Schedule Kivra job at publish time
+  F->>DB: Header status Imported`;
+
+test('D2 wide sequence diagram scrolls at readable scale in 1280x800 Split and keyboard reaches the end', async ({ page }) => {
+  const card = await diagramAnswer(page, WIDE_SEQUENCE_SOURCE);
+  await page.getByTestId('view-mode-split').click();
+  await loaded(card.locator('img'));
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  const image = reader.locator('img');
+  await loaded(image);
+
+  const naturalWidth = await image.evaluate((el) => (el as HTMLImageElement).naturalWidth);
+  expect(naturalWidth).toBeGreaterThan(1500);
+  await expect.poll(() => image.evaluate((el) => el.getBoundingClientRect().width / (el as HTMLImageElement).naturalWidth)).toBeGreaterThanOrEqual(0.7499);
+
+  const scrollBox = reader.getByRole('region', { name: 'Diagram, scrolls sideways' });
+  await expect(scrollBox).toBeVisible();
+  await expect(scrollBox).toHaveAttribute('tabindex', '0');
+  const scrollMetrics = await scrollBox.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollLeft: el.scrollLeft }));
+  expect(scrollMetrics.scrollWidth).toBeGreaterThan(scrollMetrics.clientWidth);
+  expect(scrollMetrics.scrollLeft).toBe(0);
+
+  const rightFade = reader.locator('[data-diagram-fade="right"]');
+  await expect(rightFade).toBeVisible();
+  expect(await rightFade.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none');
+  await expect(reader.locator('[data-diagram-fade="left"]')).toHaveCount(0);
+
+  const hint = reader.getByText('Wider than the reader: scroll sideways, or open full screen', { exact: true });
+  await expect(hint).toBeVisible();
+  expect(await hint.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12);
+
+  // Reach the scroll box by keyboard (Shift+Tab from Source) and scroll right with ArrowRight until the last participant is visible.
+  const sourceBtn = reader.getByRole('button', { name: 'Source', exact: true });
+  await sourceBtn.focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(scrollBox).toBeFocused();
+  for (let step = 0; step < 60; step += 1) {
+    const done = await scrollBox.evaluate((el) => el.scrollLeft + el.clientWidth >= el.scrollWidth - 2);
+    if (done) break;
+    await page.keyboard.press('ArrowRight');
+  }
+  await expect.poll(() => scrollBox.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+  const endState = await scrollBox.evaluate((el) => ({ left: el.scrollLeft, right: el.scrollLeft + el.clientWidth, total: el.scrollWidth }));
+  expect(endState.right).toBeGreaterThanOrEqual(endState.total - 2);
+
+  const [boxRect, imgRect] = await Promise.all([scrollBox.boundingBox(), image.boundingBox()]);
+  expect(imgRect!.x + imgRect!.width).toBeLessThanOrEqual(boxRect!.x + boxRect!.width + 2);
+  await expect(reader.locator('[data-diagram-fade="left"]')).toBeVisible();
+  await expect(reader.locator('[data-diagram-fade="right"]')).toHaveCount(0);
+  expect(await noSideways(page)).toBe(true);
+});
+
+test('D2 wide sequence diagram refits in 1440x900 full screen with no fade or line, and omits full screen text when narrow fullscreen', async ({ page }) => {
+  const card = await diagramAnswer(page, WIDE_SEQUENCE_SOURCE);
+  await page.getByTestId('view-mode-split').click();
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  const image = reader.locator('img');
+  await loaded(image);
+
+  await expect(reader.getByText('Wider than the reader: scroll sideways, or open full screen', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await reader.getByRole('button', { name: 'Full screen' }).click();
+  await expect(page.locator('[data-board-reader-fullscreen]')).toBeVisible();
+
+  await expect(reader.locator('[data-diagram-fade]')).toHaveCount(0);
+  await expect(reader.getByText(/Wider than the reader/)).toHaveCount(0);
+  await expect(reader.getByRole('region', { name: /scrolls sideways/ })).toHaveCount(0);
+
+  const fit = await image.evaluate((el) => {
+    const img = el as HTMLImageElement;
+    const box = img.parentElement!.getBoundingClientRect();
+    const drawn = img.getBoundingClientRect();
+    return {
+      naturalWidth: img.naturalWidth,
+      drawnWidth: drawn.width,
+      boxWidth: box.width,
+      scale: drawn.width / img.naturalWidth,
+      overflows: img.parentElement!.scrollWidth > img.parentElement!.clientWidth + 1,
+    };
+  });
+  expect(fit.scale).toBeGreaterThanOrEqual(0.7499);
+  expect(fit.scale).toBeLessThan(1);
+  expect(fit.drawnWidth).toBeLessThanOrEqual(fit.boxWidth + 1);
+  expect(fit.overflows).toBe(false);
+
+  // When already full screen at a narrow width where it still overflows, leave out ", or open full screen".
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await expect(reader.getByText('Wider than the reader: scroll sideways', { exact: true })).toBeVisible();
+  await expect(reader.locator('[data-diagram-fade="right"]')).toBeVisible();
+
+  // Scrolling to the right end at 1000 px and then narrowing to 700 px updates the right fade cleanly.
+  const fsScrollBox = reader.getByRole('region', { name: 'Diagram, scrolls sideways' });
+  await fsScrollBox.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(reader.locator('[data-diagram-fade="left"]')).toBeVisible();
+  await expect(reader.locator('[data-diagram-fade="right"]')).toHaveCount(0);
+  await page.setViewportSize({ width: 700, height: 800 });
+  await expect(reader.locator('[data-diagram-fade="right"]')).toBeVisible();
+  await expect(reader.locator('[data-diagram-fade="left"]')).toBeVisible();
+  await expect(reader.getByText('Wider than the reader: scroll sideways', { exact: true })).toBeVisible();
+
+  // Exiting full screen back to Split restores the full-screen option in the hint.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await reader.getByRole('button', { name: 'Exit full screen' }).click();
+  await expect(page.locator('[data-board-reader-fullscreen]')).toHaveCount(0);
+  await expect(reader.getByText('Wider than the reader: scroll sideways, or open full screen', { exact: true })).toBeVisible();
+  await expect(reader.locator('[data-diagram-fade="right"]')).toBeVisible();
+  expect(await noSideways(page)).toBe(true);
+});
+
+test('D2 small flowchart stays unchanged at natural size with no fade and no line', async ({ page }) => {
+  const small = 'flowchart TD\naccTitle: Small flow\nA["A"] --> B["B"]';
+  const card = await diagramAnswer(page, small);
+  await page.getByTestId('view-mode-split').click();
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  const image = reader.getByRole('img', { name: 'Small flow' });
+  await loaded(image);
+
+  const dims = await image.evaluate((el) => {
+    const img = el as HTMLImageElement;
+    const rect = img.getBoundingClientRect();
+    return { naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight, width: rect.width, height: rect.height };
+  });
+  expect(dims.naturalWidth).toBeLessThan(260);
+  expect(Math.abs(dims.width - dims.naturalWidth)).toBeLessThan(1);
+  expect(Math.abs(dims.height - dims.naturalHeight)).toBeLessThan(1);
+  await expect(reader.locator('[data-diagram-fade]')).toHaveCount(0);
+  await expect(reader.getByText(/Wider than the reader/)).toHaveCount(0);
+  await expect(reader.getByRole('region', { name: /scrolls sideways/ })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await reader.getByRole('button', { name: 'Full screen' }).click();
+  const fsDims = await image.evaluate((el) => {
+    const img = el as HTMLImageElement;
+    const rect = img.getBoundingClientRect();
+    return { naturalWidth: img.naturalWidth, width: rect.width };
+  });
+  expect(Math.abs(fsDims.width - fsDims.naturalWidth)).toBeLessThan(1);
+  expect(await noSideways(page)).toBe(true);
+});
+
+async function measureSmallestSvgLabel(image: ReturnType<Page['locator']>) {
+  // Uses the transformed-size walk from gui/e2e/readable.ts on the rendered SVG at its on-screen scale.
+  return image.evaluate((el) => {
+    const img = el as HTMLImageElement;
+    const drawnScale = img.getBoundingClientRect().width / img.naturalWidth;
+    const raw = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''));
+    const svgDoc = new DOMParser().parseFromString(raw, 'image/svg+xml');
+    const host = document.createElement('div');
+    host.style.cssText = `position:fixed;left:0;top:0;opacity:0;pointer-events:none;transform-origin:top left;transform:scale(${drawnScale});`;
+    host.append(document.importNode(svgDoc.documentElement, true));
+    document.body.append(host);
+    try {
+      const small: string[] = [];
+      let minPx = Infinity;
+      const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const text = walker.currentNode;
+        const parent = text.parentElement;
+        if (!parent || !text.textContent?.trim()) continue;
+        if (parent.closest('defs, title, desc, marker, clipPath, mask, pattern, symbol, metadata, script, style, .sequenceNumber')) continue;
+        const style = getComputedStyle(parent);
+        const r = parent.getBoundingClientRect();
+        if (style.display === 'none' || style.visibility === 'hidden' || !r.width || !r.height || parent.closest('.sr-only')) continue;
+        let scale = 1;
+        for (let ancestor: Element | null = parent; ancestor; ancestor = ancestor.parentElement) {
+          const transform = getComputedStyle(ancestor).transform;
+          if (transform !== 'none') scale *= new DOMMatrixReadOnly(transform).a;
+        }
+        const px = parseFloat(style.fontSize) * scale;
+        if (px < minPx) minPx = px;
+        if (px < 11.95) small.push(`${px.toFixed(1)}px "${text.textContent.trim().slice(0, 24)}"`);
+      }
+      return { drawnScale, minPx, small };
+    } finally {
+      host.remove();
+    }
+  });
+}
+
+test('D2 gantt chart scales up 1.2x so smallest labels measure at least 12 px on screen', async ({ page }) => {
+  const ganttSource = 'gantt\n  title Long Delivery Plan\n  section Phase 1\n  Design :a1, 2026-01-01, 10d\n  Implement :after a1, 20d\n  Verify :20d';
+  const card = await diagramAnswer(page, ganttSource);
+  await page.getByTestId('view-mode-split').click();
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  const image = reader.locator('img');
+  await loaded(image);
+  await expect(reader.getByRole('region', { name: 'Diagram, scrolls sideways' })).toBeVisible();
+  await expect(reader.locator('[data-diagram-fade="right"]')).toBeVisible();
+  await expect(reader.getByText('Wider than the reader: scroll sideways, or open full screen', { exact: true })).toBeVisible();
+  const stats = await measureSmallestSvgLabel(image);
+  expect(stats.drawnScale).toBeCloseTo(1.2, 2);
+  expect(stats.minPx).toBeGreaterThanOrEqual(11.95);
+  expect(stats.small).toEqual([]);
+});
+
+test('D2 flowchart classDef 75% scales up so smallest label measures at least 12 px on screen', async ({ page }) => {
+  const pctSource = 'flowchart LR\n  A[Alpha] --> B[Beta]\n  C[Gamma] --> D[Delta]\n  classDef small font-size:75%\n  class A small';
+  const card = await diagramAnswer(page, pctSource);
+  await page.getByTestId('view-mode-split').click();
+  await card.getByRole('button', { name: 'Read the diagram' }).click();
+  const reader = readerOf(page);
+  const image = reader.locator('img');
+  await loaded(image);
+  await expect(reader.getByRole('region', { name: 'Diagram, scrolls sideways' })).toBeVisible();
+  await expect(reader.locator('[data-diagram-fade="right"]')).toBeVisible();
+  const stats = await measureSmallestSvgLabel(image);
+  expect(stats.drawnScale).toBeCloseTo(12 / 9, 2);
+  expect(stats.minPx).toBeGreaterThanOrEqual(11.95);
+  expect(stats.small).toEqual([]);
+});

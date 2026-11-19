@@ -26,6 +26,7 @@ const BOARD_READER_SPECS = [
   'e2e/board-area-view.spec.ts',
   'e2e/board-questions.spec.ts',
   'e2e/board-commits.spec.ts',
+  'e2e/board-copy.spec.ts',
   'e2e/board-code-window.spec.ts',
   'e2e/board-assignment.spec.ts',
   'e2e/board-area.spec.ts',
@@ -163,14 +164,17 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['src/components/Diagram.tsx'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
     expect(getAffectedSpecs(['src/lib/diagram.ts'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
     expect(getAffectedSpecs(['src/diagram-frame.ts'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
 
     // Unknown paths inside src/features/board/ run e2e/board; anywhere else runs e2e.
@@ -495,6 +499,7 @@ describe('affected e2e specs', () => {
       'gui/src/features/board/BoardNodes.tsx',
       'gui/src/features/board/cards/FileCard.tsx',
       'gui/src/features/board/cards/NoteCard.tsx',
+      'gui/src/features/changes/CommitsView.tsx',
       // The design page (DS7) draws each piece in every state; its spec is on each piece's row.
       'gui/src/pages/DesignPieces.tsx',
     ]);
@@ -550,6 +555,7 @@ describe('affected e2e specs', () => {
       'gui/src/design/index.ts',
       'gui/src/features/board/rows/RowControls.tsx',
       'gui/src/features/board/rows/RowHead.tsx',
+      'gui/src/features/changes/CommitsView.tsx',
       'gui/src/pages/DesignPieces.tsx',
     ]);
     expect(usesDesignPieces("import { StepCheck } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);
@@ -832,6 +838,7 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['src\\components\\Diagram.tsx'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
     expect(getAffectedSpecs(['src\\index.css'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src\\design\\tokens.css'])).toEqual(['e2e']);

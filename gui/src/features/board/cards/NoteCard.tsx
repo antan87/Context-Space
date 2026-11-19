@@ -1,8 +1,9 @@
 import { useContext, useEffect, useId, useRef, useState } from 'react';
 import { type NodeProps } from '@xyflow/react';
-import { Archive, MoreHorizontal, Pencil, Pin, Terminal } from 'lucide-react';
+import { Archive, Copy, MoreHorizontal, Pencil, Pin, Terminal } from 'lucide-react';
 
 import { Button, CardFrame, Menu, MenuItem, MenuPopup, MenuTrigger, Pill } from '../../../design/index.js';
+import { safeCopyToClipboard } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import { NoteDialog } from '../NoteDialog.js';
 import { BoardActionsContext, firstControl } from '../boardActions.js';
@@ -20,8 +21,28 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
   // A body press reads; a double press edits. Wait briefly for the second press
   // before the modal can cover the card and swallow its double-click.
   const readTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(readTimer.current), []);
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const copyGen = useRef(0);
+  const [copyNotice, setCopyNotice] = useState<{ text: string; repeat: boolean } | null>(null);
+  useEffect(() => () => {
+    clearTimeout(readTimer.current);
+    clearTimeout(copyTimer.current);
+  }, []);
   useEffect(() => { if (editOpen) clearTimeout(readTimer.current); }, [editOpen]);
+
+  const copyNoteText = () => {
+    const trimmedTitle = data.title.trim();
+    const body = (data.text ?? '').trim();
+    const markdown = trimmedTitle && body ? `# ${trimmedTitle}\n\n${body}` : trimmedTitle ? `# ${trimmedTitle}` : body;
+    const gen = ++copyGen.current;
+    const repeat = copyNotice !== null ? !copyNotice.repeat : false;
+    void safeCopyToClipboard(markdown).then((ok) => {
+      if (gen !== copyGen.current) return;
+      setCopyNotice({ text: ok ? 'Copied' : 'Could not copy', repeat });
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopyNotice(null), 1500);
+    });
+  };
 
   const noteActionsMenu = actions && !actions.readOnly && (
     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity pointer-coarse:opacity-100">
@@ -74,6 +95,13 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
             <Archive className="size-3.5" aria-hidden="true" />
             <span>{data.archived ? 'Restore note' : 'Archive note'}</span>
           </MenuItem>
+          <MenuItem
+            onClick={copyNoteText}
+            className="flex items-center gap-2 text-[12.5px]"
+          >
+            <Copy className="size-3.5" aria-hidden="true" />
+            <span>Copy text</span>
+          </MenuItem>
           {actions.askInCLI && (
             <MenuItem
               onClick={() => {
@@ -88,6 +116,9 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           )}
         </MenuPopup>
       </Menu>
+      <span role="status" aria-live="polite" className="sr-only">
+        {copyNotice ? `${copyNotice.text}${copyNotice.repeat ? '\u00A0' : ''}` : ''}
+      </span>
     </div>
   );
 
@@ -114,7 +145,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
 
   if (data.compact) {
     const cut = titleCut || bodyCut;
-    const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
+    const title = <span ref={titleRef} id={titleId} className="nodrag select-text min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
     return (
       <>
         <CardFrame
@@ -176,7 +207,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
         }}
       >
         <div className="flex shrink-0 items-start justify-between gap-1.5">
-          <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
+          <h2 ref={titleRef} id={titleId} className={cn('nodrag select-text line-clamp-2 shrink-0 break-words text-sm font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
             {data.title}
           </h2>
           <div className="flex items-center gap-1.5 shrink-0">

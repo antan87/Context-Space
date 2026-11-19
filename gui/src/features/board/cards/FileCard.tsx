@@ -6,7 +6,7 @@ import { Button, CardFrame, CARD_BRICK as BRICK, CARD_FOCUS, Pill } from '../../
 import { cn } from '../../../lib/utils.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, firstControl, pictureSrc } from '../boardActions.js';
 import { imageAlt, type FileNode, type FileType } from '../boardLayout.js';
-import { Anchors, brickPress, CardMark, CardText, ReadAll, TITLE_BUTTON, useCut } from './cardParts.js';
+import { Anchors, brickPress, CardMark, CardText, hasDragSelection, ReadAll, TITLE_BUTTON, useCut } from './cardParts.js';
 
 const FILE_LABEL: Record<FileType, string> = { image: 'Picture', html: 'HTML page', pdf: 'PDF', markdown: 'Markdown', other: 'File' };
 const FILE_ICON: Record<FileType, LucideIcon> = { image: FileImage, html: Globe, pdf: FileText, markdown: FileCode, other: File };
@@ -35,17 +35,20 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   if (data.compact && (data.group === 'documents' || data.group === 'pages')) {
     const Icon = FILE_ICON[data.fileType];
     const folderLabel = data.folder || 'Workspace root';
-    const openItem = (event: MouseEvent<HTMLElement>) => actions?.openInReader(
-      { path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) },
-      event.currentTarget,
-    );
+    const openItem = (event: MouseEvent<HTMLElement>) => {
+      if (hasDragSelection(event.currentTarget, event)) return;
+      actions?.openInReader(
+        { path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) },
+        event.currentTarget,
+      );
+    };
     const content = (
       <>
         <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-        <span id={titleId} className="min-w-0 max-w-[52%] shrink-0 truncate text-[13.5px] font-medium leading-5 text-foreground" title={data.title}>
+        <span id={titleId} className="nodrag select-text min-w-0 max-w-[52%] shrink-0 truncate text-[13.5px] font-medium leading-5 text-foreground" title={data.title}>
           {data.title}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] leading-4 text-muted-foreground" title={folderLabel}>
+        <span className="nodrag select-text min-w-0 flex-1 truncate text-[13px] leading-4 text-muted-foreground" title={folderLabel}>
           {folderLabel}
         </span>
         {data.age && (
@@ -75,7 +78,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
             data-card-main
             aria-label={`Open ${data.title}`}
             onClick={openItem}
-            className="nodrag nopan flex h-full w-full min-w-0 items-center gap-2.5 px-3 text-left outline-hidden hover:no-underline cursor-pointer"
+            className="nodrag nopan select-text flex h-full w-full min-w-0 items-center gap-2.5 px-3 text-left outline-hidden hover:no-underline cursor-pointer"
           >
             {content}
           </button>
@@ -87,7 +90,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   }
   if (data.compact && data.group === 'pictures') {
     const Icon = FILE_ICON[data.fileType];
-    const title = <span ref={titleRef} id={titleId} className="min-w-0 truncate" title={data.title}>{data.title}</span>;
+    const title = <span ref={titleRef} id={titleId} className="nodrag select-text min-w-0 truncate" title={data.title}>{data.title}</span>;
     return (
       <article
         aria-labelledby={titleId}
@@ -126,7 +129,10 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
                 data-card-main
                 className={cn(TITLE_BUTTON, 'flex min-h-7 items-center text-[13.5px] font-medium')}
                 aria-label={`Open ${data.title}`}
-                onClick={(event) => actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) }, event.currentTarget)}
+                onClick={(event) => {
+                  if (hasDragSelection(event.currentTarget, event)) return;
+                  actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) }, event.currentTarget);
+                }}
               >{title}</button>
               : title}
           </h2>
@@ -141,7 +147,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   }
   if (data.compact) {
     const Icon = FILE_ICON[data.fileType];
-    const title = <span ref={titleRef} id={titleId} className="min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
+    const title = <span ref={titleRef} id={titleId} className="nodrag select-text min-w-0 line-clamp-1 break-words" title={data.title}>{data.title}</span>;
     const describedBy = !data.readOnly || data.age ? markId : undefined;
     return <CardFrame archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />} labelledBy={titleId} describedBy={describedBy} reading={reading} compact onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, '[data-card-main]')) : undefined}>
       <div className="flex min-h-0 flex-1 gap-3">
@@ -161,7 +167,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
           <div className="flex shrink-0 items-start gap-1.5">
           <h2 className={cn('flex min-h-7 min-w-0 flex-1 items-center text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')}>
             {actions
-              ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} onClick={(event) => actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)}>{title}</button>
+              ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} onClick={(event) => { if (hasDragSelection(event.currentTarget, event)) return; actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget); }}>{title}</button>
               : title}
           </h2>
           {data.readOnly
@@ -175,7 +181,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   }
   return <CardFrame archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
     <div className="flex shrink-0 items-start justify-between gap-1.5">
-      <h2 ref={titleRef} id={titleId} className={cn('line-clamp-2 shrink-0 break-words text-[13px] font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
+      <h2 ref={titleRef} id={titleId} className={cn('nodrag select-text line-clamp-2 shrink-0 break-words text-[13px] font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
       <Pill className="shrink-0">
         {data.fileType === 'image' ? 'picture' : data.fileType}
       </Pill>

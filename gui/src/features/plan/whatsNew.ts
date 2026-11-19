@@ -15,6 +15,15 @@ export interface NewsSection<T> { items: T[]; more: number }
 
 export interface NewsDocument { name: string; kind: string; change: 'added' | 'changed'; at: string }
 export interface NewsKnowledge { id: string; title: string; date: string | null; type: string | null }
+export type PullRequestState = 'OPEN' | 'MERGED' | 'CLOSED';
+
+export interface NewsPullRequest {
+  number: number;
+  title: string;
+  state: PullRequestState;
+  url: string;
+}
+
 export interface NewsCommit {
   sha: string;
   author: string;
@@ -23,8 +32,25 @@ export interface NewsCommit {
   firstBodyLine?: string;
   fileCount?: number;
   pushed?: boolean;
+  prNumber?: number;
+  onBase?: true;
 }
-export interface NewsRepo { repo: string; commits: NewsCommit[]; more: number; moreAtLeast?: true; problem?: string }
+export interface NewsRepo {
+  repo: string;
+  remoteRepo?: string | null;
+  branch?: string | null;
+  base?: string | null;
+  pullRequests?: NewsPullRequest[];
+  prsPending?: true;
+  /** The last PR refresh failed; the PRs shown are the last good ones. */
+  prsStale?: true;
+  /** Full SHA of each fetched commit not yet in HEAD that lies in an open PR's range, to that PR's number. */
+  incomingPrs?: Record<string, number>;
+  commits: NewsCommit[];
+  more: number;
+  moreAtLeast?: true;
+  problem?: string;
+}
 
 export type IncomingState = 'ok' | 'checking' | 'sign-in' | 'offline' | 'busy' | 'no-remote' | 'no-upstream' | 'error';
 
@@ -42,11 +68,14 @@ export interface IncomingCommitView {
   fileCount?: number;
   incoming: true;
   webUrl?: string | null;
+  ref?: string | null;
 }
 
 export interface IncomingRepoView {
   repo: string;
   remote: string | null;
+  ref?: string | null;
+  remoteRepo?: string | null;
   branch: string | null;
   host: IncomingHost | null;
   lastFetchAt: string | null;
@@ -171,7 +200,8 @@ function getWatcher(queryClient: QueryClient, workspace: string | null): Incomin
   return getClientWatchers(queryClient).get(workspace);
 }
 
-function ensureWatcher(queryClient: QueryClient, workspace: string): IncomingWatcherState {
+/** @internal exported for tests */
+export function ensureWatcher(queryClient: QueryClient, workspace: string): IncomingWatcherState {
   const map = getClientWatchers(queryClient);
   let watcher = map.get(workspace);
   if (!watcher) {
@@ -237,7 +267,8 @@ function scheduleWatcherRetry(queryClient: QueryClient, workspace: string, watch
   }, INCOMING_FETCH_RETRY_MS);
 }
 
-function applyIncomingReport(
+/** @internal exported for tests */
+export function applyIncomingReport(
   queryClient: QueryClient,
   workspace: string,
   watcher: IncomingWatcherState,
@@ -254,6 +285,8 @@ function applyIncomingReport(
     watcher.exhausted = false;
     if (justFinished) {
       void queryClient.invalidateQueries({ queryKey: newsKey(workspace) });
+      // The fetch may have brought a colleague's commit into an open PR's range; Review's PR mapping must read it again.
+      void queryClient.invalidateQueries({ queryKey: recentCommitsKey(workspace) });
     }
     return;
   }

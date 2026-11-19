@@ -7,6 +7,8 @@ import { execa } from 'execa';
 import { registerNewsRoutes } from './news-routes.js';
 import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
 import { setActiveStorageProvider } from '../core/adapters/registry.js';
+import { resetMergeDetectionCache } from '../core/merge-detection.js';
+import { gitOnlyDir, pathWith, writeGhJson, writeGhNode } from '../test-support/fake-gh.js';
 
 describe('news routes', () => {
   let root: string;
@@ -162,5 +164,228 @@ describe('news routes', () => {
     await get(`?reader=user&since=${encodeURIComponent(hoursAgo(5).toISOString())}`);
     // the first report is still the one that can be marked
     expect(await post({ reader: 'user', at: report.at })).toEqual({ status: 200, body: { ok: true } });
+  });
+
+  it('includes branch, distinct base, and remoteRepo on /recent-commits and accepts ?refresh=1', async () => {
+    const originalPath = process.env.PATH ?? '';
+    const tmpBin = path.join(root, 'bin');
+    await fs.mkdir(tmpBin, { recursive: true });
+    await writeGhJson(tmpBin, '[]');
+    process.env.PATH = pathWith(tmpBin, originalPath);
+    resetMergeDetectionCache();
+    try {
+      const repo = path.join(root, 'app');
+      await fs.mkdir(repo);
+      await execa('git', ['init', '-b', 'main'], { cwd: repo });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: repo });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execa('git', ['remote', 'add', 'origin', 'git@github.com:org/upstream-app.git'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'a.txt'), 'a\n');
+      await execa('git', ['add', '.'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'Base commit'], { cwd: repo });
+      await execa('git', ['checkout', '-b', 'feat/branch'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'b.txt'), 'b\n');
+      await execa('git', ['add', '.'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'Branch commit'], { cwd: repo });
+
+      await fs.writeFile(
+        path.join(root, 'contextspace.json'),
+        JSON.stringify({ id: 'reports', name: 'Reports', branchName: 'feat/branch', repos: [repo], assistants: [], workspacePath: root }),
+      );
+
+      const recent = await (await app.request('/api/workspace/reports/recent-commits?refresh=1')).json();
+      expect(recent.commits[0]).toMatchObject({
+        repo: 'app',
+        remoteRepo: 'org/upstream-app',
+        branch: 'feat/branch',
+        base: 'main',
+      });
+      expect(recent.commits[0].commits.map((c: { subject: string }) => c.subject)).toContain('Branch commit');
+      await expect(fs.access(seenFile())).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      process.env.PATH = originalPath;
+      resetMergeDetectionCache();
+    }
+  });
+
+  it('serves cached PRs until a second ?refresh=1 request busts the branch PR cache', async () => {
+    const originalPath = process.env.PATH ?? '';
+    const tmpBin = path.join(root, 'bin-refresh');
+    const stateFile = path.join(root, 'pr-state.txt');
+    await fs.mkdir(tmpBin, { recursive: true });
+    await fs.writeFile(stateFile, 'OPEN');
+    await writeGhNode(tmpBin, `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') process.exit(0);
+if (args[0] === 'pr') {
+  const state = fs.readFileSync(${JSON.stringify(stateFile)}, 'utf8').trim();
+  console.log(JSON.stringify([{ number: 10, title: 'Refresh test PR', state, url: 'https://github.com/org/upstream-app/pull/10', baseRefName: 'main', headRefOid: 'deadbeef', mergeCommit: null }]));
+  process.exit(0);
+}
+process.exit(1);
+`);
+    process.env.PATH = pathWith(tmpBin, originalPath);
+    resetMergeDetectionCache();
+    try {
+      const repo = path.join(root, 'app-refresh');
+      await fs.mkdir(repo);
+      await execa('git', ['init', '-b', 'main'], { cwd: repo });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: repo });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execa('git', ['remote', 'add', 'origin', 'git@github.com:org/upstream-app.git'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'a.txt'), 'a\n');
+      await execa('git', ['add', '.'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'Base commit'], { cwd: repo });
+      await execa('git', ['checkout', '-b', 'feat/branch'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'b.txt'), 'b\n');
+      await execa('git', ['add', '.'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'Branch commit'], { cwd: repo });
+      await fs.writeFile(
+        path.join(root, 'contextspace.json'),
+        JSON.stringify({ id: 'reports', name: 'Reports', branchName: 'feat/branch', repos: [repo], assistants: [], workspacePath: root }),
+      );
+
+      const first = await (await app.request('/api/workspace/reports/recent-commits?refresh=1')).json();
+      expect(first.commits[0].pullRequests?.[0]?.state).toBe('OPEN');
+
+      await fs.writeFile(stateFile, 'MERGED');
+      const cached = await (await app.request('/api/workspace/reports/recent-commits')).json();
+      expect(cached.commits[0].pullRequests?.[0]?.state).toBe('OPEN');
+
+      const refreshed = await (await app.request('/api/workspace/reports/recent-commits?refresh=1')).json();
+      expect(refreshed.commits[0].pullRequests?.[0]?.state).toBe('MERGED');
+    } finally {
+      process.env.PATH = originalPath;
+      resetMergeDetectionCache();
+    }
+  });
+
+  // The route waits for GitHub for at most 1 s ON PURPOSE (the coordinator chose it so a first load usually
+  // shows PRs already settled). It must never wait longer, whatever gh does, even if every gh call is held forever.
+  it('waits on GitHub for a bounded 1 s on purpose and still answers within about 1.5 s while every gh call is held forever', async () => {
+    const originalPath = process.env.PATH ?? '';
+    const heldBin = path.join(root, 'bin-held');
+    const gitBin = await gitOnlyDir(path.join(root, 'bin-git-held'));
+    // Held "forever" for this test's purposes: it outlives the test, and execa's own timeout kills it.
+    await writeGhNode(heldBin, 'setTimeout(() => process.exit(1), 60000);\n');
+    process.env.PATH = pathWith(heldBin, gitBin);
+    resetMergeDetectionCache();
+    try {
+      const repo = path.join(root, 'app-held');
+      await fs.mkdir(repo);
+      await execa('git', ['init', '-b', 'main'], { cwd: repo });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: repo });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execa('git', ['remote', 'add', 'origin', 'git@github.com:org/upstream-app.git'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'a.txt'), 'a\n');
+      await execa('git', ['add', '.'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'Base commit'], { cwd: repo });
+      await execa('git', ['checkout', '-b', 'feat/branch'], { cwd: repo });
+      await fs.writeFile(
+        path.join(root, 'contextspace.json'),
+        JSON.stringify({ id: 'reports', name: 'Reports', branchName: 'feat/branch', repos: [repo], assistants: [], workspacePath: root }),
+      );
+      const start = Date.now();
+      const res = await app.request('/api/workspace/reports/recent-commits');
+      const elapsedMs = Date.now() - start;
+      expect(res.status).toBe(200);
+      // Windows runners spend about 0.8 s more starting git and the gh.cmd fake (CI: 1.8-2.0 s). The bound still
+      // proves the route never waits for the held gh, which would take 60 s.
+      expect(elapsedMs).toBeLessThan(process.platform === 'win32' ? 3_000 : 1_500);
+      expect(elapsedMs).toBeGreaterThanOrEqual(900);
+      const body = await res.json();
+      expect(body.commits[0]).toMatchObject({ repo: 'app-held', branch: 'feat/branch', prsPending: true });
+    } finally {
+      process.env.PATH = originalPath;
+      resetMergeDetectionCache();
+    }
+  });
+
+  it('answers within ~2s with branches and prsPending when gh hangs, populates PRs after gh settles, and omits PRs silently when gh is missing (ENOENT)', async () => {
+    const originalPath = process.env.PATH ?? '';
+    const tmpBin = path.join(root, 'bin-hang');
+    const gitOnlyBin = await gitOnlyDir(path.join(root, 'bin-git-only'));
+    await writeGhNode(tmpBin, `const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') { process.exit(0); }
+if (args[0] === 'pr') {
+  setTimeout(() => {
+    console.log(JSON.stringify([{
+      number: 42,
+      title: 'Slow PR',
+      state: 'OPEN',
+      url: 'https://github.com/org/upstream-app/pull/42',
+      baseRefName: 'main',
+      headRefOid: 'deadbeef',
+      mergeCommit: null,
+    }]));
+    process.exit(0);
+  }, 1500);
+} else {
+  process.exit(1);
+}
+`);
+    resetMergeDetectionCache();
+    try {
+      const repo = path.join(root, 'app-hang');
+      await fs.mkdir(repo);
+      await execa('git', ['init', '-b', 'main'], { cwd: repo });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: repo });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execa('git', ['remote', 'add', 'origin', 'git@github.com:org/upstream-app.git'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'a.txt'), 'a\n');
+      await execa('git', ['add', '.'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'Base commit'], { cwd: repo });
+      await execa('git', ['checkout', '-b', 'feat/branch'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'b.txt'), 'b\n');
+      await execa('git', ['add', '.'], { cwd: repo });
+      await execa('git', ['commit', '-m', 'Branch commit'], { cwd: repo });
+      await fs.writeFile(
+        path.join(root, 'contextspace.json'),
+        JSON.stringify({ id: 'reports', name: 'Reports', branchName: 'feat/branch', repos: [repo], assistants: [], workspacePath: root }),
+      );
+
+      // 1. Missing gh (ENOENT): answers immediately with no PR line, no loading flag, and no error
+      process.env.PATH = gitOnlyBin;
+      resetMergeDetectionCache();
+      const missingRes = await app.request('/api/workspace/reports/recent-commits');
+      expect(missingRes.status).toBe(200);
+      const missingBody = await missingRes.json();
+      expect(missingBody.commits[0]).toMatchObject({ repo: 'app-hang', branch: 'feat/branch', base: 'main' });
+      expect(missingBody.commits[0].pullRequests).toBeUndefined();
+      expect(missingBody.commits[0].prsPending).toBeUndefined();
+      expect(missingBody.commits[0].problem).toBeUndefined();
+
+      // 2. Hanging gh: answers within < 2s with branches + prsPending, then later returns PR #42
+      process.env.PATH = pathWith(tmpBin, gitOnlyBin);
+      resetMergeDetectionCache();
+      const start = Date.now();
+      const firstRes = await app.request('/api/workspace/reports/recent-commits');
+      const elapsedMs = Date.now() - start;
+      expect(firstRes.status).toBe(200);
+      expect(elapsedMs).toBeLessThan(2_000);
+      const firstBody = await firstRes.json();
+      expect(firstBody.commits[0]).toMatchObject({
+        repo: 'app-hang',
+        branch: 'feat/branch',
+        base: 'main',
+        prsPending: true,
+      });
+      expect(firstBody.commits[0].pullRequests).toBeUndefined();
+
+      // Wait for the background gh lookup to settle
+      let settled = firstBody;
+      const deadline = Date.now() + 3_000;
+      while (settled.commits[0].prsPending && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        settled = await (await app.request('/api/workspace/reports/recent-commits')).json();
+      }
+      expect(settled.commits[0].prsPending).toBeUndefined();
+      expect(settled.commits[0].pullRequests?.[0]?.number).toBe(42);
+    } finally {
+      process.env.PATH = originalPath;
+      resetMergeDetectionCache();
+    }
   });
 });

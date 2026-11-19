@@ -71,6 +71,13 @@ export function extractRemoteHost(url: string): string | null {
   return toNormalizedUrl(url)?.hostname || null;
 }
 
+/** Formats a parsed remote as `owner/repo` (or `owner/project/repo` for Azure DevOps). */
+export function formatRemoteRepo(parsed: ParsedRemote | null | undefined): string | null {
+  if (!parsed || !parsed.owner || !parsed.repo) return null;
+  if (parsed.project) return `${parsed.owner}/${parsed.project}/${parsed.repo}`;
+  return `${parsed.owner}/${parsed.repo}`;
+}
+
 /**
  * Parses a git remote URL (https, ssh://, scp-style `git@host:path`, and Azure
  * DevOps variants) into structured parts, or `null` when it cannot be parsed.
@@ -185,10 +192,22 @@ export function buildCommitUrl(remote: ParsedRemote, sha: string): string | null
 }
 
 /** Detects whether the GitHub CLI is installed and authenticated. */
+const ghExecEnv = () => ({
+  ...process.env,
+  GH_PROMPT_DISABLED: '1',
+  GIT_TERMINAL_PROMPT: '0',
+});
+
 export async function detectGh(): Promise<GhStatus> {
+  const execOpts = {
+    reject: false,
+    stdin: 'ignore' as const,
+    timeout: 10_000,
+    env: ghExecEnv(),
+  };
   let installed = false;
   try {
-    const v = await execa('gh', ['--version'], { reject: false });
+    const v = await execa('gh', ['--version'], execOpts);
     installed = v.exitCode === 0;
   } catch {
     installed = false;
@@ -197,7 +216,7 @@ export async function detectGh(): Promise<GhStatus> {
 
   let authenticated = false;
   try {
-    const a = await execa('gh', ['auth', 'status'], { reject: false });
+    const a = await execa('gh', ['auth', 'status'], execOpts);
     authenticated = a.exitCode === 0;
   } catch {
     authenticated = false;

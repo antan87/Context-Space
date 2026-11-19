@@ -1,3 +1,4 @@
+import type { NewsPullRequest } from '../plan/whatsNew.js';
 import type { PlanFileStep, PlanFileView } from '../plan/planFile.js';
 import type { RawAstSymbol } from '../changes/utils/changesetSymbolIndex.js';
 import { parseCommitNodeId } from './boardActions.js';
@@ -32,6 +33,8 @@ export interface CommitDetail {
   pushed: boolean;
   forge: ForgeKind | null;
   webUrl: string | null;
+  branch?: string | null;
+  pr?: NewsPullRequest | null;
 }
 
 export interface CommitFileDiff {

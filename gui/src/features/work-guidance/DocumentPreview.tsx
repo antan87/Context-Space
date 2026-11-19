@@ -89,9 +89,9 @@ export function DocumentPreview({ preview, fileUrl, raw, expanded = false, fillF
   const sandbox = trusted ? 'allow-scripts' : '';
 
   if (lineTools && preview.content !== undefined && (preview.kind === 'text' || preview.kind === 'markdown')) return <ReaderLines content={preview.content} markdown={preview.kind === 'markdown' && !raw} tools={lineTools} links={links} />;
-  if (preview.kind === 'markdown' && !raw) return <div className={cn('rounded-lg border border-border/80 bg-card/40 p-4 sm:p-5', expanded && 'flex-1 min-h-0')}><ChatMarkdown content={preview.content ?? ''} links={links} /></div>;
+  if (preview.kind === 'markdown' && !raw) return <div className={cn('select-text rounded-lg border border-border/80 bg-card/40 p-4 sm:p-5', expanded && 'flex-1 min-h-0')}><ChatMarkdown content={preview.content ?? ''} links={links} /></div>;
   if (preview.kind === 'html' && !raw) return <iframe title={`Preview of ${preview.name}`} sandbox={sandbox} referrerPolicy="no-referrer" srcDoc={htmlDocument} className={`${height} w-full rounded-lg border border-border bg-white shadow-xs`} />;
-  if (preview.content !== undefined) return <pre className={cn('whitespace-pre-wrap break-words font-mono text-xs sm:text-sm rounded-lg border border-border bg-muted/20 p-4', expanded ? 'flex-1 min-h-0 overflow-auto' : 'overflow-x-auto')}>{preview.content}</pre>;
+  if (preview.content !== undefined) return <pre className={cn('select-text whitespace-pre-wrap break-words font-mono text-xs sm:text-sm rounded-lg border border-border bg-muted/20 p-4', expanded ? 'flex-1 min-h-0 overflow-auto' : 'overflow-x-auto')}>{preview.content}</pre>;
   if (preview.kind === 'pdf') return <iframe title={`Preview of ${preview.name}`} src={fileUrl} className={`${height} w-full rounded-lg border border-border`} />;
   if (preview.kind === 'image') {
     return (

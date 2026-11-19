@@ -1383,5 +1383,28 @@ test.describe('Board, reader', () => {
       expect(lines).toBeLessThanOrEqual(4);
       await expect(note.getByRole('heading')).toHaveCount(1);
     });
+
+    test('D2 wide diagram inside Read all omits full screen and says "Wider than the space here: scroll sideways"', async ({ page }) => {
+      const longLines = Array.from({ length: 6 }, (_, i) => `Detail line ${i + 1} before the diagram.`).join('\n');
+      const wideSeq = [
+        'sequenceDiagram',
+        '  participant A as First Service',
+        '  participant B as Second Service',
+        '  participant C as Third Service',
+        '  participant D as Fourth Service',
+        '  participant E as Fifth Service',
+        '  participant F as Sixth Service',
+        '  A->>F: Wide request across all six services',
+      ].join('\n');
+      await openBoard(page, [boardNote(1, { title: 'Wide diagram note', body: `${longLines}\n\n\`\`\`mermaid\n${wideSeq}\n\`\`\`` })], { [boardId(1)]: { x: 800, y: 240 } });
+      await board(page).getByRole('button', { name: 'Read Wide diagram note' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Wide diagram note' });
+      await expect(dialog).toBeVisible();
+      const scrollBox = dialog.getByRole('region', { name: 'Diagram, scrolls sideways' });
+      await expect(scrollBox).toBeVisible({ timeout: 10_000 });
+      await expect(dialog.locator('[data-diagram-fade="right"]')).toBeVisible();
+      await expect(dialog.getByText('Wider than the space here: scroll sideways', { exact: true })).toBeVisible();
+      await expect(dialog.getByText(/open full screen/i)).toHaveCount(0);
+    });
   });
 });

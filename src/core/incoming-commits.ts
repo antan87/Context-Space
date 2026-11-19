@@ -13,8 +13,9 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 import { isGitRepo } from '../utils/git.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
-import { buildCommitUrl, extractRemoteHost, forgeKind, parseRemoteUrl, resolvePreferredRemoteUrl, type ForgeKind, type ParsedRemote } from '../utils/pr.js';
+import { buildCommitUrl, extractRemoteHost, forgeKind, formatRemoteRepo, parseRemoteUrl, resolvePreferredRemoteUrl, type ForgeKind, type ParsedRemote } from '../utils/pr.js';
 import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog } from './commit-log-format.js';
+import { clearBranchPullRequestCache } from './merge-detection.js';
 
 export const INCOMING_COMMITS_LIMIT = 50;
 export const STALE_FETCH_MS = 5 * 60_000;
@@ -57,6 +58,8 @@ export interface IncomingCommit {
 export interface IncomingRepo {
   repo: string;
   remote: string | null;
+  ref?: string | null;
+  remoteRepo?: string | null;
   branch: string | null;
   host: IncomingHost | null;
   lastFetchAt: string | null;
@@ -873,6 +876,8 @@ async function inspectRepo(
   ): IncomingRepo => ({
     repo: repo.name,
     remote: null,
+    ref: null,
+    remoteRepo: null,
     branch: null,
     host: null,
     lastFetchAt: null,
@@ -905,6 +910,7 @@ async function inspectRepo(
   if (!target.remote || !target.mergeRef || !target.trackingRef) {
     return emptyRepo('no-upstream', `Branch "${target.branch}" does not track a branch`, {
       remote: target.remote,
+      remoteRepo: formatRemoteRepo(target.parsedRemote),
       branch: target.branch,
       host: target.host,
     });
@@ -988,6 +994,8 @@ async function inspectRepo(
   return {
     repo: repo.name,
     remote: target.remote,
+    ref: target.trackingRef ? target.trackingRef.replace(/^refs\/remotes\//, '') : null,
+    remoteRepo: formatRemoteRepo(target.parsedRemote),
     branch: target.branch,
     host: target.host,
     lastFetchAt: entry.lastFetchAt,
@@ -1023,6 +1031,9 @@ export async function incomingCommits(
   const refresh = options.refresh === true;
   const root = await fs.realpath(workspacePath).catch(() => path.resolve(workspacePath));
   const repos = await getWorkspaceRepoPaths(root).catch(() => []);
+  if (refresh) {
+    clearBranchPullRequestCache(repos.map((r) => r.path));
+  }
   const results = await Promise.all(
     repos.map(async (repo) => {
       try {
@@ -1031,6 +1042,8 @@ export async function incomingCommits(
         return {
           repo: repo.name,
           remote: null,
+          ref: null,
+          remoteRepo: null,
           branch: null,
           host: null,
           lastFetchAt: null,

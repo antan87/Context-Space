@@ -1,11 +1,12 @@
 import { stopOwnedUnixTree } from './lib/process-tree.js';
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import { spawn, spawnSync } from 'child_process';
 import { existsSync, statSync, createWriteStream, readdirSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import updaterPackage from 'electron-updater';
+import { buildContextMenuTemplate } from './lib/context-menu.js';
 import { externalLinkTarget, isAppShellNavigation, isTrustedIpcEvent } from './lib/security.js';
 import { applySpellCheckerPolicy, spellCheckerEnabled } from './lib/spellcheck.js';
 import { configureDesktopUserData } from './lib/upgrade.js';
@@ -283,6 +284,24 @@ function createWindow() {
     const external = externalLinkTarget(url, assignedPort);
     if (external) void shell.openExternal(external);
     return { action: 'deny' };
+  });
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const template = buildContextMenuTemplate(
+      params,
+      { appPort: assignedPort },
+      {
+        writeText: (text) => clipboard.writeText(text),
+        copyImageAt: (x, y) => mainWindow.webContents.copyImageAt(x, y),
+        downloadURL: (url) => mainWindow.webContents.downloadURL(url),
+        openExternal: (url) => void shell.openExternal(url),
+        loadURL: (url) => void mainWindow.loadURL(url),
+        replaceMisspelling: (word) => mainWindow.webContents.replaceMisspelling(word),
+      },
+    );
+    if (template.length > 0) {
+      Menu.buildFromTemplate(template).popup({ window: mainWindow });
+    }
   });
 
   // Start the NexusFlow backend server dynamically on port 0 (OS assigns port).

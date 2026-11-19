@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CardFrame } from '../../../design/index.js';
-import { brickPress } from './cardParts.js';
+import { brickPress, CardText, hasDragSelection } from './cardParts.js';
 
 /**
  * The shared pieces of a card, which moved out of BoardNodes.tsx (DS2b): what a press on a compact card does, and the
@@ -73,6 +73,28 @@ describe('brickPress: a press anywhere on a compact card', () => {
     expect(find).not.toHaveBeenCalled();
     expect(main.click).not.toHaveBeenCalled();
   });
+
+  it('does not block keyboard/synthetic activations (detail === 0) even when text inside is selected', () => {
+    const card = new FakeElement();
+    const inside = new FakeElement(card);
+    vi.stubGlobal('Element', FakeElement);
+    vi.stubGlobal('window', {
+      getSelection: () => ({ isCollapsed: false, toString: () => 'selected words', anchorNode: inside, focusNode: inside }),
+    });
+    expect(hasDragSelection(card, { detail: 0 })).toBe(false);
+    expect(hasDragSelection(card, { detail: 1 })).toBe(true);
+  });
+
+  it('still detects a selection that starts inside the card and ends outside it', () => {
+    const card = new FakeElement();
+    const inside = new FakeElement(card);
+    const outside = new FakeElement();
+    vi.stubGlobal('Element', FakeElement);
+    vi.stubGlobal('window', {
+      getSelection: () => ({ isCollapsed: false, toString: () => 'partial words', anchorNode: inside, focusNode: outside }),
+    });
+    expect(hasDragSelection(card, { detail: 1 })).toBe(true);
+  });
 });
 
 describe('CardFrame: the classes of each state', () => {
@@ -124,5 +146,10 @@ describe('CardFrame: the classes of each state', () => {
     const html = render({ fresh: true, freshKey: 'x', anchors: createElement('i', { 'data-anchors': '' }) });
     expect(html).toMatch(/<i data-anchors=""><\/i><span aria-hidden="true" class="board-fresh"><\/span><span>inside<\/span>/);
     expect(render()).not.toContain('board-fresh');
+  });
+
+  it('marks CardText with nodrag and select-text so card bodies select without dragging', () => {
+    const html = renderToStaticMarkup(createElement(CardText, { text: 'Hello **card** body.', cut: false }));
+    expect(html).toMatch(/class="[^"]*\bnodrag\b[^"]*\bselect-text\b[^"]*"/);
   });
 });

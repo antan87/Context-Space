@@ -392,7 +392,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(header.getByTestId('commit-body')).toBeInViewport();
 
     // The left tree lists commits and expands this commit's files with stats & status; right opens on full description + file grid first
-    const tree = win(page).getByRole('tree', { name: 'Commits' });
+    const tree = win(page).getByRole('region', { name: 'Commits' });
     await expect(tree).toBeVisible();
     await expect(win(page).getByTestId('commit-file-count')).toContainText('4 files changed');
     await expect(tree.getByRole('treeitem', { name: /export\.ts/ })).toContainText('+12 −4');
@@ -500,9 +500,11 @@ test.describe('Commit cards open the Code window on that commit', () => {
     const subject = commitHeader(page).getByTestId('commit-subject');
     await expect(subject).toHaveText('Write the CSV writer');
 
-    const tree = win(page).getByRole('tree', { name: 'Commits' });
-    await expect(tree).toContainText('Reports export to CSV');
-    await expect(tree).toContainText('Other recent commits in api');
+    const tree = win(page).getByRole('region', { name: 'Commits' });
+    const repoGroups = tree.getByTestId('commit-repo-group');
+    await expect(repoGroups).toHaveCount(2);
+    await expect(repoGroups.nth(0)).toContainText('billing');
+    await expect(repoGroups.nth(1)).toContainText('api');
     await tree.locator('[role="treeitem"][aria-expanded]').filter({ hasText: 'Add the export endpoint' }).click();
     await expect(subject).toHaveText('Add the export endpoint');
     await expect(commitHeader(page).getByTestId('commit-repo')).toHaveText('api');
@@ -575,7 +577,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(win(page)).toContainText('file 1 of 4');
     await expect(readDesc).toBeFocused();
     // The list now knows the new commit (the one list that is meant to follow the news)
-    await expect(win(page).getByRole('tree', { name: 'Commits' })).toContainText('A newer commit that arrived meanwhile');
+    await expect(win(page).getByRole('region', { name: 'Commits' })).toContainText('A newer commit that arrived meanwhile');
   });
 
   test('text typed in the Finish form (and the commit message) in Changes survives a trip to Commits and back', async ({ page }) => {
@@ -742,13 +744,14 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Add the API route');
     await expect(commitHeader(page).getByTestId('commit-repo')).toHaveText('api');
     await expect(win(page).getByTestId('commit-file-count')).toContainText('1 file changed');
-    // The row it came from holds only its own repository's commit
-    const list = win(page).getByRole('tree', { name: 'Commits' });
-    const apiHeld = list.locator('> div').filter({ hasText: 'Reports export to CSV' });
-    await expect(apiHeld.locator('[data-testid="commit-tree-item"]')).toHaveCount(1);
-    await expect(apiHeld).toContainText('Add the API route');
-    await expect(apiHeld).not.toContainText('Write the CSV writer');
-    await expect(list.locator('> div').filter({ hasText: 'Other recent commits in billing' })).toContainText('Write the CSV writer');
+    // Each repository keeps its own commits cleanly under its repository group even when SHAs collide
+    const list = win(page).getByRole('region', { name: 'Commits' });
+    const apiGroup = list.getByTestId('commit-repo-group').filter({ hasText: 'api' });
+    await expect(apiGroup.locator('[data-testid="commit-tree-item"]')).toHaveCount(1);
+    await expect(apiGroup).toContainText('Add the API route');
+    await expect(apiGroup).not.toContainText('Write the CSV writer');
+    const billingGroup = list.getByTestId('commit-repo-group').filter({ hasText: 'billing' });
+    await expect(billingGroup).toContainText('Write the CSV writer');
     await page.keyboard.press('Escape');
     await expect(win(page)).toBeHidden();
 
@@ -756,7 +759,8 @@ test.describe('Commit cards open the Code window on that commit', () => {
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText('Write the CSV writer');
     await expect(commitHeader(page).getByTestId('commit-repo')).toHaveText('billing');
     await expect(win(page).getByTestId('commit-file-count')).toContainText('4 files changed');
-    const billingHeld = list.locator('> div').filter({ hasText: 'Reports export to CSV' });
+    const billingHeld = list.getByTestId('commit-repo-group').first();
+    await expect(billingHeld).toContainText('billing');
     await expect(billingHeld.locator('[data-testid="commit-tree-item"]')).toHaveCount(1);
     await expect(billingHeld).toContainText('Write the CSV writer');
     await expect(billingHeld).not.toContainText('Add the API route');
@@ -821,7 +825,7 @@ test.describe('Commit cards open the Code window on that commit', () => {
       return undefined;
     });
     await commitButtonOf(page, 'Write the CSV writer').click();
-    const tree = win(page).getByRole('tree', { name: 'Commits' });
+    const tree = win(page).getByRole('region', { name: 'Commits' });
 
     await tree.getByRole('treeitem', { name: /export\.ts/ }).click();
     const diffToolbar = win(page).getByRole('toolbar', { name: 'Diff' });

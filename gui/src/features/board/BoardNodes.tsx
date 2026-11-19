@@ -26,7 +26,7 @@ import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boar
 import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode, type UncommittedNode } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
 import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, Pill, StepCheck } from '../../design/index.js';
-import { Anchors, brickPress, TITLE_BUTTON } from './cards/cardParts.js';
+import { Anchors, brickPress, hasDragSelection, TITLE_BUTTON } from './cards/cardParts.js';
 import { summaryLabel } from './summaryLabel.js';
 import { BoardNote } from './cards/NoteCard.js';
 import { BoardFile } from './cards/FileCard.js';
@@ -34,7 +34,8 @@ import { BoardFile } from './cards/FileCard.js';
 import { BoardRowHead } from './rows/RowHead.js';
 import { BoardFoldRow, BoardMoreTile, BoardPager } from './rows/RowControls.js';
 
-export { BoardNote, BoardFile, BoardRowHead, BoardFoldRow, BoardMoreTile, BoardPager };
+// eslint-disable-next-line react-refresh/only-export-components -- re-exported so BoardSection reaches the card helpers only through this file
+export { BoardNote, BoardFile, BoardRowHead, BoardFoldRow, BoardMoreTile, BoardPager, hasDragSelection };
 
 const ROLE_LABEL = { requirements: 'Requirements', design: 'Design', evidence: 'Evidence', reference: 'Reference' } as const;
 const STATUS_LABEL = { draft: 'Draft', approved: 'Approved', superseded: 'Superseded' } as const;
@@ -375,7 +376,7 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
     >
       <div className="flex items-start gap-2">
         <CircleHelp aria-hidden="true" className="mt-px size-4 shrink-0 text-warning-foreground" />
-        <span className="line-clamp-2 min-w-0 break-words text-[14px] font-medium leading-[18px]" title={plain}>
+        <span className="nodrag select-text line-clamp-2 min-w-0 break-words text-[14px] font-medium leading-[18px]" title={plain}>
           <span className="sr-only">Waiting for you: </span>
           <InlinePlanMarkdown content={decision.question} />
         </span>
@@ -488,7 +489,7 @@ function FullDecisionCard(props: WaitingDecisionCardProps) {
     >
       <div className="flex items-start gap-2">
         <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
-        <span className="text-[12.5px] font-medium leading-snug break-words" title={decision.question}>
+        <span className="nodrag select-text text-[12.5px] font-medium leading-snug break-words" title={decision.question}>
           <span className="sr-only">Waiting for you: </span>
           <InlinePlanMarkdown content={decision.question} />
         </span>
@@ -860,10 +861,10 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
     <header className="relative border-b border-border/60 px-3 pt-3" style={{ height: BOARD_SIZE.frameHeader }}>
       {data.kind === 'plan'
         ? <div className="h-10 pr-6">
-          <h2 id={titleId} className="truncate text-sm font-semibold leading-5 text-foreground">{data.title}</h2>
-          <p className="truncate text-[12.5px] leading-5 text-muted-foreground">{planSubtitle(data, true)}</p>
+          <h2 id={titleId} className="nodrag select-text truncate text-sm font-semibold leading-5 text-foreground">{data.title}</h2>
+          <p className="nodrag select-text truncate text-[12.5px] leading-5 text-muted-foreground">{planSubtitle(data, true)}</p>
         </div>
-        : <h2 id={titleId} className="line-clamp-2 h-10 pr-6 text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>}
+        : <h2 id={titleId} className="nodrag select-text line-clamp-2 h-10 pr-6 text-sm font-semibold leading-5 text-foreground" title={data.title}>{data.title}</h2>}
       <FrameFacts data={data} />
       {data.collapsible !== false && <FoldButton id={id} title={data.title} />}
     </header>
@@ -911,7 +912,7 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
 }
 
 /** The title row of a card that opens: the whole row is the button, and a small icon at its end says where it opens. */
-const OPENER = 'nodrag nopan flex h-5 w-full items-center gap-1.5 rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none';
+const OPENER = 'nodrag nopan select-text flex h-5 w-full items-center gap-1.5 rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none';
 
 /**
  * A source document: its role and status, and the first lines of its summary. A superseded one recedes but keeps its status.
@@ -925,7 +926,7 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
   const href = web?.kind === 'external' && !web.href.startsWith('mailto:') ? web.href : undefined;
   const icon = <FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />;
   const title = (
-    <span id={titleId} className={cn('min-w-0 flex-1 truncate text-sm font-semibold inline-flex items-center gap-1.5', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
+    <span id={titleId} className={cn('nodrag select-text min-w-0 flex-1 truncate text-sm font-semibold inline-flex items-center gap-1.5', data.dimmed ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>
       {data.fresh && (
         <>
           <FreshDot />
@@ -947,10 +948,10 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
       {data.fresh && <span aria-hidden="true" className="board-fresh" />}
       {data.filename
         ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} disabled={!actions}
-          onClick={(event) => actions?.openInReader({ path: data.filename!, title: data.title, card: id, source: data.sourceId }, event.currentTarget)}
+          onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) actions?.openInReader({ path: data.filename!, title: data.title, card: id, source: data.sourceId }, event.currentTarget); }}
         >{icon}{title}</button>
         : href
-          ? <a href={href} target="_blank" rel="noopener noreferrer" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title} (opens outside the app)`}>
+          ? <a href={href} target="_blank" rel="noopener noreferrer" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title} (opens outside the app)`} onClick={(event) => { if (hasDragSelection(event.currentTarget, event)) event.preventDefault(); }}>
             {icon}{title}<ExternalLink aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
           </a>
           : <div className="flex h-5 items-center gap-1.5">{icon}{title}</div>}
@@ -958,7 +959,7 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
         <Badge variant="outline">{ROLE_LABEL[data.role] ?? data.role}</Badge>
         <Badge variant={STATUS_BADGE[data.status] ?? 'outline'}>{STATUS_LABEL[data.status] ?? data.status}</Badge>
       </div>
-      <p className="line-clamp-1 text-[13px] leading-[17px] text-muted-foreground">{data.summary}</p>
+      <p className="nodrag select-text line-clamp-1 text-[13px] leading-[17px] text-muted-foreground">{data.summary}</p>
     </article>;
   }
   return <article
@@ -972,10 +973,10 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
     {data.filename
       ? <button
         type="button" className={OPENER} aria-label={`Open ${data.title}`} disabled={!actions}
-        onClick={(event) => actions?.openInReader({ path: data.filename!, title: data.title, card: id, source: data.sourceId }, event.currentTarget)}
+        onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) actions?.openInReader({ path: data.filename!, title: data.title, card: id, source: data.sourceId }, event.currentTarget); }}
       >{icon}{title}<PanelRightOpen aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" /></button>
       : href
-        ? <a href={href} target="_blank" rel="noopener noreferrer" className={OPENER} aria-label={`Open ${data.title} (opens outside the app)`}>
+        ? <a href={href} target="_blank" rel="noopener noreferrer" className={OPENER} aria-label={`Open ${data.title} (opens outside the app)`} onClick={(event) => { if (hasDragSelection(event.currentTarget, event)) event.preventDefault(); }}>
           {icon}{title}<ExternalLink aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
         </a>
         : <div className="flex h-5 items-center gap-1.5">{icon}{title}</div>}
@@ -983,7 +984,7 @@ export function BoardDocument({ id, data }: NodeProps<DocumentNode>) {
       <Badge variant="outline">{ROLE_LABEL[data.role] ?? data.role}</Badge>
       <Badge variant={STATUS_BADGE[data.status] ?? 'outline'}>{STATUS_LABEL[data.status] ?? data.status}</Badge>
     </div>
-    <p className="line-clamp-3 text-xs leading-[18px] text-muted-foreground">{data.summary}</p>
+    <p className="nodrag select-text line-clamp-3 text-xs leading-[18px] text-muted-foreground">{data.summary}</p>
   </article>;
 }
 
@@ -1034,10 +1035,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
   };
 
   const onSubjectClick = (event: MouseEvent<HTMLButtonElement>) => {
-    const selection = window.getSelection();
-    if (selection && !selection.isCollapsed && selection.toString() && event.currentTarget.contains(selection.anchorNode) && event.currentTarget.contains(selection.focusNode)) {
-      return;
-    }
+    if (hasDragSelection(event.currentTarget, event)) return;
     openCommit(event.currentTarget);
   };
 
@@ -1053,14 +1051,14 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
       {data.fresh && <span aria-hidden="true" className="board-fresh" />}
       <div className="flex h-5 items-center gap-2 text-[13px]">
         <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-        <code id={shaId} className="shrink-0 font-mono text-primary">{data.sha}</code>
+        <code id={shaId} className="nodrag select-text shrink-0 font-mono text-primary">{data.sha}</code>
         {data.fresh && (
           <>
             <FreshDot />
             <span className="sr-only">New since you looked. </span>
           </>
         )}
-        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
+        <span className="nodrag select-text min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
         <CommitNoteMarker id={id} subject={data.subject} commit={commit} />
       </div>
@@ -1071,12 +1069,12 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
           aria-label={`Open ${data.subject}`}
           disabled={!actions}
           onClick={onSubjectClick}
-          className="nodrag nopan block w-full min-w-0 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none"
+          className="nodrag nopan select-text block w-full min-w-0 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none"
         >
-          <span className="line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</span>
+          <span className="nodrag select-text line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</span>
         </button>
       ) : (
-        <p className="line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</p>
+        <p className="nodrag select-text line-clamp-2 text-[13px] leading-[17px] text-foreground" title={data.subject}>{data.subject}</p>
       )}
       {data.pictures && data.pictures.length > 0 && actions && (
         <div className="flex items-center gap-1.5 overflow-hidden pt-0.5">
@@ -1122,14 +1120,14 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
     <div className="flex h-4 items-center justify-between gap-2 text-xs">
       <div className="flex items-center gap-1.5 min-w-0">
         <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-        <code id={shaId} className="shrink-0 font-mono text-primary font-medium">{data.sha}</code>
+        <code id={shaId} className="nodrag select-text shrink-0 font-mono text-primary font-medium">{data.sha}</code>
         {data.fresh && (
           <>
             <FreshDot />
             <span className="sr-only">New since you looked. </span>
           </>
         )}
-        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
+        <span className="nodrag select-text min-w-0 flex-1 truncate text-muted-foreground" title={data.author}>{data.author}</span>
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
         <CommitNoteMarker id={id} subject={data.subject} commit={commit} />
       </div>
@@ -1142,12 +1140,12 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         aria-label={`Open ${data.subject}`}
         disabled={!actions}
         onClick={onSubjectClick}
-        className="nodrag nopan block w-full min-w-0 rounded-sm text-left outline-hidden hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+        className="nodrag nopan select-text block w-full min-w-0 rounded-sm text-left outline-hidden hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
       >
-        <span className="line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</span>
+        <span className="nodrag select-text line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</span>
       </button>
     ) : (
-      <p className="line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</p>
+      <p className="nodrag select-text line-clamp-2 text-sm leading-[18px] text-foreground" title={data.subject}>{data.subject}</p>
     )}
     {data.pictures && data.pictures.length > 0 && actions && (
       <div className="flex items-center gap-1.5 overflow-hidden pt-1">
@@ -1228,8 +1226,8 @@ export function BoardUncommitted({ id, data }: NodeProps<UncommittedNode>) {
         data-card-main
         aria-label={`Open ${data.title} in Review`}
         disabled={!opens}
-        onClick={(event) => open(event.currentTarget)}
-        className="nodrag nopan min-w-0 truncate rounded-sm text-left font-medium text-foreground outline-hidden hover:underline disabled:pointer-events-none"
+        onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) open(event.currentTarget); }}
+        className="nodrag nopan select-text min-w-0 truncate rounded-sm text-left font-medium text-foreground outline-hidden hover:underline disabled:pointer-events-none"
       >{data.title}</button>
       {data.numbers && (
         <span className="ml-auto shrink-0 font-mono text-[12px] tabular-nums">
@@ -1237,19 +1235,19 @@ export function BoardUncommitted({ id, data }: NodeProps<UncommittedNode>) {
         </span>
       )}
     </div>
-    <p className="truncate font-mono text-[12px] leading-4 text-muted-foreground" title={data.names.join(', ')}>{data.names.join(', ')}</p>
+    <p className="nodrag select-text truncate font-mono text-[12px] leading-4 text-muted-foreground" title={data.names.join(', ')}>{data.names.join(', ')}</p>
   </article>;
 }
 
 /** Stands in a lane that has nothing in it, so the gap is explained and not mistaken for something that failed to load. */
 export function BoardPlaceholder({ data }: NodeProps<PlaceholderNode>) {
-  return <p className={cn('flex h-full w-full items-center overflow-hidden rounded-lg border border-dashed border-border bg-card/60 px-3 text-muted-foreground', data.compact ? 'text-[13px] leading-[17px]' : 'text-xs leading-4')}>{data.text}</p>;
+  return <p className={cn('nodrag select-text flex h-full w-full items-center overflow-hidden rounded-lg border border-dashed border-border bg-card/60 px-3 text-muted-foreground', data.compact ? 'text-[13px] leading-[17px]' : 'text-xs leading-4')}>{data.text}</p>;
 }
 
 // ─── Cards ──────────────────────────────────────────────────────────────────
 
 const ANSWER_CARD = 'group relative flex h-full w-full flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80';
-const ANSWER_MAIN = 'nodrag nopan flex h-full w-full min-w-0 flex-col gap-1 px-3 py-2 text-left outline-hidden cursor-pointer';
+const ANSWER_MAIN = 'nodrag nopan select-text flex h-full w-full min-w-0 flex-col gap-1 px-3 py-2 text-left outline-hidden cursor-pointer';
 
 /** The status line of a code card: what the check found, with a mark that does not rely on colour. */
 function CodeStatusLine({ data, id }: { data: Extract<AnswerCardData, { variant: 'code' }>; id: string }) {
@@ -1357,7 +1355,7 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
     >
       <Anchors />
       {actions && press ? (
-        <button ref={main} type="button" data-card-main aria-label={label} onClick={press} className={ANSWER_MAIN}>{content}</button>
+        <button ref={main} type="button" data-card-main aria-label={label} onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) press(event); }} className={ANSWER_MAIN}>{content}</button>
       ) : (
         <div className={ANSWER_MAIN}>{content}</div>
       )}
@@ -1368,7 +1366,7 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
   if (data.variant === 'text') {
     return frame(`Read ${data.title}`, undefined, <>
       <span id={titleId} className="sr-only">{data.title}</span>
-      <span className="line-clamp-5 break-words text-[13px] leading-[18px] text-foreground">{readableText(data.text)}</span>
+      <span className="nodrag select-text line-clamp-5 break-words text-[13px] leading-[18px] text-foreground">{readableText(data.text)}</span>
     </>, readAnswer);
   }
 
@@ -1399,7 +1397,7 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
           className="size-full object-cover"
         />
       </span>
-      <span id={titleId} className="truncate text-[12.5px] leading-4 text-foreground">{data.title}</span>
+      <span id={titleId} className="nodrag select-text truncate text-[12.5px] leading-4 text-foreground">{data.title}</span>
     </>, (event) => actions.openInReader({ path: data.src!, title: data.title, card: id }, event.currentTarget));
   }
 
@@ -1409,12 +1407,12 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
   const lines = data.copy.split('\n').slice(0, status?.hint ? 2 : 3).join('\n');
   const content = (
     <>
-      <span id={titleId} className="flex min-w-0 font-mono text-[12px] font-medium leading-[18px] text-foreground" title={data.title}>
+      <span id={titleId} className="nodrag select-text flex min-w-0 font-mono text-[12px] font-medium leading-[18px] text-foreground" title={data.title}>
         {/* A long place is cut at its start, so the file's name and the lines always show */}
         <span className="min-w-0 truncate" style={{ direction: 'rtl', textAlign: 'left' }}>{head.name}</span>
         <span className="shrink-0 whitespace-pre">{head.lines}</span>
       </span>
-      <pre className={cn('overflow-hidden whitespace-pre font-mono text-[12px] leading-4 text-muted-foreground', status?.hint ? 'h-8' : 'h-12')}>{lines === '' ? ' ' : lines}</pre>
+      <pre className={cn('nodrag select-text overflow-hidden whitespace-pre font-mono text-[12px] leading-4 text-muted-foreground', status?.hint ? 'h-8' : 'h-12')}>{lines === '' ? ' ' : lines}</pre>
       <CodeStatusLine data={data} id={statusId} />
     </>
   );
@@ -1431,8 +1429,8 @@ export function BoardAnswerCard({ id, data }: NodeProps<AnswerNode>) {
         className={cn(ANSWER_CARD, CARD_FOCUS, BRICK, 'border-warning/50')}
       >
         <Anchors />
-        <Dialog open={compare} onOpenChange={setCompare}>
-          <DialogTrigger render={<button ref={main} type="button" data-card-main aria-label={`Compare ${label}`} className={ANSWER_MAIN} onClick={(event) => event.stopPropagation()} />}>
+        <Dialog open={compare} onOpenChange={(next) => { if (next && hasDragSelection(main.current)) return; setCompare(next); }}>
+          <DialogTrigger render={<button ref={main} type="button" data-card-main aria-label={`Compare ${label}`} className={ANSWER_MAIN} onClick={(event) => { if (hasDragSelection(event.currentTarget, event)) { event.preventDefault(); return; } event.stopPropagation(); }} />}>
             {content}
           </DialogTrigger>
           <DialogPopup className="max-w-5xl" data-testid="answer-compare">
@@ -1514,15 +1512,15 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
           border,
         )}
         onClick={(event) => {
-          if ((event.target as HTMLElement).closest('button')) return;
+          if ((event.target as HTMLElement).closest('button') || hasDragSelection(event.currentTarget, event)) return;
           actions?.openArea?.(id, event.currentTarget);
         }}
       >
         <button
           type="button"
-          onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+          onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) actions?.openArea?.(id, event.currentTarget); }}
           aria-label={areaLabel(data)}
-          className="board-area nodrag nopan flex w-full flex-col text-left focus-visible:outline-2 focus-visible:outline-ring rounded-lg cursor-pointer"
+          className="board-area nodrag nopan select-text flex w-full flex-col text-left focus-visible:outline-2 focus-visible:outline-ring rounded-lg cursor-pointer"
         >
           <span className={cn('flex h-5 w-full shrink-0 items-center gap-1.5 whitespace-nowrap', AREA_TEXT)}>
             {data.kind === 'checkpoint' && (
@@ -1537,7 +1535,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
             <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-muted-foreground" />
           </span>
 
-          <span className="mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
+          <span className="nodrag select-text mt-1.5 line-clamp-2 shrink-0 text-sm font-semibold leading-5 text-foreground" title={data.title}>
             {data.fresh && !data.current && !data.done && (
               <FreshDot inline />
             )}
@@ -1573,10 +1571,11 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                   aria-label={text}
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (hasDragSelection(e.currentTarget, e)) return;
                     actions?.openStep?.(id, step.key, e.currentTarget);
                   }}
                   className={cn(
-                    'nodrag nopan flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring cursor-pointer',
+                    'nodrag nopan select-text flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring cursor-pointer',
                     idx === 0 ? 'bg-muted/40 font-medium text-foreground' : 'text-muted-foreground',
                   )}
                 >
@@ -1588,7 +1587,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
                       {data.nowSet ? 'Now' : 'Next up'}
                     </span>
                   )}
-                  <span className="min-w-0 flex-1 truncate">{text}</span>
+                  <span className="nodrag select-text min-w-0 flex-1 truncate">{text}</span>
                 </button>
               );
             })}
@@ -1624,7 +1623,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
             ))}
           </div>
         ) : showPreview && data.preview ? (
-          <span className={cn('mt-2 line-clamp-2 shrink-0', AREA_TEXT)}>{data.preview}</span>
+          <span className={cn('pointer-events-auto nodrag nopan select-text mt-2 line-clamp-2 shrink-0', AREA_TEXT)}>{data.preview}</span>
         ) : null}
 
         {footer && (
@@ -1753,7 +1752,7 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
         isNotStarted && 'opacity-85'
       )}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest('button')) return;
+        if ((event.target as HTMLElement).closest('button') || hasDragSelection(event.currentTarget, event)) return;
         actions?.openArea?.(id, event.currentTarget);
       }}
     >
@@ -1761,17 +1760,17 @@ export function BoardAreaRow({ id, data, width }: NodeProps<AreaRowNode>) {
       {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-lg" />}
       <button
         type="button"
-        onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+        onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) actions?.openArea?.(id, event.currentTarget); }}
         aria-label={areaLabel(data, hiddenSubtitle)}
         className={cn(
-          'board-area nodrag nopan flex items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded',
+          'board-area nodrag nopan select-text flex items-center gap-2.5 text-left cursor-pointer focus-visible:outline-2 focus-visible:outline-ring rounded',
           listArea
             ? (rowLayout.showSecondary ? 'shrink-0' : 'min-w-0 shrink')
             : (rowLayout.showSecondary ? 'grow shrink-0' : 'min-w-0 flex-auto'),
         )}
       >
         <AreaMark data={data} />
-        <span className={cn('text-sm font-medium leading-5 text-foreground', listArea ? 'min-w-0 truncate whitespace-nowrap' : 'min-w-0 flex-auto truncate')} title={data.title}>
+        <span className={cn('nodrag select-text text-sm font-medium leading-5 text-foreground', listArea ? 'min-w-0 truncate whitespace-nowrap' : 'min-w-0 flex-auto truncate')} title={data.title}>
           {data.fresh && !data.current && !data.done && (
             <FreshDot inline />
           )}
@@ -1950,7 +1949,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       <div
         ref={cardRef}
         onClick={(event) => {
-          if ((event.target as HTMLElement).closest('button')) return;
+          if ((event.target as HTMLElement).closest('button') || hasDragSelection(event.currentTarget, event)) return;
           actions?.openArea?.(id, event.currentTarget);
         }}
         className={cn(
@@ -1964,12 +1963,12 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
         {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-xl" />}
         <button
           type="button"
-          onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+          onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) actions?.openArea?.(id, event.currentTarget); }}
           aria-label={areaLabel(data)}
-          className={cn('board-area nodrag nopan flex w-full min-w-0 gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-ring cursor-pointer', isQuestion ? 'items-start' : 'items-center')}
+          className={cn('board-area nodrag nopan select-text flex w-full min-w-0 gap-2 rounded text-left focus-visible:outline-2 focus-visible:outline-ring cursor-pointer', isQuestion ? 'items-start' : 'items-center')}
         >
           <span className={cn(isQuestion && 'mt-0.5')}><AreaMark data={data} /></span>
-          <span className={cn('min-w-0 flex-1 text-sm font-medium leading-5 text-foreground', isQuestion ? 'line-clamp-2' : 'truncate')} title={data.title}>
+          <span className={cn('nodrag select-text min-w-0 flex-1 text-sm font-medium leading-5 text-foreground', isQuestion ? 'line-clamp-2' : 'truncate')} title={data.title}>
             {data.title}
           </span>
         </button>
@@ -2003,9 +2002,9 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
             ))}
           </div>
         )}
-        {showNews && <span className="line-clamp-1 text-xs font-medium leading-4 text-foreground" title={data.newsSummary}>{data.newsSummary}</span>}
+        {showNews && <span className="pointer-events-auto nodrag nopan select-text line-clamp-1 text-xs font-medium leading-4 text-foreground" title={data.newsSummary}>{data.newsSummary}</span>}
         {showPreview && (
-          <span className="line-clamp-1 text-xs leading-4 text-muted-foreground">{data.preview}</span>
+          <span className="pointer-events-auto nodrag nopan select-text line-clamp-1 text-xs leading-4 text-muted-foreground">{data.preview}</span>
         )}
         {fileCounts && (
           <span className={cn('min-w-0 text-xs leading-4 text-muted-foreground', data.kind !== 'questions' && 'break-words')} title={fullCounts}>
@@ -2068,11 +2067,11 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
       {data.fresh && <span key={data.freshKey ?? data.title} aria-hidden="true" className="board-fresh rounded-xl" />}
       <button
         type="button"
-        onClick={(event) => actions?.openArea?.(id, event.currentTarget)}
+        onClick={(event) => { if (!hasDragSelection(event.currentTarget, event)) actions?.openArea?.(id, event.currentTarget); }}
         aria-label={areaLabel(data, !secondLine.subtitle ? subtitleText : undefined)}
         title={!secondLine.subtitle && subtitleText ? `${data.title}: ${subtitleText}` : undefined}
         className={cn(
-          'board-area nodrag nopan relative flex h-full w-full items-stretch gap-3 overflow-hidden rounded-xl border bg-card px-3 py-2.5 text-left text-card-foreground shadow-xs',
+          'board-area nodrag nopan select-text relative flex h-full w-full items-stretch gap-3 overflow-hidden rounded-xl border bg-card px-3 py-2.5 text-left text-card-foreground shadow-xs',
           'transition-[transform,box-shadow,border-color] duration-150 ease-out hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md',
           'motion-reduce:transition-none motion-reduce:hover:translate-y-0',
           data.current ? 'border-primary/40' : 'border-border/60',
@@ -2082,7 +2081,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="flex min-w-0 items-start gap-2">
               <span className="mt-0.5"><AreaMark data={data} /></span>
-              <span className="line-clamp-2 min-w-0 text-sm font-medium leading-5 text-foreground" title={data.title}>
+              <span className="nodrag select-text line-clamp-2 min-w-0 text-sm font-medium leading-5 text-foreground" title={data.title}>
                 {data.fresh && !data.current && !data.done && (
                   <FreshDot inline />
                 )}
@@ -2095,7 +2094,7 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
             <span className="flex min-w-0 items-center gap-2" style={showQuestion ? { paddingRight: questionRoom } : undefined}>
               {!statusLine && status}
               {data.tier === 4 && data.nextOpenStep && secondLine.subtitle && (
-                <span data-area-subtitle="" style={{ maxWidth: secondLine.subtitleMax }} className="min-w-0 max-w-[22ch] truncate text-xs leading-4 text-muted-foreground" title={data.nextOpenStep}>
+                <span data-area-subtitle="" style={{ maxWidth: secondLine.subtitleMax }} className="nodrag select-text min-w-0 max-w-[22ch] truncate text-xs leading-4 text-muted-foreground" title={data.nextOpenStep}>
                   {data.nextOpenStep}
                 </span>
               )}

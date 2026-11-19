@@ -23,14 +23,14 @@ import {
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { Button } from '../../components/ui/button.js';
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '../../components/ui/menu.js';
-import { safeCopyToClipboard } from '../../lib/clipboard.js';
+import { safeCopyToClipboard, copyPictureToClipboard } from '../../lib/clipboard.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
 import type { DiffViewMode } from '../changes/types.js';
 import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
-import { DiagramFixContext } from '../../components/diagramFixContext.js';
+import { DiagramFixContext, DiagramFullScreenContext } from '../../components/diagramFixContext.js';
 import { diagramFixRequest, isQuestionFile } from './questionsArea.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { isKnowledgeFile } from '../knowledge/knowledgeIndex.js';
@@ -436,18 +436,43 @@ export function BoardReader({
   const copyLabel = source ? 'Copy name' : 'Copy path';
   // Said for what was open when it was copied: another card starts without it.
   const [copiedFor, setCopiedFor] = useState<{ open: string; result: 'done' | 'failed' } | null>(null);
+  const [pictureCopyFor, setPictureCopyFor] = useState<{ open: string; ok: boolean; message: string; repeat: boolean } | null>(null);
   const copiedKey = `${request}:${open}`;
   const copied = copiedFor?.open === copiedKey ? copiedFor.result : null;
+  const pictureCopy = pictureCopyFor?.open === copiedKey ? pictureCopyFor : null;
   const noun = source ? 'name' : 'path';
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const pictureCopyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const pictureCopyGen = useRef(0);
+  useEffect(() => () => {
+    clearTimeout(copyTimer.current);
+    clearTimeout(pictureCopyTimer.current);
+    // A picture copy still being rendered when the Reader closes must not write or set a status
+    pictureCopyGen.current += 1;
+  }, []);
+  // Another document is a new copy target: a copy of the one before must not write over it
+  useEffect(() => { pictureCopyGen.current += 1; }, [copiedKey, fileUrl]);
   const copyPath = () => {
     const finish = (ok: boolean) => {
+      setPictureCopyFor(null);
       setCopiedFor({ open: copiedKey, result: ok ? 'done' : 'failed' });
       clearTimeout(copyTimer.current);
       copyTimer.current = setTimeout(() => setCopiedFor(null), 1500);
     };
     safeCopyToClipboard(path).then(finish, () => finish(false));
+  };
+  const copyPicture = () => {
+    if (!fileUrl) return;
+    const gen = ++pictureCopyGen.current;
+    const targetKey = copiedKey;
+    const repeat = pictureCopyFor?.open === targetKey ? !pictureCopyFor.repeat : false;
+    void copyPictureToClipboard({ src: fileUrl, fallbackPath: path, isCurrent: () => gen === pictureCopyGen.current }).then((result) => {
+      if (gen !== pictureCopyGen.current) return;
+      setCopiedFor(null);
+      setPictureCopyFor({ open: targetKey, ok: result.ok, message: result.message, repeat });
+      clearTimeout(pictureCopyTimer.current);
+      pictureCopyTimer.current = setTimeout(() => setPictureCopyFor(null), 2500);
+    });
   };
   const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground';
 
@@ -509,7 +534,17 @@ export function BoardReader({
           </h2>
           <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{repo ? `${repo.name} · ${path}` : path}</p>
         </div>
-        <div className="order-3 flex items-center gap-1">
+        <div className="order-3 flex flex-wrap items-center gap-1">
+          {kind === 'image' && fileUrl && (
+            <button
+              type="button"
+              onClick={copyPicture}
+              className="nodrag nopan inline-flex h-7 min-h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border/60 bg-muted/30 px-2 text-xs font-medium text-foreground hover:bg-muted/70 transition-colors cursor-pointer"
+            >
+              <Copy className="size-3.5" aria-hidden="true" />
+              <span>Copy picture</span>
+            </button>
+          )}
           {onAskInCLI && (
             <button
               type="button"
@@ -590,12 +625,22 @@ export function BoardReader({
               </>
             </MenuPopup>
           </Menu>
-          <span role="status" aria-live="polite" className="sr-only">
-            {copied === 'done'
-              ? `${noun === 'name' ? 'Name' : 'Path'} copied`
-              : copied === 'failed'
-                ? `Could not copy the ${noun}`
-                : ''}
+          <span
+            role="status"
+            aria-live="polite"
+            className={
+              pictureCopy
+                ? cn('px-1 text-xs font-medium whitespace-nowrap', pictureCopy.ok ? 'text-primary' : 'text-destructive')
+                : 'sr-only'
+            }
+          >
+            {pictureCopy
+              ? `${pictureCopy.message}${pictureCopy.repeat ? '\u00A0' : ''}`
+              : copied === 'done'
+                ? `${noun === 'name' ? 'Name' : 'Path'} copied`
+                : copied === 'failed'
+                  ? `Could not copy the ${noun}`
+                  : ''}
           </span>
           <button
             ref={fullscreenToggleRef}
@@ -654,42 +699,44 @@ export function BoardReader({
         )}
       </header>
       <div ref={bodyRef} onScrollCapture={onBodyScroll} className="min-h-0 flex-1 overflow-hidden">
-        {isKnowledge ? (
-          <BoardKnowledge key={open} workspaceId={workspaceId} entry={target.knowledge?.entry} request={request} />
-        ) : isHtml ? (
-          <ReaderPage
-            key={open}
-            workspaceId={workspaceId}
-            path={path}
-            repo={repo?.name}
-            raw={raw}
-            onViewUrlReady={handleViewUrlReady}
-          />
-        ) : (
-          <DiagramFixContext value={fixDiagram}>
-            <DocumentViewer
+        <DiagramFullScreenContext value={maximized ? 'fullscreen' : 'available'}>
+          {isKnowledge ? (
+            <BoardKnowledge key={open} workspaceId={workspaceId} entry={target.knowledge?.entry} request={request} />
+          ) : isHtml ? (
+            <ReaderPage
               key={open}
-              fill
-              fillFrame
-              chromeless
-              title={path}
-              lineTools={!isKnowledge ? { notes, request, active, readOnly, onDone: finishNote, onAsk: !readOnly && onAskInCLI ? askLines : undefined, openNoteId: target.lineNoteId } : undefined}
-              preview={data}
+              workspaceId={workspaceId}
+              path={path}
+              repo={repo?.name}
               raw={raw}
-              fileUrl={fileUrl}
-              links={links}
-              imageExpanded={maximized}
-              onImageClick={toggleMaximized}
-              status={<>
-                {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
-                {preview.isError && <p role="alert" className="text-sm text-destructive">
-                  {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
-                  <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
-                </p>}
-              </>}
+              onViewUrlReady={handleViewUrlReady}
             />
-          </DiagramFixContext>
-        )}
+          ) : (
+            <DiagramFixContext value={fixDiagram}>
+              <DocumentViewer
+                key={open}
+                fill
+                fillFrame
+                chromeless
+                title={path}
+                lineTools={!isKnowledge ? { notes, request, active, readOnly, onDone: finishNote, onAsk: !readOnly && onAskInCLI ? askLines : undefined, openNoteId: target.lineNoteId } : undefined}
+                preview={data}
+                raw={raw}
+                fileUrl={fileUrl}
+                links={links}
+                imageExpanded={maximized}
+                onImageClick={toggleMaximized}
+                status={<>
+                  {preview.isPending && <p role="status" className="text-sm text-muted-foreground">Opening document…</p>}
+                  {preview.isError && <p role="alert" className="text-sm text-destructive">
+                    {preview.error instanceof Error ? preview.error.message : 'Unable to open document.'}{' '}
+                    <Button size="sm" variant="outline" onClick={() => void preview.refetch()}>Retry preview</Button>
+                  </p>}
+                </>}
+              />
+            </DiagramFixContext>
+          )}
+        </DiagramFullScreenContext>
       </div>
       {(target.text || target.byline) && <footer aria-label="About this card" className="flex max-h-[25%] shrink-0 flex-wrap items-start gap-x-3 border-t border-border px-3 py-1.5 text-xs leading-5 text-muted-foreground">
         {target.text && <div

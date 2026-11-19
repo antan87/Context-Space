@@ -1,4 +1,4 @@
-import type { IncomingHost, RecentCommits } from '../plan/whatsNew.js';
+import type { IncomingHost, NewsPullRequest, RecentCommits } from '../plan/whatsNew.js';
 
 /** A commit by repository and (short or full) SHA. The same SHA prefix in two repositories is two commits. */
 export interface CommitRef { repo: string; sha: string }
@@ -12,6 +12,13 @@ export interface SequenceCommit extends CommitRef {
   incoming?: boolean;
   host?: IncomingHost | null;
   webUrl?: string | null;
+  prNumber?: number;
+  onBase?: true;
+  branch?: string | null;
+  base?: string | null;
+  remoteRepo?: string | null;
+  ref?: string | null;
+  pr?: NewsPullRequest | null;
 }
 
 /** The commits of the row a commit was opened from, in the order the row shows them, and what to call the row. */

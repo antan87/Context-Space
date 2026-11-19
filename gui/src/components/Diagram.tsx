@@ -1,8 +1,10 @@
 import { useContext, useEffect, useLayoutEffect, useCallback, useRef, useState, type ReactNode } from 'react';
-import { drawDiagram, diagramAlt, diagramCardLayout, diagramProblem, type DiagramDrawing } from '../lib/diagram.js';
+import { Copy } from 'lucide-react';
+import { drawDiagram, diagramAlt, diagramCardLayout, diagramReaderLayout, diagramProblem, diagramScrollHint, type DiagramDrawing } from '../lib/diagram.js';
 import { DIAGRAM_RESOURCE_REASON } from '../lib/diagramSafety.js';
+import { copyPictureToClipboard } from '../lib/clipboard.js';
 import { Button } from './ui/button.js';
-import { DiagramFixContext } from './diagramFixContext.js';
+import { DiagramFixContext, DiagramFullScreenContext } from './diagramFixContext.js';
 import { isAppDark, watchEditorTheme } from '../lib/editorTheme.js';
 
 /** A readable-size view of the start of an image; it never takes focus or keys from its card. */
@@ -33,16 +35,129 @@ function CardDiagram({ url, zoom }: { url: string; zoom: number }) {
   </div>;
 }
 
+/** Reader diagrams fit down to a 12 px text floor (scaling up to 1.5x if needed); wider ones scroll sideways at that readable scale. */
+function ReaderDiagram({ url, alt, fontSize, cut }: { url: string; alt: string; fontSize?: number; cut: boolean }) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const image = useRef<HTMLImageElement>(null);
+  const [layout, setLayout] = useState<ReturnType<typeof diagramReaderLayout> | null>(null);
+  const [fades, setFades] = useState({ left: false, right: false });
+  const fullScreen = useContext(DiagramFullScreenContext);
+
+  const measureScroll = useCallback(() => {
+    const box = scroller.current;
+    if (!box) return;
+    const next = {
+      left: box.scrollLeft > 1,
+      right: box.scrollLeft + box.clientWidth < box.scrollWidth - 1,
+    };
+    setFades((old) => (old.left === next.left && old.right === next.right ? old : next));
+  }, []);
+
+  const measure = useCallback(() => {
+    const box = viewport.current;
+    const img = image.current;
+    if (!box) return;
+    const rectWidth = box.getBoundingClientRect().width;
+    const availableWidth = rectWidth > 0 ? Math.min(box.clientWidth || rectWidth, rectWidth) : box.clientWidth;
+    if (!img?.naturalWidth || !img.naturalHeight || !availableWidth) return;
+    const next = diagramReaderLayout({ width: img.naturalWidth, height: img.naturalHeight }, availableWidth, fontSize);
+    setLayout((old) => (
+      old?.width === next.width
+      && old.height === next.height
+      && old.scale === next.scale
+      && old.scrolls === next.scrolls
+        ? old
+        : next
+    ));
+    if (next.scrolls) measureScroll();
+  }, [fontSize, measureScroll]);
+
+  useLayoutEffect(() => {
+    measure();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (viewport.current && observer) observer.observe(viewport.current);
+    return () => {
+      observer?.disconnect();
+    };
+  }, [measure, url]);
+
+  const scrolls = Boolean(layout?.scrolls);
+  useLayoutEffect(() => {
+    if (!scrolls) {
+      if (scroller.current && scroller.current.scrollLeft !== 0) scroller.current.scrollLeft = 0;
+      setFades((old) => (!old.left && !old.right ? old : { left: false, right: false }));
+      return;
+    }
+    measureScroll();
+  }, [layout, scrolls, url, measureScroll]);
+
+  return <>
+    <div ref={viewport} className="relative w-full min-w-0">
+      <div
+        ref={scroller}
+        tabIndex={scrolls && !cut ? 0 : undefined}
+        role={scrolls && !cut ? 'region' : undefined}
+        aria-label={scrolls && !cut ? `${alt}, scrolls sideways` : undefined}
+        onScroll={measureScroll}
+        className={scrolls
+          ? 'w-full min-w-0 overflow-x-auto overflow-y-hidden rounded-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring'
+          : 'w-full min-w-0 overflow-hidden'}
+      >
+        <img
+          ref={image}
+          src={url}
+          alt={alt}
+          draggable={false}
+          onLoad={measure}
+          className="not-prose m-0 block max-w-none"
+          style={layout ? { width: layout.width, height: layout.height } : { maxWidth: '100%', height: 'auto' }}
+        />
+      </div>
+      {scrolls && fades.left && (
+        <span
+          data-diagram-fade="left"
+          aria-hidden="true"
+          className="pointer-events-none absolute top-0 left-0 w-8"
+          style={{ height: layout?.height, background: 'linear-gradient(to left, transparent, var(--background))' }}
+        />
+      )}
+      {scrolls && fades.right && (
+        <span
+          data-diagram-fade="right"
+          aria-hidden="true"
+          className="pointer-events-none absolute top-0 right-0 w-8"
+          style={{ height: layout?.height, background: 'linear-gradient(to right, transparent, var(--background))' }}
+        />
+      )}
+    </div>
+    {scrolls && (
+      <p data-diagram-scroll-hint="" className="not-prose mt-1 mb-0 text-xs leading-4 text-muted-foreground">
+        {diagramScrollHint(fullScreen)}
+      </p>
+    )}
+  </>;
+}
+
 /** One inert image in both places. Source visibility belongs to this mounted fence, not polled answer data. */
 export function Diagram({ source, card = false, cardZoom = 1, code, cut = false }: { source: string; card?: boolean; cardZoom?: number; code?: ReactNode; cut?: boolean }) {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => isAppDark() ? 'dark' : 'light');
   const [drawing, setDrawing] = useState<{ source: string; theme: string; result: NonNullable<DiagramDrawing> } | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<{ source: string; ok: boolean; message: string; repeat: boolean } | null>(null);
   useEffect(() => watchEditorTheme((next) => setTheme(next === 'vs-dark' ? 'dark' : 'light')), []);
   const onFix = useContext(DiagramFixContext);
   const mounted = useRef(false);
   const pending = useRef<{ source: string; theme: string } | null>(null);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const copyGen = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearTimeout(copyTimer.current);
+    };
+  }, []);
   // Run after each render: a rejected lazy import gets another chance on the next external render,
   // without a retry loop, while completed drawings and in-flight requests are left alone.
   useEffect(() => {
@@ -64,7 +179,7 @@ export function Diagram({ source, card = false, cardZoom = 1, code, cut = false 
   const fallback = card
     ? <pre className="m-0 min-h-0 max-h-12 overflow-hidden whitespace-pre font-mono text-[12px] leading-4 text-foreground">{source.split('\n').slice(0, 3).join('\n')}</pre>
     : code;
-  return <div data-diagram-box className={card ? 'flex min-h-0 w-full flex-1 flex-col justify-center overflow-hidden' : 'my-3 min-w-0 max-w-full'}>
+  return <div data-diagram-box className={card ? 'flex min-h-0 w-full flex-1 flex-col justify-center overflow-hidden' : 'my-3 w-full min-w-0 max-w-full'}>
     {error && <>
       <span role="status" data-diagram-error={card ? undefined : ''} className="block text-[12px] leading-4 text-muted-foreground">{card ? `Can't draw this diagram${line ? ` · line ${line}` : ''}` : problem?.message}</span>
       {card && error === DIAGRAM_RESOURCE_REASON && <span className="block text-[12px] leading-4 text-muted-foreground">{error}</span>}
@@ -82,13 +197,48 @@ export function Diagram({ source, card = false, cardZoom = 1, code, cut = false 
       </>}
     </>}
     {result && 'url' in result ? <>
-      {card ? <CardDiagram url={result.url} zoom={cardZoom} /> : <div className="max-w-full overflow-x-auto">
-        <img src={result.url} alt={diagramAlt(source)} draggable={false} className="not-prose m-0 block max-w-none" />
-      </div>}
+      {card ? <CardDiagram url={result.url} zoom={cardZoom} /> : <ReaderDiagram key={source} url={result.url} alt={diagramAlt(source)} fontSize={result.fontSize} cut={cut} />}
       {!card && <>
-        <Button type="button" size="xs" variant="outline" aria-expanded={showSource} tabIndex={cut ? -1 : undefined}
-          className="nodrag nopan mt-1 text-xs"
-          onClick={() => setShowSource((shown) => !shown)}>Source</Button>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <Button type="button" size="xs" variant="outline" aria-expanded={showSource} tabIndex={cut ? -1 : undefined}
+            className="nodrag nopan h-7 min-h-7 text-[14px]"
+            onClick={() => setShowSource((shown) => !shown)}>Source</Button>
+          <Button type="button" size="xs" variant="outline" tabIndex={cut ? -1 : undefined}
+            className="nodrag nopan h-7 min-h-7 text-[14px]"
+            onClick={() => {
+              const targetSource = source;
+              const gen = ++copyGen.current;
+              const repeat = copyStatus?.source === targetSource ? !copyStatus.repeat : false;
+              void copyPictureToClipboard({
+                src: result.url,
+                isSvg: true,
+                fallbackPath: source,
+                fallbackLabel: 'diagram source',
+                isCurrent: () => mounted.current && gen === copyGen.current,
+              }).then((copied) => {
+                if (!mounted.current || gen !== copyGen.current) return;
+                setCopyStatus({ source: targetSource, ok: copied.ok, message: copied.message, repeat });
+                clearTimeout(copyTimer.current);
+                copyTimer.current = setTimeout(() => {
+                  if (mounted.current) setCopyStatus(null);
+                }, 2500);
+              });
+            }}>
+            <Copy className="size-3" aria-hidden="true" />
+            <span>Copy picture</span>
+          </Button>
+          <span
+            role="status"
+            aria-live="polite"
+            className={
+              copyStatus?.source === source
+                ? `text-[14px] font-medium ${copyStatus.ok ? 'text-primary' : 'text-destructive'}`
+                : 'sr-only'
+            }
+          >
+            {copyStatus?.source === source ? `${copyStatus.message}${copyStatus.repeat ? '\u00A0' : ''}` : ''}
+          </span>
+        </div>
         {showSource && code}
       </>}
     </> : fallback}

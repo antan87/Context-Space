@@ -988,6 +988,8 @@ export type LiveEvent =
   | { type: 'answered'; timestamp: string }
   /** The plan changed on disk, whoever changed it: read it again. */
   | { type: 'plan'; timestamp: string }
+  /** Background PR metadata finished loading: read recent commits again. */
+  | { type: 'commits'; timestamp: string }
   /** The board was changed by someone: read it again. It is never a screen event, so the strip never shows it. */
   | { type: 'board'; timestamp: string; revision: number };
 

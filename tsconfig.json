@@ -15,5 +15,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*"],
-  "exclude": ["**/*.test.ts", "node_modules", "dist", "tests", "gui", "desktop", "extension"]
+  "exclude": ["**/*.test.ts", "src/core/workspace-db/testing.ts", "src/test-support", "node_modules", "dist", "tests", "gui", "desktop", "extension"]
 }

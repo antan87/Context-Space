@@ -225,4 +225,11 @@ describe('connectScreenFeed', () => {
     first!.emit('screen', screen('next', { title: 'late', reason: 'r' }), 'late');
     expect(lives).toEqual([]);
   });
+
+  it('parses and forwards commits live events when background PR metadata finishes loading', () => {
+    connect();
+    const [source] = FakeSource.all;
+    source!.emit('commits', JSON.stringify({ type: 'commits', timestamp: base.timestamp }), base.timestamp);
+    expect(lives).toEqual([{ type: 'commits', timestamp: base.timestamp } as unknown as LiveEvent]);
+  });
 });

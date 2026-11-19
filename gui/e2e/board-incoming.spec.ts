@@ -31,7 +31,7 @@ test.afterEach(() => { expect(writes, 'no test here may write').toEqual([]); });
 
 const win = (page: Page) => page.getByRole('region', { name: 'Review', exact: true });
 const commitHeader = (page: Page) => win(page).getByTestId('commit-header');
-const commitsTree = (page: Page) => win(page).getByRole('tree', { name: 'Commits' });
+const commitsTree = (page: Page) => win(page).getByRole('region', { name: 'Commits' });
 const modeButton = (page: Page, name: string) =>
   win(page).getByRole('group', { name: 'Show' }).getByRole('button', { name: new RegExp(`^${name}( \\d+)?$`) });
 
@@ -253,13 +253,13 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
     const tree = commitsTree(page);
     await expect(tree).toBeVisible();
 
-    // Group heading at the top of the tree, before Recent commits
+    // Incoming branch heading at the top of the repo, before local branch commits
     const incomingHeading = tree.getByText('On Azure DevOps, not in your copy yet');
     await expect(incomingHeading).toBeVisible();
-    const recentHeading = tree.getByText('Recent commits in billing');
-    await expect(recentHeading).toBeVisible();
+    const localBranchHeading = tree.getByTestId('commit-branch-group').filter({ hasText: 'Prepare local formatter' }).getByTestId('commit-branch-toggle');
+    await expect(localBranchHeading).toBeVisible();
     const incomingBox = await incomingHeading.boundingBox();
-    const recentBox = await recentHeading.boundingBox();
+    const recentBox = await localBranchHeading.boundingBox();
     expect(incomingBox!.y).toBeLessThan(recentBox!.y);
 
     // Three commit items in newest-first order inside incoming, then local commit
@@ -573,7 +573,7 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
     // Simulate AI pull + refresh via Check now
     await win(page).getByRole('button', { name: 'Check now' }).click();
     await expect(commitsTree(page).getByText('On Azure DevOps, not in your copy yet')).toHaveCount(0);
-    await expect(commitsTree(page).getByText('Recent commits in billing')).toBeVisible();
+    await expect(commitsTree(page).getByTestId('commit-repo-group')).toContainText('billing');
     await expect(commitsTree(page).locator('[data-testid="commit-tree-item"]')).toHaveCount(1);
     await expect(commitsTree(page).locator('[data-testid="commit-tree-item"]').first()).toContainText('Pulled feature commit');
   });
@@ -954,7 +954,7 @@ test.describe('OP2: Incoming commits shown in Review and What\'s new', () => {
     await page.clock.runFor(50);
 
     await expect(tree.getByText('On Azure DevOps, not in your copy yet')).toHaveCount(0);
-    await expect(tree.getByText('Recent commits in billing')).toBeVisible();
+    await expect(tree.getByTestId('commit-repo-group')).toContainText('billing');
 
     // Open commit and scroll are preserved
     await expect(commitHeader(page).getByTestId('commit-subject')).toHaveText(targetDetail.subject);

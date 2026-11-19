@@ -219,7 +219,7 @@ test('the Review list marks a commit that has notes with its count, as text, and
   await stepIntoCommits(page);
   await commitCard(page, SHA_1).getByRole('button', { name: /^Open feat: merge/ }).click();
   const win = reviewRegion(page);
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  const tree = win.getByRole('region', { name: 'Commits' });
   const items = tree.locator('[data-testid="commit-tree-item"]');
   const first = items.filter({ hasText: SHA_1.slice(0, 7) });
   const mark = first.getByTestId('commit-item-notes');
@@ -284,7 +284,7 @@ test('a note on a commit that others pushed (not in your copy yet) shows the sam
   await stepIntoCommits(page);
   await commitCard(page, SHA_1).getByRole('button', { name: /^Open feat: merge/ }).click();
   const win = reviewRegion(page);
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  const tree = win.getByRole('region', { name: 'Commits' });
   const incoming = tree.getByTestId('commit-tree-item').filter({ hasText: 'Stream CSV chunks' });
   await expect(incoming.getByTestId('commit-item-notes')).toHaveText('1 note');
   await incoming.click();
@@ -303,8 +303,8 @@ test('a note on a commit that is no longer anywhere breaks nothing: not in the l
   await commitCard(page, SHA_1).getByRole('button', { name: /^Open feat: merge/ }).click();
   const win = reviewRegion(page);
   await expect(win.getByTestId('commit-notes').getByTestId('commit-note')).toHaveCount(1);
-  await expect(win.getByRole('tree', { name: 'Commits' })).not.toContainText('Rebased away');
-  await expect(win.getByRole('tree', { name: 'Commits' })).not.toContainText('abcdef0');
+  await expect(win.getByRole('region', { name: 'Commits' })).not.toContainText('Rebased away');
+  await expect(win.getByRole('region', { name: 'Commits' })).not.toContainText('abcdef0');
   await expect(win.getByTestId('commit-item-notes')).toHaveCount(1);
 });
 
