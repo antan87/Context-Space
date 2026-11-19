@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Mechanical contrast gate for the progress colours and the Dusk palette. It
- * reads the real index.css, applies the cascade the way the browser does for
+ * reads the real index.css with the design tokens it imports (design/tokens.css), applies the cascade the way the browser does for
  * each palette and theme, resolves var() and color-mix(), and checks WCAG
  * contrast. Text needs 4.5:1. Graphics that carry meaning (the ring's arcs and
  * its "you are here" marker) need 3:1.
  */
-const css = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
+/** The stylesheet with its local `@import "./….css"` lines replaced by the imported file, in place, so the rules come in the order the browser's cascade sees them. */
+function readCssWithImports(url: URL): string {
+  return readFileSync(url, 'utf8').replace(/^@import "(\.[^"]+\.css)";$/gm, (_all, file: string) => readCssWithImports(new URL(file, url)));
+}
+const css = readCssWithImports(new URL('../../index.css', import.meta.url));
 
 interface Rule { dark: boolean; palette?: string; specificity: number; order: number; declarations: Record<string, string> }
 

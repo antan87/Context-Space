@@ -31,7 +31,9 @@ From the workspace's `design/calm-design-rules.md`:
 
 ## The target look: "Hairline"
 
-Decided 17 Nov 2026 (`design/ux/look-decision-2026-11-17.md`). Precision for everything you use (1 px hairlines, 8 px corners, no resting shadows), Editorial's reading text for everything you read (14 px at 1.55, 72 characters, no bubbles). The main colour is the calm blue `#0966d3` (light) and `#58a6ff` (dark); orange stays in the logo and the Context Ring, and means "Waits for you". The look is **not applied yet**: it arrives with the restyle (R1) and `tokens.css` (slice 11). Until then, today's tokens in `src/index.css` are the truth.
+Decided 17 Nov 2026 (`design/ux/look-decision-2026-11-17.md`). Precision for everything you use (1 px hairlines, 8 px corners, no resting shadows), Editorial's reading text for everything you read (14 px at 1.55, 72 characters, no bubbles). The main colour is the calm blue `#0966d3` (light) and `#58a6ff` (dark); orange stays in the logo and the Context Ring, and means "Waits for you". The look is **not applied yet**: it arrives with the restyle (R1). Today's values are the truth.
+
+**Where the tokens live (DS11).** All design tokens are in `design/tokens.css`: the semantic tokens (`:root` and `@theme inline`), the brand and state/progress tokens, the six palettes (every `:root[data-color-theme=…]` and `:root.dark[data-color-theme=…]` block) and, last on purpose, the dark progress tokens that must win over every palette. R1 changes the tokens there, and only there. `src/index.css` imports the file; the Board's own rules are in `features/board/board.css`, imported the same way. Keep the order inside `tokens.css` (semantic, brand/state, palettes, dark progress last): `paletteContrast.test.ts` reads the file the way the browser applies the cascade. `tokens.css` is APP_WIDE for `affected-e2e` (every screen reads it); `board.css` runs the Board's specs, not all of `gui/e2e`.
 
 On the Board, sizes are written at x1/0.9 so they stay at least 12 px on screen at the Area's 0.9 zoom (12 px meta is written as 13.5 px).
 

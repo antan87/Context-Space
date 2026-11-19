@@ -1190,7 +1190,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, [openState, steppedAreaId, areaReady, activeArea, rowIds, areaOpen]);
 
   const areaEdges = useMemo(() => oneLinePerPair(boardEdges(areaNodes, board?.links ?? [])), [areaNodes, board]);
-  // Inside an Area a line is drawn only for a card the pointer is on or the keyboard is in (`data-lit`, see index.css). This sets the attribute on the
+  // Inside an Area a line is drawn only for a card the pointer is on or the keyboard is in (`data-lit`, see features/board/board.css). This sets the attribute on the
   // lines in the DOM and keeps no state: a render on every hover or focus would move things under a press in progress.
   const litNodes = useRef<{ pointed: string | null; focused: string | null }>({ pointed: null, focused: null });
   const lightAreaEdges = useCallback((change: Partial<{ pointed: string | null; focused: string | null }>) => {

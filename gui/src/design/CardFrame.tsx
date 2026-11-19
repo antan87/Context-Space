@@ -1,7 +1,7 @@
 import type { MouseEvent, ReactNode } from 'react';
 import { cn } from '../lib/utils.js';
 
-/** The class of a card that does something when pressed: a pointer, and a tint on hover (see `.board-brick` in index.css). */
+/** The class of a card that does something when pressed: a pointer, and a tint on hover (see `.board-brick` in features/board/board.css). */
 export const CARD_BRICK = 'board-brick cursor-pointer';
 /** The keyboard on a compact card shows as a ring around the whole card, not around its title. */
 export const CARD_FOCUS = 'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring';
@@ -31,7 +31,7 @@ export interface CardFrameProps {
 
 /**
  * The frame every card shares: its surface, padding, radius, border, hover and focus ring, and the states archived, pinned,
- * reading and pressable. It is the card's `<article>` and nothing else wraps it: `index.css` styles `.react-flow__node > article`.
+ * reading and pressable. It is the card's `<article>` and nothing else wraps it: `features/board/board.css` styles `.react-flow__node > article`.
  */
 export function CardFrame({ labelledBy, describedBy, archived, pinned, fresh, freshKey, reading = false, compact = false, onPress, onDoubleClick, anchors, children }: CardFrameProps) {
   return <article

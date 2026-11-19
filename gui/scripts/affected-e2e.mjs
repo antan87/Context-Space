@@ -288,6 +288,16 @@ const CARD_PARTS_SPECS = ['e2e/board', 'e2e/accessibility.spec.ts', DESIGN_PAGE_
 const DESIGN_PIECE_SPECS = CARD_PARTS_SPECS;
 
 /**
+ * The Board's own stylesheet (DS11), `features/board/board.css`: `.board-flow`, the rows, the Areas, `.board-brick` and the rest, which
+ * `index.css` imports. It moved out of `index.css` (APP_WIDE) so that a change to it no longer runs all of `gui/e2e`. Audited by grepping
+ * every spec outside `e2e/board-*` for the Board's classes (`board-area`, `react-flow`, `board-overview-plane`, `board-flow`): the page scan
+ * (`accessibility.spec.ts`, contrast of the drawn cards), the design page (which draws the cards in a `.board-flow`) and the two
+ * that press an Area by its class (`keyboard-journey`, `sidebar-rail`) draw it; every other spec outside the Board's own reads text and roles. The design
+ * tokens it reads are in `design/tokens.css`, which stays APP_WIDE.
+ */
+const BOARD_CSS_SPECS = [...CARD_PARTS_SPECS, 'e2e/keyboard-journey.spec.ts', 'e2e/sidebar-rail.spec.ts'];
+
+/**
  * The Note card (DS3), `cards/NoteCard.tsx`. Audited by making BoardNote render nothing and running every Board spec
  * that creates or could show a note: these nine failed (area, area-view, live, notes, overview, press, a11y, reader,
  * terminal-coworking). board-index is added by hand: it focuses, highlights and presses a note node, but React Flow keeps the
@@ -783,6 +793,13 @@ const FOLDER_ROWS = [
     bareNames: ['CardFrame', 'CardFrame.tsx'],
     specs: CARD_PARTS_SPECS,
     safety: 'The card article and its archived, pinned, fresh, reading and pressable states, drawn by every Board card that has one; only BoardNodes.tsx imports it, so it is not APP_WIDE (design/index.ts, which exports it, is); verified by cardParts.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  {
+    folder: 'src/features/board/board',
+    path: 'gui/src/features/board/board.css',
+    bareNames: ['board.css'],
+    specs: BOARD_CSS_SPECS,
+    safety: 'The Board\'s own styles (React Flow colours, rows, Areas, bricks, the Now dot), imported by index.css; the tokens it reads stay in APP_WIDE design/tokens.css; verified by all of e2e/board, the page scan, the design page, and the two specs outside the Board that press an Area by its class.',
   },
   // Pill, Mark and FreshDot (DS4)
   {
