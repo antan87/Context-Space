@@ -17,7 +17,7 @@ import { progressFactsKey } from '../../lib/api/queries.js';
 import type { LiveEvent, ScreenEvent } from '../../types.js';
 import { boardKey } from '../board/boardData.js';
 import { planFileKey } from '../plan/planFile.js';
-import { newsKey, recentCommitsKey } from '../plan/whatsNew.js';
+import { newsKey, recentCommitsKey, type RecentCommits } from '../plan/whatsNew.js';
 import { addScreenEvent, connectScreenFeed, type ScreenFeedOptions } from './screenFeed.js';
 
 /** A burst of events (the replay when a stream opens) asks for one fresh read, not one each. */
@@ -70,6 +70,22 @@ export function createLiveFeedHub(connect: (options: ScreenFeedOptions) => { clo
           // An AI that arranges the board sends a burst of changes; they are read together. A board event says nothing the
           // strip shows, so it does not ask for fresh progress facts.
           later(0, () => invalidate(boardKey(workspace)));
+          return;
+        }
+        if (live.type === 'commits') {
+          const key = recentCommitsKey(workspace);
+          const stateBefore = queryClient.getQueryState<RecentCommits>(key);
+          if (stateBefore?.fetchStatus === 'fetching' && stateBefore.data === undefined) {
+            void queryClient.invalidateQueries({ queryKey: key }).then(() => {
+              if (entry.listeners.size === 0) return;
+              const state = queryClient.getQueryState<RecentCommits>(key);
+              if (state?.fetchStatus === 'idle' && state.data?.commits.some((repo) => repo.prsPending)) {
+                void queryClient.invalidateQueries({ queryKey: key });
+              }
+            });
+          } else {
+            invalidate(key);
+          }
           return;
         }
         // PLAN.md changed by an AI's own edit or the CLI shows at once everywhere it is read, not at the next poll.

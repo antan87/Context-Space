@@ -29,7 +29,7 @@ export function isInPlace(feature: Feature): boolean {
   return feature.mode === 'in-place';
 }
 
-function getIsolatedRepo(feature: Feature, repoNameOrPath: string): IsolatedRepoInfo | undefined {
+export function getIsolatedRepo(feature: Feature, repoNameOrPath: string): IsolatedRepoInfo | undefined {
   if (!feature.isolatedRepos) return undefined;
   const direct = feature.isolatedRepos[repoNameOrPath] ?? feature.isolatedRepos[path.basename(repoNameOrPath)];
   if (direct) return direct;

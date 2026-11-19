@@ -267,10 +267,12 @@ test('one left list in order with single open commit, commit-first right view, a
   await expect(win.getByTestId('commit-position')).toHaveCount(0);
   await expect(win.getByTestId('commit-file-position')).toHaveCount(0);
 
-  // Left tree shows all 4 commits once, held row first, then Other recent commits
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  // Left tree shows all 4 commits once under the billing repository group
+  const tree = win.getByRole('region', { name: 'Commits' });
   await expect(tree).toBeVisible();
-  await expect(tree).toContainText('Other recent commits');
+  const repoGroups = tree.getByTestId('commit-repo-group');
+  await expect(repoGroups).toHaveCount(1);
+  await expect(repoGroups.nth(0)).toContainText('billing');
 
   const commitItems = tree.locator('[role="treeitem"][aria-expanded]');
   await expect(commitItems).toHaveCount(4);
@@ -326,7 +328,7 @@ test('list keyboard (arrows, Home, End) and window shortcuts ([ ], Alt+Up/Down) 
   await openFirstCommitFromBoard(page);
 
   const win = reviewRegion(page);
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  const tree = win.getByRole('region', { name: 'Commits' });
   await expect(win.getByTestId('commit-list-keys')).toBeVisible();
 
   // Focus first commit item in tree
@@ -406,7 +408,7 @@ test('narrow 420px drawer closes when choosing a commit or a file', async ({ pag
   await openFirstCommitFromBoard(page);
 
   const win = reviewRegion(page);
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  const tree = win.getByRole('region', { name: 'Commits' });
   const toggleBtn = () => win.getByRole('button', { name: /Show the (?:file tree|commit list)|Hide the (?:file tree|commit list)/i });
   if (!(await tree.isVisible())) {
     await toggleBtn().click();
@@ -431,7 +433,7 @@ test('narrow 420px drawer: arrows keep drawer open, Enter/Space close and focus 
   await openFirstCommitFromBoard(page);
 
   const win = reviewRegion(page);
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  const tree = win.getByRole('region', { name: 'Commits' });
   const toggleBtn = () => win.getByRole('button', { name: /Show the (?:file tree|commit list)|Hide the (?:file tree|commit list)/i });
   if (!(await tree.isVisible())) {
     await toggleBtn().click();
@@ -604,7 +606,7 @@ test('50 commits in list cause no detail request burst, and recent/plan refetch 
   const win = reviewRegion(page);
   await win.getByRole('button', { name: /Commits/i }).click();
 
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  const tree = win.getByRole('region', { name: 'Commits' });
   await expect(tree.locator('[role="treeitem"][aria-expanded]')).toHaveCount(50);
   expect(detailRequests.length, 'must only fetch selected commit detail, never 50').toBeLessThanOrEqual(2);
 
@@ -678,7 +680,7 @@ test('narrow 420px drawer: switching to Not committed and back to Commits does n
   await openFirstCommitFromBoard(page);
 
   const win = reviewRegion(page);
-  const tree = win.getByRole('tree', { name: 'Commits' });
+  const tree = win.getByRole('region', { name: 'Commits' });
   const toggleBtn = () => win.getByRole('button', { name: /Show the (?:file tree|commit list)|Hide the (?:file tree|commit list)/i });
   if (!(await tree.isVisible())) {
     await toggleBtn().click();
@@ -707,7 +709,7 @@ test('narrow 420px drawer: switching to Not committed and back to Commits does n
   const focusedOnCommitsOrList = await page.evaluate(() => {
     const active = document.activeElement;
     if (!active) return false;
-    if (active.closest('[role="tree"][aria-label="Commits"]')) return true;
+    if (active.closest('[role="region"][aria-label="Commits"]')) return true;
     return active.tagName === 'BUTTON' && active.textContent?.trim() === 'Commits';
   });
   expect(focusedOnCommitsOrList).toBe(true);

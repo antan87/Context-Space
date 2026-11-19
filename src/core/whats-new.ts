@@ -26,14 +26,19 @@ import { CHANGES_KEPT, readPlanChanges, readPlanFile, type PlanFileChange } from
 import { describeKnowledgeEntry, knowledgeEntryId, parseKnowledgeEntries, readWorkspaceKnowledge, type KnowledgeEntryType } from './knowledge.js';
 import { listRootDocuments } from './root-documents.js';
 import { assertNoLinkedPathComponents, atomicWriteFile } from '../resources/fs-safety.js';
-import { isGitRepo } from '../utils/git.js';
+import { getIsolatedRepo } from '../utils/feature.js';
+import { detectDefaultBranch, isGitRepo } from '../utils/git.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
+import { formatRemoteRepo, parseRemoteUrl, resolvePreferredRemoteUrl } from '../utils/pr.js';
+import type { Feature } from '../types.js';
 import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit } from './commit-log-format.js';
 import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from './incoming-commits.js';
+import { listBranchPullRequestsState, type BranchPullRequest, type PullRequestState } from './merge-detection.js';
 import { BoardWorkspaceError } from './board.js';
 import { readLineNotes, type LineNote } from './line-notes.js';
 import { listCommitNotes } from './commit-notes.js';
 import { readQuestions, type QuestionAnswer } from './questions.js';
+import { loadFeatureConfig } from './workspace.js';
 
 export { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit };
 
@@ -101,6 +106,15 @@ export interface NewsKnowledge {
   type: KnowledgeEntryType | null;
 }
 
+export type { PullRequestState };
+
+export interface NewsPullRequest {
+  number: number;
+  title: string;
+  state: PullRequestState;
+  url: string;
+}
+
 export interface NewsCommit {
   sha: string;
   author: string;
@@ -109,11 +123,27 @@ export interface NewsCommit {
   firstBodyLine?: string;
   fileCount?: number;
   pushed?: boolean;
+  prNumber?: number;
+  onBase?: true;
 }
 
 /** One repository's commits, or why they could not be read. */
 export interface NewsRepo {
   repo: string;
+  /** `owner/repo` from the repository's remote URL, when parsed (only set by `recentCommits`). */
+  remoteRepo?: string | null;
+  /** Current branch name, or `null` when detached (only set by `recentCommits`). */
+  branch?: string | null;
+  /** Distinct target/base branch when known and different from {@link branch} (only set by `recentCommits`). */
+  base?: string | null;
+  /** Pull requests whose head branch matches {@link branch} (only set by `recentCommits` when non-empty). */
+  pullRequests?: NewsPullRequest[];
+  /** True when `gh` PR lookup exceeded the bounded wait and continues resolving asynchronously. */
+  prsPending?: true;
+  /** True when the last `gh` PR refresh failed and the PRs shown are the last good ones. */
+  prsStale?: true;
+  /** Full SHA of each commit that is not in HEAD yet (already fetched) but lies in an open PR's range, to that PR's number. */
+  incomingPrs?: Record<string, number>;
   /** Newest first. */
   commits: NewsCommit[];
   /** How many more there are than listed; with `moreAtLeast`, at least that many. */
@@ -487,6 +517,7 @@ export function formatCommitNoteNewsLine(note: Pick<NewsCommitNote, 'by' | 'shor
 }
 
 const RECENT_COMMITS_LIMIT = 50;
+const RECENT_PR_WAIT_MS = 1_000;
 
 function parseCommits(stdout: string): NewsCommit[] {
   return stdout.split('\n').filter(Boolean).map((line) => {
@@ -529,24 +560,252 @@ export function formatIncomingNewsLine(
   return `${repo}: ${summary}`;
 }
 
-function parseDetailedCommits(stdout: string, unpushed: Set<string> | null): NewsCommit[] {
+interface ParsedCommitWithFullSha extends NewsCommit {
+  fullSha: string;
+}
+
+const PR_STATE_RANK: Record<PullRequestState, number> = {
+  OPEN: 0,
+  MERGED: 1,
+  CLOSED: 2,
+};
+
+function parseDetailedCommitsWithFullSha(stdout: string, unpushed: Set<string> | null): ParsedCommitWithFullSha[] {
   return parseDetailedCommitLog(stdout).map(({ fullSha, ...commit }) => ({
+    fullSha,
     ...commit,
     ...(unpushed !== null ? { pushed: !unpushed.has(fullSha) } : {}),
   }));
 }
 
+/** Any ref for a branch name (this remote, `origin`, then local): enough to NAME a base, never to compute a PR range from. */
+async function branchRefExistsAnywhere(repoPath: string, remoteName: string | null, branchName: string): Promise<boolean> {
+  const candidates = [
+    ...(remoteName ? [`refs/remotes/${remoteName}/${branchName}`] : []),
+    `refs/remotes/origin/${branchName}`,
+    `refs/heads/${branchName}`,
+  ];
+  for (const ref of candidates) {
+    if ((await git(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok) return true;
+  }
+  return false;
+}
+
+/**
+ * A branch ref in the SAME remote the PR lookup used (`<remoteName>/<branch>`). When that remote has no such ref this returns
+ * `null` on purpose: falling back to another remote's (maybe older) base would hand base-branch commits to the PR, so those
+ * commits stay unassigned instead. Only a checkout with no remote at all reads the local branch.
+ */
+async function resolveBranchRef(repoPath: string, remoteName: string | null, branchName: string): Promise<string | null> {
+  const candidates = remoteName ? [`refs/remotes/${remoteName}/${branchName}`] : [`refs/heads/${branchName}`];
+  for (const ref of candidates) {
+    const check = await git(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    if (check.ok) return ref;
+  }
+  return null;
+}
+
+function sortPullRequestsForDisplay(prs: BranchPullRequest[]): BranchPullRequest[] {
+  return [...prs].sort((a, b) => {
+    const rankDiff = PR_STATE_RANK[a.state] - PR_STATE_RANK[b.state];
+    return rankDiff !== 0 ? rankDiff : b.number - a.number;
+  });
+}
+
+function orderPullRequestsForClaiming(prs: BranchPullRequest[]): BranchPullRequest[] {
+  const merged = prs.filter((p) => p.state === 'MERGED').sort((a, b) => a.number - b.number);
+  const open = prs.filter((p) => p.state === 'OPEN').sort((a, b) => b.number - a.number);
+  const closed = prs.filter((p) => p.state === 'CLOSED').sort((a, b) => b.number - a.number);
+  return [...merged, ...open, ...closed];
+}
+
+async function resolveRepoBranchContext(
+  repoPath: string,
+  repoName: string,
+  feature: Feature | null,
+  refresh: boolean,
+  prWaitMs: number,
+): Promise<{
+  branch: string | null;
+  remoteName: string | null;
+  remoteRepo: string | null;
+  sortedPrs: BranchPullRequest[];
+  prsPending: boolean;
+  prsStale: boolean;
+  hasCached: boolean;
+  base: string | null;
+}> {
+  const [symRes, remotesRes] = await Promise.all([
+    git(repoPath, ['symbolic-ref', '--short', '-q', 'HEAD']),
+    git(repoPath, ['remote']),
+  ]);
+  const branch = symRes.ok && symRes.stdout.trim() ? symRes.stdout.trim() : null;
+  const remotes = remotesRes.ok ? remotesRes.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : [];
+
+  let branchRemoteName = '';
+  if (branch) {
+    const cfgRemote = await git(repoPath, ['config', '--get', `branch.${branch}.remote`]);
+    if (cfgRemote.ok) branchRemoteName = cfgRemote.stdout.trim();
+  }
+  const remoteName = branchRemoteName && branchRemoteName !== '.' && remotes.includes(branchRemoteName)
+    ? branchRemoteName
+    : remotes.includes('origin')
+      ? 'origin'
+      : remotes[0] ?? null;
+
+  let remoteUrl: string | null = null;
+  let remoteRepo: string | null = null;
+  if (remoteName) {
+    const cfgUrl = await git(repoPath, ['config', '--get', `remote.${remoteName}.url`]);
+    remoteUrl = await resolvePreferredRemoteUrl(cfgUrl.ok ? cfgUrl.stdout : '', async () => {
+      const effective = await git(repoPath, ['remote', 'get-url', remoteName]);
+      return effective.ok ? effective.stdout : null;
+    });
+    remoteRepo = formatRemoteRepo(remoteUrl ? parseRemoteUrl(remoteUrl) : null);
+  }
+
+  const prState = branch && remoteUrl
+    ? await listBranchPullRequestsState(repoPath, branch, remoteUrl, { refresh, waitMs: prWaitMs })
+    : { prs: [], pending: false, hasCached: false, stale: false };
+  const sortedPrs = sortPullRequestsForDisplay(prState.prs);
+  const prsPending = prState.pending;
+  const hasCached = prState.hasCached;
+  const prsStale = prState.stale;
+
+  let base: string | null = null;
+  if (branch) {
+    const isolated = feature ? (getIsolatedRepo(feature, repoName) ?? getIsolatedRepo(feature, repoPath)) : undefined;
+    const isolatedBase = isolated?.baseBranch?.trim() || null;
+    const prBase = sortedPrs.find((p) => p.baseRefName && p.baseRefName !== branch)?.baseRefName ?? null;
+    let candidateBase = (isolatedBase && isolatedBase !== branch ? isolatedBase : null)
+      ?? prBase;
+
+    if (!candidateBase) {
+      const detected = await detectDefaultBranch(repoPath).catch(() => null);
+      if (detected && detected !== branch && await branchRefExistsAnywhere(repoPath, remoteName, detected)) {
+        candidateBase = detected;
+      }
+    }
+    if (!candidateBase) {
+      const upstream = await git(repoPath, ['rev-parse', '--symbolic-full-name', '@{u}']);
+      if (upstream.ok) {
+        const sym = upstream.stdout.trim();
+        const remotePrefix = remoteName ? `refs/remotes/${remoteName}/` : null;
+        const stripped = remotePrefix && sym.startsWith(remotePrefix)
+          ? sym.slice(remotePrefix.length)
+          : sym.startsWith('refs/remotes/')
+            ? sym.replace(/^refs\/remotes\/[^/]+\//, '')
+            : null;
+        if (stripped && stripped !== branch) {
+          candidateBase = stripped;
+        }
+      }
+    }
+    base = candidateBase && candidateBase !== branch ? candidateBase : null;
+  }
+
+  return { branch, remoteName, remoteRepo, sortedPrs, prsPending, prsStale, hasCached, base };
+}
+
+async function resolveCommitPullRequestsAndBase(
+  repoPath: string,
+  headSha: string,
+  branch: string | null,
+  base: string | null,
+  remoteName: string | null,
+  prs: BranchPullRequest[],
+  commitShas: string[],
+): Promise<{ prBySha: Map<string, number>; onBaseSet: Set<string>; incomingPrs: Record<string, number> }> {
+  const prBySha = new Map<string, number>();
+  const onBaseSet = new Set<string>();
+  const incomingPrs: Record<string, number> = {};
+  if (!branch) return { prBySha, onBaseSet, incomingPrs };
+  const needed = new Set(commitShas);
+
+  // GitHub names the commit a merge, squash or rebase produced (`mergeCommitOid`): that exact SHA belongs to that PR.
+  for (const pr of orderPullRequestsForClaiming(prs)) {
+    const oid = pr.state === 'MERGED' ? pr.mergeCommitOid : undefined;
+    if (!oid || !SHA.test(oid.toLowerCase())) continue;
+    const full = oid.toLowerCase();
+    for (const sha of needed) {
+      if (sha.toLowerCase() === full && !prBySha.has(sha)) prBySha.set(sha, pr.number);
+    }
+  }
+
+  for (const pr of orderPullRequestsForClaiming(prs)) {
+    const headOid = pr.headRefOid;
+    if (!headOid || !SHA.test(headOid.toLowerCase())) continue;
+    const headExists = await git(repoPath, ['rev-parse', '--verify', '--quiet', `${headOid}^{commit}`]);
+    if (!headExists.ok) continue;
+
+    let excludeRef: string | null = null;
+    if (pr.state === 'MERGED' && pr.mergeCommitOid && SHA.test(pr.mergeCommitOid.toLowerCase())) {
+      const parentsRes = await git(repoPath, ['rev-list', '--parents', '-n', '1', pr.mergeCommitOid]);
+      if (parentsRes.ok) {
+        const tokens = parentsRes.stdout.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length >= 2 && tokens[1] && pr.mergeCommitOid.toLowerCase() !== headOid.toLowerCase()) {
+          excludeRef = tokens[1];
+        }
+      }
+    }
+    if (!excludeRef) {
+      const targetBase = pr.baseRefName || base;
+      const prBaseRef = targetBase ? await resolveBranchRef(repoPath, remoteName, targetBase) : null;
+      if (prBaseRef) {
+        const mb = await git(repoPath, ['merge-base', prBaseRef, headOid]);
+        if (mb.ok && mb.stdout.trim()) excludeRef = mb.stdout.trim();
+      }
+    }
+    if (!excludeRef || excludeRef.toLowerCase() === headOid.toLowerCase()) continue;
+
+    const listRes = await git(repoPath, ['rev-list', '--max-count=500', `${excludeRef}..${headOid}`, '--']);
+    if (!listRes.ok) continue;
+    for (const line of listRes.stdout.split(/\r?\n/)) {
+      const sha = line.trim();
+      if (sha && needed.has(sha) && !prBySha.has(sha)) {
+        prBySha.set(sha, pr.number);
+      }
+    }
+    if (pr.state === 'OPEN') {
+      // Commits of an open PR that this checkout does not have yet but has fetched (a colleague pushed to a shared PR).
+      const incomingRes = await git(repoPath, ['rev-list', '--max-count=500', `${excludeRef}..${headOid}`, `^${headSha}`, '--']);
+      if (incomingRes.ok) {
+        for (const line of incomingRes.stdout.split(/\r?\n/)) {
+          const sha = line.trim();
+          if (sha && !(sha in incomingPrs)) incomingPrs[sha] = pr.number;
+        }
+      }
+    }
+  }
+
+  if (base && base !== branch) {
+    const baseRef = await resolveBranchRef(repoPath, remoteName, base);
+    if (baseRef) {
+      const aboveRes = await git(repoPath, ['rev-list', '--max-count=500', `${baseRef}..${headSha}`, '--']);
+      if (aboveRes.ok) {
+        const above = new Set(aboveRes.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+        for (const sha of needed) {
+          if (!prBySha.has(sha) && !above.has(sha)) {
+            onBaseSet.add(sha);
+          }
+        }
+      }
+    }
+  }
+
+  return { prBySha, onBaseSet, incomingPrs };
+}
+
 /** Commits since the recorded HEAD; when that is unknown or gone (a rebase), the commits since `from`. */
-async function repoNews(
+async function repoNewsCommits(
   repo: RepoHead,
   recorded: string | undefined,
   from: string,
   limit: number,
   options: { detailed?: boolean; seenIncomingOid?: string } = {},
-): Promise<NewsRepo> {
-  const none: NewsRepo = { repo: repo.name, commits: [], more: 0 };
-  if (repo.problem) return { ...none, problem: repo.problem };
-  if (!repo.head || repo.head === recorded) return none;
+): Promise<{ commits: ParsedCommitWithFullSha[] | NewsCommit[]; more: number; moreAtLeast?: true; problem?: string }> {
+  if (repo.problem) return { commits: [], more: 0, problem: repo.problem };
+  if (!repo.head || repo.head === recorded) return { commits: [], more: 0 };
   const detailed = options.detailed === true;
   const format = detailed
     ? DETAILED_COMMIT_FORMAT
@@ -572,7 +831,7 @@ async function repoNews(
     }
     result = await log(sinceArg, repo.head);
   }
-  if (!result.ok) return { ...none, problem: result.reason };
+  if (!result.ok) return { commits: [], more: 0, problem: result.reason };
   let unpushed: Set<string> | null = null;
   if (detailed) {
     const revResult = await unpushedPromise;
@@ -580,9 +839,97 @@ async function repoNews(
       unpushed = new Set(revResult.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
     }
   }
-  const commits = detailed ? parseDetailedCommits(result.stdout, unpushed) : parseCommits(result.stdout);
+  const commits = detailed ? parseDetailedCommitsWithFullSha(result.stdout, unpushed) : parseCommits(result.stdout);
   const section = capped(commits, limit);
-  return { ...none, commits: section.items, more: section.more, ...(commits.length >= COMMITS_COUNTED ? { moreAtLeast: true as const } : {}) };
+  return { commits: section.items, more: section.more, ...(commits.length >= COMMITS_COUNTED ? { moreAtLeast: true as const } : {}) };
+}
+
+async function repoNews(
+  repo: RepoHead,
+  recorded: string | undefined,
+  from: string,
+  limit: number,
+  options: { detailed?: boolean; seenIncomingOid?: string } = {},
+): Promise<NewsRepo> {
+  const res = await repoNewsCommits(repo, recorded, from, limit, options);
+  const commits = options.detailed
+    ? (res.commits as ParsedCommitWithFullSha[]).map(({ fullSha: _fullSha, ...commit }) => commit)
+    : (res.commits as NewsCommit[]);
+  return {
+    repo: repo.name,
+    commits,
+    more: res.more,
+    ...(res.moreAtLeast ? { moreAtLeast: true as const } : {}),
+    ...(res.problem ? { problem: res.problem } : {}),
+  };
+}
+
+async function repoRecentCommits(
+  repo: RepoHead,
+  from: string,
+  limit: number,
+  feature: Feature | null,
+  refresh: boolean,
+  prWaitMs: number,
+): Promise<NewsRepo> {
+  if (repo.problem) return { repo: repo.name, commits: [], more: 0, problem: repo.problem };
+  const [branchCtx, raw] = await Promise.all([
+    resolveRepoBranchContext(repo.path, repo.name, feature, refresh, prWaitMs),
+    repoNewsCommits(repo, undefined, from, limit, { detailed: true }),
+  ]);
+  if (raw.problem) {
+    return {
+      repo: repo.name,
+      remoteRepo: branchCtx.remoteRepo,
+      branch: branchCtx.branch,
+      base: branchCtx.base,
+      commits: [],
+      more: 0,
+      problem: raw.problem,
+    };
+  }
+  const detailedCommits = raw.commits as ParsedCommitWithFullSha[];
+  const { prBySha, onBaseSet, incomingPrs } = repo.head && !(branchCtx.prsPending && !branchCtx.hasCached)
+    ? await resolveCommitPullRequestsAndBase(
+      repo.path,
+      repo.head,
+      branchCtx.branch,
+      branchCtx.base,
+      branchCtx.remoteName,
+      branchCtx.sortedPrs,
+      detailedCommits.map((c) => c.fullSha),
+    )
+    : { prBySha: new Map<string, number>(), onBaseSet: new Set<string>(), incomingPrs: {} as Record<string, number> };
+
+  const commits: NewsCommit[] = detailedCommits.map(({ fullSha, ...commit }) => {
+    const prNumber = prBySha.get(fullSha);
+    const onBase = onBaseSet.has(fullSha);
+    return {
+      ...commit,
+      ...(prNumber !== undefined ? { prNumber } : {}),
+      ...(onBase ? { onBase: true as const } : {}),
+    };
+  });
+  const pullRequests: NewsPullRequest[] = branchCtx.sortedPrs.map(({ number, title, state, url }) => ({
+    number,
+    title,
+    state,
+    url,
+  }));
+
+  return {
+    repo: repo.name,
+    remoteRepo: branchCtx.remoteRepo,
+    branch: branchCtx.branch,
+    base: branchCtx.base,
+    ...(pullRequests.length > 0 ? { pullRequests } : {}),
+    ...(branchCtx.prsPending ? { prsPending: true as const } : {}),
+    ...(branchCtx.prsStale ? { prsStale: true as const } : {}),
+    ...(Object.keys(incomingPrs).length > 0 ? { incomingPrs } : {}),
+    commits,
+    more: raw.more,
+    ...(raw.moreAtLeast ? { moreAtLeast: true as const } : {}),
+  };
 }
 
 // ─── The report ────────────────────────────────────────────────────────────────
@@ -705,12 +1052,21 @@ export async function markSeen(workspacePath: string, reader: string, at: string
  * The commits of the last few days, whatever a reader has seen: what the Board draws, so that marking the news as seen never takes
  * work off the board. It reads and records nothing. The shape is the news report's commits, newest first per repository.
  */
-export async function recentCommits(workspacePath: string, options: { now?: Date; days?: number; limit?: number } = {}): Promise<{ at: string; from: string; commits: NewsRepo[] }> {
+export async function recentCommits(
+  workspacePath: string,
+  options: { now?: Date; days?: number; limit?: number; refresh?: boolean; prWaitMs?: number } = {},
+): Promise<{ at: string; from: string; commits: NewsRepo[] }> {
   const root = await fs.realpath(workspacePath);
   const now = options.now ?? new Date();
   const from = new Date(now.getTime() - (options.days ?? FIRST_LOOK_DAYS) * 24 * 60 * 60 * 1000).toISOString();
-  const repos = await getWorkspaceRepoPaths(root).catch(() => []);
+  const [repos, feature] = await Promise.all([
+    getWorkspaceRepoPaths(root).catch(() => []),
+    loadFeatureConfig(root).catch(() => null),
+  ]);
   const heads = await Promise.all(repos.map(repoHead));
-  const commits = await Promise.all(heads.map((repo) => repoNews(repo, undefined, from, options.limit ?? RECENT_COMMITS_LIMIT, { detailed: true })));
+  const prWaitMs = options.prWaitMs ?? RECENT_PR_WAIT_MS;
+  const commits = await Promise.all(
+    heads.map((repo) => repoRecentCommits(repo, from, options.limit ?? RECENT_COMMITS_LIMIT, feature, options.refresh === true, prWaitMs)),
+  );
   return { at: now.toISOString(), from, commits };
 }

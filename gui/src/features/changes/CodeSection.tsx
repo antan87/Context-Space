@@ -35,12 +35,14 @@ import { getEditorLabel, openInVsCodeAtLine } from './adapters/ExternalDiffLaunc
 import { disposeChangesetModelsAfterEditors } from './utils/changesetModelStore.js';
 import { globalChangesetSymbolIndex, useChangesetSymbolStore, type ChangesetSymbol, type RawAstSymbol } from './utils/changesetSymbolIndex.js';
 import { omittedNotice } from './utils/omittedContent.js';
-import { refreshIncomingCommits, useIncomingCommits, useRecentCommits } from '../plan/whatsNew.js';
+import { recentCommitsKey, refreshIncomingCommits, useIncomingCommits, useRecentCommits } from '../plan/whatsNew.js';
+import { useFeedConnected } from '../progress/useScreenFeed.js';
 import type { CommitStepLink } from '../board/commitContext.js';
 import { useCommitNotes } from '../board/commitNotes.js';
+import { usePendingPrFallbackRefetch } from './pendingPrFallback.js';
 import { CommitsList, CommitsMain } from './CommitsView.js';
 import { useCommitDetail } from './commitData.js';
-import { buildCommitListGroups } from './commitListModel.js';
+import { buildCommitRepoGroups, flattenRepoGroupCommits } from './commitListModel.js';
 import { applyCodeRequest, newestRecentCommit, sameCommit, type CommitOpen, type CommitRef, type CommitsModeState } from './commitsMode.js';
 
 const MonacoFileViewer = lazy(() => import('./adapters/MonacoFileViewer.js').then((module) => ({ default: module.MonacoFileViewer })));
@@ -388,6 +390,7 @@ export function CodeSection(props: CodeSectionProps) {
   }, [request, workspace]);
   useEffect(() => { if (!active) setNotice(null); }, [active]);
 
+  const [revealCommitSeq, setRevealCommitSeq] = useState(0);
   // A request to open the window: for a commit it opens Commits mode on it (with the row it came from); any other request (the Code button, a
   // file) is the working tree. Only a new request does this, so a refresh of the board or the news never moves the commit, the file or the mode.
   const handledOpen = useRef(props.requestId);
@@ -399,6 +402,7 @@ export function CodeSection(props: CodeSectionProps) {
       setCommitFile(null);
       setExpandedCommit({ repo: asked.repo, sha: asked.sha });
       setDrawerOpen(false);
+      setRevealCommitSeq((seq) => seq + 1);
     }
     setCommits((current) => applyCodeRequest(current, asked));
   }, [active, props.requestId, props.commitOpen]);
@@ -419,6 +423,21 @@ export function CodeSection(props: CodeSectionProps) {
   const recentQuery = useRecentCommits(commitsShown ? workspace : null);
   const commitNotes = useCommitNotes(commitsShown ? workspace : null);
   const recent = recentQuery.data;
+  const feedConnected = useFeedConnected(workspace, commitsShown && visible);
+  const hasPendingPrs = Boolean(recent?.commits.some((repo) => repo.prsPending));
+  const prevFeedConnectedRef = useRef(false);
+  useEffect(() => {
+    const wasConnected = prevFeedConnectedRef.current;
+    prevFeedConnectedRef.current = feedConnected;
+    if (commitsShown && !wasConnected && feedConnected && hasPendingPrs) {
+      void queryClient.invalidateQueries({ queryKey: recentCommitsKey(workspace) });
+    }
+  }, [commitsShown, feedConnected, hasPendingPrs, queryClient, workspace]);
+  // The feed's `commits` event can be missed (it reconnects before the pending response arrives); ask again after 5 s, then 15 s, then stop.
+  const refetchRecentCommits = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: recentCommitsKey(workspace) });
+  }, [queryClient, workspace]);
+  const prsUnavailable = usePendingPrFallbackRefetch(commitsShown && visible && hasPendingPrs, refetchRecentCommits);
   const incomingQuery = useIncomingCommits(workspace, { enabled: commitsShown && visible });
   const incomingReport = incomingQuery.data;
   const [refreshingIncoming, setRefreshingIncoming] = useState(false);
@@ -430,10 +449,10 @@ export function CodeSection(props: CodeSectionProps) {
       .finally(() => setRefreshingIncoming(false));
   }, [incomingQuery.checking, queryClient, refreshingIncoming, workspace]);
   const commitGroups = useMemo(
-    () => buildCommitListGroups(commits.held, recent, commits.commit, commitDetail.data, incomingReport),
+    () => buildCommitRepoGroups(commits.held, recent, commits.commit, commitDetail.data, incomingReport),
     [commits.held, recent, commits.commit, commitDetail.data, incomingReport],
   );
-  const allListCommits = useMemo(() => commitGroups.flatMap((group) => group.commits), [commitGroups]);
+  const allListCommits = useMemo(() => flattenRepoGroupCommits(commitGroups), [commitGroups]);
   const openCommitItem = useMemo(
     () => (commits.commit ? allListCommits.find((entry) => sameCommit(entry, commits.commit)) : undefined),
     [allListCommits, commits.commit],
@@ -441,6 +460,26 @@ export function CodeSection(props: CodeSectionProps) {
   const openIncomingMeta = openCommitItem?.incoming
     ? { hostName: openCommitItem.host?.name ?? null, webUrl: openCommitItem.webUrl ?? null }
     : null;
+  const openCommitMeta = useMemo(() => {
+    if (!commits.commit) return null;
+    const recentRepo = recent?.commits.find((item) => item.repo === commits.commit?.repo);
+    const incomingRepo = openCommitItem?.incoming
+      ? incomingReport?.repos.find((item) => item.repo === commits.commit?.repo)
+      : undefined;
+    const branch = openCommitItem?.incoming
+      ? (openCommitItem.ref ?? incomingRepo?.ref ?? incomingRepo?.branch ?? undefined)
+      // A branch is claimed only with evidence: the list put this commit under it (so `branch` is set on the item).
+      // A commit under "Other commits" has none, and the repository's current branch must not stand in for it.
+      : (openCommitItem?.branch !== undefined
+        ? openCommitItem.branch
+        : commitDetail.data?.branch);
+    const pr = openCommitItem?.pr
+      ?? commitDetail.data?.pr
+      ?? (openCommitItem?.prNumber !== undefined
+        ? recentRepo?.pullRequests?.find((candidate) => candidate.number === openCommitItem.prNumber) ?? null
+        : null);
+    return branch !== undefined || pr !== null ? { branch, pr } : null;
+  }, [commitDetail.data, commits.commit, incomingReport?.repos, openCommitItem, recent?.commits]);
   const currentCommitIndex = useMemo(
     () => (commits.commit ? allListCommits.findIndex((entry) => sameCommit(entry, commits.commit)) : -1),
     [allListCommits, commits.commit],
@@ -889,8 +928,10 @@ export function CodeSection(props: CodeSectionProps) {
       commit={commits.commit}
       expanded={expandedCommit}
       file={commitFile}
+      revealCommitSeq={revealCommitSeq}
       expandedDetail={expandedDetail}
-      recentPending={recentQuery.isPending}
+      prsUnavailable={prsUnavailable}
+              recentPending={recentQuery.isPending}
       incomingReport={incomingReport}
       notes={commitNotes}
       checkingIncoming={refreshingIncoming || incomingQuery.checking}
@@ -1051,6 +1092,7 @@ export function CodeSection(props: CodeSectionProps) {
               commit={commits.commit}
               detail={commitDetail}
               incomingMeta={openIncomingMeta}
+              commitMeta={openCommitMeta}
               file={commitFile}
               ordered={commitFiles}
               hasNextCommit={hasNextCommit}

@@ -321,7 +321,7 @@
 :root {
   --state-needs: #ad370a;
   --state-ai: #4f46e5;
-  --state-done: #15803d;
+  --state-done: #116329;
   --state-reopened: #be123c;
   --state-now: #b8770b;
   --ring-a: color-mix(in srgb, var(--brand-first) 55%, #1c1410);

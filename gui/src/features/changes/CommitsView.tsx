@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, Loader2, RefreshCw, SquareArrowOutUpRight, StickyNote } from 'lucide-react';
+import { Pill, foldSurface, rowSurface } from '../../design/index.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
 import { useConfig } from '../../lib/api/queries.js';
 import { useClockTick } from '../../lib/useClockTick.js';
 import { usePlanFile } from '../plan/planFile.js';
-import { agoText, type IncomingCommitsReport } from '../plan/whatsNew.js';
+import { agoText, type IncomingCommitsReport, type NewsPullRequest } from '../plan/whatsNew.js';
 import { useBoard } from '../board/boardData.js';
 import { noteAuthorName, noteCountText, notesOfCommit, takeNotesView, useCommitNotes, type CommitNoteEntry } from '../board/commitNotes.js';
 import {
@@ -27,16 +28,19 @@ import { disposeChangesetModelsAfterEditors } from './utils/changesetModelStore.
 import { globalChangesetSymbolIndex } from './utils/changesetSymbolIndex.js';
 import { omittedNotice } from './utils/omittedContent.js';
 import type { DiffViewMode } from './types.js';
-import { commitKey, sameCommit, type CommitListGroup, type CommitRef } from './commitsMode.js';
+import { commitKey, sameCommit, type CommitRef } from './commitsMode.js';
 import {
+  ancestorGroupIdsForCommit,
   applyCommitTreeKey,
   commitItemId,
   fileItemId,
   firstDescriptionLine,
   flattenCommitTree,
   formatCommitStepLabel,
+  formatPrStateLabel,
   splitFilePath,
   statusCode,
+  type CommitRepoGroup,
   type CommitTreeRow,
 } from './commitListModel.js';
 
@@ -68,14 +72,25 @@ function FileDiffStats({ entry }: { entry: CommitDetailFile }) {
   return <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{counts}</span>;
 }
 
+/** The ids of the toggles and rows after `from` in drawn order, then those before it nearest first: where focus goes if `from` disappears. */
+function toggleFallbackIds(root: HTMLElement, from: HTMLElement): string[] {
+  const all = Array.from(root.querySelectorAll<HTMLElement>('[data-toggle-id],[data-tree-id]'));
+  const at = all.indexOf(from);
+  if (at < 0) return [];
+  const idOf = (el: HTMLElement) => (el.dataset.toggleId ?? el.dataset.treeId)!;
+  return [...all.slice(at + 1).map(idOf), ...all.slice(0, at).reverse().map(idOf)];
+}
+
 /** Single left-hand tree in Commits mode: commits newest-first with one open commit expanded beneath it. */
 export function CommitsList({
   groups,
   commit,
   expanded,
   file,
+  revealCommitSeq = 0,
   expandedDetail,
   recentPending,
+  prsUnavailable = false,
   incomingReport,
   notes,
   checkingIncoming = false,
@@ -85,12 +100,15 @@ export function CommitsList({
   onSelectFile,
   onTreeStateChange,
 }: {
-  groups: readonly CommitListGroup[];
+  groups: readonly CommitRepoGroup[];
   commit: CommitRef | null;
   expanded: CommitRef | null;
   file: string | null;
+  revealCommitSeq?: number;
   expandedDetail: ReturnType<typeof useCommitDetail>;
   recentPending: boolean;
+  /** The bounded refetches are spent and PR information is still pending: say it is not available instead of "loading". */
+  prsUnavailable?: boolean;
   incomingReport?: IncomingCommitsReport;
   /** The notes an AI left on commits; a commit that has some shows how many, after its sha and age. */
   notes?: readonly CommitNoteEntry[];
@@ -134,12 +152,36 @@ export function CommitsList({
   });
   const prevRowsRef = useRef<CommitTreeRow[] | null>(null);
   const scrolledFilesForRef = useRef<string | null>(null);
-  const prevScrollStateRef = useRef<{ currentId: string | null; expandedId: string | null; focusTick: number }>({
+  const prevScrollStateRef = useRef<{ currentId: string | null; expandedId: string | null; focusTick: number; selectedTargetId: string | null }>({
     currentId: null,
     expandedId: null,
     focusTick: -1,
+    selectedTargetId: null,
   });
   const [focusTick, setFocusTick] = useState(0);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const commitSignature = commit ? commitKey(commit) : null;
+  const [trackedCommitKey, setTrackedCommitKey] = useState<string | null>(commitSignature);
+  const [trackedRevealSeq, setTrackedRevealSeq] = useState(revealCommitSeq);
+
+  if (commitSignature !== trackedCommitKey || revealCommitSeq !== trackedRevealSeq) {
+    setTrackedCommitKey(commitSignature);
+    setTrackedRevealSeq(revealCommitSeq);
+    if (commit) {
+      const ancestors = ancestorGroupIdsForCommit(groups, commit);
+      if (ancestors.some((id) => collapsedGroups[id])) {
+        setCollapsedGroups((prev) => {
+          const next = { ...prev };
+          for (const id of ancestors) delete next[id];
+          return next;
+        });
+      }
+    }
+  }
+
+  const toggleCollapsed = (id: string) => {
+    setCollapsedGroups((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
   const expandedFiles = useMemo(() => {
     if (!expanded || !expandedDetail.data || !sameCommit(expandedDetail.data, expanded)) return [];
@@ -147,9 +189,14 @@ export function CommitsList({
   }, [expanded, expandedDetail.data]);
 
   const rows = useMemo(
-    () => flattenCommitTree(groups, expanded, expandedFiles),
-    [groups, expanded, expandedFiles],
+    () => flattenCommitTree(groups, expanded, expandedFiles, undefined, collapsedGroups),
+    [groups, expanded, expandedFiles, collapsedGroups],
   );
+
+  const selectedTargetId = useMemo(() => {
+    if (!commit) return null;
+    return file ? fileItemId(commit, file) : commitItemId(commit);
+  }, [commit, file]);
 
   const currentId = useMemo(() => {
     if (!commit) return rows[0]?.id ?? null;
@@ -189,14 +236,20 @@ export function CommitsList({
     prevRowsRef.current = rows;
 
     const prev = prevScrollStateRef.current;
+    const collapsedSelectionFallback = Boolean(
+      selectedTargetId
+      && currentId !== selectedTargetId
+      && prev.selectedTargetId === selectedTargetId
+      && prev.focusTick === focusTick,
+    );
     const navChanged =
-      prev.currentId !== currentId ||
+      (!collapsedSelectionFallback && prev.currentId !== currentId) ||
       prev.expandedId !== expandedId ||
       prev.focusTick !== focusTick;
     if (prev.expandedId !== expandedId) {
       scrolledFilesForRef.current = null;
     }
-    prevScrollStateRef.current = { currentId, expandedId, focusTick };
+    prevScrollStateRef.current = { currentId, expandedId, focusTick, selectedTargetId };
 
     if (pendingFocusId.current) {
       const targetId = pendingFocusId.current;
@@ -296,11 +349,47 @@ export function CommitsList({
     }
 
     finishLayout();
-  }, [currentId, expandedId, hasExpandedFiles, focusTick, rows]);
+  }, [currentId, expandedId, hasExpandedFiles, focusTick, rows, selectedTargetId]);
+
+  // A focused group toggle (repository, branch, pull request or section heading) can vanish when a refresh empties its group.
+  // Focus then moves to the next toggle or row after it, else the one before it, instead of falling back to the page.
+  const focusedToggleRef = useRef<{ el: HTMLElement; id: string; fallbackIds: string[] } | null>(null);
+  useLayoutEffect(() => {
+    const root = treeRef.current;
+    const held = focusedToggleRef.current;
+    if (!root || !held) return;
+    // While the toggle is there, keep where focus would go in step with the list as drawn (rows open and close around it).
+    if (held.el.isConnected) {
+      held.fallbackIds = toggleFallbackIds(root, held.el);
+      return;
+    }
+    const active = document.activeElement;
+    const focusLost = active === null || active === document.body || active === root;
+    const find = (id: string) => Array.from(root.querySelectorAll<HTMLElement>('[data-toggle-id],[data-tree-id]'))
+      .find((el) => (el.dataset.toggleId ?? el.dataset.treeId) === id) ?? null;
+    const target = [held.id, ...held.fallbackIds].map(find).find((el): el is HTMLElement => el !== null) ?? null;
+    if (focusLost && target) {
+      restoringFocusRef.current = true;
+      try { target.focus({ preventScroll: true }); } finally { restoringFocusRef.current = false; }
+      focusedToggleRef.current = target.dataset.toggleId
+        ? { el: target, id: target.dataset.toggleId, fallbackIds: toggleFallbackIds(root, target) }
+        : null;
+    } else if (target?.dataset.toggleId) {
+      focusedToggleRef.current = { el: target, id: target.dataset.toggleId, fallbackIds: toggleFallbackIds(root, target) };
+    } else {
+      focusedToggleRef.current = null;
+    }
+  });
 
   const handleTreeFocus = (event: FocusEvent<HTMLDivElement>) => {
     if (restoringFocusRef.current) return;
     const root = treeRef.current;
+    const toggle = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-toggle-id]') : null;
+    if (root && toggle?.dataset.toggleId) {
+      focusedToggleRef.current = { el: toggle, id: toggle.dataset.toggleId, fallbackIds: toggleFallbackIds(root, toggle) };
+    } else {
+      focusedToggleRef.current = null;
+    }
     const item = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-tree-id]') : null;
     const id = item?.dataset.treeId ?? null;
     if (!root || !item || !id) return;
@@ -313,6 +402,7 @@ export function CommitsList({
     const root = treeRef.current;
     const next = event.relatedTarget;
     if (next instanceof Node && root?.contains(next)) return;
+    if (focusedToggleRef.current?.el.isConnected) focusedToggleRef.current = null;
     if (focusedTreeItemRef.current?.el.isConnected) {
       focusedTreeItemRef.current = null;
       anchorOffsetRef.current = null;
@@ -345,13 +435,14 @@ export function CommitsList({
       event.target instanceof Element
         ? event.target.closest<HTMLElement>('[data-tree-id]')?.dataset.treeId ?? null
         : null;
+    if (!targetId) return;
     const result = applyCommitTreeKey(
       rows,
       {
         commit,
         expanded,
         file,
-        focusId: targetId ?? currentId,
+        focusId: targetId,
       },
       event.key,
     );
@@ -415,14 +506,15 @@ export function CommitsList({
       )}
       <div
         ref={treeRef}
-        role="tree"
+        role="region"
         aria-label="Commits"
+        data-testid="commits-tree-container"
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         onFocus={handleTreeFocus}
         onBlur={handleTreeBlur}
         onScroll={handleTreeScroll}
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-2 outline-none [scrollbar-gutter:stable]"
+        className="min-h-0 flex-1 scroll-pt-9 overflow-y-auto overflow-x-hidden px-1.5 py-2 outline-none [scrollbar-gutter:stable]"
       >
         {groups.length === 0 && recentPending && (
           <p role="status" className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground">
@@ -433,185 +525,373 @@ export function CommitsList({
         {groups.length === 0 && !recentPending && (
           <p className="px-2 py-1.5 text-xs text-muted-foreground">No commits in this workspace.</p>
         )}
-        {groups.map((group) => (
-          <div key={group.id ?? group.label} className="mb-2 last:mb-0">
-            <div
-              role="presentation"
-              className="px-2 pb-1 pt-1.5 text-xs font-medium text-muted-foreground"
-            >
-              {group.label}
-            </div>
-            <div className="space-y-0.5">
-              {group.commits.map((entry) => {
-                const cId = commitItemId(entry);
-                const isCurrentCommit = Boolean(commit && sameCommit(entry, commit));
-                const isSelected = isCurrentCommit && file === null;
-                const isExpanded = Boolean(expanded && sameCommit(entry, expanded));
-                const shortSha = entry.sha.slice(0, 7);
-                const age = entry.at ? agoText(entry.at, new Date(clockNow)) : '';
-                const firstLine = firstDescriptionLine(entry.firstBodyLine);
-                const noteCount = notes ? notesOfCommit(notes, entry.repo, entry.sha).length : 0;
-
+        {groups.map((repoGroup) => {
+          const repoCollapsed = Boolean(collapsedGroups[repoGroup.id]);
+          return (
+            <div key={repoGroup.id} data-testid="commit-repo-group" className="mb-2 last:mb-0">
+              <div className="sticky top-0 z-10 bg-background py-0.5">
+                <button
+                  type="button"
+                  data-testid="commit-repo-toggle"
+                  data-toggle-id={repoGroup.id}
+                  aria-expanded={!repoCollapsed}
+                  onClick={() => toggleCollapsed(repoGroup.id)}
+                  className={cn(
+                    rowSurface({ now: false, hover: 'hover:bg-accent/50 hover:text-foreground' }),
+                    'flex min-h-7 w-full min-w-0 items-center gap-1.5 px-2 py-1 text-left text-xs font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  )}
+                >
+                  {repoCollapsed ? (
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  <span
+                    title={repoGroup.repo}
+                    className={cn('truncate', repoGroup.remoteRepoLabel ? 'max-w-[60%] shrink-0' : 'min-w-0 flex-1')}
+                  >
+                    {repoGroup.repo}
+                  </span>
+                  {repoGroup.remoteRepoLabel && (
+                    <span
+                      data-testid="commit-repo-remote"
+                      title={repoGroup.remoteRepoLabel}
+                      className="min-w-0 flex-1 truncate font-normal text-muted-foreground"
+                    >
+                      {repoGroup.remoteRepoLabel}
+                    </span>
+                  )}
+                </button>
+              </div>
+              {!repoCollapsed && repoGroup.branches.map((branchGroup) => {
+                const branchCollapsed = Boolean(collapsedGroups[branchGroup.id]);
                 return (
-                  <div key={commitKey(entry)} className="min-w-0">
-                    <div
-                      role="treeitem"
-                      data-tree-id={cId}
-                      data-testid="commit-tree-item"
-                      aria-level={1}
-                      aria-expanded={isExpanded}
-                      aria-selected={isSelected}
-                      tabIndex={cId === currentId ? 0 : -1}
-                      onClick={() => {
-                        pendingFocusId.current = cId;
-                        setFocusTick((t) => t + 1);
-                        onSelectCommit({ repo: entry.repo, sha: entry.sha });
-                      }}
+                  <div key={branchGroup.id} data-testid="commit-branch-group" className="mt-0.5 pl-1.5">
+                    <button
+                      type="button"
+                      data-testid="commit-branch-toggle"
+                      data-toggle-id={branchGroup.id}
+                      aria-expanded={!branchCollapsed}
+                      onClick={() => toggleCollapsed(branchGroup.id)}
                       className={cn(
-                        'flex min-h-7 cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                        isSelected
-                          ? 'cur bg-accent text-foreground shadow-[inset_2px_0_0_0_hsl(var(--primary))]'
-                          : isCurrentCommit
-                            ? 'bg-accent/55 text-foreground shadow-[inset_2px_0_0_0_hsl(var(--primary)/0.6)]'
-                            : 'hover:bg-accent/50',
+                        rowSurface({ now: false, hover: 'hover:bg-accent/50 hover:text-foreground' }),
+                        'flex min-h-6 w-full min-w-0 items-center gap-1.5 px-1.5 py-0.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       )}
                     >
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        {isExpanded ? (
-                          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                        ) : (
-                          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                        )}
-                        <span
-                          className={cn(
-                            'min-w-0 flex-1 truncate text-xs leading-4',
-                            isCurrentCommit ? 'font-semibold text-foreground' : 'font-medium text-foreground',
-                          )}
-                          title={entry.subject ?? shortSha}
-                        >
-                          {entry.subject ?? shortSha}
-                        </span>
-                      </div>
-                      <div className="flex min-w-0 flex-wrap items-center gap-x-1 pl-5 text-xs leading-4 text-muted-foreground">
-                        {entry.incoming && entry.author && (
-                          <span className="inline-flex max-w-full min-w-0 items-center gap-x-1">
-                            <span
-                              data-testid="commit-item-author"
-                              title={entry.author}
-                              className="min-w-0 truncate font-medium text-foreground/85"
-                            >
-                              {entry.author}
-                            </span>
-                            <span aria-hidden="true" className="shrink-0">·</span>
-                          </span>
-                        )}
-                        <code className="font-mono text-xs">{shortSha}</code>
-                        {age && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <time dateTime={entry.at} title={entry.at}>{age}</time>
-                          </>
-                        )}
-                        {entry.fileCount !== undefined && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span>
-                              {entry.fileCount} {entry.fileCount === 1 ? 'file' : 'files'}
-                            </span>
-                          </>
-                        )}
-                        {noteCount > 0 && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span data-testid="commit-item-notes" className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-300">
-                              <StickyNote className="size-3" aria-hidden="true" />
-                              {noteCountText(noteCount)}
-                            </span>
-                          </>
-                        )}
-                        {!entry.incoming && entry.pushed === false && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="text-amber-600 dark:text-amber-400">not pushed</span>
-                          </>
-                        )}
-                      </div>
-                      {firstLine && (
-                        <p className="truncate pl-5 text-xs leading-4 text-muted-foreground" title={firstLine}>
-                          {firstLine}
-                        </p>
+                      {branchCollapsed ? (
+                        <ChevronRight className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      ) : (
+                        <ChevronDown className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
                       )}
-                    </div>
-
-                    {isExpanded && (
-                      <div
-                        role="group"
-                        aria-label={`Files in ${shortSha}`}
-                        className="mt-0.5 mb-1 ml-3 space-y-0.5 border-l border-border/60 pl-1.5"
-                      >
-                        {expandedDetail.isPending && expandedFiles.length === 0 ? (
-                          <p role="status" className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
-                            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-                            Opening commit…
-                          </p>
-                        ) : expandedDetail.isError && expandedFiles.length === 0 ? (
-                          <p className="px-2 py-1 text-xs text-muted-foreground">
-                            Files unavailable.
-                          </p>
-                        ) : expandedFiles.length === 0 ? (
-                          <p className="px-2 py-1 text-xs text-muted-foreground">No files changed.</p>
-                        ) : (
-                          expandedFiles.map((fileEntry) => {
-                            const fId = fileItemId(entry, fileEntry.path);
-                            const isFileCurrent = Boolean(isCurrentCommit && file === fileEntry.path);
-                            const { name, dir } = splitFilePath(fileEntry.path);
-                            return (
-                              <div
-                                key={fId}
-                                role="treeitem"
-                                data-tree-id={fId}
-                                data-testid="commit-tree-file"
-                                aria-level={2}
-                                aria-selected={isFileCurrent}
-                                tabIndex={fId === currentId ? 0 : -1}
-                                title={`${fileEntry.oldPath ? `${fileEntry.oldPath} → ` : ''}${fileEntry.path} · ${fileEntry.status}`}
-                                onClick={() => {
-                                  pendingFocusId.current = fId;
-                                  setFocusTick((t) => t + 1);
-                                  onSelectFile({ repo: entry.repo, sha: entry.sha }, fileEntry.path);
-                                }}
-                                className={cn(
-                                  'flex min-h-6 cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                                  isFileCurrent ? 'cur bg-accent font-medium text-foreground' : 'text-foreground/90 hover:bg-accent/50',
-                                )}
-                              >
-                                <span
-                                  aria-hidden="true"
-                                  className={cn('w-3 shrink-0 text-center font-mono text-xs font-semibold', statusColour(fileEntry.status))}
-                                >
-                                  {statusCode(fileEntry.status)}
-                                </span>
-                                <span className={cn('min-w-0 shrink truncate', fileEntry.status === 'deleted' && 'line-through opacity-70')}>
-                                  {name}
-                                </span>
-                                {dir ? (
-                                  <span className="min-w-[3ch] flex-1 truncate text-xs text-muted-foreground">{dir}</span>
-                                ) : (
-                                  <span className="min-w-0 flex-1" aria-hidden="true" />
-                                )}
-                                <FileDiffStats entry={fileEntry} />
-                              </div>
-                            );
-                          })
+                      {branchGroup.kind === 'local' && branchGroup.branch && branchGroup.base ? (
+                        <span className="flex min-w-0 flex-1 items-center" title={branchGroup.label}>
+                          <span data-testid="commit-branch-name" className="min-w-0 truncate font-medium text-foreground">
+                            {branchGroup.branch}
+                          </span>
+                          <span data-testid="commit-branch-base" className="shrink-0 whitespace-pre text-muted-foreground">
+                            {` → ${branchGroup.base}`}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={branchGroup.label}>
+                          {branchGroup.label}
+                        </span>
+                      )}
+                    </button>
+                    {!branchCollapsed && (
+                      <div className="mt-0.5 space-y-1">
+                        {branchGroup.statusLabel && (
+                          <p className="px-2 text-xs text-muted-foreground">{branchGroup.statusLabel}</p>
                         )}
+                        {branchGroup.prsPending && !prsUnavailable && (
+                          <p
+                            role="status"
+                            data-testid="commit-pr-loading"
+                            className="flex items-center gap-1.5 px-2 py-0.5 text-xs text-muted-foreground"
+                          >
+                            <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
+                            <span>PR information is loading</span>
+                          </p>
+                        )}
+                        {branchGroup.prsPending && prsUnavailable && (
+                          <p role="status" data-testid="commit-pr-unavailable" className="px-2 py-0.5 text-xs text-muted-foreground">
+                            PR information is not available right now
+                          </p>
+                        )}
+                        {branchGroup.prsStale && (
+                          <p data-testid="commit-pr-stale" className="px-2 py-0.5 text-xs text-muted-foreground">
+                            PR information may be out of date
+                          </p>
+                        )}
+                        {branchGroup.sections.map((section) => {
+                          const hasHeading = section.kind !== 'direct';
+                          const sectionCollapsed = hasHeading && Boolean(collapsedGroups[section.id]);
+                          const pr = section.pr;
+                          const prStateLabel = pr ? formatPrStateLabel(pr.state) : null;
+                          const prStateTone = pr?.state === 'OPEN' ? 'ai' : pr?.state === 'MERGED' ? 'done' : 'neutral';
+                          const safePrUrl = safeForgeUrl(pr?.url);
+                          const sectionTreeLabel = pr
+                            ? `Commits in #${pr.number} ${pr.title}`
+                            : section.label
+                              ? `${section.label} commits in ${repoGroup.repo}`
+                              : `Commits in ${repoGroup.repo} ${branchGroup.label}`;
+
+                          return (
+                            <div key={section.id} data-testid={`commit-section-${section.kind}`} className="min-w-0">
+                              {section.kind === 'pr' && pr && prStateLabel && (
+                                <div
+                                  data-testid="commit-pr-heading"
+                                  className={cn(foldSurface(false), 'mb-0.5 flex min-h-7 min-w-0 items-center gap-1 px-1 py-0.5')}
+                                >
+                                  <button
+                                    type="button"
+                                    data-testid="commit-pr-toggle"
+                                    data-toggle-id={section.id}
+                                    aria-expanded={!sectionCollapsed}
+                                    aria-label={`Toggle pull request #${pr.number}`}
+                                    onClick={() => toggleCollapsed(section.id)}
+                                    className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  >
+                                    {sectionCollapsed ? (
+                                      <ChevronRight className="size-3.5" aria-hidden="true" />
+                                    ) : (
+                                      <ChevronDown className="size-3.5" aria-hidden="true" />
+                                    )}
+                                  </button>
+                                  {safePrUrl ? (
+                                    <a
+                                      href={safePrUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      data-testid="commit-pr-link"
+                                      title={`#${pr.number} ${pr.title} (${prStateLabel})`}
+                                      className="inline-flex min-h-6 min-w-0 flex-1 items-center gap-1 rounded px-0.5 py-0.5 text-xs leading-4 font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    >
+                                      <span className="shrink-0 font-mono text-muted-foreground">#{pr.number}</span>
+                                      <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">{pr.title}</span>
+                                      <Pill tone={prStateTone} look="hairline" className="shrink-0">{prStateLabel}</Pill>
+                                    </a>
+                                  ) : (
+                                    <span
+                                      data-testid="commit-pr-badge"
+                                      title={`#${pr.number} ${pr.title} (${prStateLabel})`}
+                                      className="inline-flex min-h-6 min-w-0 flex-1 items-center gap-1 rounded px-0.5 py-0.5 text-xs leading-4 font-medium text-foreground"
+                                    >
+                                      <span className="shrink-0 font-mono text-muted-foreground">#{pr.number}</span>
+                                      <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">{pr.title}</span>
+                                      <Pill tone={prStateTone} look="hairline" className="shrink-0">{prStateLabel}</Pill>
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {(section.kind === 'unassigned-pr' || section.kind === 'on-base' || section.kind === 'older') && (
+                                <button
+                                  type="button"
+                                  data-testid={
+                                    section.kind === 'unassigned-pr'
+                                      ? 'commit-unassigned-toggle'
+                                      : section.kind === 'on-base'
+                                        ? 'commit-on-base-toggle'
+                                        : 'commit-older-toggle'
+                                  }
+                                  data-toggle-id={section.id}
+                                  aria-expanded={!sectionCollapsed}
+                                  onClick={() => toggleCollapsed(section.id)}
+                                  className={cn(
+                                    rowSurface({ now: false, hover: 'hover:bg-accent/50 hover:text-foreground' }),
+                                    'mb-0.5 flex min-h-6 w-full min-w-0 items-center gap-1.5 px-1.5 py-0.5 text-left text-xs font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                  )}
+                                >
+                                  {sectionCollapsed ? (
+                                    <ChevronRight className="size-3 shrink-0" aria-hidden="true" />
+                                  ) : (
+                                    <ChevronDown className="size-3 shrink-0" aria-hidden="true" />
+                                  )}
+                                  <span className="truncate" title={section.label}>{section.label}</span>
+                                </button>
+                              )}
+                              {!sectionCollapsed && (
+                                <div role="tree" aria-label={sectionTreeLabel} className="space-y-0.5">
+                                  {section.commits.map((entry) => {
+                                    const cId = commitItemId(entry);
+                                    const isCurrentCommit = Boolean(commit && sameCommit(entry, commit));
+                                    const isSelected = isCurrentCommit && file === null;
+                                    const isExpanded = Boolean(expanded && sameCommit(entry, expanded));
+                                    const shortSha = entry.sha.slice(0, 7);
+                                    const age = entry.at ? agoText(entry.at, new Date(clockNow)) : '';
+                                    const firstLine = firstDescriptionLine(entry.firstBodyLine);
+                                    const noteCount = notes ? notesOfCommit(notes, entry.repo, entry.sha).length : 0;
+
+                                    return (
+                                      <div key={commitKey(entry)} className="min-w-0">
+                                        <div
+                                          role="treeitem"
+                                          data-tree-id={cId}
+                                          data-testid="commit-tree-item"
+                                          aria-level={1}
+                                          aria-expanded={isExpanded}
+                                          aria-selected={isSelected}
+                                          tabIndex={cId === currentId ? 0 : -1}
+                                          onClick={() => {
+                                            pendingFocusId.current = cId;
+                                            setFocusTick((t) => t + 1);
+                                            onSelectCommit({ repo: entry.repo, sha: entry.sha });
+                                          }}
+                                          className={cn(
+                                            'flex min-h-7 cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                            isSelected
+                                              ? 'cur bg-accent text-foreground shadow-[inset_2px_0_0_0_hsl(var(--primary))]'
+                                              : isCurrentCommit
+                                                ? 'bg-accent/55 text-foreground shadow-[inset_2px_0_0_0_hsl(var(--primary)/0.6)]'
+                                                : 'hover:bg-accent/50',
+                                          )}
+                                        >
+                                          <div className="flex min-w-0 items-start gap-1.5">
+                                            {isExpanded ? (
+                                              <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                            ) : (
+                                              <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                            )}
+                                            <span
+                                              className={cn(
+                                                'line-clamp-2 min-w-0 flex-1 text-xs leading-4 [overflow-wrap:anywhere]',
+                                                isCurrentCommit ? 'font-semibold text-foreground' : 'font-medium text-foreground',
+                                              )}
+                                              title={entry.subject ?? shortSha}
+                                            >
+                                              {entry.subject ?? shortSha}
+                                            </span>
+                                          </div>
+                                          <div className="flex min-w-0 flex-wrap items-center gap-x-1 pl-5 text-xs leading-4 text-muted-foreground">
+                                            {entry.incoming && entry.author && (
+                                              <span className="inline-flex max-w-full min-w-0 items-center gap-x-1">
+                                                <span
+                                                  data-testid="commit-item-author"
+                                                  title={entry.author}
+                                                  className="min-w-0 truncate font-medium text-foreground/85"
+                                                >
+                                                  {entry.author}
+                                                </span>
+                                                <span aria-hidden="true" className="shrink-0">·</span>
+                                              </span>
+                                            )}
+                                            <code className="font-mono text-xs">{shortSha}</code>
+                                            {age && (
+                                              <>
+                                                <span aria-hidden="true">·</span>
+                                                <time dateTime={entry.at} title={entry.at}>{age}</time>
+                                              </>
+                                            )}
+                                            {entry.fileCount !== undefined && (
+                                              <>
+                                                <span aria-hidden="true">·</span>
+                                                <span>
+                                                  {entry.fileCount} {entry.fileCount === 1 ? 'file' : 'files'}
+                                                </span>
+                                              </>
+                                            )}
+                                            {noteCount > 0 && (
+                                              <>
+                                                <span aria-hidden="true">·</span>
+                                                <span data-testid="commit-item-notes" className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-300">
+                                                  <StickyNote className="size-3" aria-hidden="true" />
+                                                  {noteCountText(noteCount)}
+                                                </span>
+                                              </>
+                                            )}
+                                            {!entry.incoming && entry.pushed === false && (
+                                              <>
+                                                <span aria-hidden="true">·</span>
+                                                <span className="text-warning-foreground">not pushed</span>
+                                              </>
+                                            )}
+                                          </div>
+                                          {firstLine && (
+                                            <p className="truncate pl-5 text-xs leading-4 text-muted-foreground" title={firstLine}>
+                                              {firstLine}
+                                            </p>
+                                          )}
+                                        </div>
+
+                                        {isExpanded && (
+                                          <div
+                                            role="group"
+                                            aria-label={`Files in ${shortSha}`}
+                                            className="mt-0.5 mb-1 ml-3 space-y-0.5 border-l border-border/60 pl-1.5"
+                                          >
+                                            {expandedDetail.isPending && expandedFiles.length === 0 ? (
+                                              <p role="status" className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+                                                <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                                                Opening commit…
+                                              </p>
+                                            ) : expandedDetail.isError && expandedFiles.length === 0 ? (
+                                              <p className="px-2 py-1 text-xs text-muted-foreground">
+                                                Files unavailable.
+                                              </p>
+                                            ) : expandedFiles.length === 0 ? (
+                                              <p className="px-2 py-1 text-xs text-muted-foreground">No files changed.</p>
+                                            ) : (
+                                              expandedFiles.map((fileEntry) => {
+                                                const fId = fileItemId(entry, fileEntry.path);
+                                                const isFileCurrent = Boolean(isCurrentCommit && file === fileEntry.path);
+                                                const { name, dir } = splitFilePath(fileEntry.path);
+                                                return (
+                                                  <div
+                                                    key={fId}
+                                                    role="treeitem"
+                                                    data-tree-id={fId}
+                                                    data-testid="commit-tree-file"
+                                                    aria-level={2}
+                                                    aria-selected={isFileCurrent}
+                                                    tabIndex={fId === currentId ? 0 : -1}
+                                                    title={`${fileEntry.oldPath ? `${fileEntry.oldPath} → ` : ''}${fileEntry.path} · ${fileEntry.status}`}
+                                                    onClick={() => {
+                                                      pendingFocusId.current = fId;
+                                                      setFocusTick((t) => t + 1);
+                                                      onSelectFile({ repo: entry.repo, sha: entry.sha }, fileEntry.path);
+                                                    }}
+                                                    className={cn(
+                                                      'flex min-h-6 cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                                      isFileCurrent ? 'cur bg-accent font-medium text-foreground' : 'text-foreground/90 hover:bg-accent/50',
+                                                    )}
+                                                  >
+                                                    <span
+                                                      aria-hidden="true"
+                                                      className={cn('w-3 shrink-0 text-center font-mono text-xs font-semibold', statusColour(fileEntry.status))}
+                                                    >
+                                                      {statusCode(fileEntry.status)}
+                                                    </span>
+                                                    <span className={cn('min-w-0 shrink truncate', fileEntry.status === 'deleted' && 'line-through opacity-70')}>
+                                                      {name}
+                                                    </span>
+                                                    {dir ? (
+                                                      <span className="min-w-[3ch] flex-1 truncate text-xs text-muted-foreground">{dir}</span>
+                                                    ) : (
+                                                      <span className="min-w-0 flex-1" aria-hidden="true" />
+                                                    )}
+                                                    <FileDiffStats entry={fileEntry} />
+                                                  </div>
+                                                );
+                                              })
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
                 );
               })}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div
         data-testid="commit-list-keys"
@@ -643,6 +923,7 @@ function CommitOverview({
   commit,
   detail,
   incomingMeta,
+  commitMeta,
   headingRef,
   ready,
   onOpenFile,
@@ -652,6 +933,7 @@ function CommitOverview({
   commit: CommitRef;
   detail: CommitDetail;
   incomingMeta?: { hostName: string | null; webUrl: string | null } | null;
+  commitMeta?: { branch?: string | null; pr?: NewsPullRequest | null } | null;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   /** The detail shown is the settled read of this very commit (not a read under way for another form of its sha). */
   ready: boolean;
@@ -706,6 +988,12 @@ function CommitOverview({
   const bodyText = detail.body.trim();
   const totalFiles = detail.files.length + detail.moreFiles;
   const countsText = plusMinusText(detail.additions, detail.deletions);
+  const rawBranch = commitMeta?.branch !== undefined ? commitMeta.branch : detail.branch;
+  const branchText = rawBranch === null ? 'Detached HEAD' : rawBranch;
+  const prMeta = commitMeta?.pr ?? detail.pr ?? null;
+  const prStateLabel = prMeta ? formatPrStateLabel(prMeta.state) : null;
+  const prStateTone = prMeta?.state === 'OPEN' ? 'ai' : prMeta?.state === 'MERGED' ? 'done' : 'neutral';
+  const safePrUrl = safeForgeUrl(prMeta?.url);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 [scrollbar-gutter:stable]">
@@ -743,7 +1031,36 @@ function CommitOverview({
               </button>
               {copied && <span role="status" className="text-xs">{copied === 'copied' ? 'SHA copied' : 'Could not copy'}</span>}
               <span aria-hidden="true">·</span>
-              <span data-testid="commit-repo">{detail.repo || commit.repo}</span>
+              <span data-testid="commit-repo" className="min-w-0 [overflow-wrap:anywhere]">{detail.repo || commit.repo}</span>
+              {branchText && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span data-testid="commit-branch" className="min-w-0 [overflow-wrap:anywhere]">{branchText}</span>
+                </>
+              )}
+              {prMeta && prStateLabel && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  {safePrUrl ? (
+                    <a
+                      href={safePrUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="commit-pr-link"
+                      title={`#${prMeta.number} ${prMeta.title} (${prStateLabel})`}
+                      className="inline-flex min-h-6 items-center gap-1 rounded px-1 text-xs font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <span>#{prMeta.number}</span>
+                      <Pill tone={prStateTone} look="hairline">{prStateLabel}</Pill>
+                    </a>
+                  ) : (
+                    <span data-testid="commit-pr-badge" title={prMeta.title} className="inline-flex min-h-6 items-center gap-1 text-xs font-medium text-foreground">
+                      <span>#{prMeta.number}</span>
+                      <Pill tone={prStateTone} look="hairline">{prStateLabel}</Pill>
+                    </span>
+                  )}
+                </>
+              )}
               <span aria-hidden="true">·</span>
               {incomingMeta ? (
                 <>
@@ -768,7 +1085,7 @@ function CommitOverview({
                 <>
                   <span
                     data-testid="commit-pushed"
-                    className={detail.pushed ? undefined : 'text-amber-600 dark:text-amber-400'}
+                    className={detail.pushed ? undefined : 'text-warning-foreground'}
                   >
                     {detail.pushed ? 'pushed' : 'not pushed'}
                   </span>
@@ -914,6 +1231,7 @@ export function CommitsMain({
   commit,
   detail,
   incomingMeta,
+  commitMeta,
   file,
   ordered,
   hasNextCommit,
@@ -933,6 +1251,7 @@ export function CommitsMain({
   commit: CommitRef | null;
   detail: ReturnType<typeof useCommitDetail>;
   incomingMeta?: { hostName: string | null; webUrl: string | null } | null;
+  commitMeta?: { branch?: string | null; pr?: NewsPullRequest | null } | null;
   file: string | null;
   ordered: string[];
   hasNextCommit: boolean;
@@ -1062,6 +1381,7 @@ export function CommitsMain({
         commit={commit}
         detail={data}
         incomingMeta={incomingMeta}
+        commitMeta={commitMeta}
         headingRef={commitHeadingRef}
         ready={!detail.isFetching && !detail.isPending}
         onOpenFile={onOpenFile}

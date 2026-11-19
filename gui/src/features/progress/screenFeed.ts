@@ -89,6 +89,7 @@ export function parseLiveFrame(data: unknown): LiveEvent | null {
   }
   if (frame.type === 'answered' && isText(frame.timestamp)) return { type: 'answered', timestamp: frame.timestamp };
   if (frame.type === 'plan' && isText(frame.timestamp)) return { type: 'plan', timestamp: frame.timestamp };
+  if (frame.type === 'commits' && isText(frame.timestamp)) return { type: 'commits', timestamp: frame.timestamp };
   return null;
 }
 
@@ -109,7 +110,7 @@ export interface EventSourceLike {
 }
 
 const CLOSED = 2;
-const FRAME_TYPES = ['screen', 'question', 'answered', 'plan'] as const;
+const FRAME_TYPES = ['screen', 'question', 'answered', 'plan', 'commits'] as const;
 
 export interface ScreenFeedOptions {
   /** The stream address, resuming after the last event seen when `since` is given. */

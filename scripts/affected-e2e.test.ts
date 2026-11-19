@@ -495,6 +495,7 @@ describe('affected e2e specs', () => {
       'gui/src/features/board/BoardNodes.tsx',
       'gui/src/features/board/cards/FileCard.tsx',
       'gui/src/features/board/cards/NoteCard.tsx',
+      'gui/src/features/changes/CommitsView.tsx',
       // The design page (DS7) draws each piece in every state; its spec is on each piece's row.
       'gui/src/pages/DesignPieces.tsx',
     ]);
@@ -550,6 +551,7 @@ describe('affected e2e specs', () => {
       'gui/src/design/index.ts',
       'gui/src/features/board/rows/RowControls.tsx',
       'gui/src/features/board/rows/RowHead.tsx',
+      'gui/src/features/changes/CommitsView.tsx',
       'gui/src/pages/DesignPieces.tsx',
     ]);
     expect(usesDesignPieces("import { StepCheck } from '../design/index.js';", ROW_PIECE_NAMES, ROW_PIECE_FILES)).toBe(true);

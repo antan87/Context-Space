@@ -4,7 +4,17 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 
-import { checkMerged, fetchDefaultBranch, findMergedPullRequest } from './merge-detection.js';
+import {
+  checkMerged,
+  clearBranchPullRequestCache,
+  fetchDefaultBranch,
+  findMergedPullRequest,
+  listBranchPullRequests,
+  listBranchPullRequestsState,
+  parseBranchPullRequests,
+  resetMergeDetectionCache,
+  subscribePullRequestsSettled,
+} from './merge-detection.js';
 
 const git = async (cwd: string, ...args: string[]) => (await execa('git', args, { cwd })).stdout.trim();
 
@@ -92,5 +102,287 @@ describe('checkMerged (real git)', { timeout: 60_000 }, () => {
     expect(await checkMerged({ repoPath: repo, sha: tip, defaultBranch: 'trunk', usePullRequests: false }))
       .toMatchObject({ merged: false, detail: 'default branch "trunk" not found' });
     expect(await fetchDefaultBranch(repo, 'trunk')).toMatch(/.+/);
+  });
+});
+
+describe('parseBranchPullRequests & listBranchPullRequests', () => {
+  const originalPath = process.env.PATH ?? '';
+  let tmpBin: string;
+
+  beforeEach(async () => {
+    resetMergeDetectionCache();
+    tmpBin = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cs-gh-stub-')));
+  });
+
+  afterEach(async () => {
+    process.env.PATH = originalPath;
+    resetMergeDetectionCache();
+    await fs.rm(tmpBin, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  async function installFakeGh(scriptBody: string) {
+    const ghPath = path.join(tmpBin, 'gh');
+    await fs.writeFile(ghPath, `#!/usr/bin/env bash\nset -e\n${scriptBody}\n`, { mode: 0o755 });
+    process.env.PATH = `${tmpBin}:${originalPath}`;
+  }
+
+  it('parses gh pr list JSON and rejects malformed or unsafe URLs', () => {
+    const parsed = parseBranchPullRequests(JSON.stringify([
+      {
+        number: 482,
+        title: 'Board commit notes',
+        state: 'MERGED',
+        url: 'https://github.com/antan87/Context-Space/pull/482',
+        baseRefName: 'main',
+        headRefOid: 'd630e498631a27aba978b5b968b01f2c9db15878',
+        mergeCommit: { oid: 'fbcf23270e160676394c5176c4f81166679d553e' },
+      },
+      {
+        number: 485,
+        title: 'Follow-up UI',
+        state: 'open',
+        url: 'https://github.com/antan87/Context-Space/pull/485',
+        baseRefName: 'main',
+        headRefOid: 'abc1234',
+        mergeCommit: null,
+      },
+      {
+        number: 999,
+        title: 'Unsafe link',
+        state: 'OPEN',
+        url: 'javascript:alert(1)',
+      },
+      {
+        number: 0,
+        title: 'Invalid number',
+        state: 'CLOSED',
+        url: 'https://github.com/antan87/Context-Space/pull/0',
+      },
+    ]));
+    expect(parsed).toEqual([
+      {
+        number: 482,
+        title: 'Board commit notes',
+        state: 'MERGED',
+        url: 'https://github.com/antan87/Context-Space/pull/482',
+        baseRefName: 'main',
+        headRefOid: 'd630e498631a27aba978b5b968b01f2c9db15878',
+        mergeCommitOid: 'fbcf23270e160676394c5176c4f81166679d553e',
+      },
+      {
+        number: 485,
+        title: 'Follow-up UI',
+        state: 'OPEN',
+        url: 'https://github.com/antan87/Context-Space/pull/485',
+        baseRefName: 'main',
+        headRefOid: 'abc1234',
+      },
+    ]);
+    expect(parseBranchPullRequests('{broken')).toEqual([]);
+  });
+
+  it('returns [] silently for non-GitHub remotes, detached branch, or unauthenticated gh', async () => {
+    const callsFile = path.join(tmpBin, 'calls.log');
+    await installFakeGh(`
+      echo "$*" >> ${JSON.stringify(callsFile)}
+      if [ "$1" = "--version" ]; then echo "gh version 2.0.0"; exit 0; fi
+      if [ "$1" = "auth" ]; then exit 1; fi
+      exit 1
+    `);
+
+    expect(await listBranchPullRequests(tmpBin, 'feat/x', 'git@gitlab.com:acme/app.git')).toEqual([]);
+    expect(await listBranchPullRequests(tmpBin, null, 'git@github.com:acme/app.git')).toEqual([]);
+    // Non-GitHub / detached must not even invoke gh
+    await expect(fs.access(callsFile)).rejects.toThrow();
+
+    // Unauthenticated gh -> returns [], never throws
+    expect(await listBranchPullRequests(tmpBin, 'feat/x', 'git@github.com:acme/app.git')).toEqual([]);
+    const log = await fs.readFile(callsFile, 'utf8');
+    expect(log).not.toContain('pr list');
+  });
+
+  it('calls gh non-interactively, caches for TTL, and refreshes on refresh=true or cache clear', async () => {
+    const callsFile = path.join(tmpBin, 'calls.log');
+    const countFile = path.join(tmpBin, 'count.txt');
+    await fs.writeFile(countFile, '0');
+    await installFakeGh(`
+      echo "PROMPT=$GH_PROMPT_DISABLED:$GIT_TERMINAL_PROMPT ARGS=$*" >> ${JSON.stringify(callsFile)}
+      if [ "$1" = "--version" ]; then echo "gh version 2.0.0"; exit 0; fi
+      if [ "$1" = "auth" ]; then exit 0; fi
+      if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+        n=$(( $(cat ${JSON.stringify(countFile)}) + 1 ))
+        echo "$n" > ${JSON.stringify(countFile)}
+        if [ "$n" = "1" ]; then
+          echo '[{"number":10,"title":"First PR","state":"OPEN","url":"https://github.com/acme/app/pull/10","baseRefName":"main","headRefOid":"aaaa111","mergeCommit":null}]'
+        else
+          echo '[{"number":10,"title":"First PR","state":"MERGED","url":"https://github.com/acme/app/pull/10","baseRefName":"main","headRefOid":"aaaa111","mergeCommit":{"oid":"bbbb222"}}]'
+        fi
+        exit 0
+      fi
+      exit 1
+    `);
+
+    const first = await listBranchPullRequests(tmpBin, 'feat/demo', 'https://github.com/acme/app.git');
+    expect(first).toHaveLength(1);
+    expect(first[0]?.state).toBe('OPEN');
+
+    // Cached hit: gh pr list should not run a second time
+    const cached = await listBranchPullRequests(tmpBin, 'feat/demo', 'https://github.com/acme/app.git');
+    expect(cached[0]?.state).toBe('OPEN');
+    expect(await fs.readFile(countFile, 'utf8')).toBe('1\n');
+
+    // Explicit refresh busts cache
+    const refreshed = await listBranchPullRequests(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { refresh: true });
+    expect(refreshed[0]?.state).toBe('MERGED');
+    expect(await fs.readFile(countFile, 'utf8')).toBe('2\n');
+
+    clearBranchPullRequestCache([tmpBin]);
+    await listBranchPullRequests(tmpBin, 'feat/demo', 'https://github.com/acme/app.git');
+    expect(await fs.readFile(countFile, 'utf8')).toBe('3\n');
+
+    const log = await fs.readFile(callsFile, 'utf8');
+    expect(log).toContain('PROMPT=1:0 ARGS=pr list --repo acme/app --head feat/demo --state all --json number,title,state,url,baseRefName,headRefOid,mergeCommit --limit 50');
+  });
+
+  it('returns [] silently without throwing when gh is missing (ENOENT)', async () => {
+    const emptyBin = path.join(tmpBin, 'empty');
+    await fs.mkdir(emptyBin, { recursive: true });
+    process.env.PATH = emptyBin;
+    resetMergeDetectionCache();
+
+    await expect(
+      listBranchPullRequests(tmpBin, 'feat/x', 'git@github.com:acme/app.git', { refresh: true }),
+    ).resolves.toEqual([]);
+  });
+
+  it('coalesces concurrent ghAvailable(true) probes into a single detectGh invocation', async () => {
+    const probeLog = path.join(tmpBin, 'probes.log');
+    await installFakeGh(`
+      if [ "$1" = "--version" ]; then echo "gh version 2.40.0"; exit 0; fi
+      if [ "$1" = "auth" ]; then
+        sleep 0.1
+        echo "auth" >> ${JSON.stringify(probeLog)}
+        exit 0
+      fi
+      if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+        echo "[]"
+        exit 0
+      fi
+      exit 1
+    `);
+
+    const [a, b] = await Promise.all([
+      listBranchPullRequests(path.join(tmpBin, 'repo-a'), 'feat/a', 'https://github.com/acme/a.git', { refresh: true }),
+      listBranchPullRequests(path.join(tmpBin, 'repo-b'), 'feat/b', 'https://github.com/acme/b.git', { refresh: true }),
+    ]);
+    expect(a).toEqual([]);
+    expect(b).toEqual([]);
+    const authCalls = (await fs.readFile(probeLog, 'utf8')).trim().split('\n').filter(Boolean);
+    expect(authCalls).toHaveLength(1);
+  });
+
+  it('keeps cached PRs for stale-while-revalidate on clearBranchPullRequestCache and avoids duplicate in-flight gh calls', async () => {
+    const prCallsLog = path.join(tmpBin, 'pr-calls.log');
+    const stateFile = path.join(tmpBin, 'pr-state.txt');
+    const delayFile = path.join(tmpBin, 'pr-delay.txt');
+    await fs.writeFile(stateFile, 'OPEN');
+    await fs.writeFile(delayFile, '350');
+
+    const ghPath = path.join(tmpBin, 'gh');
+    await fs.writeFile(
+      ghPath,
+      `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') { process.exit(0); }
+if (args[0] === 'pr' && args[1] === 'list') {
+  fs.appendFileSync(${JSON.stringify(prCallsLog)}, args.join(' ') + '\\n');
+  const delay = Number(fs.readFileSync(${JSON.stringify(delayFile)}, 'utf8').trim()) || 0;
+  const state = fs.readFileSync(${JSON.stringify(stateFile)}, 'utf8').trim();
+  setTimeout(() => {
+    console.log(JSON.stringify([{
+      number: 10,
+      title: 'Stale-while-revalidate PR',
+      state,
+      url: 'https://github.com/acme/app/pull/10',
+      baseRefName: 'main',
+      headRefOid: 'aaaa111',
+      mergeCommit: state === 'MERGED' ? { oid: 'bbbb222' } : null,
+    }]));
+    process.exit(0);
+  }, delay);
+} else {
+  process.exit(1);
+}
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${tmpBin}:${originalPath}`;
+    resetMergeDetectionCache();
+
+    const settledRepos: string[] = [];
+    const unsubscribe = subscribePullRequestsSettled((repoPath) => {
+      settledRepos.push(repoPath);
+    });
+    try {
+      // Cold load while gh is slow -> pending: true, hasCached: false, prs: []
+      const cold = await listBranchPullRequestsState(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { waitMs: 50 });
+      expect(cold).toMatchObject({ prs: [], pending: true, hasCached: false });
+
+      await expect.poll(() => settledRepos.length, { timeout: 2_000 }).toBe(1);
+      const warm = await listBranchPullRequestsState(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { waitMs: 50 });
+      expect(warm).toMatchObject({
+        pending: false,
+        hasCached: true,
+        prs: [expect.objectContaining({ number: 10, state: 'OPEN' })],
+      });
+
+      // Clear cache for this repo while next gh response is slow and returns MERGED:
+      // must keep OPEN PR for stale-while-revalidate and NOT spawn duplicate gh pr list calls
+      await fs.writeFile(stateFile, 'MERGED');
+      clearBranchPullRequestCache([tmpBin]);
+      const stale = await listBranchPullRequestsState(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { waitMs: 50 });
+      expect(stale).toMatchObject({
+        pending: true,
+        hasCached: true,
+        prs: [expect.objectContaining({ number: 10, state: 'OPEN' })],
+      });
+
+      // Calling clearBranchPullRequestCache() + refresh while still in flight must reuse the in-flight call
+      clearBranchPullRequestCache();
+      const stillInFlight = await listBranchPullRequestsState(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { refresh: true, waitMs: 50 });
+      expect(stillInFlight).toMatchObject({
+        pending: true,
+        hasCached: true,
+        prs: [expect.objectContaining({ number: 10, state: 'OPEN' })],
+      });
+
+      await expect.poll(() => settledRepos.length, { timeout: 2_000 }).toBe(2);
+      const settled = await listBranchPullRequestsState(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { waitMs: 50 });
+      expect(settled).toMatchObject({
+        pending: false,
+        hasCached: true,
+        prs: [expect.objectContaining({ number: 10, state: 'MERGED' })],
+      });
+
+      const prCalls = (await fs.readFile(prCallsLog, 'utf8')).trim().split('\n').filter(Boolean);
+      expect(prCalls).toHaveLength(2);
+
+      // No-arg clearBranchPullRequestCache() also preserves cached value for stale-while-revalidate
+      await fs.writeFile(stateFile, 'CLOSED');
+      clearBranchPullRequestCache();
+      const staleAll = await listBranchPullRequestsState(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { waitMs: 50 });
+      expect(staleAll).toMatchObject({
+        pending: true,
+        hasCached: true,
+        prs: [expect.objectContaining({ number: 10, state: 'MERGED' })],
+      });
+      await expect.poll(() => settledRepos.length, { timeout: 2_000 }).toBe(3);
+      const settledClosed = await listBranchPullRequestsState(tmpBin, 'feat/demo', 'https://github.com/acme/app.git', { waitMs: 50 });
+      expect(settledClosed.prs[0]?.state).toBe('CLOSED');
+    } finally {
+      unsubscribe();
+    }
   });
 });

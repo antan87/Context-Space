@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from './server.js';
 import * as configModule from './core/config.js';
 import { BOARD_EVENTS_FILE, appendScreenEvent } from './core/screen-events.js';
+import { execa } from 'execa';
+import { resetMergeDetectionCache } from './core/merge-detection.js';
+import { recentCommits } from './core/whats-new.js';
 
 let root: string;
 let dir: string;
@@ -211,5 +214,65 @@ describe('GET /api/workspace/:id/screen-events', () => {
     const res = await app.request('/api/workspace/ws/screen-events');
     expect(res.status).toBe(200);
     expect(await readFrames(res, (f) => f.length > 0, 600)).toEqual([]);
+  });
+
+  it('emits a commits event when a timed-out recentCommits PR lookup settles in the background', async () => {
+    const originalPath = process.env.PATH ?? '';
+    const tmpBin = path.join(root, 'bin');
+    const repo = path.join(dir, 'app');
+    await fs.mkdir(tmpBin, { recursive: true });
+    await fs.mkdir(repo, { recursive: true });
+    await execa('git', ['init', '-b', 'main'], { cwd: repo });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: repo });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+    await execa('git', ['remote', 'add', 'origin', 'git@github.com:org/app.git'], { cwd: repo });
+    await fs.writeFile(path.join(repo, 'a.txt'), 'a\n');
+    await execa('git', ['add', '.'], { cwd: repo });
+    await execa('git', ['commit', '-m', 'Base'], { cwd: repo });
+    await execa('git', ['checkout', '-b', 'feat/x'], { cwd: repo });
+    await fs.writeFile(path.join(repo, 'b.txt'), 'b\n');
+    await execa('git', ['add', '.'], { cwd: repo });
+    await execa('git', ['commit', '-m', 'Feat'], { cwd: repo });
+    await fs.writeFile(
+      path.join(dir, 'contextspace.json'),
+      JSON.stringify({ id: 'ws', name: 'WS', branchName: 'feat/x', repos: [repo], assistants: [], workspacePath: dir }),
+    );
+    await fs.writeFile(
+      path.join(tmpBin, 'gh'),
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') { process.exit(0); }
+if (args[0] === 'pr') {
+  setTimeout(() => {
+    console.log(JSON.stringify([{
+      number: 77,
+      title: 'Async PR',
+      state: 'OPEN',
+      url: 'https://github.com/org/app/pull/77',
+      baseRefName: 'main',
+      headRefOid: 'deadbeef',
+      mergeCommit: null,
+    }]));
+    process.exit(0);
+  }, 1500);
+} else {
+  process.exit(1);
+}
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${tmpBin}:${originalPath}`;
+    resetMergeDetectionCache();
+    try {
+      const res = await app.request('/api/workspace/ws/screen-events');
+      const recent = await recentCommits(dir);
+      expect((recent.commits[0] as { prsPending?: boolean }).prsPending).toBe(true);
+      const frames = await readFrames(res, (f) => f.some((x) => x.event === 'commits'), 4_000);
+      expect(frames.some((f) => f.event === 'commits' && f.data?.type === 'commits')).toBe(true);
+    } finally {
+      process.env.PATH = originalPath;
+      resetMergeDetectionCache();
+    }
   });
 });

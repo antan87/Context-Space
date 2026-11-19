@@ -1,10 +1,11 @@
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { progressFactsKey } from '../../lib/api/queries.js';
 import type { LiveEvent, ScreenEvent } from '../../types.js';
 import { boardKey } from '../board/boardData.js';
 import { planFileKey } from '../plan/planFile.js';
+import { recentCommitsKey } from '../plan/whatsNew.js';
 import { EMPTY_FEED, REFRESH_DELAY_MS, createLiveFeedHub, type FeedState } from './liveFeedHub.js';
 import type { ScreenFeedOptions } from './screenFeed.js';
 
@@ -154,5 +155,59 @@ describe('liveFeedHub', () => {
     stop();
     stop();
     expect(fake.closed).toBe(0);
+  });
+
+  it('invalidates recentCommitsKey without triggering progressFacts when a commits event arrives', () => {
+    listen();
+    fake.live({ type: 'commits', timestamp: '2026-10-23T10:00:00.000Z' } as unknown as LiveEvent);
+    expect(invalidated).toEqual([recentCommitsKey('demo')]);
+    vi.advanceTimersByTime(REFRESH_DELAY_MS);
+    expect(invalidated).toEqual([recentCommitsKey('demo')]);
+  });
+
+  it('re-invalidates after an in-flight cold recentCommits fetch resolves with prsPending=true when commits SSE arrived mid-flight', async () => {
+    vi.useRealTimers();
+    const realClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const realFake = new FakeFeed();
+    const realHub = createLiveFeedHub(realFake.connect);
+
+    let resolveFirst!: (value: unknown) => void;
+    let calls = 0;
+    const queryFn = () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve({
+        at: '2026-10-23T10:00:02.000Z',
+        from: '2026-10-20T10:00:00.000Z',
+        commits: [{ repo: 'demo', prsPending: undefined, pullRequests: [{ number: 42, title: 'Settled PR', state: 'OPEN', url: 'https://github.com/o/r/pull/42' }], commits: [], more: 0 }],
+      });
+    };
+
+    const observer = new QueryObserver(realClient, { queryKey: recentCommitsKey('demo'), queryFn });
+    const unsubObserver = observer.subscribe(() => {});
+    const stop = realHub.subscribe('demo', realClient, () => {});
+
+    // commits SSE arrives while cold fetch (data === undefined) is still in flight
+    realFake.live({ type: 'commits', timestamp: '2026-10-23T10:00:01.000Z' });
+
+    resolveFirst({
+      at: '2026-10-23T10:00:00.000Z',
+      from: '2026-10-20T10:00:00.000Z',
+      commits: [{ repo: 'demo', prsPending: true, commits: [], more: 0 }],
+    });
+    await vi.waitFor(() => {
+      expect(calls).toBe(2);
+    });
+    const data = realClient.getQueryData<{ commits: Array<{ prsPending?: boolean; pullRequests?: Array<{ number: number }> }> }>(recentCommitsKey('demo'));
+    expect(data?.commits[0]?.prsPending).toBeUndefined();
+    expect(data?.commits[0]?.pullRequests?.[0]?.number).toBe(42);
+
+    unsubObserver();
+    stop();
+    realClient.clear();
   });
 });

@@ -29,8 +29,10 @@ import {
   type InputRequest,
 } from './attention.js';
 import { resolveWorkspaceChatLedger } from './constants.js';
+import { subscribePullRequestsSettled } from './merge-detection.js';
 import { PLAN_FILE, PLAN_NOW_FILE } from './plan-file.js';
 import { readLedgerTail } from './ledger-tail.js';
+import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import {
   cleanLineNumber as lineNumber,
   cleanRelativePath as relativePath,
@@ -88,7 +90,9 @@ export type LiveEvent =
   | { type: 'question'; request: InputRequest }
   | { type: 'answered'; timestamp: string }
   /** PLAN.md changed on disk, whoever changed it (an AI's own edit, the CLI, another window): read it again. */
-  | { type: 'plan'; timestamp: string };
+  | { type: 'plan'; timestamp: string }
+  /** Background PR lookup settled for a repository in this workspace: refresh recent commits. */
+  | { type: 'commits'; timestamp: string };
 
 // ─── Cleaning ───────────────────────────────────────────────────────────────
 
@@ -358,12 +362,18 @@ async function collect(
   return found.sort((a, b) => a.time - b.time);
 }
 
-function pause(ms: number, signal?: AbortSignal): Promise<void> {
+function pause(ms: number, signal?: AbortSignal, onWakeReady?: (wake: () => void) => void): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
     const timer = setTimeout(done, ms);
-    function done() { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      onWakeReady?.(() => {});
+      resolve();
+    }
     signal?.addEventListener('abort', done, { once: true });
+    onWakeReady?.(done);
   });
 }
 
@@ -413,40 +423,71 @@ export async function* watchLiveEvents(
   // Saying which step is being worked on reads the plan again too.
   const nowFile = path.join(workspaceRoot, PLAN_NOW_FILE);
   let planLast: string | undefined;
+  const pendingPrRepos = new Set<string>();
+  let wakePause: (() => void) | null = null;
+  const unsubscribePrs = subscribePullRequestsSettled((repoPath) => {
+    pendingPrRepos.add(path.resolve(repoPath));
+    wakePause?.();
+  });
 
-  while (!options.signal?.aborted) {
-    const now = clock();
-    // A plan written by any tool is on screen within a poll, not at the next read of the plan.
-    const planNow = await signature([planFile, nowFile]);
-    if (planLast !== undefined && planNow !== planLast) yield { type: 'plan', timestamp: new Date(now).toISOString() };
-    planLast = planNow;
-    // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.
-    const files = await liveFiles(workspaceRoot);
-    const current = await signature([files.screen, files.board, ...files.chat]);
-    if (first || current !== last) {
-      last = current;
-      const since = Math.max(options.since ?? 0, now - SCREEN_EVENT_MAX_AGE_MS);
-      let events = await collect(workspaceRoot, since, now);
-      const window = new Set(events.map((e) => e.key));
-      forgetLeft(seen, window);
-      forgetLeft(heldBack, window);
-      if (first) {
-        // A board event only says "read the board again", and a screen that opens reads it anyway, so none is replayed.
-        // Replay only the newest few of the rest, so a long-running workspace does not flood a screen that just opened.
-        // What is held back counts as seen: the next read covers the same window, and must not send it after all.
-        const screens = events.filter((e) => e.key.startsWith('s:'));
-        const held = [...screens.slice(0, Math.max(0, screens.length - SCREEN_EVENT_REPLAY_LIMIT)), ...events.filter((e) => e.key.startsWith('b:'))].map((e) => e.key);
-        for (const key of held) heldBack.add(key);
-        events = events.filter((e) => !heldBack.has(e.key));
+  const drainSettledCommitsEvent = async (now: number): Promise<LiveEvent | null> => {
+    if (pendingPrRepos.size === 0) return null;
+    const settled = [...pendingPrRepos];
+    pendingPrRepos.clear();
+    const workspaceRepos = await getWorkspaceRepoPaths(workspaceRoot).catch(() => []);
+    if (workspaceRepos.length === 0) return null;
+    const normalizedRepos = new Set(
+      await Promise.all(workspaceRepos.map(async (r) => fs.realpath(r.path).catch(() => path.resolve(r.path)))),
+    );
+    const normalizedSettled = await Promise.all(settled.map(async (p) => fs.realpath(p).catch(() => path.resolve(p))));
+    return normalizedSettled.some((p) => normalizedRepos.has(p))
+      ? { type: 'commits', timestamp: new Date(now).toISOString() }
+      : null;
+  };
+
+  try {
+    while (!options.signal?.aborted) {
+      const now = clock();
+      const commitsEvent = await drainSettledCommitsEvent(now);
+      if (commitsEvent) yield commitsEvent;
+      // A plan written by any tool is on screen within a poll, not at the next read of the plan.
+      const planNow = await signature([planFile, nowFile]);
+      if (planLast !== undefined && planNow !== planLast) yield { type: 'plan', timestamp: new Date(now).toISOString() };
+      planLast = planNow;
+      // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.
+      const files = await liveFiles(workspaceRoot);
+      const current = await signature([files.screen, files.board, ...files.chat]);
+      if (first || current !== last) {
+        last = current;
+        const since = Math.max(options.since ?? 0, now - SCREEN_EVENT_MAX_AGE_MS);
+        let events = await collect(workspaceRoot, since, now);
+        const window = new Set(events.map((e) => e.key));
+        forgetLeft(seen, window);
+        forgetLeft(heldBack, window);
+        if (first) {
+          // A board event only says "read the board again", and a screen that opens reads it anyway, so none is replayed.
+          // Replay only the newest few of the rest, so a long-running workspace does not flood a screen that just opened.
+          // What is held back counts as seen: the next read covers the same window, and must not send it after all.
+          const screens = events.filter((e) => e.key.startsWith('s:'));
+          const held = [...screens.slice(0, Math.max(0, screens.length - SCREEN_EVENT_REPLAY_LIMIT)), ...events.filter((e) => e.key.startsWith('b:'))].map((e) => e.key);
+          for (const key of held) heldBack.add(key);
+          events = events.filter((e) => !heldBack.has(e.key));
+        }
+        for (const entry of events) {
+          if (seen.has(entry.key) || heldBack.has(entry.key)) continue;
+          seen.add(entry.key);
+          yield entry.event;
+        }
+        options.onRead?.({ window: window.size, remembered: seen.size + heldBack.size });
+        first = false;
       }
-      for (const entry of events) {
-        if (seen.has(entry.key) || heldBack.has(entry.key)) continue;
-        seen.add(entry.key);
-        yield entry.event;
+      if (pendingPrRepos.size === 0) {
+        await pause(pollMs, options.signal, (wake) => { wakePause = wake; });
       }
-      options.onRead?.({ window: window.size, remembered: seen.size + heldBack.size });
-      first = false;
+      wakePause = null;
     }
-    await pause(pollMs, options.signal);
+  } finally {
+    wakePause = null;
+    unsubscribePrs();
   }
 }
