@@ -37,6 +37,33 @@
   --running: #0969da;
   --running-foreground: #ffffff;
 
+  /* Hairline (R1a): the look decision's radius, shadow, hover-border and type tokens. Shared by all six palettes, which only change colours. */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --r-full: 9999px;
+  --shadow-hover: 0 1px 2px rgb(0 0 0 / .06);
+  --shadow-raised: 0 8px 24px rgb(0 0 0 / .12);
+  --border-hover: #afb8c1;
+  --divider: color-mix(in srgb, var(--border) 60%, transparent);
+  /* Type scale: size / weight / line height. */
+  --type-area-title-size: 18px;  --type-area-title-weight: 600;  --type-area-title-leading: 24px;
+  --type-panel-title-size: 16px; --type-panel-title-weight: 600; --type-panel-title-leading: 22px;
+  --type-card-title-size: 14px;  --type-card-title-weight: 600;  --type-card-title-leading: 20px;
+  --type-ui-size: 13px;          --type-ui-weight: 400;          --type-ui-leading: 20px;
+  --type-reading-size: 14px;     --type-reading-weight: 400;     --type-reading-leading: 22px;
+  --type-meta-size: 12px;        --type-meta-weight: 400;        --type-meta-leading: 16px;
+  --type-label-size: 12px;       --type-label-weight: 500;       --type-label-leading: 16px;
+  /* The same scale as the Board writes it: every size and line height divided by the Area's 0.9 zoom, so 12 px meta is 13.5 px written and 12 px on screen. */
+  --type-board-area-title-size: 20px;    --type-board-area-title-leading: 26.7px;
+  --type-board-panel-title-size: 17.8px; --type-board-panel-title-leading: 24.4px;
+  --type-board-card-title-size: 15.6px;  --type-board-card-title-leading: 22.2px;
+  --type-board-ui-size: 14.4px;          --type-board-ui-leading: 22.2px;
+  --type-board-reading-size: 15.6px;     --type-board-reading-leading: 24.4px;
+  --type-board-meta-size: 13.5px;        --type-board-meta-leading: 17.8px;
+  --type-board-label-size: 13.5px;       --type-board-label-leading: 17.8px;
+
   @variant dark {
     color-scheme: dark;
     --background: #090d13;
@@ -66,6 +93,9 @@
     --warning-foreground: #e3b341;
     --running: #58a6ff;
     --running-foreground: #79c0ff;
+    --shadow-hover: 0 1px 2px rgb(0 0 0 / .4);
+    --shadow-raised: 0 8px 24px rgb(0 0 0 / .5);
+    --border-hover: #484f58;
   }
 }
 
@@ -117,6 +147,11 @@
   --radius-lg: var(--radius);
   --radius-xl: 0.5rem;
   --radius-2xl: 0.625rem;
+
+  /* Hairline utilities (rounded-card, shadow-card-hover, border-border-hover). The existing radius scale above is unchanged. */
+  --radius-card: var(--r-lg);
+  --shadow-card-hover: var(--shadow-hover);
+  --color-border-hover: var(--border-hover);
 
   --animate-skeleton: skeleton 2s -1s infinite linear;
   @keyframes skeleton {

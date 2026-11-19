@@ -31,7 +31,9 @@ From the workspace's `design/calm-design-rules.md`:
 
 ## The target look: "Hairline"
 
-Decided 17 Nov 2026 (`design/ux/look-decision-2026-11-17.md`). Precision for everything you use (1 px hairlines, 8 px corners, no resting shadows), Editorial's reading text for everything you read (14 px at 1.55, 72 characters, no bubbles). The main colour is the calm blue `#0966d3` (light) and `#58a6ff` (dark); orange stays in the logo and the Context Ring, and means "Waits for you". The look is **not applied yet**: it arrives with the restyle (R1). Today's values are the truth.
+Decided 17 Nov 2026 (`design/ux/look-decision-2026-11-17.md`). Precision for everything you use (1 px hairlines, 8 px corners, no resting shadows), Editorial's reading text for everything you read (14 px at 1.55, 72 characters, no bubbles). The main colour is the calm blue `#0966d3` (light) and `#58a6ff` (dark); orange stays in the logo and the Context Ring, and means "Waits for you". The look is applied one piece per slice (R1). **Applied so far (R1a): the tokens in the table below (all of them now exist in `tokens.css`) and `CardFrame`.** Every other piece still draws today's look.
+
+The new tokens, in `tokens.css`: `--r-sm`, `--r-md`, `--r-lg`, `--r-xl`, `--r-full`; `--shadow-hover`, `--shadow-raised`; `--border-hover`; `--divider`; the type scale as `--type-<name>-size|weight|leading` (names: `area-title`, `panel-title`, `card-title`, `ui`, `reading`, `meta`, `label`) and its Board version `--type-board-<name>-size|leading` (÷ 0.9). Tailwind utilities: `rounded-card` (8 px), `shadow-card-hover`, `border-border-hover`. The old `--radius-*` scale (`rounded-lg` and so on) is unchanged until the pieces that use it move.
 
 **Where the tokens live (DS11).** All design tokens are in `design/tokens.css`: the semantic tokens (`:root` and `@theme inline`), the brand and state/progress tokens, the six palettes (every `:root[data-color-theme=…]` and `:root.dark[data-color-theme=…]` block) and, last on purpose, the dark progress tokens that must win over every palette. R1 changes the tokens there, and only there. `src/index.css` imports the file; the Board's own rules are in `features/board/board.css`, imported the same way. Keep the order inside `tokens.css` (semantic, brand/state, palettes, dark progress last): `paletteContrast.test.ts` reads the file the way the browser applies the cascade. `tokens.css` is APP_WIDE for `affected-e2e` (every screen reads it); `board.css` runs the Board's specs, not all of `gui/e2e`.
 
@@ -76,7 +78,7 @@ State always shows as a word, never colour alone: Now (`--state-now` dot, "Now",
 | Piece | Status | Comes in |
 |---|---|---|
 | Button, IconButton, Badge, StatusBadge, Dialog, AlertDialog, Sheet, Menu, Popover, Tooltip, Select, Input, Textarea, Checkbox, RadioGroup, Switch, Tabs, Label, Field, Card, Alert, Empty, Kbd, Separator, ScrollArea, Skeleton, Spinner, Sidebar, ContextRing | **Exist.** Exported from `design/index`; the files still live in `components/ui` | DS2a |
-| `CardFrame` (the card's `<article>`) | planned | 2b |
+| `CardFrame` (the card's `<article>`) | **Exists**, drawn in the **Hairline** look (R1a): `rounded-card` (8 px), a 1 px `--border`, no shadow at rest; on hover (pointer only) `--border-hover`, `--shadow-hover` and a 1 px lift in 120 ms (the border only under reduced motion); pinned keeps `border-primary/50`; archived is the muted surface at 70 % with the dashed border; reading is a 1 px primary border and a 1 px inner ring; the keyboard ring and the fresh glow are unchanged | 2b, R1a |
 | `Pill` (a kind tag or state word, with tones `neutral`, `accent`, `ai`, `needs`, `done`, `reopened`, `warning`), `Mark` (who made a card: "AI" in the AI's tone or "you"), `FreshDot` (the "New since you looked" dot, block or inline) | **Exist** (DS4), with the legacy look (today's classes) until the restyle; `look="hairline"` is the target look of `Pill` | 4 |
 | `MetaLine` | planned | with the rows (5) or the restyle |
 | `StepCheck` (the step checkbox: `checked`, `label`, `title`, `disabled`, `busy`, `pressable`, `testId`, `onToggle`, `className`; it takes plain values, never Board data), `rowSurface(...)` and `foldSurface(...)` in `RowSurface.tsx` (class helpers for the Now/Next step surface and the folded row) | **Exist** (DS5b), drawn exactly as the rows did; the Hairline stripe and real suggested-answer buttons come with R1. Use `StepCheck` for any step checkbox, `rowSurface` for a step row's surface | 5 |
@@ -84,7 +86,7 @@ State always shows as a word, never colour alone: Now (`--state-now` dot, "Now",
 | `Composer` (a controlled multi-line text field: `value`, `onChange` (gets the string), `mono`, `className` (drawn last), and `id`, `name`, `placeholder`, `maxLength`, `rows`, `disabled`, `autoFocus`, `onKeyDown`, `aria-*` and `ref` straight to the `<textarea>`) | **Exists** (DS6), drawn exactly as the note dialog's body was. Use it for any multi-line text the Board writes. It has no auto-grow, toolbar, saving or error state yet: the in-place note, paste and drop, Sticky and the Markdown writing add them when they need them, and R1 restyles it | 6 |
 | The live design page `#/design` (`src/pages/DesignPage.tsx`, `DesignPieces.tsx`) | **Exists** (DS7). See "The design page" below | 7 |
 | `tokens.css` (moved from `index.css`) | planned | 11 |
-| The Hairline look applied | planned | R1 |
+| The Hairline look applied | tokens and `CardFrame` done (R1a); the other pieces follow | R1 |
 
 ## The design page
 

@@ -98,12 +98,13 @@ describe('brickPress: a press anywhere on a compact card', () => {
 });
 
 describe('CardFrame: the classes of each state', () => {
-  const BASE = 'group relative flex h-full w-full flex-col overflow-hidden rounded-xl border px-3.5 shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md hover:border-border/80';
+  const BASE = 'group relative flex h-full w-full flex-col overflow-hidden rounded-card border px-3.5 transition-[border-color,box-shadow,translate,background-color] duration-120 ease-out motion-safe:hover:-translate-y-px motion-safe:hover:shadow-card-hover';
   const FOCUS = 'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring';
   const BRICK = 'board-brick cursor-pointer';
-  const PLAIN = 'border-border bg-card text-card-foreground';
+  const PLAIN = 'border-border bg-card text-card-foreground hover:border-border-hover';
   const PINNED = 'border-primary/50 bg-card text-card-foreground';
-  const ARCHIVED = 'border-dashed border-border bg-muted text-muted-foreground';
+  const READING = 'border-primary hover:border-primary outline-1 -outline-offset-2 outline-primary';
+  const ARCHIVED = 'border-dashed border-border/70 bg-muted/70 text-muted-foreground hover:border-border-hover';
 
   const render = (props: Partial<Parameters<typeof CardFrame>[0]> = {}) =>
     renderToStaticMarkup(createElement(CardFrame, { labelledBy: 't', ...props }, createElement('span', null, 'inside')));
@@ -132,7 +133,7 @@ describe('CardFrame: the classes of each state', () => {
     expect(classOf(render({ pinned: true }))).toBe(`${BASE} py-2.5 ${PINNED}`);
     expect(classOf(render({ archived: true }))).toBe(`${BASE} py-2.5 ${ARCHIVED}`);
     expect(classOf(render({ archived: true, pinned: true }))).toBe(`${BASE} py-2.5 ${ARCHIVED}`);
-    expect(classOf(render({ reading: true }))).toBe(`${BASE} py-2.5 ${PLAIN} ring-2 ring-primary`);
+    expect(classOf(render({ reading: true }))).toBe(`${BASE} py-2.5 bg-card text-card-foreground ${READING}`);
   });
 
   it('marks the card open in the reader, and describes it by what it is told to', () => {

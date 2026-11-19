@@ -146,6 +146,22 @@ describe('the stylesheet reader', () => {
   });
 });
 
+describe('the dark progress block beats the palettes that set the sunset ring colours', () => {
+  it.each(['sunset', 'dusk'])('%s in dark takes the brand colours for the ring and the dark orange for "waits for you"', (palette) => {
+    const tokens = tokensFor(palette, 'dark');
+    expect([tokens['--ring-a'], tokens['--ring-b'], tokens['--ring-c']]).toEqual(['var(--brand-first)', 'var(--brand-middle)', 'var(--brand-last)']);
+    expect(tokens['--state-needs']).toBe('#fb923c');
+  });
+});
+
+describe.each(PALETTES.flatMap((palette) => THEMES.map((theme) => [palette, theme] as const)))('an archived card in %s %s', (palette, theme) => {
+  it('keeps muted text at 4.5:1 on the muted surface at 70 % over the background', () => {
+    const tokens = tokensFor(palette, theme);
+    const surface = resolve('color-mix(in srgb, var(--muted) 70%, var(--background))', tokens);
+    expect(contrast(resolve(tokens['--muted-foreground']!, tokens), surface)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 describe('Dusk is a complete palette', () => {
   it.each(THEMES)('defines every surface and action token in %s', (theme) => {
     const tokens = tokensFor('dusk', theme);

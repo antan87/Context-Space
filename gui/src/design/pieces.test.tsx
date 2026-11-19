@@ -2,7 +2,8 @@ import { createElement, createRef, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { cn } from '../lib/utils.js';
-import { Composer, foldSurface, FreshDot, Mark, Pill, PILL_LEGACY, rowSurface, StepCheck, type PillTone } from './index.js';
+import { readFileSync } from 'node:fs';
+import { CardFrame, Composer, foldSurface, FreshDot, Mark, Pill, PILL_LEGACY, rowSurface, StepCheck, type PillTone } from './index.js';
 
 const html = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element);
 
@@ -225,5 +226,88 @@ describe('Composer (DS6)', () => {
       .toBe(`<textarea class="${cn(wasClass(false), 'min-h-[200px] extra')}"></textarea>`);
     expect(cn(wasClass(false), 'min-h-[200px] extra')).toContain('min-h-[200px]');
     expect(cn(wasClass(false), 'min-h-[200px] extra')).not.toContain('min-h-[140px]');
+  });
+});
+
+/** The Hairline card frame (R1a): the frame's classes in each state, and the tokens they use. */
+describe('CardFrame, Hairline', () => {
+  const classes = (props: Parameters<typeof CardFrame>[0] extends infer P ? Partial<P> : never = {}) =>
+    /<article[^>]*? class="([^"]*)"/.exec(html(createElement(CardFrame, { labelledBy: 't', ...props }, 'x')))![1]!.split(' ');
+  const tokens = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8');
+
+  it('has 8 px corners, a 1 px border and no shadow at rest, in a plain card', () => {
+    const c = classes();
+    expect(c).toContain('rounded-card');
+    expect(c).toContain('border');
+    expect(c).toContain('border-border');
+    expect(c).toContain('bg-card');
+    expect(c.filter((name) => /^shadow-/.test(name) || /^ring/.test(name) || name === 'rounded-xl')).toEqual([]);
+  });
+
+  it('animates the border, shadow, lift (the `translate` property, not `transform`) and the pressable tint', () => {
+    const transition = classes().find((name) => name.startsWith('transition-['))!;
+    for (const property of ['border-color', 'box-shadow', 'translate', 'background-color']) expect(transition).toContain(property);
+    expect(transition).not.toContain('transform');
+  });
+
+  it('lifts 1 px, shows its hover shadow and takes the hover border only on hover, and the motion only without reduced motion', () => {
+    const c = classes();
+    expect(c).toContain('hover:border-border-hover');
+    expect(c).toContain('motion-safe:hover:-translate-y-px');
+    expect(c).toContain('motion-safe:hover:shadow-card-hover');
+    expect(c).toContain('duration-120');
+    expect(c).toContain('ease-out');
+    expect(c.filter((name) => /^hover:(shadow|-translate)/.test(name))).toEqual([]);
+  });
+
+  it('keeps a primary border for pinned, even on hover', () => {
+    const c = classes({ pinned: true });
+    expect(c).toContain('border-primary/50');
+    expect(c.filter((name) => name.includes('border-border'))).toEqual([]);
+  });
+
+  it('is dashed, muted and at 70 % when archived, and archived wins over pinned', () => {
+    for (const c of [classes({ archived: true }), classes({ archived: true, pinned: true })]) {
+      expect(c).toEqual(expect.arrayContaining(['border-dashed', 'border-border/70', 'bg-muted/70', 'text-muted-foreground']));
+      expect(c).not.toContain('border-primary/50');
+      // No opacity on the card: it would weaken the text, the focus ring and the reading mark.
+      expect(c.filter((name) => /(^|:)opacity-/.test(name))).toEqual([]);
+    }
+    expect(classes({ archived: true, compact: true, reading: true })).toEqual(expect.arrayContaining(['has-[:focus-visible]:ring-2', 'has-[:focus-visible]:ring-ring', 'outline-primary']));
+    expect(classes({ archived: true, compact: true, reading: true }).filter((name) => /(^|:)opacity-/.test(name))).toEqual([]);
+  });
+
+  it('is a 1 px primary border plus a 1 px inner ring when reading, not the old ring-2', () => {
+    const c = classes({ reading: true });
+    expect(c).toEqual(expect.arrayContaining(['border-primary', 'hover:border-primary', 'outline-1', '-outline-offset-2', 'outline-primary']));
+    expect(c).not.toContain('ring-2');
+    expect(c).not.toContain('hover:border-border-hover');
+  });
+
+  it('keeps the keyboard ring (2 px --ring) on a compact card, and a pressable card is still a brick', () => {
+    expect(classes({ compact: true })).toEqual(expect.arrayContaining(['has-[:focus-visible]:ring-2', 'has-[:focus-visible]:ring-ring']));
+    expect(classes({ onPress: () => {} })).toEqual(expect.arrayContaining(['board-brick', 'cursor-pointer']));
+  });
+
+  it('draws only with tokens that exist: the radius, shadow, hover border and divider, and the type scales', () => {
+    for (const [name, value] of [['--r-sm', '4px'], ['--r-md', '6px'], ['--r-lg', '8px'], ['--r-xl', '12px'], ['--r-full', '9999px'],
+      ['--shadow-hover', '0 1px 2px rgb(0 0 0 / .06)'], ['--shadow-raised', '0 8px 24px rgb(0 0 0 / .12)'], ['--border-hover', '#afb8c1']] as const) {
+      expect(tokens, name).toContain(`${name}: ${value};`);
+    }
+    for (const [name, value] of [['--shadow-hover', '0 1px 2px rgb(0 0 0 / .4)'], ['--shadow-raised', '0 8px 24px rgb(0 0 0 / .5)'], ['--border-hover', '#484f58']] as const) {
+      expect(tokens, `${name} in dark`).toContain(`    ${name}: ${value};`);
+    }
+    expect(tokens).toContain('--divider: color-mix(in srgb, var(--border) 60%, transparent);');
+    expect(tokens).toContain('--radius-card: var(--r-lg);');
+    expect(tokens).toContain('--shadow-card-hover: var(--shadow-hover);');
+    expect(tokens).toContain('--color-border-hover: var(--border-hover);');
+    for (const kind of ['area-title', 'panel-title', 'card-title', 'ui', 'reading', 'meta', 'label']) {
+      for (const part of ['size', 'leading']) {
+        expect(tokens, `--type-${kind}-${part}`).toContain(`--type-${kind}-${part}:`);
+        expect(tokens, `--type-board-${kind}-${part}`).toContain(`--type-board-${kind}-${part}:`);
+      }
+      expect(tokens, `--type-${kind}-weight`).toContain(`--type-${kind}-weight:`);
+    }
+    expect(tokens).toContain('--type-board-meta-size: 13.5px;');
   });
 });
