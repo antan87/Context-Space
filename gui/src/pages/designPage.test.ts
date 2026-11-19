@@ -17,7 +17,7 @@ describe('the design page', () => {
     /** Pieces drawn on the page; a name that starts with one of them is a part of it (`CardHeader` of `Card`). */
     const DRAWN = [
       'Alert', 'AlertDialog', 'Badge', 'Button', 'Card', 'CardFrame', 'Checkbox', 'Composer', 'ContextRing', 'Dialog', 'Empty', 'Field', 'FreshDot', 'IconButton',
-      'Input', 'Kbd', 'Label', 'Mark', 'Menu', 'Pill', 'Popover', 'Radio', 'ScrollArea', 'Select', 'Separator', 'Sheet', 'Skeleton', 'Spinner', 'StatusBadge',
+      'Input', 'Kbd', 'KindLabel', 'Label', 'Mark', 'Menu', 'Pill', 'Popover', 'Radio', 'ScrollArea', 'Select', 'Separator', 'Sheet', 'Skeleton', 'Spinner', 'StatusBadge',
       'StepCheck', 'Switch', 'Tabs', 'Textarea', 'Tooltip',
     ];
     /** Not drawn, with the reason. Both only get shorter. */

@@ -669,7 +669,7 @@ export function CommitsList({
                                     >
                                       <span className="shrink-0 font-mono text-muted-foreground">#{pr.number}</span>
                                       <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">{pr.title}</span>
-                                      <Pill tone={prStateTone} look="hairline" className="shrink-0">{prStateLabel}</Pill>
+                                      <Pill tone={prStateTone} className="shrink-0">{prStateLabel}</Pill>
                                     </a>
                                   ) : (
                                     <span
@@ -679,7 +679,7 @@ export function CommitsList({
                                     >
                                       <span className="shrink-0 font-mono text-muted-foreground">#{pr.number}</span>
                                       <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">{pr.title}</span>
-                                      <Pill tone={prStateTone} look="hairline" className="shrink-0">{prStateLabel}</Pill>
+                                      <Pill tone={prStateTone} className="shrink-0">{prStateLabel}</Pill>
                                     </span>
                                   )}
                                 </div>
@@ -1051,12 +1051,12 @@ function CommitOverview({
                       className="inline-flex min-h-6 items-center gap-1 rounded px-1 text-xs font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <span>#{prMeta.number}</span>
-                      <Pill tone={prStateTone} look="hairline">{prStateLabel}</Pill>
+                      <Pill tone={prStateTone}>{prStateLabel}</Pill>
                     </a>
                   ) : (
                     <span data-testid="commit-pr-badge" title={prMeta.title} className="inline-flex min-h-6 items-center gap-1 text-xs font-medium text-foreground">
                       <span>#{prMeta.number}</span>
-                      <Pill tone={prStateTone} look="hairline">{prStateLabel}</Pill>
+                      <Pill tone={prStateTone}>{prStateLabel}</Pill>
                     </span>
                   )}
                 </>

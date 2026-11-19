@@ -3,10 +3,7 @@ import { cn } from '../lib/utils.js';
 
 export type PillTone = 'neutral' | 'accent' | 'ai' | 'needs' | 'done' | 'reopened' | 'warning';
 
-/** Today's kind tag on a card ("commit", "note", "picture"): kept byte for byte until the restyle (R1). */
-export const PILL_LEGACY = 'rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground';
-
-/** The tones of the restyled pill: a quiet fill of the tone's own colour, and its word at 12 px. */
+/** The tones of the pill: a quiet fill of the tone's own colour, and its word at 12 px. */
 const PILL_TONES: Record<PillTone, string> = {
   neutral: 'bg-muted text-muted-foreground',
   accent: 'bg-primary/10 text-primary',
@@ -20,19 +17,14 @@ const PILL_TONES: Record<PillTone, string> = {
 export const PILL_BASE = 'inline-flex items-center rounded-sm px-1.5 text-xs font-medium leading-4';
 
 export interface PillProps {
-  /** Which colour it carries. Only the `hairline` look uses it. */
+  /** Which colour it carries: the tone's own colours at 12 px. */
   tone?: PillTone;
-  /**
-   * `legacy` (the default until the restyle) is today's kind tag exactly, whatever the tone. `hairline` is the target look:
-   * the tone's colours at 12 px.
-   */
-  look?: 'legacy' | 'hairline';
-  /** Put first in the class list, so that a class here reads before the pill's own (`shrink-0` on today's tags). */
+  /** Put first in the class list, so that a class here reads before the pill's own (`shrink-0`). */
   className?: string;
   children: ReactNode;
 }
 
-/** A small label: the kind of a card ("note", "commit", "picture"), or a state in a word. It is not pressable. */
-export function Pill({ tone = 'neutral', look = 'legacy', className, children }: PillProps) {
-  return <span className={cn(className, look === 'legacy' ? PILL_LEGACY : [PILL_BASE, PILL_TONES[tone]])}>{children}</span>;
+/** A small label for a state in a word. (The kind of a card is a `KindLabel`.) It is not pressable. */
+export function Pill({ tone = 'neutral', className, children }: PillProps) {
+  return <span className={cn(className, PILL_BASE, PILL_TONES[tone])}>{children}</span>;
 }

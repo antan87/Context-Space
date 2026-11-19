@@ -43,6 +43,7 @@ import {
   Input,
   Kbd,
   KbdGroup,
+  KindLabel,
   Label,
   Mark,
   Menu,
@@ -84,6 +85,7 @@ import {
   Tooltip,
   TooltipPopup,
   TooltipTrigger,
+  type KindLabelKind,
   type PillTone,
 } from '../design/index.js';
 
@@ -108,6 +110,7 @@ function State({ name, children }: { name: string; children: ReactNode }) {
   );
 }
 
+const KINDS: KindLabelKind[] = ['note', 'commit', 'picture', 'html', 'pdf', 'markdown', 'other'];
 const PILL_TONES: PillTone[] = ['neutral', 'accent', 'ai', 'needs', 'done', 'reopened', 'warning'];
 const MILESTONES = [{ state: 'done' as const }, { state: 'done' as const }, { state: 'in_progress' as const }, { state: 'upcoming' as const }];
 
@@ -173,9 +176,11 @@ export function DesignPieces() {
           </State>
         ))}
       </Piece>
-      <Piece id="pill" name="Pill" note="Today's kind tag (the legacy look), then each tone of the target look (hairline).">
-        <State name="legacy kind tag"><Pill>note</Pill></State>
-        {PILL_TONES.map((tone) => <State key={tone} name={`hairline, ${tone}`}><Pill tone={tone} look="hairline">{tone}</Pill></State>)}
+      <Piece id="pill" name="Pill" note="A state in a word, in each of its tones.">
+        {PILL_TONES.map((tone) => <State key={tone} name={tone}><Pill tone={tone}>{tone}</Pill></State>)}
+      </Piece>
+      <Piece id="kind-label" name="KindLabel" note="The kind of a card: an icon and the word, muted, at the Board's meta size, no box.">
+        {KINDS.map((kind) => <State key={kind} name={kind}><KindLabel kind={kind} /></State>)}
       </Piece>
       <Piece id="mark" name="Mark">
         <State name="AI"><Mark ai label="Claude, 5 min ago" /></State>

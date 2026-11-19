@@ -3,22 +3,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { cn } from '../lib/utils.js';
 import { readFileSync } from 'node:fs';
-import { CardFrame, Composer, foldSurface, FreshDot, Mark, Pill, PILL_LEGACY, rowSurface, StepCheck, type PillTone } from './index.js';
+import { CardFrame, Composer, foldSurface, FreshDot, Mark, KindLabel, KIND_LABEL, Pill, rowSurface, StepCheck, type KindLabelKind, type PillTone } from './index.js';
 
 const html = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element);
 
 /** The small pieces of the design module (DS4). The cards' golden markup pins them in place; these pin each piece on its own. */
 describe('Pill', () => {
-  it('draws today\'s kind tag by default (the legacy look), whatever the tone', () => {
-    const legacy = '<span class="rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">note</span>';
-    expect(PILL_LEGACY).toBe('rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground');
-    expect(html(createElement(Pill, null, 'note'))).toBe(legacy);
-    expect(html(createElement(Pill, { tone: 'ai' }, 'note'))).toBe(legacy);
-  });
-
   it('puts a given class first, as the cards wrote shrink-0', () => {
-    expect(html(createElement(Pill, { className: 'shrink-0' }, 'commit')))
-      .toBe('<span class="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">commit</span>');
+    expect(html(createElement(Pill, { className: 'shrink-0' }, 'x')))
+      .toBe('<span class="shrink-0 inline-flex items-center rounded-sm px-1.5 text-xs font-medium leading-4 bg-muted text-muted-foreground">x</span>');
   });
 
   it('keeps the text it is given', () => {
@@ -36,10 +29,34 @@ describe('Pill', () => {
       warning: 'bg-warning/12 text-warning-foreground',
     };
     for (const [tone, classes] of Object.entries(expected)) {
-      const out = html(createElement(Pill, { tone: tone as PillTone, look: 'hairline' }, 'x'));
+      const out = html(createElement(Pill, { tone: tone as PillTone }, 'x'));
       expect(out).toBe(`<span class="inline-flex items-center rounded-sm px-1.5 text-xs font-medium leading-4 ${classes}">x</span>`);
       expect(out).not.toContain('text-[10.5px]');
     }
+  });
+});
+
+describe('KindLabel', () => {
+  const kinds: KindLabelKind[] = ['note', 'commit', 'picture', 'html', 'pdf', 'markdown', 'other'];
+
+  it('draws a hidden icon and the word, muted, at the Board\'s meta size, with no box', () => {
+    for (const kind of kinds) {
+      const out = html(createElement(KindLabel, { kind }));
+      expect(out.startsWith(`<span class="${KIND_LABEL}"><svg `)).toBe(true);
+      expect(out).toMatch(/<svg [^>]*aria-hidden="true"/);
+      expect(out).toMatch(/<svg [^>]*class="[^"]*size-3\.5/);
+      expect(out.endsWith(`</svg>${kind}</span>`)).toBe(true);
+    }
+    expect(KIND_LABEL).toContain('text-[length:var(--type-board-meta-size)]');
+    expect(KIND_LABEL).toContain('font-normal');
+    expect(KIND_LABEL).toContain('text-muted-foreground');
+    expect(KIND_LABEL).not.toMatch(/\b(bg-|border|rounded|px-|py-)/);
+  });
+
+  it('gives each kind its own icon and takes a given class last', () => {
+    const icons = new Set(kinds.map((kind) => /<svg .*<\/svg>/.exec(html(createElement(KindLabel, { kind })))?.[0]));
+    expect(icons.size).toBe(kinds.length);
+    expect(html(createElement(KindLabel, { kind: 'commit', className: 'mt-1' }))).toMatch(/^<span class="inline-flex [^"]* mt-1"><svg/);
   });
 });
 

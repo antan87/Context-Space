@@ -1,15 +1,15 @@
 import { useContext, useId, useState, type MouseEvent } from 'react';
 import { type NodeProps } from '@xyflow/react';
-import { File, FileCode, FileImage, FileText, Globe, PanelRightOpen, type LucideIcon } from 'lucide-react';
+import { PanelRightOpen, type LucideIcon } from 'lucide-react';
 
-import { Button, CardFrame, CARD_BRICK as BRICK, CARD_FOCUS, Pill } from '../../../design/index.js';
+import { Button, CardFrame, CARD_BRICK as BRICK, CARD_FOCUS, KIND_ICON, KindLabel } from '../../../design/index.js';
 import { cn } from '../../../lib/utils.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, firstControl, pictureSrc } from '../boardActions.js';
 import { imageAlt, type FileNode, type FileType } from '../boardLayout.js';
 import { Anchors, brickPress, CardMark, CardText, hasDragSelection, ReadAll, TITLE_BUTTON, useCut } from './cardParts.js';
 
 const FILE_LABEL: Record<FileType, string> = { image: 'Picture', html: 'HTML page', pdf: 'PDF', markdown: 'Markdown', other: 'File' };
-const FILE_ICON: Record<FileType, LucideIcon> = { image: FileImage, html: Globe, pdf: FileText, markdown: FileCode, other: File };
+const FILE_ICON: Record<FileType, LucideIcon> = { image: KIND_ICON.picture, html: KIND_ICON.html, pdf: KIND_ICON.pdf, markdown: KIND_ICON.markdown, other: KIND_ICON.other };
 
 /** What stands in a file card where a picture would: the kind of file, and where it is. */
 function FileKind({ type, path }: { type: FileType; path: string }) {
@@ -182,9 +182,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
   return <CardFrame archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
     <div className="flex shrink-0 items-start justify-between gap-1.5">
       <h2 ref={titleRef} id={titleId} className={cn('nodrag select-text line-clamp-2 shrink-0 break-words text-[13px] font-semibold leading-5 flex-1', data.archived ? 'text-muted-foreground' : 'text-foreground')} title={data.title}>{data.title}</h2>
-      <Pill className="shrink-0">
-        {data.fileType === 'image' ? 'picture' : data.fileType}
-      </Pill>
+      <KindLabel kind={data.fileType === 'image' ? 'picture' : data.fileType} />
     </div>
     <div className="group/thumb relative mt-1.5 h-24 shrink-0 overflow-hidden rounded-md border border-border/80 bg-black/40">
       {picture

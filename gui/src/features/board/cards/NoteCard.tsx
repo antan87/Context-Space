@@ -2,7 +2,7 @@ import { useContext, useEffect, useId, useRef, useState } from 'react';
 import { type NodeProps } from '@xyflow/react';
 import { Archive, Copy, MoreHorizontal, Pencil, Pin, Terminal } from 'lucide-react';
 
-import { Button, CardFrame, Menu, MenuItem, MenuPopup, MenuTrigger, Pill } from '../../../design/index.js';
+import { Button, CardFrame, KindLabel, Menu, MenuItem, MenuPopup, MenuTrigger } from '../../../design/index.js';
 import { safeCopyToClipboard } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import { NoteDialog } from '../NoteDialog.js';
@@ -211,7 +211,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
             {data.title}
           </h2>
           <div className="flex items-center gap-1.5 shrink-0">
-            <Pill>note</Pill>
+            <KindLabel kind="note" />
             {noteActionsMenu}
           </div>
         </div>

@@ -11,7 +11,7 @@ test.use({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
 
 /** The pieces, by the heading each one has (`design-piece-<id>`). */
 const PIECES: Array<[id: string, heading: string]> = [
-  ['button', 'Button'], ['icon-button', 'IconButton'], ['badge', 'Badge and StatusBadge'], ['card-frame', 'CardFrame'], ['pill', 'Pill'], ['mark', 'Mark'],
+  ['button', 'Button'], ['icon-button', 'IconButton'], ['badge', 'Badge and StatusBadge'], ['card-frame', 'CardFrame'], ['pill', 'Pill'], ['kind-label', 'KindLabel'], ['mark', 'Mark'],
   ['fresh-dot', 'FreshDot'], ['step-check', 'StepCheck'], ['row-surface', 'rowSurface and foldSurface'], ['composer', 'Composer'],
   ['input', 'Input, Textarea and Field'], ['choices', 'Checkbox, Switch, Radio and Select'], ['tabs', 'Tabs'], ['alert', 'Alert, Empty and Card'],
   ['small-things', 'Kbd, Separator, Skeleton, Spinner, ScrollArea and ContextRing'], ['overlays', 'Dialog, AlertDialog, Sheet, Menu, Popover and Tooltip'],
@@ -117,6 +117,29 @@ test.describe('DS7: the design page', () => {
     await expect(page.getByTestId('design-card-commit.fullReading').locator('[aria-current="true"]')).toHaveCount(1);
     await expect(page.getByTestId('design-card-note.full').locator('.board-fresh')).toHaveCount(1);
     await expect(page.getByTestId('design-card-note.pinned').locator('.board-fresh')).toHaveCount(0);
+  });
+
+  test('the full commit card\'s header never overlaps: icon, sha, dot, author, time and note marker stay apart and inside the card', async ({ page }) => {
+    await open(page);
+    // The busiest header a commit card can have: a long author, "45 min ago" and "2 notes" (set here, so the page's own texts stay as they are).
+    const card = page.getByTestId('design-card-commit.full');
+    await card.locator('article > div.h-4 > div > span.truncate').evaluate((el) => { el.textContent = 'a-very-long-author-name@example.com'; });
+    await card.locator('article > div.h-4 > div > time').evaluate((el) => { el.textContent = '45 min ago'; });
+    await card.getByTestId('commit-note-marker').evaluate((el) => { el.lastChild!.textContent = '2 notes'; });
+    await expect(card.getByTestId('commit-note-marker')).toContainText('2 notes');
+    for (const key of ['commit.full']) {
+      const boxes = await card.locator('article > div.h-4 > div > *, article > div.h-4 > :not(div)').evaluateAll((els) => els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { name: (el.textContent || el.tagName).trim().slice(0, 20), left: r.left, right: r.right, width: r.width };
+      }).filter((box) => box.width > 2).sort((a, b) => a.left - b.left));
+      const article = await card.locator('article').evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right }; });
+      expect(boxes.length, `${key} header children`).toBeGreaterThanOrEqual(4);
+      boxes.forEach((box, i) => {
+        expect(box.left, `${key}: ${box.name} inside the card`).toBeGreaterThanOrEqual(article.left);
+        expect(box.right, `${key}: ${box.name} inside the card`).toBeLessThanOrEqual(article.right + 0.5);
+        if (i > 0) expect(box.left, `${key}: ${boxes[i - 1]!.name} overlaps ${box.name}`).toBeGreaterThanOrEqual(boxes[i - 1]!.right - 0.5);
+      });
+    }
   });
 
   test('the page shows no error and makes no request that writes', async ({ page }) => {

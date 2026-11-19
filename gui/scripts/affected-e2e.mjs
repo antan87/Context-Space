@@ -277,7 +277,7 @@ const READABLE_SPECS = ['e2e/board-overview-split.spec.ts', DESIGN_PAGE_SPEC];
 const CARD_PARTS_SPECS = ['e2e/board', 'e2e/accessibility.spec.ts', DESIGN_PAGE_SPEC];
 
 /**
- * The small pieces of the design module (DS4): `design/Pill.tsx` (the kind tag of the commit, note and file cards),
+ * The small pieces of the design module (DS4): `design/Pill.tsx` (a state in a word), `design/KindLabel.tsx` (the kind of the note and file cards; the commit card shows the word only to screen readers),
  * `design/Mark.tsx` (the you/AI mark `CardMark` draws on every compact card) and `design/FreshDot.tsx` (the "New since you
  * looked" dot of cards, step rows and Area cards). One shared row for the three, and the same specs as the card parts: the
  * mark is on every card kind and the dot in every Area and row, so only a Board-wide run is exact, and nothing outside
@@ -807,7 +807,21 @@ const FOLDER_ROWS = [
     path: 'gui/src/design/Pill.tsx',
     bareNames: ['Pill', 'Pill.tsx'],
     specs: DESIGN_PIECE_SPECS,
-    safety: 'The kind tag of the commit, note and file cards; only Board files import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+    safety: 'A state in a word (the pull request state of the commit list); only CommitsView.tsx and the design page import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx and the design page spec, which draws each tone.',
+  },
+  {
+    folder: 'src/design/KindLabel',
+    path: 'gui/src/design/KindLabel.tsx',
+    bareNames: ['KindLabel', 'KindLabel.tsx'],
+    specs: DESIGN_PIECE_SPECS,
+    safety: 'The kind of a card (an icon and the word) in the title row of the note and file cards (R1b); only those two card files and the design page import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+  },
+  {
+    folder: 'src/design/kindIcons',
+    path: 'gui/src/design/kindIcons.ts',
+    bareNames: ['kindIcons', 'kindIcons.ts'],
+    specs: DESIGN_PIECE_SPECS,
+    safety: 'The icon of each kind of card (R1b), drawn by KindLabel and by the file card stand-ins; imported by KindLabel.tsx, FileCard.tsx and design/index.ts (which is APP_WIDE), which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
   },
   {
     folder: 'src/design/Mark',
