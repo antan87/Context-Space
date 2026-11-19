@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import * as api from './index.js';
 import { applyBatch, dbFilePath, exportPlan, getBlock, getItem, listBlocks, listCards, maybeBackup, listBackups, restoreBackup, runQuery, startCheckRun, finishCheckRun, importPlanText, openWorkspaceDb, stripExport, WorkspaceDbError, planView, type BatchResult, type Op } from './index.js';
-import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace, undo } from './testing.js';
+import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace, track, undo } from './testing.js';
 
 afterEach(cleanTemp);
 
@@ -103,13 +103,23 @@ describe('3. restore', () => {
     expect(listBlocks(openTest(ws)).length).toBeGreaterThan(10);
   });
 
-  it('a connection whose file vanished fails closed instead of writing into an unlinked file', async () => {
+  // POSIX: a file can be deleted while a connection has it open. Windows refuses (EPERM), see the twin below.
+  it.skipIf(process.platform === 'win32')('a connection whose file vanished fails closed instead of writing into an unlinked file', async () => {
     const { ws, db } = await seeded();
     rmSync(dbFilePath(ws));
     await expect(at(db, 1, [{ op: 'tick', id: idOf(db, 'Write the file') }])).rejects.toMatchObject({ code: 'replaced' });
   });
 
-  it('a writer waiting for the lock while the file is replaced gets `replaced`, not a write into the old file', async () => {
+  it.runIf(process.platform === 'win32')('on Windows the open database file cannot be deleted, and the connection stays current and writable', async () => {
+    const { ws, db } = await seeded();
+    expect(() => rmSync(dbFilePath(ws))).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(EPERM|EBUSY|EACCES)$/) }));
+    expect(existsSync(dbFilePath(ws))).toBe(true);
+    expect(db.isCurrent()).toBe(true);
+    expect((await at(db, 1, [{ op: 'tick', id: idOf(db, 'Write the file') }])).ok).toBe(true);
+  });
+
+  // POSIX mechanism: another process renames a file over the live one. Windows refuses that rename while the file is open; its rule is in runtime.test.ts (`file_in_use`).
+  it.skipIf(process.platform === 'win32')('a writer waiting for the lock while the file is replaced gets `replaced`, not a write into the old file', async () => {
     const { ws, db } = await seeded();
     await maybeBackup(ws);
     const holder = runChild(`
@@ -157,6 +167,7 @@ describe('4. generation and request replay', () => {
     const oldId = dbOf(db);
     const first = await at(db, 1, [{ op: 'tick', id: idOf(db, 'Write the file') }], { requestId: 'before-restore' });
     expect(first.ok).toBe(true);
+    db.close(); // Windows cannot replace a database file another connection still has open; the replaced-file rules are in runtime.test.ts
     restoreBackup(ws, listBackups(ws)[0]!);
     const fresh = openTest(ws);
     expect(rev(fresh)).toBe(2);
@@ -310,6 +321,7 @@ describe('8. the event loop', () => {
     const open = (api as unknown as { openWorkspaceDbAsync?: typeof openWorkspaceDb }).openWorkspaceDbAsync;
     const r = await worstGap(async () => (open ? await open(ws, { busy: 'server', backups: false }) : openWorkspaceDb(ws, { busy: 'server', backups: false })));
     await holder.done;
+    if (r.value) track(r.value as { close(): void });
     expect(r.error).toBeUndefined();
     expect(r.worst).toBeLessThan(100);
   });
@@ -363,7 +375,7 @@ describe('9. open is not create, and the file must be ours', () => {
     raw.close();
     expect(() => api.createWorkspaceDb(ws, { busy: 'cli', backups: false })).toThrow(WorkspaceDbError);
     expect(() => openWorkspaceDb(ws, { busy: 'cli', backups: false })).toThrow(WorkspaceDbError);
-    const after = new DatabaseSync(dbFilePath(ws));
+    const after = track(new DatabaseSync(dbFilePath(ws)));
     expect((after.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((r) => r.name)).toEqual(['unrelated']);
   });
 

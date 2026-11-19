@@ -1128,6 +1128,7 @@ test('keeps the last good PRs when a refresh fails, drops a section whose last c
 });
 
 test('asks again after 5 s then 15 s when the live feed missed the commits event, then stops', async ({ page }) => {
+  test.setTimeout(60_000); // the macOS runner is several times slower than a laptop; the 30 s default is too tight for this one
   const SHA_482 = '11223344556677889900aabbccddeeff11223344';
   const settled = false;
   let fetches = 0;
@@ -1163,7 +1164,8 @@ test('asks again after 5 s then 15 s when the live feed missed the commits event
   await page.clock.pauseAt(new Date(Date.now() + 1_000));
   await page.waitForTimeout(400);
   const baseline = fetches;
-  const settle = () => page.waitForTimeout(300);
+  // A short real pause after the fake clock moves, so a request that should NOT happen has time to show up.
+  const settle = () => page.waitForTimeout(250);
 
   await page.clock.runFor(2_000);
   await settle();
@@ -1190,9 +1192,14 @@ test('asks again after 5 s then 15 s when the live feed missed the commits event
   await expect.poll(() => fetches).toBe(baseline + 2);
 
   // And then it stops, however long the response stays pending.
-  await page.clock.runFor(10 * 60_000);
+  // (runFor ticks every page timer, about 25 ms of real time per fake second, so it covers 3 minutes; fastForward then
+  // jumps 10 more minutes and fires anything still due, so a much later extra ask would be caught too.)
+  await page.clock.runFor(3 * 60_000);
   await settle();
-  expect(fetches, 'no third ask').toBe(baseline + 2);
+  expect(fetches, 'no third ask within 3 minutes').toBe(baseline + 2);
+  await page.clock.fastForward(10 * 60_000);
+  await settle();
+  expect(fetches, 'no third ask after 13 minutes').toBe(baseline + 2);
   // Both asks are spent and the data is still pending: say so instead of "loading" for ever. Check now stays available.
   await expect(region.getByTestId('commit-pr-unavailable')).toHaveText('PR information is not available right now');
   await expect(region.getByTestId('commit-pr-loading')).toHaveCount(0);

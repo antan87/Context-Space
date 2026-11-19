@@ -16,6 +16,16 @@ describe('export round trip', () => {
     expect(exportDigest(text)).toMatch(/^[0-9a-f]{16}$/);
   });
 
+  it('a plan with CRLF line endings (a PLAN.md checked out on Windows) exports byte for byte with CRLF', async () => {
+    const crlf = SAMPLE_PLAN.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+    expect(crlf).toContain('\r\n');
+    const { db } = await seeded(crlf);
+    const text = exportPlanMarkdown(db);
+    expect(stripExport(text)).toBe(crlf);
+    // every line ends with CRLF, the header line too: no bare LF is left
+    expect(text.replace(/\r\n/g, '')).not.toContain('\n');
+  });
+
   it('the fixture covers what it claims to', async () => {
     const { db } = await seeded();
     const blocks = listBlocks(db);

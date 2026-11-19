@@ -23,6 +23,8 @@ export type WorkspaceDbErrorCode =
   | 'open_failed'
   /** The call itself was wrong (bad arguments). */
   | 'invalid'
+  /** A restore could not replace the file because another connection still has it open (Windows cannot replace an open file). Nothing was changed. */
+  | 'file_in_use'
   /** A restore or backup could not be made. */
   | 'backup_failed'
   /** The query was refused or stopped. */

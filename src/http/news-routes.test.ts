@@ -8,6 +8,7 @@ import { registerNewsRoutes } from './news-routes.js';
 import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
 import { setActiveStorageProvider } from '../core/adapters/registry.js';
 import { resetMergeDetectionCache } from '../core/merge-detection.js';
+import { gitOnlyDir, pathWith, writeGhJson, writeGhNode } from '../test-support/fake-gh.js';
 
 describe('news routes', () => {
   let root: string;
@@ -169,12 +170,8 @@ describe('news routes', () => {
     const originalPath = process.env.PATH ?? '';
     const tmpBin = path.join(root, 'bin');
     await fs.mkdir(tmpBin, { recursive: true });
-    await fs.writeFile(
-      path.join(tmpBin, 'gh'),
-      '#!/usr/bin/env bash\nif [ "$1" = "--version" ]; then echo "gh version 2.40.0"; exit 0; fi\nif [ "$1" = "auth" ]; then exit 0; fi\nif [ "$1" = "pr" ]; then echo "[]"; exit 0; fi\nexit 1\n',
-      { mode: 0o755 },
-    );
-    process.env.PATH = `${tmpBin}:${originalPath}`;
+    await writeGhJson(tmpBin, '[]');
+    process.env.PATH = pathWith(tmpBin, originalPath);
     resetMergeDetectionCache();
     try {
       const repo = path.join(root, 'app');
@@ -217,21 +214,18 @@ describe('news routes', () => {
     const stateFile = path.join(root, 'pr-state.txt');
     await fs.mkdir(tmpBin, { recursive: true });
     await fs.writeFile(stateFile, 'OPEN');
-    await fs.writeFile(
-      path.join(tmpBin, 'gh'),
-      `#!/usr/bin/env bash
-if [ "$1" = "--version" ]; then echo "gh version 2.40.0"; exit 0; fi
-if [ "$1" = "auth" ]; then exit 0; fi
-if [ "$1" = "pr" ]; then
-  STATE=$(cat ${JSON.stringify(stateFile)})
-  echo "[{\\"number\\":10,\\"title\\":\\"Refresh test PR\\",\\"state\\":\\"$STATE\\",\\"url\\":\\"https://github.com/org/upstream-app/pull/10\\",\\"baseRefName\\":\\"main\\",\\"headRefOid\\":\\"deadbeef\\",\\"mergeCommit\\":null}]"
-  exit 0
-fi
-exit 1
-`,
-      { mode: 0o755 },
-    );
-    process.env.PATH = `${tmpBin}:${originalPath}`;
+    await writeGhNode(tmpBin, `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') process.exit(0);
+if (args[0] === 'pr') {
+  const state = fs.readFileSync(${JSON.stringify(stateFile)}, 'utf8').trim();
+  console.log(JSON.stringify([{ number: 10, title: 'Refresh test PR', state, url: 'https://github.com/org/upstream-app/pull/10', baseRefName: 'main', headRefOid: 'deadbeef', mergeCommit: null }]));
+  process.exit(0);
+}
+process.exit(1);
+`);
+    process.env.PATH = pathWith(tmpBin, originalPath);
     resetMergeDetectionCache();
     try {
       const repo = path.join(root, 'app-refresh');
@@ -271,15 +265,11 @@ exit 1
   // shows PRs already settled). It must never wait longer, whatever gh does, even if every gh call is held forever.
   it('waits on GitHub for a bounded 1 s on purpose and still answers within about 1.5 s while every gh call is held forever', async () => {
     const originalPath = process.env.PATH ?? '';
-    const gitPath = (await execa('which', ['git'])).stdout.trim();
     const heldBin = path.join(root, 'bin-held');
-    const gitBin = path.join(root, 'bin-git-held');
-    await fs.mkdir(heldBin, { recursive: true });
-    await fs.mkdir(gitBin, { recursive: true });
-    await fs.symlink(gitPath, path.join(gitBin, 'git'));
+    const gitBin = await gitOnlyDir(path.join(root, 'bin-git-held'));
     // Held "forever" for this test's purposes: it outlives the test, and execa's own timeout kills it.
-    await fs.writeFile(path.join(heldBin, 'gh'), `#!${process.execPath}\nsetTimeout(() => process.exit(1), 60000);\n`, { mode: 0o755 });
-    process.env.PATH = `${heldBin}:${gitBin}`;
+    await writeGhNode(heldBin, 'setTimeout(() => process.exit(1), 60000);\n');
+    process.env.PATH = pathWith(heldBin, gitBin);
     resetMergeDetectionCache();
     try {
       const repo = path.join(root, 'app-held');
@@ -312,16 +302,9 @@ exit 1
 
   it('answers within ~2s with branches and prsPending when gh hangs, populates PRs after gh settles, and omits PRs silently when gh is missing (ENOENT)', async () => {
     const originalPath = process.env.PATH ?? '';
-    const gitPath = (await execa('which', ['git'])).stdout.trim();
     const tmpBin = path.join(root, 'bin-hang');
-    const gitOnlyBin = path.join(root, 'bin-git-only');
-    await fs.mkdir(tmpBin, { recursive: true });
-    await fs.mkdir(gitOnlyBin, { recursive: true });
-    await fs.symlink(gitPath, path.join(gitOnlyBin, 'git'));
-    await fs.writeFile(
-      path.join(tmpBin, 'gh'),
-      `#!${process.execPath}
-const args = process.argv.slice(2);
+    const gitOnlyBin = await gitOnlyDir(path.join(root, 'bin-git-only'));
+    await writeGhNode(tmpBin, `const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
 if (args[0] === 'auth') { process.exit(0); }
 if (args[0] === 'pr') {
@@ -340,9 +323,7 @@ if (args[0] === 'pr') {
 } else {
   process.exit(1);
 }
-`,
-      { mode: 0o755 },
-    );
+`);
     resetMergeDetectionCache();
     try {
       const repo = path.join(root, 'app-hang');
@@ -375,7 +356,7 @@ if (args[0] === 'pr') {
       expect(missingBody.commits[0].problem).toBeUndefined();
 
       // 2. Hanging gh: answers within < 2s with branches + prsPending, then later returns PR #42
-      process.env.PATH = `${tmpBin}:${gitOnlyBin}`;
+      process.env.PATH = pathWith(tmpBin, gitOnlyBin);
       resetMergeDetectionCache();
       const start = Date.now();
       const firstRes = await app.request('/api/workspace/reports/recent-commits');

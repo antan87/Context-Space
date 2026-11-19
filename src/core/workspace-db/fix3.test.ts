@@ -36,6 +36,7 @@ describe('2. undo is bound to its generation', () => {
     const oldId = dbIdOf(db);
     await apply(db, [{ op: 'tick', id: idOf(db, 'Write the file') }]);
     const oldSeq = (await apply(db, [{ op: 'tick', id: idOf(db, 'Nested step one') }])).seq;
+    db.close(); // Windows cannot replace a database file another connection still has open; the replaced-file rules are in runtime.test.ts
     restoreBackup(ws, listBackups(ws)[0]!);
     const fresh = openTest(ws);
     const landed = await apply(fresh, [{ op: 'tick', id: idOf(fresh, 'Query the report rows') }]);

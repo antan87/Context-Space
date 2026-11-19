@@ -10,7 +10,8 @@ import { TABLES, createStatements, newId, schemaText, KIND_LETTER, ID_PATTERN } 
 import { identityColumns, snapshotColumns } from './definitions.js';
 import { apply, cleanTemp, idOf, seeded, tempWorkspace, openTest } from './testing.js';
 
-afterEach(() => { cleanTemp(); vi.mocked(randomBytes).mockReset(); });
+// the mock is reset first: a cleanup that throws must not leave a spent mock for the next test
+afterEach(() => { vi.mocked(randomBytes).mockReset(); cleanTemp(); });
 
 describe('the definitions object', () => {
   it('the tables are the ones v4 and v5 name', () => {

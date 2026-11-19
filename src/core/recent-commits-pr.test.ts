@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import { incomingCommits, resetIncomingCommitsState } from './incoming-commits.js';
 import { resetMergeDetectionCache, subscribePullRequestsSettled } from './merge-detection.js';
 import { recentCommits, whatsNew } from './whats-new.js';
+import { pathWith, writeGhJson, writeGhNode } from '../test-support/fake-gh.js';
 
 const git = async (cwd: string, args: string[], env?: Record<string, string>) =>
   (await execa('git', args, { cwd, env: { ...process.env, ...env } })).stdout.trim();
@@ -31,24 +32,11 @@ describe('recentCommits branch, base, remoteRepo, and PR commit-range matching (
     };
   };
 
-  async function installFakeGh(prsJsonExpr: string) {
+  /** A fake `gh` that lists exactly these pull requests (`json`). Works on Windows too. */
+  async function installFakeGhJson(json: string) {
     resetMergeDetectionCache();
-    const ghPath = path.join(tmpBin, 'gh');
-    await fs.writeFile(
-      ghPath,
-      `#!/usr/bin/env bash
-set -e
-if [ "$1" = "--version" ]; then echo "gh version 2.40.0"; exit 0; fi
-if [ "$1" = "auth" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-${prsJsonExpr}
-exit 0
-fi
-exit 1
-`,
-      { mode: 0o755 },
-    );
-    process.env.PATH = `${tmpBin}:${originalPath}`;
+    await writeGhJson(tmpBin, json);
+    process.env.PATH = pathWith(tmpBin, originalPath);
   }
 
   beforeEach(async () => {
@@ -61,7 +49,7 @@ exit 1
     repoDir = path.join(ws, 'NexusFlow');
     await fs.mkdir(ws, { recursive: true });
     await fs.mkdir(tmpBin, { recursive: true });
-    await installFakeGh('echo "[]"');
+    await installFakeGhJson('[]');
 
     await git(root, ['init', '--bare', '-b', 'main', bare]);
     await git(ws, ['clone', bare, 'NexusFlow']);
@@ -152,7 +140,7 @@ exit 1
         mergeCommit: { oid: mergeCommitSha },
       },
     ]);
-    await installFakeGh(`cat <<'JSON'\n${prsPayload}\nJSON`);
+    await installFakeGhJson(prsPayload);
 
     const recent = await recentCommits(ws);
     expect(recent.commits).toHaveLength(1);
@@ -239,13 +227,19 @@ exit 1
     await git(repoDir, ['push', '-u', 'origin', 'feat/demo']);
 
     const flagFile = path.join(root, 'show-open-pr');
-    await installFakeGh(`
-if [ -f ${JSON.stringify(flagFile)} ]; then
-  echo '[{"number":10,"title":"Merged squash PR","state":"MERGED","url":"https://github.com/antan87/Context-Space/pull/10","baseRefName":"main","headRefOid":"${squashPrHead}","mergeCommit":{"oid":"${squashMergeSha}"}},{"number":11,"title":"Active open PR","state":"OPEN","url":"https://github.com/antan87/Context-Space/pull/11","baseRefName":"main","headRefOid":"${openPrHead}","mergeCommit":null},{"number":8,"title":"Abandoned PR","state":"CLOSED","url":"https://github.com/antan87/Context-Space/pull/8","baseRefName":"main","headRefOid":"${squashPrHead}","mergeCommit":null}]'
-else
-  echo '[{"number":10,"title":"Merged squash PR","state":"MERGED","url":"https://github.com/antan87/Context-Space/pull/10","baseRefName":"main","headRefOid":"${squashPrHead}","mergeCommit":{"oid":"${squashMergeSha}"}}]'
-fi
+    resetMergeDetectionCache();
+    await writeGhNode(tmpBin, `const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') process.exit(0);
+if (args[0] === 'pr' && args[1] === 'list') {
+  if (fs.existsSync(${JSON.stringify(flagFile)})) process.stdout.write('[{"number":10,"title":"Merged squash PR","state":"MERGED","url":"https://github.com/antan87/Context-Space/pull/10","baseRefName":"main","headRefOid":"${squashPrHead}","mergeCommit":{"oid":"${squashMergeSha}"}},{"number":11,"title":"Active open PR","state":"OPEN","url":"https://github.com/antan87/Context-Space/pull/11","baseRefName":"main","headRefOid":"${openPrHead}","mergeCommit":null},{"number":8,"title":"Abandoned PR","state":"CLOSED","url":"https://github.com/antan87/Context-Space/pull/8","baseRefName":"main","headRefOid":"${squashPrHead}","mergeCommit":null}]\\n');
+  else process.stdout.write('[{"number":10,"title":"Merged squash PR","state":"MERGED","url":"https://github.com/antan87/Context-Space/pull/10","baseRefName":"main","headRefOid":"${squashPrHead}","mergeCommit":{"oid":"${squashMergeSha}"}}]\\n');
+  process.exit(0);
+}
+process.exit(1);
 `);
+    process.env.PATH = pathWith(tmpBin, originalPath);
 
     const first = await recentCommits(ws);
     expect(first.commits[0]?.pullRequests?.map((p) => p.number)).toEqual([10]);
@@ -341,7 +335,7 @@ fi
         mergeCommit: null,
       },
     ]);
-    await installFakeGh(`cat <<'JSON'\n${payload}\nJSON`);
+    await installFakeGhJson(payload);
 
     const recent = await recentCommits(ws);
     const bySubject = new Map(recent.commits[0]!.commits.map((c) => [c.subject, c]));
@@ -415,7 +409,7 @@ fi
         mergeCommit: { oid: m11Sha },
       },
     ]);
-    await installFakeGh(`cat <<'JSON'\n${payload}\nJSON`);
+    await installFakeGhJson(payload);
 
     const recent = await recentCommits(ws);
     const bySubject = new Map(recent.commits[0]!.commits.map((c) => [c.subject, c]));
@@ -521,7 +515,7 @@ fi
         mergeCommit: { oid: ffMergeSha },
       },
     ]);
-    await installFakeGh(`cat <<'JSON'\n${payload}\nJSON`);
+    await installFakeGhJson(payload);
 
     const recent = await recentCommits(ws);
     const bySubject = new Map(recent.commits[0]!.commits.map((c) => [c.subject, c]));
@@ -582,10 +576,7 @@ fi
         },
       ]),
     );
-    await fs.writeFile(
-      path.join(tmpBin, 'gh'),
-      `#!${process.execPath}
-const fs = require('node:fs');
+    await writeGhNode(tmpBin, `const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
 if (args[0] === 'auth') { process.exit(0); }
@@ -597,10 +588,8 @@ if (args[0] === 'pr' && args[1] === 'list') {
 } else {
   process.exit(1);
 }
-`,
-      { mode: 0o755 },
-    );
-    process.env.PATH = `${tmpBin}:${originalPath}`;
+`);
+    process.env.PATH = pathWith(tmpBin, originalPath);
     resetMergeDetectionCache();
 
     let settledCount = 0;
@@ -712,7 +701,7 @@ if (args[0] === 'pr' && args[1] === 'list') {
         mergeCommit: { oid: ffMergeSha },
       },
     ]);
-    await installFakeGh(`cat <<'JSON'\n${payload}\nJSON`);
+    await installFakeGhJson(payload);
 
     const recent = await recentCommits(ws);
     const bySubject = new Map(recent.commits[0]!.commits.map((c) => [c.subject, c]));

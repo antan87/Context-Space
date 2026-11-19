@@ -187,6 +187,68 @@ function scanIds(db: DatabaseSync): { ids: Set<string>; complete: boolean } {
 }
 
 /**
+ * Windows promotion. A hard link to an open file cannot be removed again there, so nothing is linked: the live file is
+ * RENAMED aside, which Windows refuses cleanly while any other connection has it open (nothing is changed then). Only
+ * after that succeeds is the journal moved and the new file renamed into place. If a later step fails, the old file
+ * and its journal are renamed back before the error is thrown; if that recovery fails too, the error says exactly
+ * where each file is (never "nothing was changed"). The database file and its journal stay together under the live
+ * name until recovery succeeds.
+ * Remaining crash window: between renaming the live file aside and renaming the new one in, the live path is missing
+ * while both whole files exist (`workspace.db.replaced-<time>` and the new `.restore-*` temp). Opening then reports
+ * `missing`. Handling "live missing but a .replaced exists" belongs to DB3.
+ */
+function replaceOnWindows(live: string, temp: string): string | null {
+  if (!existsSync(live)) { renameSync(temp, live); return null; }
+  const journal = `${live}-journal`;
+  // A name nothing uses (rename overwrites on some platforms): timestamp plus a random part, checked right before the rename.
+  let keptAs = '';
+  for (let attempt = 0; attempt < 5 && !keptAs; attempt += 1) {
+    const name = `${live}.replaced-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}`;
+    if (!existsSync(name) && !existsSync(`${name}-journal`)) keptAs = name;
+  }
+  if (!keptAs) throw new WorkspaceDbError('backup_failed', 'The restore could not find a free name for the replaced database. The backup was not installed and the workspace database was left in place.');
+  const keptJournal = `${keptAs}-journal`;
+  const inUse = (cause: unknown) => new WorkspaceDbError('file_in_use', 'The backup could not be restored because another connection still has the workspace database open. Close ContextSpace and every other program using this workspace, then restore again. The backup was not installed and the workspace database was left in place (SQLite may have finished an interrupted write while the restore checked it).', { cause });
+  try {
+    renameSync(live, keptAs); // the probe: refused while another handle holds the file
+  } catch (error) {
+    if (isFileInUse(error)) throw inUse(error);
+    throw error; // nothing was moved
+  }
+  let journalMoved = false;
+  try {
+    if (existsSync(journal)) { renameSync(journal, keptJournal); journalMoved = true; } // a leftover journal must never be applied to the new file
+    renameSync(temp, live);
+    return keptAs;
+  } catch (error) {
+    // Recovery: the journal first, then the database, so the database is never openable without the journal it may need.
+    // If the journal cannot go back, the database is not moved back either: both stay under their kept names.
+    const fail = (where: string) => new WorkspaceDbError('backup_failed', `The restore failed (${(error as Error).message}) and the old database could not be put back: ${where}. Nothing was deleted. Close every program using this workspace, then put the database back at ${live} with its journal (if it has one) at ${journal}.`, { cause: error });
+    if (journalMoved) {
+      try {
+        if (existsSync(journal)) throw new Error('a new journal appeared at the live path');
+        renameSync(keptJournal, journal);
+      } catch { throw fail(`the old database is at ${keptAs} and its journal is at ${keptJournal}`); }
+    }
+    try {
+      renameSync(keptAs, live);
+    } catch {
+      let journalAt: string | null = existsSync(journal) ? journal : null; // a journal that was never moved aside is still at the live path
+      if (journalMoved) { journalAt = keptJournal; try { renameSync(journal, keptJournal); } catch { journalAt = journal; } } // keep the pair together again
+      throw fail(`the old database is at ${keptAs}${journalAt ? ` and its journal is at ${journalAt}` : ''}`);
+    }
+    if (isFileInUse(error)) throw inUse(error);
+    throw error;
+  }
+}
+
+/** Windows says an open file cannot be replaced with EPERM, EBUSY or EACCES. */
+function isFileInUse(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
+/**
  * Restores a backup (a file name from {@link listBackups}, or a path) as the workspace database, as a new generation:
  * `db_id` changes and the ids ever issued are carried over so none is reused. The ledger comes from the live file
  * while it can be read; when it is damaged, from whatever of it can still be read plus the backup's own, and when
@@ -197,12 +259,17 @@ function scanIds(db: DatabaseSync): { ids: Set<string>; complete: boolean } {
 export function restoreBackup(workspacePath: string, backup: string): RestoreResult {
   // NOT YET SAFE while other connections are open. It holds the live file's write lock only for its own scan and
   // promotion; a writer or opener in another process or connection is not fenced against the replacement, the Windows
-  // rename of an open file is not handled, and the whole thing is synchronous. DB3 must fence it (close or refuse all
+  // rename of an open file is refused with `file_in_use` (nothing changed) but not otherwise fenced, and the whole thing is synchronous. DB3 must fence it (close or refuse all
   // other openers and writers first, then restore) before anything calls it from a running app.
   const live = dbFilePath(workspacePath);
   const source = path.isAbsolute(backup) ? backup : path.join(backupsDir(workspacePath), backup);
   if (!existsSync(source)) throw new WorkspaceDbError('backup_failed', `There is no backup ${source}.`);
   assertBackup(source);
+  // A journal at the live path with no database beside it belongs to a database that is not there (a failed recovery
+  // left it). Installing a backup next to it could apply it to the wrong file: refuse before anything moves.
+  if (!existsSync(live) && existsSync(`${live}-journal`)) {
+    throw new WorkspaceDbError('backup_failed', `There is a journal at ${live}-journal but no database at ${live}. Move that journal away, or recover the old database it belongs to, before restoring. Nothing was changed.`);
+  }
   mkdirSync(path.dirname(live), { recursive: true });
   const temp = path.join(path.dirname(live), `.restore-${process.pid}-${randomBytes(4).toString('hex')}.db`);
   copyFileSync(source, temp);
@@ -253,19 +320,23 @@ export function restoreBackup(workspacePath: string, backup: string): RestoreRes
     } finally {
       try { restored.close(); } catch { /* ignore */ }
     }
-    // Promotion. The live path always holds a whole file: the old one is linked (or copied) aside first, then the new
-    // one replaces it with one atomic rename. A crash before the rename leaves the old file in place and a copy aside;
-    // after it, the new file in place and the old one aside.
+    // Promotion. On POSIX the live path always holds a whole file: the old one is linked (or copied) aside first, then
+    // the new one replaces it with one atomic rename. A crash before the rename leaves the old file in place and a copy
+    // aside; after it, the new file in place and the old one aside.
     let keptAs: string | null = null;
-    if (existsSync(live)) {
-      keptAs = `${live}.replaced-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      try { linkSync(live, keptAs); } catch { copyFileSync(live, keptAs, constants.COPYFILE_EXCL); }
-      const journal = `${live}-journal`;
-      if (existsSync(journal)) renameSync(journal, `${keptAs}-journal`); // a leftover journal must never be applied to the new file
+    if (process.platform === 'win32') {
+      releaseLive(); // Windows cannot replace a file that is open
+      keptAs = replaceOnWindows(live, temp);
+    } else {
+      if (existsSync(live)) {
+        keptAs = `${live}.replaced-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+        try { linkSync(live, keptAs); } catch { copyFileSync(live, keptAs, constants.COPYFILE_EXCL); }
+        const journal = `${live}-journal`;
+        if (existsSync(journal)) renameSync(journal, `${keptAs}-journal`); // a leftover journal must never be applied to the new file
+      }
+      renameSync(temp, live);
+      releaseLive();
     }
-    if (process.platform === 'win32') releaseLive(); // Windows cannot replace a file that is open
-    renameSync(temp, live);
-    releaseLive();
     return { ...result, keptAs };
   } catch (error) {
     releaseLive();

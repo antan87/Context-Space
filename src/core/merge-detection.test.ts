@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
+import { pathWith, writeGhNode } from '../test-support/fake-gh.js';
 
 import {
   checkMerged,
@@ -120,10 +121,10 @@ describe('parseBranchPullRequests & listBranchPullRequests', () => {
     await fs.rm(tmpBin, { recursive: true, force: true, maxRetries: 5 });
   });
 
-  async function installFakeGh(scriptBody: string) {
-    const ghPath = path.join(tmpBin, 'gh');
-    await fs.writeFile(ghPath, `#!/usr/bin/env bash\nset -e\n${scriptBody}\n`, { mode: 0o755 });
-    process.env.PATH = `${tmpBin}:${originalPath}`;
+  /** A fake `gh` written as a Node script, so it runs on Windows too (see test-support/fake-gh.ts). */
+  async function installFakeGh(source: string) {
+    await writeGhNode(tmpBin, source);
+    process.env.PATH = pathWith(tmpBin, originalPath);
   }
 
   it('parses gh pr list JSON and rejects malformed or unsafe URLs', () => {
@@ -184,11 +185,12 @@ describe('parseBranchPullRequests & listBranchPullRequests', () => {
   it('returns [] silently for non-GitHub remotes, detached branch, or unauthenticated gh', async () => {
     const callsFile = path.join(tmpBin, 'calls.log');
     await installFakeGh(`
-      echo "$*" >> ${JSON.stringify(callsFile)}
-      if [ "$1" = "--version" ]; then echo "gh version 2.0.0"; exit 0; fi
-      if [ "$1" = "auth" ]; then exit 1; fi
-      exit 1
-    `);
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(callsFile)}, args.join(' ') + '\\n');
+if (args[0] === '--version') { console.log('gh version 2.0.0'); process.exit(0); }
+process.exit(1);
+`);
 
     expect(await listBranchPullRequests(tmpBin, 'feat/x', 'git@gitlab.com:acme/app.git')).toEqual([]);
     expect(await listBranchPullRequests(tmpBin, null, 'git@github.com:acme/app.git')).toEqual([]);
@@ -206,21 +208,20 @@ describe('parseBranchPullRequests & listBranchPullRequests', () => {
     const countFile = path.join(tmpBin, 'count.txt');
     await fs.writeFile(countFile, '0');
     await installFakeGh(`
-      echo "PROMPT=$GH_PROMPT_DISABLED:$GIT_TERMINAL_PROMPT ARGS=$*" >> ${JSON.stringify(callsFile)}
-      if [ "$1" = "--version" ]; then echo "gh version 2.0.0"; exit 0; fi
-      if [ "$1" = "auth" ]; then exit 0; fi
-      if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-        n=$(( $(cat ${JSON.stringify(countFile)}) + 1 ))
-        echo "$n" > ${JSON.stringify(countFile)}
-        if [ "$n" = "1" ]; then
-          echo '[{"number":10,"title":"First PR","state":"OPEN","url":"https://github.com/acme/app/pull/10","baseRefName":"main","headRefOid":"aaaa111","mergeCommit":null}]'
-        else
-          echo '[{"number":10,"title":"First PR","state":"MERGED","url":"https://github.com/acme/app/pull/10","baseRefName":"main","headRefOid":"aaaa111","mergeCommit":{"oid":"bbbb222"}}]'
-        fi
-        exit 0
-      fi
-      exit 1
-    `);
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(callsFile)}, 'PROMPT=' + process.env.GH_PROMPT_DISABLED + ':' + process.env.GIT_TERMINAL_PROMPT + ' ARGS=' + args.join(' ') + '\\n');
+if (args[0] === '--version') { console.log('gh version 2.0.0'); process.exit(0); }
+if (args[0] === 'auth') process.exit(0);
+if (args[0] === 'pr' && args[1] === 'list') {
+  const n = Number(fs.readFileSync(${JSON.stringify(countFile)}, 'utf8')) + 1;
+  fs.writeFileSync(${JSON.stringify(countFile)}, n + '\\n');
+  if (n === 1) console.log('[{"number":10,"title":"First PR","state":"OPEN","url":"https://github.com/acme/app/pull/10","baseRefName":"main","headRefOid":"aaaa111","mergeCommit":null}]');
+  else console.log('[{"number":10,"title":"First PR","state":"MERGED","url":"https://github.com/acme/app/pull/10","baseRefName":"main","headRefOid":"aaaa111","mergeCommit":{"oid":"bbbb222"}}]');
+  process.exit(0);
+}
+process.exit(1);
+`);
 
     const first = await listBranchPullRequests(tmpBin, 'feat/demo', 'https://github.com/acme/app.git');
     expect(first).toHaveLength(1);
@@ -258,18 +259,18 @@ describe('parseBranchPullRequests & listBranchPullRequests', () => {
   it('coalesces concurrent ghAvailable(true) probes into a single detectGh invocation', async () => {
     const probeLog = path.join(tmpBin, 'probes.log');
     await installFakeGh(`
-      if [ "$1" = "--version" ]; then echo "gh version 2.40.0"; exit 0; fi
-      if [ "$1" = "auth" ]; then
-        sleep 0.1
-        echo "auth" >> ${JSON.stringify(probeLog)}
-        exit 0
-      fi
-      if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-        echo "[]"
-        exit 0
-      fi
-      exit 1
-    `);
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') {
+  setTimeout(() => { fs.appendFileSync(${JSON.stringify(probeLog)}, 'auth\\n'); process.exit(0); }, 100);
+} else if (args[0] === 'pr' && args[1] === 'list') {
+  console.log('[]');
+  process.exit(0);
+} else {
+  process.exit(1);
+}
+`);
 
     const [a, b] = await Promise.all([
       listBranchPullRequests(path.join(tmpBin, 'repo-a'), 'feat/a', 'https://github.com/acme/a.git', { refresh: true }),
@@ -288,11 +289,7 @@ describe('parseBranchPullRequests & listBranchPullRequests', () => {
     await fs.writeFile(stateFile, 'OPEN');
     await fs.writeFile(delayFile, '350');
 
-    const ghPath = path.join(tmpBin, 'gh');
-    await fs.writeFile(
-      ghPath,
-      `#!${process.execPath}
-const fs = require('node:fs');
+    await writeGhNode(tmpBin, `const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
 if (args[0] === 'auth') { process.exit(0); }
@@ -315,10 +312,8 @@ if (args[0] === 'pr' && args[1] === 'list') {
 } else {
   process.exit(1);
 }
-`,
-      { mode: 0o755 },
-    );
-    process.env.PATH = `${tmpBin}:${originalPath}`;
+`);
+    process.env.PATH = pathWith(tmpBin, originalPath);
     resetMergeDetectionCache();
 
     const settledRepos: string[] = [];

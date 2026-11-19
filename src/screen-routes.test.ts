@@ -9,6 +9,7 @@ import { BOARD_EVENTS_FILE, appendScreenEvent } from './core/screen-events.js';
 import { execa } from 'execa';
 import { resetMergeDetectionCache } from './core/merge-detection.js';
 import { recentCommits } from './core/whats-new.js';
+import { pathWith, writeGhNode } from './test-support/fake-gh.js';
 
 let root: string;
 let dir: string;
@@ -237,10 +238,7 @@ describe('GET /api/workspace/:id/screen-events', () => {
       path.join(dir, 'contextspace.json'),
       JSON.stringify({ id: 'ws', name: 'WS', branchName: 'feat/x', repos: [repo], assistants: [], workspacePath: dir }),
     );
-    await fs.writeFile(
-      path.join(tmpBin, 'gh'),
-      `#!${process.execPath}
-const args = process.argv.slice(2);
+    await writeGhNode(tmpBin, `const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
 if (args[0] === 'auth') { process.exit(0); }
 if (args[0] === 'pr') {
@@ -259,10 +257,8 @@ if (args[0] === 'pr') {
 } else {
   process.exit(1);
 }
-`,
-      { mode: 0o755 },
-    );
-    process.env.PATH = `${tmpBin}:${originalPath}`;
+`);
+    process.env.PATH = pathWith(tmpBin, originalPath);
     resetMergeDetectionCache();
     try {
       const res = await app.request('/api/workspace/ws/screen-events');

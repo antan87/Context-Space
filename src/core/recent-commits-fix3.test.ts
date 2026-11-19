@@ -6,6 +6,7 @@ import { execa } from 'execa';
 
 import { checkMerged, listBranchPullRequestsState, resetMergeDetectionCache } from './merge-detection.js';
 import { recentCommits } from './whats-new.js';
+import { pathWith, writeGhNode } from '../test-support/fake-gh.js';
 
 const git = async (cwd: string, args: string[], env?: Record<string, string>) =>
   (await execa('git', args, { cwd, env: { ...process.env, ...env } })).stdout.trim();
@@ -24,20 +25,23 @@ describe('CL1 fix round 3: backend PR evidence (real git, fake gh)', { timeout: 
       GIT_COMMITTER_NAME: author, GIT_COMMITTER_EMAIL: `${author.toLowerCase()}@example.com`, GIT_COMMITTER_DATE: iso,
     };
   };
-  const writeGh = async (script: string) => {
+  /** Installs a fake `gh` written as a Node script (it runs on Windows too). */
+  const writeGh = async (source: string) => {
     resetMergeDetectionCache();
-    await fs.writeFile(path.join(bin, 'gh'), script, { mode: 0o755 });
-    process.env.PATH = `${bin}:${originalPath}`;
+    await writeGhNode(bin, source);
+    process.env.PATH = pathWith(bin, originalPath);
   };
-  /** A fake `gh` whose `pr list` is the shell snippet `body`; `$ARGS` holds all its arguments. */
-  const bashGh = (body: string) => `#!/usr/bin/env bash
-if [ "$1" = "--version" ]; then echo "gh version 2.40.0"; exit 0; fi
-if [ "$1" = "auth" ]; then exit 0; fi
-if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-ARGS="$*"
+  /** A fake `gh` whose `pr list` runs the JavaScript `body`; `ARGS` holds all its arguments, `out(json)` answers. */
+  const nodeGh = (body: string) => `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const ARGS = args.join(' ');
+const out = (json) => { process.stdout.write(json + '\\n'); process.exit(0); };
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') process.exit(0);
+if (args[0] === 'pr' && args[1] === 'list') {
 ${body}
-fi
-exit 1
+}
+process.exit(1);
 `;
 
   beforeEach(async () => {
@@ -76,14 +80,12 @@ exit 1
   it('asks gh for the remote repository and never reuses a PR cache entry across remotes (a fork and its upstream share branch and SHAs)', async () => {
     const head = await git(repo, ['rev-parse', 'HEAD']);
     const pr = (number: number, title: string, slug: string) =>
-      `echo '[{"number":${number},"title":"${title}","state":"OPEN","url":"https://github.com/${slug}/pull/${number}","baseRefName":"main","headRefOid":"${head}","mergeCommit":null}]'`;
+      JSON.stringify([{ number, title, state: 'OPEN', url: `https://github.com/${slug}/pull/${number}`, baseRefName: 'main', headRefOid: head, mergeCommit: null }]);
     // Without --repo gh would use its own default repository, here a wrong one (#999).
-    await writeGh(bashGh(`
-case "$ARGS" in
-  *"--repo me/app"*) ${pr(1, 'Fork PR', 'me/app')}; exit 0;;
-  *"--repo org/app"*) ${pr(2, 'Upstream PR', 'org/app')}; exit 0;;
-  *) ${pr(999, 'Default repo PR', 'someone/else')}; exit 0;;
-esac`));
+    await writeGh(nodeGh(`
+if (ARGS.includes('--repo me/app')) out(${JSON.stringify(pr(1, 'Fork PR', 'me/app'))});
+else if (ARGS.includes('--repo org/app')) out(${JSON.stringify(pr(2, 'Upstream PR', 'org/app'))});
+else out(${JSON.stringify(pr(999, 'Default repo PR', 'someone/else'))});`));
 
     const fork = await recentCommits(ws);
     expect(fork.commits[0]?.remoteRepo).toBe('me/app');
@@ -119,7 +121,7 @@ esac`));
     await git(mate, ['push', 'origin', 'feat/x']);
     await git(repo, ['fetch', 'origin']);
 
-    await writeGh(bashGh(`echo '[{"number":7,"title":"Shared PR","state":"OPEN","url":"https://github.com/me/app/pull/7","baseRefName":"main","headRefOid":"${mateHead}","mergeCommit":null}]'; exit 0`));
+    await writeGh(nodeGh(`out(${JSON.stringify(JSON.stringify([{ number: 7, title: 'Shared PR', state: 'OPEN', url: 'https://github.com/me/app/pull/7', baseRefName: 'main', headRefOid: mateHead, mergeCommit: null }]))});`));
     const recent = await recentCommits(ws);
     const incoming = recent.commits[0]?.incomingPrs;
     expect(incoming).toEqual({ [mateHead]: 7, [mateFirst]: 7 });
@@ -130,9 +132,9 @@ esac`));
   it('keeps the last good PRs, marked stale, when a later gh pr list fails', async () => {
     const head = await git(repo, ['rev-parse', 'HEAD']);
     const flag = path.join(root, 'fail');
-    await writeGh(bashGh(`
-if [ -f ${JSON.stringify(flag)} ]; then exit 4; fi
-echo '[{"number":3,"title":"Known PR","state":"OPEN","url":"https://github.com/me/app/pull/3","baseRefName":"main","headRefOid":"${head}","mergeCommit":null}]'; exit 0`));
+    await writeGh(nodeGh(`
+if (fs.existsSync(${JSON.stringify(flag)})) process.exit(4);
+out(${JSON.stringify(JSON.stringify([{ number: 3, title: 'Known PR', state: 'OPEN', url: 'https://github.com/me/app/pull/3', baseRefName: 'main', headRefOid: head, mergeCommit: null }]))});`));
 
     const good = await recentCommits(ws);
     expect(good.commits[0]?.pullRequests?.map((p) => p.number)).toEqual([3]);
@@ -152,8 +154,7 @@ echo '[{"number":3,"title":"Known PR","state":"OPEN","url":"https://github.com/m
 
   it('runs at most 2 background gh pr list processes at once across repositories', async () => {
     const log = path.join(root, 'gh-log');
-    await writeGh(`#!${process.execPath}
-const fs = require('node:fs');
+    await writeGh(`const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
 if (args[0] === 'auth') process.exit(0);
@@ -185,13 +186,15 @@ if (args[0] === 'pr') {
   it('keeps the last good PRs, marked stale, when the gh auth probe fails during a refresh (round 4)', async () => {
     const head = await git(repo, ['rev-parse', 'HEAD']);
     const flag = path.join(root, 'auth-fails');
-    await writeGh(`#!/usr/bin/env bash
-if [ "$1" = "--version" ]; then echo "gh version 2.40.0"; exit 0; fi
-if [ "$1" = "auth" ]; then [ -f ${JSON.stringify(flag)} ] && exit 1; exit 0; fi
-if [ "$1" = "pr" ]; then
-echo '[{"number":3,"title":"Known PR","state":"OPEN","url":"https://github.com/me/app/pull/3","baseRefName":"main","headRefOid":"${head}","mergeCommit":null}]'; exit 0
-fi
-exit 1
+    await writeGh(`const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'auth') process.exit(fs.existsSync(${JSON.stringify(flag)}) ? 1 : 0);
+if (args[0] === 'pr') {
+  console.log(${JSON.stringify(JSON.stringify([{ number: 3, title: 'Known PR', state: 'OPEN', url: 'https://github.com/me/app/pull/3', baseRefName: 'main', headRefOid: '__HEAD__', mergeCommit: null }]))}.replace('__HEAD__', ${JSON.stringify(head)}));
+  process.exit(0);
+}
+process.exit(1);
 `);
     const good = await recentCommits(ws);
     expect(good.commits[0]?.pullRequests?.map((p) => p.number)).toEqual([3]);
@@ -224,7 +227,7 @@ exit 1
     await git(repo, ['config', 'branch.feat/x.remote', 'fork']);
     await git(repo, ['update-ref', 'refs/remotes/fork/feat/x', head]);
     await git(repo, ['update-ref', 'refs/remotes/origin/main', baseSha]);
-    await writeGh(bashGh(`echo '[{"number":9,"title":"Fork PR","state":"OPEN","url":"https://github.com/fork/app/pull/9","baseRefName":"main","headRefOid":"${head}","mergeCommit":null}]'; exit 0`));
+    await writeGh(nodeGh(`out(${JSON.stringify(JSON.stringify([{ number: 9, title: 'Fork PR', state: 'OPEN', url: 'https://github.com/fork/app/pull/9', baseRefName: 'main', headRefOid: head, mergeCommit: null }]))});`));
 
     // fork/main is missing: never fall back to origin/main's (older) base. Nothing is claimed by the PR.
     const missing = await recentCommits(ws);
@@ -244,7 +247,7 @@ exit 1
   it('asks gh for the remote repository when Archive checks a merged PR (round 4)', async () => {
     const head = await git(repo, ['rev-parse', 'HEAD']);
     const calls = path.join(root, 'calls');
-    await writeGh(bashGh(`echo "$ARGS" >> ${JSON.stringify(calls)}; echo '[{"url":"https://github.com/me/app/pull/4","headRefOid":"${head}","baseRefName":"main"}]'; exit 0`));
+    await writeGh(nodeGh(`fs.appendFileSync(${JSON.stringify(calls)}, ARGS + '\\n'); out(${JSON.stringify(JSON.stringify([{ url: 'https://github.com/me/app/pull/4', headRefOid: head, baseRefName: 'main' }]))});`));
     const result = await checkMerged({ repoPath: repo, sha: head, branch: 'feat/x', defaultBranch: 'main', remoteUrl: 'git@github.com:me/app.git' });
     expect(result.evidence).toBe('pull-request');
     expect(await fs.readFile(calls, 'utf8')).toContain('--repo me/app');

@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { backupsDir, dbFilePath, getRevision, listBackups, listBlocks, localDay, maybeBackup, newId, createWorkspaceDb, restoreBackup, WorkspaceDbError } from './index.js';
-import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace } from './testing.js';
+import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace, track } from './testing.js';
 
 afterEach(cleanTemp);
 
@@ -81,7 +81,7 @@ describe('daily backups (v5 point 7)', () => {
 
   it('the first committed write of a day schedules the backup after commit, and later writes do not make another', async () => {
     const ws = tempWorkspace();
-    const db = createWorkspaceDb(ws, { busy: 'cli' }); // backups on
+    const db = track(createWorkspaceDb(ws, { busy: 'cli' })); // backups on
     const { importPlanText } = await import('./index.js');
     await importPlanText(db, SAMPLE_PLAN, { by: 'import' });
     await db.idle();
@@ -103,6 +103,7 @@ describe('restore starts a new generation', () => {
     const dbIdBefore = getRevision(db).dbId;
     const added = await apply(db, [{ op: 'add', kind: 'step', text: 'Made after the backup', under: idOf(db, 'Third checkpoint') }]);
     const lostId = added.newIds[0]!;
+    db.close(); // Windows cannot replace a database file another connection still has open; the replaced-file rules are in runtime.test.ts
     const result = restoreBackup(ws, listBackups(ws)[0]!);
     expect(result.dbId).not.toBe(dbIdBefore);
     expect(result.keptAs).toMatch(/workspace\.db\.replaced-/);

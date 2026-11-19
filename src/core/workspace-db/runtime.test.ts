@@ -1,10 +1,10 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { dbFilePath, exportPlanMarkdown, getRevision, listBlocks, openWorkspaceDb, planView, restoreBackup, maybeBackup, schemaText, WorkspaceDbError } from './index.js';
-import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace, applyBatch } from './testing.js';
+import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace, applyBatch, track } from './testing.js';
 
 afterEach(cleanTemp);
 
@@ -77,7 +77,7 @@ describe('opening', () => {
     raw.exec('CREATE TABLE blocks (x)');
     raw.close();
     expect(() => openTest(ws)).toThrow(WorkspaceDbError);
-    const after = new DatabaseSync(dbFilePath(ws));
+    const after = track(new DatabaseSync(dbFilePath(ws)));
     expect(after.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get()).toEqual({ n: 1 });
     expect(Object.values(after.prepare('PRAGMA user_version').get() as object)[0]).toBe(0);
   });
@@ -265,7 +265,8 @@ describe('stdout stays clean', () => {
 });
 
 describe('a replaced file', () => {
-  it('a connection opened before a restore is refused with a typed error and loses nothing', async () => {
+  // POSIX: the restore replaces the file under a live connection, which then gets `replaced`. Windows cannot replace an open file: see the next test.
+  it.skipIf(process.platform === 'win32')('a connection opened before a restore is refused with a typed error and loses nothing', async () => {
     const { ws, db } = await seeded();
     await maybeBackup(ws);
     await apply(db, [{ op: 'tick', id: idOf(db, 'Write the file') }]);
@@ -278,5 +279,19 @@ describe('a replaced file', () => {
     expect(getRevision(fresh).dbId).toBe(result.dbId);
     expect(existsSync(result.keptAs!)).toBe(true);
     expect(planView(fresh)).toContain('revision 2');
+  });
+
+  // The Windows rule: a restore never replaces a file another connection has open. It says so, changes nothing, and the open connection keeps working.
+  it.skipIf(process.platform !== 'win32')('on Windows a restore under an open connection fails with file_in_use and changes nothing', async () => {
+    const { ws, db } = await seeded();
+    await maybeBackup(ws);
+    await apply(db, [{ op: 'tick', id: idOf(db, 'Write the file') }]);
+    const dbIdBefore = getRevision(db).dbId;
+    const name = (await import('./index.js')).listBackups(ws)[0]!;
+    expect(() => restoreBackup(ws, name)).toThrow(expect.objectContaining({ code: 'file_in_use' }));
+    expect(db.isCurrent()).toBe(true);
+    expect(getRevision(db)).toEqual({ revision: 2, dbId: dbIdBefore });
+    expect((await apply(db, [{ op: 'tick', id: idOf(db, 'Nested step one') }])).ok).toBe(true);
+    expect(readdirSync(path.join(ws, '.contextspace')).filter((n) => n.startsWith('.restore'))).toEqual([]);
   });
 });

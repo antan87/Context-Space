@@ -34,14 +34,29 @@ export function tempWorkspace(): string {
   return dir;
 }
 
+/** Everything a test opened (databases, raw handles): closed before the folders go. Windows cannot delete an open file. */
+const handles: Array<{ close(): void }> = [];
+
+/** Remembers a database (or raw `DatabaseSync`) a test opened so `cleanTemp` closes it. Returns it unchanged. */
+export function track<T extends { close(): void }>(handle: T): T {
+  handles.push(handle);
+  return handle;
+}
+
 export function cleanTemp(): void {
-  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const handle of handles.splice(0)) { try { handle.close(); } catch { /* already closed */ } }
+  const failures: unknown[] = [];
+  for (const dir of made.splice(0)) {
+    // retries ride out a virus scanner or indexer that holds a file for a moment (Windows)
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw failures[0];
 }
 
 /** Creates the database when there is none, otherwise opens it (read-only when asked). */
 export function openTest(workspace: string, busy: BusyMode = 'cli', extra: { readOnly?: boolean; backups?: boolean } = {}): WorkspaceDb {
-  if (extra.readOnly) return openWorkspaceDb(workspace, { busy, backups: extra.backups ?? false, readOnly: true });
-  return createWorkspaceDb(workspace, { busy, backups: extra.backups ?? false });
+  if (extra.readOnly) return track(openWorkspaceDb(workspace, { busy, backups: extra.backups ?? false, readOnly: true }));
+  return track(createWorkspaceDb(workspace, { busy, backups: extra.backups ?? false }));
 }
 
 export const dbIdOf = (db: WorkspaceDb): string => (db.sqlite.prepare("SELECT value FROM meta WHERE key = 'db_id'").get() as { value: string }).value;

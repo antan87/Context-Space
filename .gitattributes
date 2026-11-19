@@ -1,0 +1,2 @@
+# The store's tests and the sample plan compare exact text with \n, so Git must not turn it into CRLF on Windows.
+src/core/workspace-db/fixtures/* text eol=lf
