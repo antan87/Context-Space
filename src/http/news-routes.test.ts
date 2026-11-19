@@ -290,7 +290,9 @@ process.exit(1);
       const res = await app.request('/api/workspace/reports/recent-commits');
       const elapsedMs = Date.now() - start;
       expect(res.status).toBe(200);
-      expect(elapsedMs).toBeLessThan(1_500);
+      // Windows runners spend about 0.8 s more starting git and the gh.cmd fake (CI: 1.8-2.0 s). The bound still
+      // proves the route never waits for the held gh, which would take 60 s.
+      expect(elapsedMs).toBeLessThan(process.platform === 'win32' ? 3_000 : 1_500);
       expect(elapsedMs).toBeGreaterThanOrEqual(900);
       const body = await res.json();
       expect(body.commits[0]).toMatchObject({ repo: 'app-held', branch: 'feat/branch', prsPending: true });
