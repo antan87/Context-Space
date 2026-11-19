@@ -145,7 +145,8 @@ async function dragSelectLocatorText(page: Page, target: Locator): Promise<strin
     return {
       startX: first.left + 2,
       startY: first.top + first.height / 2,
-      endX: last.right - 2,
+      // Just past the last letter: ending inside it leaves a narrow last letter (an "r") unselected on some renderers.
+      endX: last.right + 1,
       endY: last.top + last.height / 2,
     };
   });
@@ -247,8 +248,9 @@ test('Copy text in a card … menu copies the title and body as Markdown', async
   await note.getByRole('button', { name: 'Actions for Retry disk save cleanly', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Copy text', exact: true }).click();
 
+  // The Windows clipboard gives text back with CRLF line endings, as it does for every app.
   await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .poll(() => page.evaluate(() => navigator.clipboard.readText().then((t) => t.replace(/\r\n/g, '\n'))))
     .toBe('# Retry disk save cleanly\n\nCheck **disk full** handling cleanly.');
 });
 
@@ -388,7 +390,10 @@ test('keyboard activation, cross-edge drag-select, note selection without thread
   await page.mouse.up();
   await expect(reader(page)).toHaveCount(0);
 
-  // 3. Keyboard Enter still opens FileCard and StepDetailDialog while text inside is selected
+  // 3. Keyboard Enter still opens FileCard and StepDetailDialog while text inside is selected.
+  // Step 2 left the title selected. On macOS a press on selected text starts dragging that text instead of a new
+  // selection, so start from no selection.
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
   const selectedFile = await dragSelectLocatorText(page, fileCard.locator('h2 span[title="CSV format specification"]'));
   expect(selectedFile).toContain('CSV format');
   await fileBtn.focus();
