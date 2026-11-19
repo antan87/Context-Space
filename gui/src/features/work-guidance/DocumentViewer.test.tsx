@@ -188,4 +188,36 @@ describe('DocumentViewer', () => {
     const chromelessFill = renderToStaticMarkup(createElement(DocumentViewer, { title: 'doc.md', preview: null, raw: false, fill: true, chromeless: true, status: createElement(Probe) }));
     expect(chromelessFill).toContain('data-screen="none"');
   });
+
+  it('shows a Copy picture button for non-chromeless image previews with a fileUrl', () => {
+    const imagePreview: DocumentPreviewData = { name: 'assets/chart.png', kind: 'image', size: 120, modifiedAt: '2026-10-18T12:00:00.000Z' };
+    const withChrome = renderToStaticMarkup(createElement(DocumentViewer, {
+      title: 'assets/chart.png',
+      preview: imagePreview,
+      raw: false,
+      fileUrl: '/api/workspace/demo/documents/file?name=assets%2Fchart.png',
+    }));
+    expect(withChrome).toContain('Copy picture');
+    expect(withChrome).toContain('role="status"');
+
+    const withFillChrome = renderToStaticMarkup(createElement(DocumentViewer, {
+      title: 'assets/chart.png',
+      preview: imagePreview,
+      raw: false,
+      fill: true,
+      chromeless: false,
+      fileUrl: '/api/workspace/demo/documents/file?name=assets%2Fchart.png',
+    }));
+    expect(withFillChrome).toContain('Copy picture');
+
+    const chromelessImg = renderToStaticMarkup(createElement(DocumentViewer, {
+      title: 'assets/chart.png',
+      preview: imagePreview,
+      raw: false,
+      fill: true,
+      chromeless: true,
+      fileUrl: '/api/workspace/demo/documents/file?name=assets%2Fchart.png',
+    }));
+    expect(chromelessImg).not.toContain('Copy picture');
+  });
 });

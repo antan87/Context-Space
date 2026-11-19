@@ -8,7 +8,7 @@ import { plainText, stripHeadingColon } from '../../../lib/plainText.js';
 import { Badge, Button, CARD_BRICK as BRICK, CARD_FOCUS, Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger, rowSurface, StepCheck } from '../../../design/index.js';
 import { BoardActionsContext, firstControl } from '../boardActions.js';
 import type { RowHeadData, RowHeadNode } from '../boardLayout.js';
-import { Anchors, brickPress } from '../cards/cardParts.js';
+import { Anchors, brickPress, hasDragSelection } from '../cards/cardParts.js';
 
 const STATE_LABEL = { current: 'Now', next: 'Next', open: 'Step', done: 'Done', plain: '' } as const;
 /** What a step row calls itself: the plan's first step in the focus Area is "Next up", not "Next". */
@@ -46,24 +46,27 @@ function StepDetailDialog({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const actions = useContext(BoardActionsContext);
   // Saying which step is worked on is for the open steps that can be worked on, not for headings or done steps
   const canSetNow = Boolean(actions?.setNow && !actions.readOnly && stepKey && !isDone && actions.nowKeys?.has(stepKey));
   const isNowStep = Boolean(stepKey && actions?.nowKey === stepKey);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(next) => { if (next && hasDragSelection(triggerRef.current)) return; setOpen(next); }}>
       <DialogTrigger
         render={
           <button
+            ref={triggerRef}
             type="button"
             {...(main ? { 'data-card-main': true } : {})}
             {...(rowFallback ? { 'data-row-fallback': true } : {})}
             data-testid={stepKey ? `step-trigger-${stepKey}` : 'step-trigger'}
-            className={cn("nodrag nopan flex min-w-0 flex-1 flex-col justify-center text-left rounded-md px-1 py-0.5 outline-hidden transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer", className)}
+            className={cn("nodrag nopan select-text flex min-w-0 flex-1 flex-col justify-center text-left rounded-md px-1 py-0.5 outline-hidden transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 cursor-pointer", className)}
             aria-label={label ?? `View step: ${plainText(title)}`}
             onClick={(e) => {
               e.stopPropagation();
+              if (hasDragSelection(e.currentTarget, e)) e.preventDefault();
             }}
           />
         }
@@ -230,7 +233,8 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
           <span
             className={cn(
               'line-clamp-1 text-[13px] font-medium leading-[17px]',
-              isDone ? 'text-muted-foreground line-through' : 'text-foreground'
+              isDone ? 'text-muted-foreground line-through' : 'text-foreground',
+              'nodrag select-text',
             )}
             title={stepName}
           >
@@ -262,7 +266,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   const body = isStep && data.prominent
     ? null
     : <span className="flex min-w-0 flex-1 items-baseline gap-2">
-      <span className={cn('truncate text-[14px] font-semibold leading-5', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={isStep ? stepPlain : data.title}>{isStep ? <InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /> : data.title}</span>
+      <span className={cn('nodrag select-text truncate text-[14px] font-semibold leading-5', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={isStep ? stepPlain : data.title}>{isStep ? <InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /> : data.title}</span>
       {stepError ? (
         <span role="alert" className="shrink-0 whitespace-nowrap text-[12.5px] leading-5 text-destructive">{stepError}</span>
       ) : (data.summary || data.caption) && (
@@ -308,7 +312,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
             isBusy={isBusy}
             onToggle={!actions?.readOnly && data.stepKey && actions?.toggleStep ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text) : undefined}
           >
-            <span className={cn('line-clamp-2 text-[14px] font-semibold leading-[18px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={stepPlain}><InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /></span>
+            <span className={cn('nodrag select-text line-clamp-2 text-[14px] font-semibold leading-[18px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={stepPlain}><InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /></span>
           </StepDetailDialog>
         </div>
       </div>
@@ -331,9 +335,9 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
           aria-expanded={data.expanded}
           aria-label={label}
           disabled={!actions}
-          onClick={() => actions?.toggleRow?.(data.rowId)}
+          onClick={(e) => { if (!hasDragSelection(e.currentTarget, e)) actions?.toggleRow?.(data.rowId); }}
           className={cn(
-            'board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'board-row-control nodrag nopan select-text relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             !data.prominent && 'hover:bg-accent/30'
           )}
         >
@@ -347,8 +351,8 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
   const toggle = (
     <button
       type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
-      onClick={() => actions?.toggleRow?.(data.rowId)}
-      className={cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left',
+      onClick={(e) => { if (!hasDragSelection(e.currentTarget, e)) actions?.toggleRow?.(data.rowId); }}
+      className={cn('board-row-control nodrag nopan select-text relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left',
         rowSurface({ now: Boolean(data.prominent), hover: data.prominent ? 'hover:bg-primary/10' : 'hover:bg-accent/30' }))}
     >
       {body}

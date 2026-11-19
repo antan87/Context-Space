@@ -72,7 +72,7 @@ import {
   type NavItem,
   type NavMode,
 } from './boardNav.js';
-import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardAnswerCard, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead, BoardUncommitted } from './BoardNodes.js';
+import { BoardArea, BoardAreaFold, BoardAreaMini, BoardAreaRow, BoardCheckpoint, BoardCommit, BoardDocument, BoardAnswerCard, BoardFile, BoardFoldRow, BoardLane, BoardMoreTile, BoardNote, BoardPager, BoardPlaceholder, BoardRowHead, BoardUncommitted, hasDragSelection } from './BoardNodes.js';
 import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
 import { commitOpenFor } from './commitSequence.js';
@@ -2824,6 +2824,8 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                           onNodeClick={(event, node) => {
                             const target = event.target as HTMLElement | null;
                             if (target?.closest('button, a, input, textarea, select')) return;
+                            const nodeEl = target?.closest('.react-flow__node') ?? event.currentTarget;
+                            if (hasDragSelection(nodeEl, event)) return;
                             if (!['fold', 'more', 'pager'].includes(node.type ?? '')) {
                               setThreadSelectedId((curr) => (curr === node.id ? null : node.id));
                             }

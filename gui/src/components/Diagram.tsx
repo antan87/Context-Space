@@ -1,6 +1,8 @@
 import { useContext, useEffect, useLayoutEffect, useCallback, useRef, useState, type ReactNode } from 'react';
+import { Copy } from 'lucide-react';
 import { drawDiagram, diagramAlt, diagramCardLayout, diagramReaderLayout, diagramProblem, diagramScrollHint, type DiagramDrawing } from '../lib/diagram.js';
 import { DIAGRAM_RESOURCE_REASON } from '../lib/diagramSafety.js';
+import { copyPictureToClipboard } from '../lib/clipboard.js';
 import { Button } from './ui/button.js';
 import { DiagramFixContext, DiagramFullScreenContext } from './diagramFixContext.js';
 import { isAppDark, watchEditorTheme } from '../lib/editorTheme.js';
@@ -142,11 +144,20 @@ export function Diagram({ source, card = false, cardZoom = 1, code, cut = false 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => isAppDark() ? 'dark' : 'light');
   const [drawing, setDrawing] = useState<{ source: string; theme: string; result: NonNullable<DiagramDrawing> } | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<{ source: string; ok: boolean; message: string; repeat: boolean } | null>(null);
   useEffect(() => watchEditorTheme((next) => setTheme(next === 'vs-dark' ? 'dark' : 'light')), []);
   const onFix = useContext(DiagramFixContext);
   const mounted = useRef(false);
   const pending = useRef<{ source: string; theme: string } | null>(null);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const copyGen = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearTimeout(copyTimer.current);
+    };
+  }, []);
   // Run after each render: a rejected lazy import gets another chance on the next external render,
   // without a retry loop, while completed drawings and in-flight requests are left alone.
   useEffect(() => {
@@ -188,9 +199,46 @@ export function Diagram({ source, card = false, cardZoom = 1, code, cut = false 
     {result && 'url' in result ? <>
       {card ? <CardDiagram url={result.url} zoom={cardZoom} /> : <ReaderDiagram key={source} url={result.url} alt={diagramAlt(source)} fontSize={result.fontSize} cut={cut} />}
       {!card && <>
-        <Button type="button" size="xs" variant="outline" aria-expanded={showSource} tabIndex={cut ? -1 : undefined}
-          className="nodrag nopan mt-1 text-xs"
-          onClick={() => setShowSource((shown) => !shown)}>Source</Button>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <Button type="button" size="xs" variant="outline" aria-expanded={showSource} tabIndex={cut ? -1 : undefined}
+            className="nodrag nopan h-7 min-h-7 text-[14px]"
+            onClick={() => setShowSource((shown) => !shown)}>Source</Button>
+          <Button type="button" size="xs" variant="outline" tabIndex={cut ? -1 : undefined}
+            className="nodrag nopan h-7 min-h-7 text-[14px]"
+            onClick={() => {
+              const targetSource = source;
+              const gen = ++copyGen.current;
+              const repeat = copyStatus?.source === targetSource ? !copyStatus.repeat : false;
+              void copyPictureToClipboard({
+                src: result.url,
+                isSvg: true,
+                fallbackPath: source,
+                fallbackLabel: 'diagram source',
+                isCurrent: () => mounted.current && gen === copyGen.current,
+              }).then((copied) => {
+                if (!mounted.current || gen !== copyGen.current) return;
+                setCopyStatus({ source: targetSource, ok: copied.ok, message: copied.message, repeat });
+                clearTimeout(copyTimer.current);
+                copyTimer.current = setTimeout(() => {
+                  if (mounted.current) setCopyStatus(null);
+                }, 2500);
+              });
+            }}>
+            <Copy className="size-3" aria-hidden="true" />
+            <span>Copy picture</span>
+          </Button>
+          <span
+            role="status"
+            aria-live="polite"
+            className={
+              copyStatus?.source === source
+                ? `text-[14px] font-medium ${copyStatus.ok ? 'text-primary' : 'text-destructive'}`
+                : 'sr-only'
+            }
+          >
+            {copyStatus?.source === source ? `${copyStatus.message}${copyStatus.repeat ? '\u00A0' : ''}` : ''}
+          </span>
+        </div>
         {showSource && code}
       </>}
     </> : fallback}

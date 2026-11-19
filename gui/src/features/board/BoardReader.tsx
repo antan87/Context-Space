@@ -23,7 +23,7 @@ import {
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { Button } from '../../components/ui/button.js';
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '../../components/ui/menu.js';
-import { safeCopyToClipboard } from '../../lib/clipboard.js';
+import { safeCopyToClipboard, copyPictureToClipboard } from '../../lib/clipboard.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { cn } from '../../lib/utils.js';
 import type { DiffViewMode } from '../changes/types.js';
@@ -436,18 +436,43 @@ export function BoardReader({
   const copyLabel = source ? 'Copy name' : 'Copy path';
   // Said for what was open when it was copied: another card starts without it.
   const [copiedFor, setCopiedFor] = useState<{ open: string; result: 'done' | 'failed' } | null>(null);
+  const [pictureCopyFor, setPictureCopyFor] = useState<{ open: string; ok: boolean; message: string; repeat: boolean } | null>(null);
   const copiedKey = `${request}:${open}`;
   const copied = copiedFor?.open === copiedKey ? copiedFor.result : null;
+  const pictureCopy = pictureCopyFor?.open === copiedKey ? pictureCopyFor : null;
   const noun = source ? 'name' : 'path';
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const pictureCopyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const pictureCopyGen = useRef(0);
+  useEffect(() => () => {
+    clearTimeout(copyTimer.current);
+    clearTimeout(pictureCopyTimer.current);
+    // A picture copy still being rendered when the Reader closes must not write or set a status
+    pictureCopyGen.current += 1;
+  }, []);
+  // Another document is a new copy target: a copy of the one before must not write over it
+  useEffect(() => { pictureCopyGen.current += 1; }, [copiedKey, fileUrl]);
   const copyPath = () => {
     const finish = (ok: boolean) => {
+      setPictureCopyFor(null);
       setCopiedFor({ open: copiedKey, result: ok ? 'done' : 'failed' });
       clearTimeout(copyTimer.current);
       copyTimer.current = setTimeout(() => setCopiedFor(null), 1500);
     };
     safeCopyToClipboard(path).then(finish, () => finish(false));
+  };
+  const copyPicture = () => {
+    if (!fileUrl) return;
+    const gen = ++pictureCopyGen.current;
+    const targetKey = copiedKey;
+    const repeat = pictureCopyFor?.open === targetKey ? !pictureCopyFor.repeat : false;
+    void copyPictureToClipboard({ src: fileUrl, fallbackPath: path, isCurrent: () => gen === pictureCopyGen.current }).then((result) => {
+      if (gen !== pictureCopyGen.current) return;
+      setCopiedFor(null);
+      setPictureCopyFor({ open: targetKey, ok: result.ok, message: result.message, repeat });
+      clearTimeout(pictureCopyTimer.current);
+      pictureCopyTimer.current = setTimeout(() => setPictureCopyFor(null), 2500);
+    });
   };
   const quiet = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-accent data-[popup-open]:text-foreground';
 
@@ -509,7 +534,17 @@ export function BoardReader({
           </h2>
           <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground" title={path}>{repo ? `${repo.name} · ${path}` : path}</p>
         </div>
-        <div className="order-3 flex items-center gap-1">
+        <div className="order-3 flex flex-wrap items-center gap-1">
+          {kind === 'image' && fileUrl && (
+            <button
+              type="button"
+              onClick={copyPicture}
+              className="nodrag nopan inline-flex h-7 min-h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border/60 bg-muted/30 px-2 text-xs font-medium text-foreground hover:bg-muted/70 transition-colors cursor-pointer"
+            >
+              <Copy className="size-3.5" aria-hidden="true" />
+              <span>Copy picture</span>
+            </button>
+          )}
           {onAskInCLI && (
             <button
               type="button"
@@ -590,12 +625,22 @@ export function BoardReader({
               </>
             </MenuPopup>
           </Menu>
-          <span role="status" aria-live="polite" className="sr-only">
-            {copied === 'done'
-              ? `${noun === 'name' ? 'Name' : 'Path'} copied`
-              : copied === 'failed'
-                ? `Could not copy the ${noun}`
-                : ''}
+          <span
+            role="status"
+            aria-live="polite"
+            className={
+              pictureCopy
+                ? cn('px-1 text-xs font-medium whitespace-nowrap', pictureCopy.ok ? 'text-primary' : 'text-destructive')
+                : 'sr-only'
+            }
+          >
+            {pictureCopy
+              ? `${pictureCopy.message}${pictureCopy.repeat ? '\u00A0' : ''}`
+              : copied === 'done'
+                ? `${noun === 'name' ? 'Name' : 'Path'} copied`
+                : copied === 'failed'
+                  ? `Could not copy the ${noun}`
+                  : ''}
           </span>
           <button
             ref={fullscreenToggleRef}

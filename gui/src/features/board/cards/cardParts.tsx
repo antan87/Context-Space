@@ -23,19 +23,175 @@ export function Anchors() {
  * a button itself (a button cannot hold buttons and links), so a press on one of those keeps its own action, and a press that ends the
  * selection of some text does nothing: the text of a card can be selected.
  */
+let pointerState: {
+  x: number;
+  y: number;
+  dragged: boolean;
+  beforeText: string;
+  active: boolean;
+  upAt: number;
+  downTarget: EventTarget | null;
+  /** How far the pointer may move and still be a press: a finger is less steady than a mouse. */
+  slop: number;
+} | null = null;
+let clickDragState: {
+  at: number;
+  anchorNode: Node | null;
+  focusNode: Node | null;
+  downTarget: EventTarget | null;
+} | null = null;
+let clearClickDragTimer: ReturnType<typeof setTimeout> | null = null;
+let pointerEventsSeen = false;
+let pointerTrackerInstalled = false;
+
+/** Pixels a press may move and still open a card. */
+const MOUSE_SLOP = 4;
+const TOUCH_SLOP = 10;
+
+function clearClickDrag() {
+  clickDragState = null;
+  if (clearClickDragTimer !== null) {
+    clearTimeout(clearClickDragTimer);
+    clearClickDragTimer = null;
+  }
+}
+
+function ensurePointerTracker() {
+  if (pointerTrackerInstalled || typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  pointerTrackerInstalled = true;
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.button !== 0) return;
+      pointerEventsSeen = true;
+      clearClickDrag();
+      const beforeText = typeof window !== 'undefined' ? (window.getSelection()?.toString() ?? '') : '';
+      pointerState = {
+        x: event.clientX,
+        y: event.clientY,
+        dragged: false,
+        beforeText,
+        active: true,
+        upAt: 0,
+        downTarget: event.target,
+        slop: event.pointerType === 'touch' ? TOUCH_SLOP : MOUSE_SLOP,
+      };
+    },
+    true,
+  );
+  document.addEventListener(
+    'pointermove',
+    (event) => {
+      if (!pointerState?.active || pointerState.dragged) return;
+      if (Math.hypot(event.clientX - pointerState.x, event.clientY - pointerState.y) > pointerState.slop) {
+        pointerState.dragged = true;
+      }
+    },
+    true,
+  );
+  const finishPointer = () => {
+    if (!pointerState?.active) return;
+    pointerState.upAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    pointerState.active = false;
+  };
+  document.addEventListener('pointerup', finishPointer, true);
+  document.addEventListener('pointercancel', finishPointer, true);
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        clearClickDrag();
+        if (pointerState && !pointerState.active) pointerState = null;
+      }
+    },
+    true,
+  );
+  document.addEventListener(
+    'click',
+    (event) => {
+      pointerEventsSeen = true;
+      clearClickDrag();
+      if (event.detail === 0) return;
+      const selection = typeof window !== 'undefined' ? window.getSelection() : null;
+      const selectedNow = selection && !selection.isCollapsed ? selection.toString() : '';
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (!selectedNow || !pointerState || pointerState.active || now - pointerState.upAt >= 500) {
+        return;
+      }
+      if (!pointerState.dragged && selectedNow === pointerState.beforeText) {
+        // A stale selection is only cleared on the Board's own cards: a click elsewhere in the app keeps its selection
+        const target = event.target;
+        if (target instanceof Element && target.closest('.react-flow__node')) selection?.removeAllRanges?.();
+        return;
+      }
+      clickDragState = {
+        at: now,
+        anchorNode: selection?.anchorNode ?? null,
+        focusNode: selection?.focusNode ?? null,
+        downTarget: pointerState.downTarget,
+      };
+      clearClickDragTimer = setTimeout(() => {
+        clickDragState = null;
+        clearClickDragTimer = null;
+      }, 0);
+    },
+    true,
+  );
+}
+
+ensurePointerTracker();
+
+function selectionTouches(
+  container: Element,
+  anchorNode: Node | null,
+  focusNode: Node | null,
+  downTarget: EventTarget | null,
+): boolean {
+  return (
+    container.contains(anchorNode) ||
+    container.contains(focusNode) ||
+    (typeof Node !== 'undefined' && downTarget instanceof Node && container.contains(downTarget))
+  );
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- a helper the cards share, not a component
+export function hasDragSelection(
+  target: EventTarget | null,
+  event?: { detail?: number } | null,
+): boolean {
+  if (event && event.detail === 0) return false;
+  const container = target instanceof Element ? target : null;
+  if (!container) return false;
+
+  if (pointerEventsSeen) {
+    if (!clickDragState) return false;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - clickDragState.at >= 100) return false;
+    return selectionTouches(
+      container,
+      clickDragState.anchorNode,
+      clickDragState.focusNode,
+      clickDragState.downTarget,
+    );
+  }
+
+  const selection = typeof window !== 'undefined' ? window.getSelection() : null;
+  if (!selection || selection.isCollapsed || !selection.toString()) return false;
+  return selectionTouches(container, selection.anchorNode, selection.focusNode, null);
+}
+
 // eslint-disable-next-line react-refresh/only-export-components -- a helper the cards share, not a component
 export function brickPress(event: MouseEvent<HTMLElement>, find: (card: HTMLElement) => HTMLElement | null) {
   const target = event.target;
   // A press inside a dialog that the card opened bubbles up through React's tree, but is not on the card
   if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
   if (target.closest('button, a, input, textarea, select, [role="button"]')) return;
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && selection.toString() && event.currentTarget.contains(selection.anchorNode) && event.currentTarget.contains(selection.focusNode)) return;
+  if (hasDragSelection(event.currentTarget, event)) return;
   find(event.currentTarget)?.click();
 }
 
 /** The title of a compact card that opens, which is the card's one stop for the keyboard. The press of the whole card does what it does. */
-export const TITLE_BUTTON = 'nodrag nopan flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none';
+export const TITLE_BUTTON = 'nodrag nopan select-text flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none';
 
 /**
  * Whether the text in an element is cut off by its line clamp. Measured again when `key` changes and whenever the element
@@ -67,7 +223,7 @@ export function useCut<T extends HTMLElement>(key: string): [(element: T | null)
 export function CardText({ text, cut, className, ref }: { text: string; cut: boolean; className?: string; ref?: Ref<HTMLDivElement> }) {
   const actions = useContext(BoardActionsContext);
   const links = useMemo(() => actions && cardLinks(actions), [actions]);
-  return <div ref={ref} className={cn('board-text break-words', className)}>
+  return <div ref={ref} className={cn('board-text nodrag select-text break-words', className)}>
     <ChatMarkdown content={text} links={links ?? undefined} onCard cut={cut} />
   </div>;
 }
@@ -80,9 +236,9 @@ export function ReadAll({ data, title }: { data: CardData; /** The title of a co
   // Whether the dialog closes to hand the keyboard to the reader, which takes it itself.
   const [handingOver, setHandingOver] = useState(false);
   const links = useMemo(() => actions && cardLinks(actions, trigger, () => { setHandingOver(true); setOpen(false); }), [actions, trigger]);
-  return <Dialog open={open} onOpenChange={(next) => { if (next) setHandingOver(false); setOpen(next); }}>
+  return <Dialog open={open} onOpenChange={(next) => { if (next && hasDragSelection(trigger)) return; if (next) setHandingOver(false); setOpen(next); }}>
     <DialogTrigger render={title
-      ? <button ref={setTrigger} type="button" data-card-main className={TITLE_BUTTON} aria-label={`Read ${data.title}`} />
+      ? <button ref={setTrigger} type="button" data-card-main className={TITLE_BUTTON} aria-label={`Read ${data.title}`} onClick={(event) => { if (hasDragSelection(event.currentTarget, event)) event.preventDefault(); }} />
       : <Button ref={setTrigger} size="xs" variant="ghost" className="nodrag nopan text-[13px]" aria-label={`Read all of ${data.title}`} />}>{title ?? 'Read all'}</DialogTrigger>
     <DialogPopup className="max-w-lg" finalFocus={() => !handingOver}>
       <DialogHeader>

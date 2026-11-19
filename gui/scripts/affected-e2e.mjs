@@ -147,6 +147,7 @@ const READER_SPECS = [
   'e2e/board-area-view.spec.ts',
   'e2e/board-questions.spec.ts',
   'e2e/board-commits.spec.ts',
+  'e2e/board-copy.spec.ts',
   'e2e/board-code-window.spec.ts',
   'e2e/board-assignment.spec.ts',
   'e2e/board-area.spec.ts',
@@ -296,6 +297,7 @@ const DESIGN_PIECE_SPECS = CARD_PARTS_SPECS;
  */
 const NOTE_CARD_SPECS = [
   'e2e/board-notes.spec.ts',
+  'e2e/board-copy.spec.ts',
   'e2e/board-area.spec.ts',
   'e2e/board-area-view.spec.ts',
   'e2e/board-overview.spec.ts',
@@ -314,6 +316,7 @@ const NOTE_CARD_SPECS = [
  */
 const FILE_CARD_SPECS = [
   'e2e/board-workspace-files.spec.ts',
+  'e2e/board-copy.spec.ts',
   'e2e/board-area.spec.ts',
   'e2e/board-area-view.spec.ts',
   'e2e/board-reader.spec.ts',
@@ -346,6 +349,7 @@ const FILE_CARD_SPECS = [
  */
 const ROW_HEAD_SPECS = [
   'e2e/board-step-ticking.spec.ts',
+  'e2e/board-copy.spec.ts',
   'e2e/board-area.spec.ts',
   'e2e/board-area-view.spec.ts',
   'e2e/board-now-line.spec.ts',
@@ -460,7 +464,7 @@ const FOLDER_ROWS = [
     folder: `src/${file.replace(/\.tsx?$/, '')}`,
     path: `gui/src/${file}`,
     bareNames: [path.basename(file)],
-    specs: ['e2e/board-questions.spec.ts', 'e2e/board-reader.spec.ts'],
+    specs: ['e2e/board-questions.spec.ts', 'e2e/board-reader.spec.ts', 'e2e/board-copy.spec.ts'],
     safety: 'Shared diagram drawing on answer cards and Markdown in the reader; exercised in both specs.',
   })),
   // Board Reader (reader overlay, pages, navigation, and reader docking)

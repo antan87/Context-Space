@@ -7,7 +7,7 @@ import { Input } from '../../components/ui/input.js';
 import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { DiagramFullScreenContext } from '../../components/diagramFixContext.js';
-import { safeCopyToClipboard } from '../../lib/clipboard.js';
+import { copyPictureToClipboard, safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
 import type { ReaderLineTools } from '../board/ReaderLines.js';
 import { DocumentPreview, type DocumentPreviewData } from './DocumentPreview.js';
@@ -81,6 +81,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [pictureCopyStatus, setPictureCopyStatus] = useState<{ ok: boolean; message: string; repeat: boolean } | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
   const [targetPath, setTargetPath] = useState('');
   const [moving, setMoving] = useState(false);
@@ -93,6 +94,8 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   const mountedRef = useRef(true);
   const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyPictureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyPictureGenRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -102,9 +105,18 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         clearTimeout(saveStatusTimerRef.current);
         saveStatusTimerRef.current = null;
       }
+      if (copyPictureTimerRef.current) {
+        clearTimeout(copyPictureTimerRef.current);
+        copyPictureTimerRef.current = null;
+      }
       if (copyPathTimerRef.current) {
         clearTimeout(copyPathTimerRef.current);
         copyPathTimerRef.current = null;
+      }
+      setPictureCopyStatus(null);
+      if (copyPictureTimerRef.current) {
+        clearTimeout(copyPictureTimerRef.current);
+        copyPictureTimerRef.current = null;
       }
     };
   }, []);
@@ -144,6 +156,11 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       if (copyPathTimerRef.current) {
         clearTimeout(copyPathTimerRef.current);
         copyPathTimerRef.current = null;
+      }
+      setPictureCopyStatus(null);
+      if (copyPictureTimerRef.current) {
+        clearTimeout(copyPictureTimerRef.current);
+        copyPictureTimerRef.current = null;
       }
     }
   }, [currentDocName, preview?.content]);
@@ -247,6 +264,28 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
 
   const [copiedPath, setCopiedPath] = useState(false);
   const pathToCopy = preview?.name ?? title;
+  const canCopyPicture = preview?.kind === 'image' && Boolean(fileUrl);
+  // Another document is a new copy target: a copy of the one before must not write over it
+  useEffect(() => { copyPictureGenRef.current += 1; }, [fileUrl, pathToCopy]);
+  const handleCopyPicture = () => {
+    if (!fileUrl) return;
+    const gen = ++copyPictureGenRef.current;
+    const repeat = pictureCopyStatus ? !pictureCopyStatus.repeat : false;
+    void copyPictureToClipboard({
+      src: fileUrl,
+      fallbackPath: pathToCopy,
+      isCurrent: () => mountedRef.current && gen === copyPictureGenRef.current,
+    }).then((result) => {
+      if (!mountedRef.current || gen !== copyPictureGenRef.current) return;
+      setPictureCopyStatus({ ok: result.ok, message: result.message, repeat });
+      if (copyPictureTimerRef.current) clearTimeout(copyPictureTimerRef.current);
+      copyPictureTimerRef.current = setTimeout(() => {
+        if (!mountedRef.current) return;
+        setPictureCopyStatus(null);
+        copyPictureTimerRef.current = null;
+      }, 2500);
+    });
+  };
   const handleCopyPath = () => {
     void safeCopyToClipboard(pathToCopy).then((ok) => {
       if (!mountedRef.current) return;
@@ -365,6 +404,30 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
           )}
         </MenuPopup>
       </Menu>
+      {canCopyPicture && (
+        <>
+          <Button
+            size="xs"
+            variant="outline"
+            className="nodrag nopan h-7 shrink-0 gap-1 px-2 text-xs"
+            onClick={handleCopyPicture}
+          >
+            <Copy aria-hidden="true" className="size-3.5" />
+            <span>Copy picture</span>
+          </Button>
+          <span
+            role="status"
+            aria-live="polite"
+            className={
+              pictureCopyStatus
+                ? cn('px-1 text-xs font-medium whitespace-nowrap', pictureCopyStatus.ok ? 'text-primary' : 'text-destructive')
+                : 'sr-only'
+            }
+          >
+            {pictureCopyStatus ? `${pictureCopyStatus.message}${pictureCopyStatus.repeat ? '\u00A0' : ''}` : ''}
+          </span>
+        </>
+      )}
       <Button ref={expandedNow ? overlayToggle : inlineToggle} size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Expand document" aria-pressed={expandedNow}
         title={expandedNow ? 'Collapse document' : 'Expand document'} onClick={() => setExpanded(value => !value)}>
         {expandedNow ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
@@ -453,6 +516,30 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
             </Button>
           )}
           {onToggleRaw && !editing && <Button size={buttonSize} variant="outline" onClick={onToggleRaw}>{raw ? rawLabels[1] : rawLabels[0]}</Button>}
+          {canCopyPicture && (
+            <>
+              <Button
+                size={buttonSize}
+                variant="outline"
+                className="nodrag nopan gap-1 text-xs"
+                onClick={handleCopyPicture}
+              >
+                <Copy size={compact ? 12 : 14} aria-hidden="true" />
+                <span>Copy picture</span>
+              </Button>
+              <span
+                role="status"
+                aria-live="polite"
+                className={
+                  pictureCopyStatus
+                    ? cn('text-xs font-medium whitespace-nowrap', pictureCopyStatus.ok ? 'text-primary' : 'text-destructive')
+                    : 'sr-only'
+                }
+              >
+                {pictureCopyStatus ? `${pictureCopyStatus.message}${pictureCopyStatus.repeat ? '\u00A0' : ''}` : ''}
+              </span>
+            </>
+          )}
           {downloadHref && (
             <a
               className={cn(buttonVariants({ variant: 'outline', size: buttonSize }), 'gap-1.5')}

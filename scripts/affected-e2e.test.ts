@@ -26,6 +26,7 @@ const BOARD_READER_SPECS = [
   'e2e/board-area-view.spec.ts',
   'e2e/board-questions.spec.ts',
   'e2e/board-commits.spec.ts',
+  'e2e/board-copy.spec.ts',
   'e2e/board-code-window.spec.ts',
   'e2e/board-assignment.spec.ts',
   'e2e/board-area.spec.ts',
@@ -163,14 +164,17 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['src/components/Diagram.tsx'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
     expect(getAffectedSpecs(['src/lib/diagram.ts'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
     expect(getAffectedSpecs(['src/diagram-frame.ts'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
 
     // Unknown paths inside src/features/board/ run e2e/board; anywhere else runs e2e.
@@ -834,6 +838,7 @@ describe('affected e2e specs', () => {
     expect(getAffectedSpecs(['src\\components\\Diagram.tsx'])).toEqual([
       'e2e/board-questions.spec.ts',
       'e2e/board-reader.spec.ts',
+      'e2e/board-copy.spec.ts',
     ]);
     expect(getAffectedSpecs(['src\\index.css'])).toEqual(['e2e']);
     expect(getAffectedSpecs(['src\\design\\tokens.css'])).toEqual(['e2e']);

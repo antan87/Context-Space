@@ -61,7 +61,7 @@ test.describe('Board cards', () => {
     await expect(note).toContainText('12 min ago');
     expect(await note.getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')))).toEqual(['Edit Export leaks memory', 'Actions for Export leaks memory']);
     await note.getByRole('button', { name: 'Actions for Export leaks memory' }).click();
-    await expect(page.getByRole('menuitem')).toHaveText(['Edit note', 'Pin note', 'Archive note', 'Ask in CLI']);
+    await expect(page.getByRole('menuitem')).toHaveText(['Edit note', 'Pin note', 'Archive note', 'Copy text', 'Ask in CLI']);
     await page.keyboard.press('Escape');
     // A person's own note says "you".
     const mine = canvas.getByRole('article', { name: 'Ask finance about time zones' });
