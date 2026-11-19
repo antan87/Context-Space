@@ -34,3 +34,7 @@ export { runQuery, checkQueryText, QUERY_MAX_ROWS, QUERY_TIMEOUT_MS } from './qu
 export type { QueryResult, QueryOptions } from './query.js';
 export { maybeBackup, restoreBackup, listBackups, backupsDir, localDay, BACKUPS_KEPT } from './backup.js';
 export type { BackupResult, RestoreResult } from './backup.js';
+export { exportPortableSnapshot } from './snapshot.js';
+export type { SnapshotOptions } from './snapshot.js';
+export { importLegacyData } from './legacy-import.js';
+export type { LegacyData, LegacyCard, LegacyLink, LegacyCheck, LegacyImportResult, Unmapped, UnmappedWhat, Resolved } from './legacy-import.js';
