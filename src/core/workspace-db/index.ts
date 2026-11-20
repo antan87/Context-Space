@@ -3,7 +3,7 @@
  * The workspace database: the Board's plan, cards, links and history in one SQLite file, in a shape AIs can read.
  * This index is the only import other code uses; the files beside it are private to the module.
  *
- * Nothing calls it yet. The slices after this one wire it in (migration, publication, the routes, the CLI and MCP).
+ * `ctxspace plan migrate` (core/plan-migrate) builds it and puts it in place; nothing reads it for the app yet (DB3b).
  */
 
 export { openWorkspaceDb, openWorkspaceDbAsync, createWorkspaceDb, dbFilePath, getMeta, readRevision, readDbId, beginImmediate, commitTransaction, withSnapshot, readWithRetry, validateWorkspaceSchema, WORKSPACE_MARKER, SCHEMA_VERSION, SERVER_BUSY_MS, CLI_BUSY_MS } from './connection.js';
@@ -38,3 +38,5 @@ export { exportPortableSnapshot } from './snapshot.js';
 export type { SnapshotOptions } from './snapshot.js';
 export { importLegacyData } from './legacy-import.js';
 export type { LegacyData, LegacyCard, LegacyLink, LegacyCheck, LegacyImportResult, Unmapped, UnmappedWhat, Resolved } from './legacy-import.js';
+export { readImportRecord, writeImportRecord } from './import-record.js';
+export type { DbImportRecord } from './import-record.js';

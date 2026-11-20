@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import { readGenerationLock } from './generation-lock.js';
 import { acquireLock } from './locks.js';
 import { BRAND_NAME, CLI_NAME } from './constants.js';
+import { WorkspaceMovedError, readSwitch } from './workspace-db-switch.js';
 
 const CORE_ARTIFACTS = [
   '.gitignore',
@@ -206,6 +207,10 @@ export async function pushWorkspaceArtifacts(workspacePath: string): Promise<voi
 }
 
 export async function pullWorkspaceArtifacts(workspacePath: string): Promise<void> {
+  // A pull rewrites PLAN.md and can bring back the Board file and the other files a move to the workspace database
+  // archived. Until pulls are reconciled with the database (DB3d), a moved workspace does not pull.
+  const moved = readSwitch(workspacePath);
+  if (moved) throw new WorkspaceMovedError(moved);
   await ensureWorkspaceGitRepository(workspacePath);
   const dirty = await execa('git', ['status', '--porcelain'], { cwd: workspacePath });
   if (dirty.stdout.trim()) throw new Error('Workspace artifact repository has uncommitted changes; commit them before pulling.');

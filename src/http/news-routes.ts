@@ -11,6 +11,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { isArchived } from '../core/archive-guard.js';
 import { NewsChangedError, markSeen, recentCommits, whatsNew } from '../core/whats-new.js';
+import { WorkspaceMovedError } from '../core/workspace-db-switch.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 
 const reader = z.string().trim().min(1).max(40);
@@ -30,7 +31,7 @@ export function registerNewsRoutes(app: Hono, resolveWorkspace: (id: string) => 
     } catch (error) {
       if (error instanceof z.ZodError) return c.json({ error: error.issues[0]?.message ?? 'Invalid request.' }, 400);
       const message = error instanceof Error ? error.message : String(error);
-      return c.json({ error: message }, error instanceof NewsChangedError || message === ARCHIVED_MESSAGE || /saving what it has seen/.test(message) ? 409 : 400);
+      return c.json({ error: message }, error instanceof NewsChangedError || error instanceof WorkspaceMovedError || message === ARCHIVED_MESSAGE || /saving what it has seen/.test(message) ? 409 : 400);
     }
   };
 
