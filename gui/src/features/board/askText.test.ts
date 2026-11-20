@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { askCard, askText, isAskLine, type AskCard } from './askText.js';
+import { askCard, askText, boardCardId, isAskLine, type AskCard } from './askText.js';
 
 const hasBreak = (line: string) => Array.from(line).some((c) => c.charCodeAt(0) < 32 || c === '\u2028' || c === '\u2029');
 
@@ -58,12 +58,30 @@ describe('askText', () => {
   });
 });
 
+describe('boardCardId', () => {
+  it('names a real board card (a uuid) and nothing a generated card has as its id', () => {
+    expect(boardCardId('00000000-0000-4000-8000-000000000002')).toBe('00000000-0000-4000-8000-000000000002');
+    for (const id of ['wsfile:board-pictures/x.png', 'wsfile:step:s:a.md', 'document:abc', 'qcard:q1.md#1', 'file:pic', '', undefined]) expect(boardCardId(id)).toBeUndefined();
+  });
+  it('a generated file asks as "About <path> ("<title>")", with no card id', () => {
+    expect(askText({ kind: 'file', id: boardCardId('wsfile:board-pictures/x.png'), title: 'x.png', path: 'board-pictures/x.png' })).toBe('About board-pictures/x.png ("x.png"): ');
+  });
+  it('the file card and the reader send only a real card id', () => {
+    for (const file of ['cards/FileCard.tsx', 'BoardReader.tsx']) {
+      const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+      expect(source).toMatch(/kind: 'file', id: boardCardId\(/);
+      expect(source).not.toMatch(/kind: 'file', id: (id|target\.card),/);
+    }
+  });
+});
+
 describe('the callers', () => {
   const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
   it.each([
     ['cards/NoteCard.tsx', 2, "kind: 'note'"],
     ['cards/FileCard.tsx', 1, "kind: 'file'"],
     ['BoardNodes.tsx', 3, "kind: 'commit'"],
+    ['cards/cardParts.tsx', 1, 'askCard(card)'],
     ['BoardReader.tsx', 1, "kind: 'file'"],
   ])('%s builds its line with askCard (%i)', (file, count, kind) => {
     const source = read(file);
