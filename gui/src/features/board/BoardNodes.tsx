@@ -26,6 +26,7 @@ import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boar
 import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode, type UncommittedNode } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
 import { CARD_BRICK as BRICK, CARD_FOCUS, chipClass, FreshDot, needsSurface, StepCheck } from '../../design/index.js';
+import { askCard } from './askText.js';
 import { Anchors, brickPress, hasDragSelection, TITLE_BUTTON } from './cards/cardParts.js';
 import { summaryLabel } from './summaryLabel.js';
 import { BoardNote } from './cards/NoteCard.js';
@@ -133,6 +134,8 @@ interface WaitingDecisionCardProps {
   width?: number;
   /** Said when the card leaves the board with its dialog open and no answer sent: the question changed in the plan (or was answered elsewhere). */
   onLost?: () => void;
+  /** The checkpoint the question belongs to, when it shows in a frame of one: "Ask in CLI" names it. */
+  checkpoint?: string;
 }
 
 /**
@@ -282,7 +285,7 @@ const ANSWER_BUTTON = `${chipClass()} text-[13.5px]`;
 const GHOST_BUTTON = 'nodrag nopan inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
 
 /** Asks about the question in the CLI; the question without its marks. */
-function AskInCliButton({ question }: { question: string }) {
+function AskInCliButton({ question, checkpoint }: { question: string; checkpoint?: string }) {
   const actions = useContext(BoardActionsContext);
   if (!actions?.askInCLI || actions.readOnly) return null;
   const plain = plainText(question) || question;
@@ -291,7 +294,7 @@ function AskInCliButton({ question }: { question: string }) {
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        actions.askInCLI?.(plain);
+        actions.askInCLI?.(askCard({ kind: 'question', question, checkpoint }));
       }}
       className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded px-2 text-[12px] text-muted-foreground hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
       title={`Ask about "${plain}" in CLI`}
@@ -466,7 +469,7 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
               {displayError && <p role="alert" title={displayError} className="max-h-24 overflow-y-auto break-words text-sm text-destructive">{displayError}</p>}
             </div>
             <DialogFooter variant="bare" className="shrink-0 pt-3">
-              <AskInCliButton question={decision.question} />
+              <AskInCliButton question={decision.question} checkpoint={props.checkpoint} />
               <DialogClose render={<Button type="button" variant="ghost" size="sm" />}>Close</DialogClose>
             </DialogFooter>
           </DialogPopup>
@@ -550,8 +553,7 @@ function FullDecisionCard(props: WaitingDecisionCardProps) {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              const q = decision.question.replace(/[*_`#]/g, '').trim() || decision.question;
-              actions.askInCLI?.(q);
+              actions.askInCLI?.(askCard({ kind: 'question', question: decision.question, checkpoint: props.checkpoint }));
             }}
             className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded px-2 text-[12px] text-muted-foreground hover:text-foreground hover:bg-background/80 transition-colors cursor-pointer"
             title={`Ask about "${decision.question.replace(/[*_`#]/g, '').trim() || decision.question}" in CLI`}
@@ -675,7 +677,7 @@ function WaitingFrame({ id, data, border, titleId, width }: { id?: string; data:
     {data.waiting.length > 0 && (
       <ul aria-label="Decisions waiting for you" className={cn('flex min-h-0 flex-1 flex-col gap-2 px-2.5', noticeApart ? 'pb-2' : 'pb-4')}>
         {data.waiting.map((decision) => (
-          <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} onLost={onLost} width={width ?? ROW_SIZE.decisionWidth} />
+          <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} onLost={onLost} width={width ?? ROW_SIZE.decisionWidth} checkpoint={data.kind === 'checkpoint' ? data.title : undefined} />
         ))}
       </ul>
     )}
@@ -871,7 +873,7 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
     </header>
     {data.waiting.length > 0 && <ul aria-label="Decisions waiting for you" className="nowheel min-h-0 max-h-60 overflow-y-auto space-y-2 p-2.5">
       {data.waiting.map((decision) => (
-        <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} />
+        <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} checkpoint={data.kind === 'checkpoint' ? data.title : undefined} />
       ))}
       {data.moreWaiting > 0 && <li className="flex items-center gap-1.5 px-3 text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}><span aria-hidden="true" className="size-2 rounded-full bg-state-needs" />+{data.moreWaiting} more waiting</li>}
     </ul>}
@@ -1187,8 +1189,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            const commitSummary = data.subject ? `${data.sha}: ${data.subject}` : `commit ${data.sha}`;
-            actions.askInCLI?.(commitSummary);
+            actions.askInCLI?.(askCard({ kind: 'commit', sha: data.sha, subject: data.subject, repo: commit?.repo }));
           }}
           className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
           title={`Ask about commit ${data.sha} in CLI`}

@@ -187,11 +187,11 @@ test.describe('Board & Terminal Unified Co-Working', () => {
     await expect(page.getByTestId('chat-dock-slot')).toBeVisible();
 
     // The terminal should receive the prefilled prompt over the wire and be focused
-    await expect.poll(() => typedInputs.at(-1)).toBe('Regarding Architecture note: ');
+    await expect.poll(() => typedInputs.at(-1)).toBe('About the board note "Architecture note" (card 00000000-0000-4000-8000-000000000001; board_read shows it): ');
     const terminalPane = page.getByTestId('terminal-pane');
     await expect(terminalPane).toBeVisible();
     await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
-    await expect(page.locator('.xterm-rows')).toContainText('Regarding Architecture note: ');
+    await expect(page.locator('.xterm-rows')).toContainText('About the board note "Architecture note"');
 
     // Return to board mode and test "Ask in CLI ↗" on the decision card
     await boardBtn.click();
@@ -206,8 +206,24 @@ test.describe('Board & Terminal Unified Co-Working', () => {
 
     await expect(splitBtn).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('chat-dock-slot')).toBeVisible();
-    await expect.poll(() => typedInputs.at(-1)).toBe('Regarding Which time zone should export timestamps use?: ');
+    await expect.poll(() => typedInputs.at(-1)).toBe('About the plan question "Which time zone should export timestamps use?" (Reports export to CSV): ');
     await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+  });
+
+  test('"Ask in CLI" in the reader of a picture file types a line that names the card and the path, and never presses Enter', async ({ page }) => {
+    // This board has a picture file card on the current step
+    await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [boardFileCard(2, 'board-pictures/export.png', { title: 'Export screen' })] }) }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('.board-overview-plane button.board-area').first().click();
+    await expect(page.getByRole('button', { name: 'Board ›' })).toBeVisible();
+
+    // The compact cards of an Area have no "Ask in CLI" button on a picture or a commit; a picture is asked about from its reader
+    await page.getByRole('button', { name: 'Open Export screen' }).click();
+    const reader = page.getByRole('region', { name: 'Reader', exact: true });
+    await expect(reader).toBeVisible();
+    await reader.getByRole('button', { name: /Ask in CLI/ }).click();
+    await expect.poll(() => typedInputs.at(-1)).toBe('About board-pictures/export.png (board card "Export screen", 00000000-0000-4000-8000-000000000002): ');
+    expect(typedInputs.join('')).not.toMatch(/[\r\n]/);
   });
 });
 

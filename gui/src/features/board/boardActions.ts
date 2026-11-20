@@ -1,4 +1,5 @@
 import { createContext } from 'react';
+import type { AskLine } from './askText.js';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { apiFetch } from '../../lib/api/client.js';
 import { API_BASE } from '../../lib/apiBase.js';
@@ -105,7 +106,7 @@ export interface BoardActions {
     steps?: Array<{ key: string; text: string; done?: boolean }>;
   }>;
   /** Prefills the CLI terminal with a card context and switches to split view if needed. */
-  askInCLI?: (context: string) => void;
+  askInCLI?: (context: string | AskLine) => void;
   /** Adds a step to a checkpoint (`checkpoint` is its key; none: the plan's own frame) from the card's own "Add step" form. Without it the form writes to the plan itself, as the Board does. Returns true if it worked. */
   addStep?: (change: { step: string; checkpoint?: string }) => Promise<boolean>;
   /** Where a card's picture comes from, when it is not the workspace's own file (the design page's made-up cards have none). Default: the server's file route. */

@@ -2,6 +2,7 @@ import { lineNoteViewer } from '../changes/codeLineNotes.js';
 import { apiFetch } from '../../lib/api/client.js';
 import type { ReferenceTarget } from '../workspace-shell/openRequests.js';
 import type { LineRange } from './lineNotes.js';
+import type { AskLine } from './askText.js';
 import { useOpenFileReference } from '../workspace-shell/useOpenFileReference.js';
 import '@xyflow/react/dist/style.css';
 
@@ -234,7 +235,7 @@ function useLayoutElementSize(element: HTMLElement | null): { width: number; hei
 const nodeHolds = (node: BoardNode): string[] | undefined =>
   node.type === 'fold' || node.type === 'more' || node.type === 'pager' || node.type === 'step' ? node.data.holds : node.type === 'lane' ? node.data.group?.holds : undefined;
 
-export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false, askInCLI }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean; askInCLI?: (context: string, range?: LineRange) => void }) {
+export function BoardSection({ workspaceId, workspacePath, active, panelActions, readOnly = false, askInCLI }: { workspaceId: string; workspacePath?: string; active: boolean; panelActions?: ReactNode; readOnly?: boolean; askInCLI?: (context: string | AskLine, range?: LineRange) => void }) {
   const plan = usePlanFile(workspaceId);
   const guidance = useWorkGuidance(workspaceId);
   const news = useWhatsNew(workspaceId);
