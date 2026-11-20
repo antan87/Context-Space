@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Mechanical contrast gate for the progress colours and the Dusk palette. It
- * reads the real index.css, applies the cascade the way the browser does for
+ * reads the real index.css with the design tokens it imports (design/tokens.css), applies the cascade the way the browser does for
  * each palette and theme, resolves var() and color-mix(), and checks WCAG
  * contrast. Text needs 4.5:1. Graphics that carry meaning (the ring's arcs and
  * its "you are here" marker) need 3:1.
  */
-const css = readFileSync(new URL('../../index.css', import.meta.url), 'utf8');
+/** The stylesheet with its local `@import "./….css"` lines replaced by the imported file, in place, so the rules come in the order the browser's cascade sees them. */
+function readCssWithImports(url: URL): string {
+  return readFileSync(url, 'utf8').replace(/^@import "(\.[^"]+\.css)";$/gm, (_all, file: string) => readCssWithImports(new URL(file, url)));
+}
+const css = readCssWithImports(new URL('../../index.css', import.meta.url));
 
 interface Rule { dark: boolean; palette?: string; specificity: number; order: number; declarations: Record<string, string> }
 
@@ -142,6 +146,22 @@ describe('the stylesheet reader', () => {
   });
 });
 
+describe('the dark progress block beats the palettes that set the sunset ring colours', () => {
+  it.each(['sunset', 'dusk'])('%s in dark takes the brand colours for the ring and the dark orange for "waits for you"', (palette) => {
+    const tokens = tokensFor(palette, 'dark');
+    expect([tokens['--ring-a'], tokens['--ring-b'], tokens['--ring-c']]).toEqual(['var(--brand-first)', 'var(--brand-middle)', 'var(--brand-last)']);
+    expect(tokens['--state-needs']).toBe('#fb923c');
+  });
+});
+
+describe.each(PALETTES.flatMap((palette) => THEMES.map((theme) => [palette, theme] as const)))('an archived card in %s %s', (palette, theme) => {
+  it('keeps muted text at 4.5:1 on the muted surface at 70 % over the background', () => {
+    const tokens = tokensFor(palette, theme);
+    const surface = resolve('color-mix(in srgb, var(--muted) 70%, var(--background))', tokens);
+    expect(contrast(resolve(tokens['--muted-foreground']!, tokens), surface)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 describe('Dusk is a complete palette', () => {
   it.each(THEMES)('defines every surface and action token in %s', (theme) => {
     const tokens = tokensFor('dusk', theme);
@@ -187,6 +207,19 @@ describe.each(PALETTES.flatMap((palette) => THEMES.map((theme) => [palette, them
 
   it.each(surfaces)('the "you are here" marker is visible on %s (3:1)', (surface) => {
     expect(contrast(resolve(tokens['--state-now']!, tokens), resolve(tokens[surface]!, tokens))).toBeGreaterThanOrEqual(3);
+  });
+
+  // R1c: the Now row's 3 px rule is the only colour of the row, so it must stand out from the card it sits on and from the canvas around it.
+  it.each(surfaces)('the Now row\'s 3 px rule (--state-now) is visible on %s (3:1)', (surface) => {
+    expect(contrast(resolve(tokens['--state-now']!, tokens), resolve(tokens[surface]!, tokens))).toBeGreaterThanOrEqual(3);
+  });
+
+  // Fix round 1: a hovered row on the card must move away from the card the right way: lighter in dark, darker in light, never toward the canvas.
+  it.each([['--accent', 30], ['--primary', 10], ['--primary', 5]] as const)('a row hover of %s at %s %% over the card moves away from the card the right way', (token, pct) => {
+    const card = resolve(tokens['--card']!, tokens);
+    const mixed = resolve(`color-mix(in srgb, var(${token}) ${pct}%, var(--card))`, tokens);
+    if (theme === 'dark') expect(luminance(mixed)).toBeGreaterThan(luminance(card));
+    else expect(luminance(mixed)).toBeLessThan(luminance(card));
   });
 
   it('keeps arcs that are still ahead faintly visible against the card (1.2:1) without competing with finished ones', () => {

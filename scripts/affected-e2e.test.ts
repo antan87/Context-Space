@@ -105,7 +105,7 @@ function usesDesignPieces(source: string, names: readonly string[], files: reado
   });
 }
 
-const DESIGN_PIECES = ['Pill', 'Mark', 'FreshDot'] as const;
+const DESIGN_PIECES = ['Pill', 'KindLabel', 'Mark', 'FreshDot'] as const;
 const ROW_PIECE_NAMES = ['StepCheck', 'rowSurface', 'foldSurface'] as const;
 const ROW_PIECE_FILES = ['StepCheck', 'RowSurface'] as const;
 const findDesignPieceUsers = (dir: string, names: readonly string[]) => sourceFiles(dir).filter((file) => usesDesignPieces(readFileSync(file, 'utf8'), names));
@@ -479,7 +479,27 @@ describe('affected e2e specs', () => {
     expect(importsRowFile('// import "./rows/RowHead.js";\nexport const x = 1;', both)).toBe(false);
   });
 
-  it('maps Pill, Mark and FreshDot (DS4) to all of e2e/board and the page scan, and only Board files import them', () => {
+  it('maps the Board stylesheet (DS11) to the full list of specs that draw the Board, and design/tokens.css to all of e2e', () => {
+    const board = [
+      'e2e/board',
+      'e2e/accessibility.spec.ts',
+      'e2e/design-page.spec.ts',
+      'e2e/keyboard-journey.spec.ts',
+      'e2e/sidebar-rail.spec.ts',
+      // Every row also lists the two whole-page scans (WHOLE_PAGE_A11Y_SPECS), appended where the rows are built; inside e2e/board it is a repeat
+      'e2e/board-a11y.spec.ts',
+    ];
+    expect(FOLDER_SPECS.find((entry) => entry.path === 'gui/src/features/board/board.css')?.specs).toEqual(board);
+    expect(getAffectedSpecs(['gui/src/features/board/board.css'])).toEqual(board);
+    expect(getAffectedSpecs(['src/features/board/board.css'])).toEqual(board);
+    // Not the whole app: index.css, which imports it, is APP_WIDE, the stylesheet itself is not
+    expect(getAffectedSpecs(['gui/src/features/board/board.css'])).not.toEqual(['e2e']);
+    // The tokens stay APP_WIDE: every screen reads them
+    expect(getAffectedSpecs(['gui/src/design/tokens.css'])).toEqual(['e2e']);
+    expect(getAffectedSpecs(['gui/src/index.css'])).toEqual(['e2e']);
+  });
+
+  it('maps Pill, KindLabel, Mark and FreshDot (DS4, R1b) to all of e2e/board and the page scan, and only the files listed below import them', () => {
     const rowOf = (path: string) => FOLDER_SPECS.find((entry) => entry.path === path);
     for (const piece of DESIGN_PIECES) {
       const row = rowOf(`gui/src/design/${piece}.tsx`);
@@ -496,11 +516,14 @@ describe('affected e2e specs', () => {
     // The rows are safe only while nothing outside the Board draws the pieces: a new user must extend them first.
     expect(findDesignPieceUsers('gui/src', ['Pill']).sort()).toEqual([
       'gui/src/design/index.ts',
-      'gui/src/features/board/BoardNodes.tsx',
-      'gui/src/features/board/cards/FileCard.tsx',
-      'gui/src/features/board/cards/NoteCard.tsx',
       'gui/src/features/changes/CommitsView.tsx',
       // The design page (DS7) draws each piece in every state; its spec is on each piece's row.
+      'gui/src/pages/DesignPieces.tsx',
+    ]);
+    expect(findDesignPieceUsers('gui/src', ['KindLabel']).sort()).toEqual([
+      'gui/src/design/index.ts',
+      'gui/src/features/board/cards/FileCard.tsx',
+      'gui/src/features/board/cards/NoteCard.tsx',
       'gui/src/pages/DesignPieces.tsx',
     ]);
     expect(findDesignPieceUsers('gui/src', ['Mark']).sort()).toEqual(['gui/src/design/index.ts', 'gui/src/features/board/cards/cardParts.tsx', 'gui/src/pages/DesignPieces.tsx']);

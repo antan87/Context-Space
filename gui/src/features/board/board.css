@@ -1,0 +1,235 @@
+/* The Board (features/board): React Flow's own colours replaced by the app's theme tokens, so the canvas follows the
+   light and dark themes. Scoped to .board-flow; the library's stylesheet loads with the board, so every rule here either
+   sets a variable the library reads or is more specific than the library's own. */
+.board-flow {
+  --xy-background-color: var(--background);
+  --xy-background-pattern-dots-color: var(--border);
+  --xy-attribution-background-color: color-mix(in srgb, var(--card) 80%, transparent);
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--background) 65%, transparent);
+  --xy-minimap-mask-stroke-color: var(--primary);
+  --xy-minimap-node-background-color: var(--border);
+}
+
+.board-flow .react-flow__attribution a { color: var(--muted-foreground); }
+.board-flow .react-flow__minimap { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+
+/* A map of the board: lanes faint, cards firmer, checkpoints by whether they are done, notes and files by the accent. */
+.board-flow .react-flow__minimap-node.board-mini-lane { fill: var(--secondary); }
+.board-flow .react-flow__minimap-node.board-mini-document,
+.board-flow .react-flow__minimap-node.board-mini-commit { fill: var(--muted-foreground); fill-opacity: 0.55; }
+.board-flow .react-flow__minimap-node.board-mini-note,
+.board-flow .react-flow__minimap-node.board-mini-file { fill: var(--primary); fill-opacity: 0.35; }
+.board-flow .react-flow__minimap-node.board-mini-checkpoint { fill: var(--primary); fill-opacity: 0.6; }
+.board-flow .react-flow__minimap-node.board-mini-checkpoint.board-mini-done { fill: var(--success); }
+
+/* React Flow gives a node that cannot be dragged or picked no pointer events, so a drag that starts on a card pans the
+   board. Its buttons and links need them back, or a click goes through them. */
+.board-flow .react-flow__node :is(button, a) { pointer-events: auto; }
+
+/* The Markdown text of a note or a file card, at the size the card has always shown its text. The typography of documents
+   is not for a card, which has a fixed height: no margins but a small gap, line breaks as written, and the colour of the card. */
+.board-text .prose { font-size: inherit; line-height: inherit; color: inherit; }
+.board-text :is(p, li) { white-space: pre-line; }
+.board-text :is(p, ul, ol, blockquote, table) { margin-block: 0; }
+.board-text .prose > * + :not(h1, h2, h3, h4, h5, h6) { margin-top: 4px; }
+.board-text :is(ul, ol) { padding-inline-start: 1.25em; }
+.board-text li { margin-block: 0; padding-inline-start: 0; }
+.board-text :is(li, blockquote) > p { margin-block: 0; }
+.board-text blockquote { padding-inline-start: 0.75em; }
+.board-text :has(> pre) { margin-block: 4px; }
+.board-text pre :is(code, span), .board-text table, .board-text :is(th, td) { font-size: inherit; line-height: inherit; }
+/* The reader's closed one-line note: a first code line or table row is plain inline text, like any other line. */
+.board-text[data-closed] :has(> pre) { display: inline; margin: 0; }
+.board-text[data-closed] pre { display: inline; margin: 0; padding: 0; border: 0; background: none; border-radius: 0; font: inherit; white-space: pre-line; }
+.board-text[data-closed] :is(pre, code, th) { color: inherit; font-weight: inherit; }
+.board-text[data-closed] :has(> pre) > button { display: none; }
+.board-text[data-closed] :is(table, thead, tbody, tr) { display: block; }
+.board-text[data-closed] :is(th, td) { display: inline; padding: 0; border: 0; }
+.board-text[data-closed] :is(th, td)::after { content: ' '; }
+.board-text pre { padding: 6px 8px; font-size: 12.5px; line-height: 16px; }
+
+/* A grab cursor on the board itself and on whatever can be dragged (the library gives those nodes theirs). A node that the
+   keyboard can move shows its focus on the card inside it, which has the rounded corners. */
+.board-flow .react-flow__pane { cursor: grab; }
+.board-flow .react-flow__pane.dragging { cursor: grabbing; }
+.board-flow:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.board-flow .react-flow__node:focus-visible { outline: none; }
+.board-flow .react-flow__node:focus-visible > article { outline: 2px solid var(--ring); outline-offset: 2px; }
+.board-flow .react-flow__node article:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* A group folded into one summary is a button, and shows its focus itself. */
+.board-flow .board-fold:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* The lines between things: subtle edges by default so canvas cards remain calm and readable,
+   illuminating on hover or during thread tracing. */
+.board-flow .react-flow__edge {
+  opacity: 0.2;
+  transition: opacity 180ms ease;
+}
+.board-flow .react-flow__edge:hover,
+.board-flow .react-flow__edge:focus-within {
+  opacity: 1;
+}
+.board-flow .react-flow__edge-path { stroke: var(--muted-foreground); stroke-width: 1.5; }
+.board-flow .react-flow__edge-textbg { fill: var(--card); stroke: var(--border); rx: 4; }
+.board-flow .react-flow__edge-text { fill: var(--foreground); font-size: 11px; }
+.board-flow .board-handle { width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0; background: none; opacity: 0; pointer-events: none; }
+
+/* A card an AI just made or changed: a ring and a wash of the accent colour that fade away. Under reduced motion nothing
+   moves or fades: the same ring simply goes at the end. */
+.board-fresh {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent);
+  animation: board-fresh 3.2s ease-out forwards;
+}
+@keyframes board-fresh { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .board-fresh { animation: board-fresh-still 3.2s steps(1, end) forwards; } }
+@keyframes board-fresh-still { from { opacity: 1; } to { opacity: 0; } }
+
+/* A node jumped to from the Board index pulses a highlight ring so it is immediately spotted. */
+.board-flow .react-flow__node[data-highlighted="true"] > :is(article, button, div, p) {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  animation: board-node-highlight 2.2s ease-out forwards;
+}
+@keyframes board-node-highlight {
+  0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 40%, transparent); }
+  60% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent); }
+  100% { outline-color: transparent; box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-flow .react-flow__node[data-highlighted="true"] > :is(article, button, div, p) {
+    animation: none;
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+  }
+}
+
+/* The card the reader shows is marked while the reader is open, and the rest of the board stays as it is */
+.board-flow .react-flow__node[data-reader-open="true"] > :is(article, button, div) {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+/* Follow the thread: selected card and its chain stay bright; unrelated cards dim */
+.board-flow[data-thread-active="true"] .react-flow__node {
+  transition: opacity 220ms ease, filter 220ms ease;
+}
+.board-flow[data-thread-active="true"] .react-flow__node:not([data-thread="active"]) {
+  opacity: 0.28;
+  filter: grayscale(40%);
+}
+.board-flow[data-thread-active="true"] .react-flow__node[data-thread="active"] {
+  opacity: 1;
+  filter: none;
+}
+.board-flow[data-thread-active="true"] .react-flow__node[data-thread-selected="true"] > :is(article, button, div) {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.board-flow[data-thread-active="true"] .react-flow__edge {
+  transition: opacity 220ms ease;
+}
+.board-flow[data-thread-active="true"] .react-flow__edge:not([data-thread="active"]) {
+  opacity: 0.15;
+}
+.board-flow[data-thread-active="true"] .react-flow__edge[data-thread="active"] path {
+  stroke: var(--primary) !important;
+  stroke-width: 2.5px !important;
+  opacity: 1 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-flow[data-thread-active="true"] .react-flow__node,
+  .board-flow[data-thread-active="true"] .react-flow__edge {
+    transition: none;
+  }
+}
+
+/* Inside an Area no line is drawn at rest. Each line is faint on its own (0.2), but the lines of a card that many things point to run
+   on top of each other and add up to a nearly solid line: 8 lines at 0.2 are 83 % opaque. A line shows only when one of its two cards
+   is hovered or has the keyboard (`data-lit`), or is in the thread of the selected card. It stays in the accessibility tree. */
+.board-flow-rows .react-flow__edge,
+.board-flow-rows[data-thread-active="true"] .react-flow__edge:not([data-thread="active"]) {
+  opacity: 0;
+  pointer-events: none;
+}
+.board-flow-rows .react-flow__edge[data-lit],
+.board-flow-rows[data-thread-active="true"] .react-flow__edge[data-lit],
+.board-flow-rows[data-thread-active="true"] .react-flow__edge[data-thread="active"] {
+  opacity: 1;
+}
+.board-flow-rows .react-flow__edge[data-lit] .react-flow__edge-path {
+  stroke: var(--primary);
+  stroke-width: 2.5px;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--primary) 55%, transparent));
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-flow-rows .react-flow__edge { transition: none; }
+}
+
+/* ─── Board Areas & Stepping In/Out (Level 0 and Level 1) ─────────────────── */
+.board-overview-plane {
+  scale: 1;
+  translate: 0px 0px;
+  transition: scale 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.board-overview-plane[data-receded="true"] {
+  scale: 0.92;
+}
+@keyframes board-area-enter {
+  from { opacity: 0; scale: 0.42; }
+  to { opacity: 1; scale: 1; }
+}
+@keyframes board-area-exit {
+  from { opacity: 1; scale: 1; }
+  to { opacity: 0; scale: 0.42; }
+}
+.board-area-enter {
+  scale: 1;
+  translate: 0px 0px;
+  animation: board-area-enter 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.board-area-exit {
+  scale: 1;
+  translate: 0px 0px;
+  animation: board-area-exit 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-overview-plane { transition: none; }
+  .board-area-enter,
+  .board-area-exit { animation: none; }
+}
+.board-flow .board-row-control:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Nothing is dragged inside an Area, but a card is still pressed on and its text read and selected. */
+.board-flow-rows .react-flow__node { pointer-events: all !important; cursor: default; user-select: text; -webkit-user-select: text; }
+/* Rows slide to their new place when one opens or folds. */
+@media (prefers-reduced-motion: no-preference) {
+  .board-flow-rows .react-flow__node { transition: transform 160ms ease-out, height 160ms ease-out; }
+}
+.board-flow :is(.board-area, .board-area-fold):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.board-flow .react-flow__minimap-node.board-mini-area { fill: var(--primary); fill-opacity: 0.55; }
+
+/* When board reader is in fullscreen breakout, any portaled menu positioners sit above it (z-110) */
+body:has([data-board-reader-fullscreen]) [data-slot="menu-positioner"] {
+  z-index: 110 !important;
+}
+
+
+/* A card that opens on a press: it darkens to the accent, and stays opaque so the dot grid of the board never shows through. */
+.board-brick:hover { background-color: color-mix(in oklab, var(--accent) 30%, var(--card)); }
+
+/* The chevron of a row's label line shows when the pointer or the keyboard is on the row, and always where there is no hover. */
+.board-flow .board-row-chevron { opacity: 0; transition: opacity 120ms ease-out; }
+.board-flow .board-row-control:is(:hover, :focus-visible) .board-row-chevron { opacity: 1; }
+@media (hover: none) { .board-flow .board-row-chevron { opacity: 1; } }
+/* The Now dot breathes. */
+@keyframes board-now-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: no-preference) { .board-now-dot { animation: board-now-breathe 2.4s ease-in-out infinite; } }
+/* The text of a compact card has a line of 17px, and a code block at its start shows whole lines: no band above it. */
+.board-text-compact :has(> pre) { margin-block: 0; }
+.board-text-compact pre { margin-block: 0; padding-block: 0; line-height: 17px; }
+.board-text-compact pre :is(code, span) { line-height: 17px; }

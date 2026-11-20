@@ -103,7 +103,7 @@ import { SessionHistory } from '../features/sessions/SessionHistory.js';
 import { IconButton } from '../components/ui/icon-button.js';
 import { useFloatingChat } from '../features/chat/floatingChatStore.js';
 import { ChatDockSlot } from '../features/chat/ChatDockSlot.js';
-import { CHAT_LAYOUT, chatLayout, hasRoomBeside, useChatLayout } from '../features/chat/chatLayout.js';
+import { CHAT_LAYOUT, chatLayout, fittingChatPercent, hasRoomBeside, useChatLayout } from '../features/chat/chatLayout.js';
 import { useElementWidth } from '../lib/useElementWidth.js';
 import { WorkspaceTabs } from '../features/workspace-home/WorkspaceTabs.js';
 import { useRunningTerminals } from '../features/chat/useRunningTerminals.js';
@@ -111,7 +111,7 @@ import { WorkspaceSkillsTab } from '../features/skills/WorkspaceSkillsTab.js';
 import { ChatMarkdown } from '../components/ChatMarkdown.js';
 import { CodeWindowSlot } from '../features/changes/CodeWindowSlot.js';
 import { fillPromptForWorkspace } from '../features/terminal/promptFill.js';
-import { openBoardStep } from '../features/workspace-shell/openRequests.js';
+import { boardOverviewRequests, openBoardStep, showBoardOverview } from '../features/workspace-shell/openRequests.js';
 import type { CommitStepLink } from '../features/board/commitContext.js';
 
 type SubTab = WorkspaceSection;
@@ -202,6 +202,9 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
   const [body, setBody] = useState<HTMLDivElement | null>(null);
   const bodyWidth = useElementWidth(body);
   const roomBeside = hasRoomBeside(bodyWidth);
+  // The Board keeps its share of the width; the chat takes what is left beside the divider and the rail. The saved share is held
+  // back on a narrow body so the Board always keeps room.
+  const chatPercent = fittingChatPercent(layout.percent, bodyWidth);
   const dragDivider = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !body) return;
     const target = event.currentTarget;
@@ -223,6 +226,13 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     target.addEventListener('pointerup', stop);
     target.addEventListener('pointercancel', stop);
   };
+
+  // A press of "Open plan & sources" that the Board has not taken yet (it may still be loading) is dropped when the person goes
+  // anywhere but the Board, so a later visit is not met with it.
+  const selectedBranchName = selected?.branchName;
+  useEffect(() => {
+    if (selectedBranchName && subTab !== 'board') boardOverviewRequests.discard(selectedBranchName);
+  }, [selectedBranchName, subTab]);
 
   const handleModeChange = useCallback((mode: 'board' | 'split' | 'terminal') => {
     if (!selected) return;
@@ -956,7 +966,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
             />
           )}
           {showPanel && (
-          <div className="relative flex min-w-0 flex-1 flex-col" style={{ flex: showChat ? `0 0 ${100 - layout.percent}%` : '1 1 100%' }}>
+          <div className="relative flex min-w-0 flex-1 flex-col" style={{ flex: showChat ? `0 0 ${100 - chatPercent}%` : '1 1 100%' }}>
             {/* What is open, and the way back to the chat, which is always one click: the cross, or the rail item again.
                 Code, Docs and the Board carry these in their own toolbars or corners, so each spends no row on a title. */}
             {subTab !== 'board' && (
@@ -1100,7 +1110,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
                       <div className="rounded-xl border border-border bg-card p-5 space-y-3">
                         <h3 className="font-semibold">Plan, assignment & source documents</h3>
                         <p className="text-sm text-muted-foreground">Set the current AI stage, attach requirements, and manage milestone progress in one place.</p>
-                        <Button onClick={() => onSelectTab(selected.branchName, 'plan')}>Open plan & sources</Button>
+                        <Button onClick={() => { showBoardOverview(selected.branchName); onSelectTab(selected.branchName, 'board'); }}>Open plan & sources</Button>
                       </div>
                     </div>
 
@@ -1586,19 +1596,19 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           {showChat && showPanel && (
             <div
               role="separator" tabIndex={0} aria-orientation="vertical" aria-label="Resize the workspace panes"
-              aria-valuemin={CHAT_LAYOUT.minPercent} aria-valuemax={CHAT_LAYOUT.maxPercent} aria-valuenow={Math.round(layout.percent)}
+              aria-valuemin={CHAT_LAYOUT.minPercent} aria-valuemax={fittingChatPercent(CHAT_LAYOUT.maxPercent, bodyWidth)} aria-valuenow={Math.round(chatPercent)}
               className="group z-10 -mx-0.5 flex w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-border/60 hover:bg-primary/40 focus-visible:bg-primary/50 focus-visible:outline-hidden"
               title="Drag, or use the arrow keys, to resize the panes"
               onPointerDown={dragDivider}
               onKeyDown={(event) => {
                 if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
                 event.preventDefault();
-                chatLayout.setPercent(chatLayout.get().percent + (event.key === 'ArrowRight' ? -3 : 3));
+                chatLayout.setPercent(chatPercent + (event.key === 'ArrowRight' ? -3 : 3));
               }}
             />
           )}
           {showChat && (
-            <div className="h-full min-h-0 min-w-0" style={{ flex: showPanel ? `0 0 ${layout.percent}%` : '1 1 100%' }}>
+            <div className="h-full min-h-0 min-w-0" style={{ flex: showPanel ? '1 1 0%' : '1 1 100%' }}>
               {/* The chat is not rendered here: it lives above the router and sits over this box, so it stays alive. */}
               <ChatDockSlot />
             </div>

@@ -25,7 +25,7 @@ import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.
 import { boardNews, useIncomingCommits, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
 import { useFeedConnected } from '../progress/useScreenFeed.js';
-import { boardStepRequests, codeRequests, documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useBoardStepRequest, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
+import { BOARD_OVERVIEW_REQUEST_MS, boardOverviewRequests, boardStepRequests, codeRequests, documentRequests, invalidateReferenceIntent, openCodeWindow, referenceIntentIsCurrent, useBoardOverviewRequest, useBoardStepRequest, useCodeWindowOpen, useDocumentRequest } from '../workspace-shell/openRequests.js';
 import { filesChangedText } from '../changes/changeSummary.js';
 import { useRepoChanges } from '../changes/useRepoChanges.js';
 import { BoardActionsContext, BoardReadingContext, firstControl, knowledgeTarget, type BoardActions, type ReaderTarget } from './boardActions.js';
@@ -1013,6 +1013,59 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     }, 210);
   }, [setReader, clearJump, setThreadSelectedId]);
 
+  // "Open plan & sources" on the workspace Overview: the plan is the overview level, so the Board leaves the Area it was left in and
+  // closes its reader, then puts the keyboard in the overview. Stepping out returns the keyboard to the Area's own card, which is in
+  // the overview; with nothing to step out of, the overview canvas takes it. Nothing inert is ever the target.
+  const overviewRequest = useBoardOverviewRequest(workspaceId);
+  // The wish for the keyboard is a deadline (from the press), not a flag: it ends with the Board leaving the screen, with stepping into
+  // an Area, and with the person doing anything outside it, so a later visit is never pulled.
+  const [overviewFocusUntil, setOverviewFocusUntil] = useState<number | null>(null);
+  useEffect(() => {
+    if (!overviewRequest || !active) return;
+    boardOverviewRequests.acknowledge(workspaceId, overviewRequest.id);
+    if (Date.now() - overviewRequest.request.at > BOARD_OVERVIEW_REQUEST_MS) return;
+    closeReader();
+    if (steppedRef.current) stepOut();
+    else if (!overviewRequest.request.acted) setOverviewFocusUntil(overviewRequest.request.at + BOARD_OVERVIEW_REQUEST_MS);
+  }, [overviewRequest, active, workspaceId, closeReader, stepOut]);
+  useEffect(() => {
+    if (!active || stepped) setOverviewFocusUntil(null);
+  }, [active, stepped]);
+  useEffect(() => {
+    if (overviewFocusUntil === null || !active || stepped || areasLoading) return;
+    let frame = 0;
+    let tries = 0;
+    let rested = 0;
+    const done = () => setOverviewFocusUntil(null);
+    // The chat's terminal takes the keyboard when it attaches, a moment after this: that is beaten. A person acting (a press or a key
+    // anywhere) ends the wish at once, and so does the keyboard resting in the Board for a few frames.
+    const acted = () => done();
+    document.addEventListener('pointerdown', acted, true);
+    document.addEventListener('keydown', acted, true);
+    const attempt = () => {
+      if (Date.now() > overviewFocusUntil) { done(); return; }
+      const plane = document.getElementById('board-overview');
+      const usable = (el: HTMLElement | null | undefined) => (el && !el.closest('[inert]') ? el : null);
+      const target = usable(plane?.querySelector<HTMLElement>('.react-flow')) ?? usable(plane?.querySelector<HTMLElement>('button'));
+      const held = document.activeElement;
+      const free = !held || held === document.body || Boolean(held.closest('[role="region"][aria-label="CLI Chat"]'));
+      const inBoard = Boolean(root.current?.contains(held));
+      if (!free && !inBoard) { done(); return; }
+      if (target && free) target.focus({ preventScroll: true });
+      rested = root.current?.contains(document.activeElement) ? rested + 1 : 0;
+      tries += 1;
+      // Resting in the Board for a few frames is not enough while the terminal may still attach: wait out a short grace first.
+      if ((rested >= 30 && tries >= 30) || tries > 90) { done(); return; }
+      frame = requestAnimationFrame(attempt);
+    };
+    frame = requestAnimationFrame(attempt);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('pointerdown', acted, true);
+      document.removeEventListener('keydown', acted, true);
+    };
+  }, [overviewFocusUntil, active, stepped, areasLoading]);
+
   const [areaCanvasContainer, setAreaCanvasContainer] = useState<HTMLDivElement | null>(null);
   // Focus restoration when reader closes. Declared before the step-in/step-out focus effects below: when a jump closes the
   // reader and changes the Area in one commit, the old opener is still connected here, so those later effects must run after
@@ -1190,7 +1243,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   }, [openState, steppedAreaId, areaReady, activeArea, rowIds, areaOpen]);
 
   const areaEdges = useMemo(() => oneLinePerPair(boardEdges(areaNodes, board?.links ?? [])), [areaNodes, board]);
-  // Inside an Area a line is drawn only for a card the pointer is on or the keyboard is in (`data-lit`, see index.css). This sets the attribute on the
+  // Inside an Area a line is drawn only for a card the pointer is on or the keyboard is in (`data-lit`, see features/board/board.css). This sets the attribute on the
   // lines in the DOM and keeps no state: a render on every hover or focus would move things under a press in progress.
   const litNodes = useRef<{ pointed: string | null; focused: string | null }>({ pointed: null, focused: null });
   const lightAreaEdges = useCallback((change: Partial<{ pointed: string | null; focused: string | null }>) => {

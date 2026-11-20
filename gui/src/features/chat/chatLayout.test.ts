@@ -74,3 +74,15 @@ describe('chatLayout', () => {
     expect(hasRoomBeside(0)).toBe(false);
   });
 });
+
+describe('fittingChatPercent', () => {
+  it('holds the saved share back so the panel, divider and rail fit, and gives it back on a wider body', async () => {
+    const { fittingChatPercent } = await load();
+    expect(fittingChatPercent(75, 1044)).toBe(Math.floor(((1044 - 360 - 52) / 1044) * 100));
+    expect(fittingChatPercent(75, 1044) * 1044 / 100 + 360 + 52).toBeLessThanOrEqual(1044);
+    expect(fittingChatPercent(75, 2000)).toBe(75);
+    expect(fittingChatPercent(50, 1044)).toBe(50);
+    expect(fittingChatPercent(75, 0)).toBe(75);
+    expect(fittingChatPercent(Number.NaN, 1044)).toBe(50);
+  });
+});

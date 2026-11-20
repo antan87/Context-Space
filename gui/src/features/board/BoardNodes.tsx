@@ -25,7 +25,7 @@ import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLin
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
 import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode, type UncommittedNode } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
-import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, Pill, StepCheck } from '../../design/index.js';
+import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, StepCheck } from '../../design/index.js';
 import { Anchors, brickPress, hasDragSelection, TITLE_BUTTON } from './cards/cardParts.js';
 import { summaryLabel } from './summaryLabel.js';
 import { BoardNote } from './cards/NoteCard.js';
@@ -1118,7 +1118,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
     <Anchors />
     {data.fresh && <span aria-hidden="true" className="board-fresh" />}
     <div className="flex h-4 items-center justify-between gap-2 text-xs">
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">
         <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
         <code id={shaId} className="nodrag select-text shrink-0 font-mono text-primary font-medium">{data.sha}</code>
         {data.fresh && (
@@ -1131,7 +1131,8 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
         {ago && <time dateTime={data.at} className="shrink-0 whitespace-nowrap text-muted-foreground">{ago}</time>}
         <CommitNoteMarker id={id} subject={data.subject} commit={commit} />
       </div>
-      <Pill className="shrink-0">commit</Pill>
+      {/* The leading commit icon and the sha say "commit" to the eye; the word is for screen readers (a visible label did not fit the 246 px row beside the note marker). */}
+      <span className="sr-only">commit</span>
     </div>
     {commit ? (
       <button

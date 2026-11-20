@@ -1,0 +1,448 @@
+/* ─── Semantic tokens ─────────────────────────────────────────────────────────
+   shadcn-style semantic palette: light values at :root, dark overrides in the
+   @variant dark block. Utilities (bg-background, text-muted-foreground, …) are
+   generated from the @theme inline mapping below.
+   The brand theme reflects the ContextSpace Open Context identity in the default Sunset palette:
+   Solar Gold (#FDE047), Coral Orange (#FB923C / #F97316), Hibiscus Rose (#F43F5E),
+   Pacific Indigo (#6366F1), on Deep Obsidian Twilight (#0A0812). */
+:root {
+  color-scheme: light;
+  --radius: 0.375rem;
+  --background: #f6f8fa;
+  --foreground: #1f2328;
+  --card: #ffffff;
+  --card-foreground: #1f2328;
+  --popover: #ffffff;
+  --popover-foreground: #1f2328;
+  --primary: #0966d3;
+  --primary-foreground: #ffffff;
+  --secondary: #eaeef2;
+  --secondary-foreground: #1f2328;
+  --muted: #f6f8fa;
+  --muted-foreground: #5f6771;
+  --accent: #eaeef2;
+  --accent-foreground: #0966d3;
+  --destructive: #c9212d;
+  /* Status *-foreground tokens are text colours on light surfaces (≥4.5:1), not text on a solid fill. */
+  --destructive-foreground: #a40e26;
+  --border: #d0d7de;
+  --input: #d0d7de;
+  --ring: #0969da;
+  --info: #0969da;
+  --info-foreground: #0550ae;
+  --success: #187733;
+  --success-foreground: #116329;
+  --warning: #8d5e00;
+  --warning-foreground: #7d4e00;
+  --running: #0969da;
+  --running-foreground: #ffffff;
+
+  /* Hairline (R1a): the look decision's radius, shadow, hover-border and type tokens. Shared by all six palettes, which only change colours. */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --r-full: 9999px;
+  --shadow-hover: 0 1px 2px rgb(0 0 0 / .06);
+  --shadow-raised: 0 8px 24px rgb(0 0 0 / .12);
+  --border-hover: #afb8c1;
+  --divider: color-mix(in srgb, var(--border) 60%, transparent);
+  /* Type scale: size / weight / line height. */
+  --type-area-title-size: 18px;  --type-area-title-weight: 600;  --type-area-title-leading: 24px;
+  --type-panel-title-size: 16px; --type-panel-title-weight: 600; --type-panel-title-leading: 22px;
+  --type-card-title-size: 14px;  --type-card-title-weight: 600;  --type-card-title-leading: 20px;
+  --type-ui-size: 13px;          --type-ui-weight: 400;          --type-ui-leading: 20px;
+  --type-reading-size: 14px;     --type-reading-weight: 400;     --type-reading-leading: 22px;
+  --type-meta-size: 12px;        --type-meta-weight: 400;        --type-meta-leading: 16px;
+  --type-label-size: 12px;       --type-label-weight: 500;       --type-label-leading: 16px;
+  /* The same scale as the Board writes it: every size and line height divided by the Area's 0.9 zoom, so 12 px meta is 13.5 px written and 12 px on screen. */
+  --type-board-area-title-size: 20px;    --type-board-area-title-leading: 26.7px;
+  --type-board-panel-title-size: 17.8px; --type-board-panel-title-leading: 24.4px;
+  --type-board-card-title-size: 15.6px;  --type-board-card-title-leading: 22.2px;
+  --type-board-ui-size: 14.4px;          --type-board-ui-leading: 22.2px;
+  --type-board-reading-size: 15.6px;     --type-board-reading-leading: 24.4px;
+  --type-board-meta-size: 13.5px;        --type-board-meta-leading: 17.8px;
+  --type-board-label-size: 13.5px;       --type-board-label-leading: 17.8px;
+
+  @variant dark {
+    color-scheme: dark;
+    --background: #090d13;
+    --foreground: #f0f6fc;
+    --card: #161b22;
+    --card-foreground: #f0f6fc;
+    --popover: #161b22;
+    --popover-foreground: #f0f6fc;
+    --primary: #58a6ff;
+    --primary-foreground: #090d13;
+    --secondary: #21262d;
+    --secondary-foreground: #f0f6fc;
+    --muted: #161b22;
+    --muted-foreground: #8b949e;
+    --accent: #21262d;
+    --accent-foreground: #58a6ff;
+    --destructive: #f8655d;
+    --destructive-foreground: #fecdd3;
+    --border: #30363d;
+    --input: #30363d;
+    --ring: #58a6ff;
+    --info: #58a6ff;
+    --info-foreground: #79c0ff;
+    --success: #3fb950;
+    --success-foreground: #56d364;
+    --warning: #d29922;
+    --warning-foreground: #e3b341;
+    --running: #58a6ff;
+    --running-foreground: #79c0ff;
+    --shadow-hover: 0 1px 2px rgb(0 0 0 / .4);
+    --shadow-raised: 0 8px 24px rgb(0 0 0 / .5);
+    --border-hover: #484f58;
+  }
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-running: var(--running);
+  --color-running-foreground: var(--running-foreground);
+
+  --color-sunset-gold: var(--brand-first);
+  --color-sunset-coral: var(--brand-middle);
+  --color-sunset-hibiscus: var(--brand-last);
+  --color-sunset-indigo: var(--brand-depth);
+
+  --color-state-needs: var(--state-needs);
+  --color-state-ai: var(--state-ai);
+  --color-state-done: var(--state-done);
+  --color-state-reopened: var(--state-reopened);
+  --color-state-now: var(--state-now);
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.3125rem;
+  --radius-lg: var(--radius);
+  --radius-xl: 0.5rem;
+  --radius-2xl: 0.625rem;
+
+  /* Hairline utilities (rounded-card, shadow-card-hover, border-border-hover). The existing radius scale above is unchanged. */
+  --radius-card: var(--r-lg);
+  --shadow-card-hover: var(--shadow-hover);
+  --color-border-hover: var(--border-hover);
+  /* The hover fill of a row that sits on the card surface: an opaque mix over the card (as `.board-brick:hover` does), never a see-through colour,
+     so a hovered row is lighter than the card in dark and darker in light, and the canvas never shows through. */
+  --color-row-hover: color-mix(in oklab, var(--accent) 30%, var(--card));
+  --color-row-hover-now: color-mix(in oklab, var(--primary) 10%, var(--card));
+  --color-row-hover-now-soft: color-mix(in oklab, var(--primary) 5%, var(--card));
+
+  --animate-skeleton: skeleton 2s -1s infinite linear;
+  @keyframes skeleton {
+    to {
+      background-position: -200% 0;
+    }
+  }
+}
+
+/* Color identity is independent of light/dark appearance. */
+:root {
+  --brand-first: #fde047;
+  --brand-middle: #fb923c;
+  --brand-last: #f43f5e;
+  --brand-depth: #6366f1;
+}
+
+/* Progress and state colours for the Context Ring. States are semantic, so they do not change with the
+   palette. Ring arcs take the palette's own brand gradient, darkened on light surfaces until they reach 3:1.
+   The dark values are the last block of this file so they win over every palette's light block. */
+:root {
+  --state-needs: #ad370a;
+  --state-ai: #4f46e5;
+  --state-done: #116329;
+  --state-reopened: #be123c;
+  --state-now: #b8770b;
+  --ring-a: color-mix(in srgb, var(--brand-first) 55%, #1c1410);
+  --ring-b: color-mix(in srgb, var(--brand-middle) 55%, #1c1410);
+  --ring-c: color-mix(in srgb, var(--brand-last) 55%, #1c1410);
+  --ring-dim: color-mix(in srgb, var(--foreground) 12%, var(--card));
+  --ring-t0: var(--ring-a);
+  --ring-t1: color-mix(in srgb, var(--ring-b) 33.3%, var(--ring-a));
+  --ring-t2: color-mix(in srgb, var(--ring-b) 66.7%, var(--ring-a));
+  --ring-t3: var(--ring-b);
+  --ring-t4: color-mix(in srgb, var(--ring-c) 33.3%, var(--ring-b));
+  --ring-t5: color-mix(in srgb, var(--ring-c) 66.7%, var(--ring-b));
+  --ring-t6: var(--ring-c);
+}
+/* On light surfaces the sunset gradient reads better in amber, orange and rose than in a darkened gold.
+   The amber is the lightest that still reaches 3:1 on every light palette surface. */
+:root[data-color-theme="sunset"],
+:root[data-color-theme="dusk"] {
+  --ring-a: #b8770b;
+  --ring-b: #ea580c;
+  --ring-c: #e11d48;
+}
+:root[data-color-theme="aurora"] {
+  --brand-first: #5eead4;
+  --brand-middle: #22d3ee;
+  --brand-last: #818cf8;
+  --brand-depth: #6366f1;
+  --background: #f4f9fc;
+  --foreground: #112738;
+  --card: #ffffff;
+  --card-foreground: #112738;
+  --popover: #ffffff;
+  --popover-foreground: #112738;
+  --primary: #087683;
+  --primary-foreground: #ffffff;
+  --secondary: #e6f0f5;
+  --secondary-foreground: #112738;
+  --muted: #e6f0f5;
+  --muted-foreground: #526b7a;
+  --accent: #d9f2f3;
+  --accent-foreground: #065964;
+  --border: #bfd4df;
+  --input: #a9c7d6;
+  --ring: #087e8b;
+  --running: #0891b2;
+  --running-foreground: #0e7490;
+}
+:root.dark[data-color-theme="aurora"] {
+  --background: #070f1b;
+  --foreground: #edf7fb;
+  --card: #0e1c2c;
+  --card-foreground: #edf7fb;
+  --popover: #122337;
+  --popover-foreground: #edf7fb;
+  --primary: #5eead4;
+  --primary-foreground: #052e35;
+  --secondary: #14293b;
+  --secondary-foreground: #edf7fb;
+  --muted: #112335;
+  --muted-foreground: #9cb5c7;
+  --accent: #173647;
+  --accent-foreground: #99f6e4;
+  --border: #284359;
+  --input: #36556c;
+  --ring: #5eead4;
+  --running: #22d3ee;
+  --running-foreground: #67e8f9;
+}
+:root[data-color-theme="forest"] {
+  --brand-first: #86efac;
+  --brand-middle: #22c55e;
+  --brand-last: #14b8a6;
+  --brand-depth: #0f766e;
+  --background: #f4faf6;
+  --foreground: #132a1c;
+  --card: #ffffff;
+  --card-foreground: #132a1c;
+  --popover: #ffffff;
+  --popover-foreground: #132a1c;
+  --primary: #147c3b;
+  --primary-foreground: #ffffff;
+  --secondary: #e6f4ea;
+  --secondary-foreground: #132a1c;
+  --muted: #e6f4ea;
+  --muted-foreground: #4e6b56;
+  --accent: #daf0e0;
+  --accent-foreground: #14532d;
+  --border: #bfdcce;
+  --input: #a6d0bd;
+  --ring: #15803d;
+  --running: #16a34a;
+  --running-foreground: #14532d;
+}
+:root.dark[data-color-theme="forest"] {
+  --background: #07130c;
+  --foreground: #ecf9f0;
+  --card: #0d2015;
+  --card-foreground: #ecf9f0;
+  --popover: #11281b;
+  --popover-foreground: #ecf9f0;
+  --primary: #4ade80;
+  --primary-foreground: #052e16;
+  --secondary: #143121;
+  --secondary-foreground: #ecf9f0;
+  --muted: #11291b;
+  --muted-foreground: #8db899;
+  --accent: #19402b;
+  --accent-foreground: #86efac;
+  --border: #224c34;
+  --input: #2e6143;
+  --ring: #4ade80;
+  --running: #22c55e;
+  --running-foreground: #86efac;
+}
+:root[data-color-theme="nebula"] {
+  --brand-first: #f472b6;
+  --brand-middle: #c084fc;
+  --brand-last: #818cf8;
+  --brand-depth: #4f46e5;
+  --background: #faf6fd;
+  --foreground: #221430;
+  --card: #ffffff;
+  --card-foreground: #221430;
+  --popover: #ffffff;
+  --popover-foreground: #221430;
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --secondary: #f2e8fc;
+  --secondary-foreground: #221430;
+  --muted: #f2e8fc;
+  --muted-foreground: #6b5580;
+  --accent: #ebd9fc;
+  --accent-foreground: #5b21b6;
+  --border: #dac5ed;
+  --input: #caaee0;
+  --ring: #7c3aed;
+  --running: #9333ea;
+  --running-foreground: #581c87;
+}
+:root.dark[data-color-theme="nebula"] {
+  --background: #0e0918;
+  --foreground: #f6f0fd;
+  --card: #181128;
+  --card-foreground: #f6f0fd;
+  --popover: #1f1633;
+  --popover-foreground: #f6f0fd;
+  --primary: #c084fc;
+  --primary-foreground: #270642;
+  --secondary: #271a3d;
+  --secondary-foreground: #f6f0fd;
+  --muted: #211535;
+  --muted-foreground: #b29dc9;
+  --accent: #332250;
+  --accent-foreground: #e9d5ff;
+  --border: #422d64;
+  --input: #563b82;
+  --ring: #c084fc;
+  --running: #d946ef;
+  --running-foreground: #f0abfc;
+}
+:root[data-color-theme="glacier"] {
+  --brand-first: #93c5fd;
+  --brand-middle: #38bdf8;
+  --brand-last: #60a5fa;
+  --brand-depth: #2563eb;
+  --background: #f3f7fb;
+  --foreground: #102133;
+  --card: #ffffff;
+  --card-foreground: #102133;
+  --popover: #ffffff;
+  --popover-foreground: #102133;
+  --primary: #0369a1;
+  --primary-foreground: #ffffff;
+  --secondary: #e2eef7;
+  --secondary-foreground: #102133;
+  --muted: #e2eef7;
+  --muted-foreground: #4f6980;
+  --accent: #d2e7f5;
+  --accent-foreground: #0369a1;
+  --border: #b8d4e8;
+  --input: #9fc2dc;
+  --ring: #0369a1;
+  --running: #0ea5e9;
+  --running-foreground: #0369a1;
+}
+:root.dark[data-color-theme="glacier"] {
+  --background: #08101a;
+  --foreground: #eff6fc;
+  --card: #0f1c2c;
+  --card-foreground: #eff6fc;
+  --popover: #142337;
+  --popover-foreground: #eff6fc;
+  --primary: #38bdf8;
+  --primary-foreground: #042436;
+  --secondary: #172a40;
+  --secondary-foreground: #eff6fc;
+  --muted: #132438;
+  --muted-foreground: #95acc2;
+  --accent: #1e3855;
+  --accent-foreground: #bae6fd;
+  --border: #284768;
+  --input: #375e87;
+  --ring: #38bdf8;
+  --running: #0ea5e9;
+  --running-foreground: #7dd3fc;
+}
+:root[data-color-theme="dusk"] {
+  --brand-first: #fde047;
+  --brand-middle: #fb923c;
+  --brand-last: #f43f5e;
+  --brand-depth: #6366f1;
+  --background: #f5f3fa;
+  --foreground: #17122b;
+  --card: #ffffff;
+  --card-foreground: #17122b;
+  --popover: #ffffff;
+  --popover-foreground: #17122b;
+  --primary: #ad370a;
+  --primary-foreground: #ffffff;
+  --secondary: #ebe7f5;
+  --secondary-foreground: #17122b;
+  --muted: #efecf7;
+  --muted-foreground: #605a7b;
+  --accent: #ece7f7;
+  --accent-foreground: #9a3412;
+  --border: #d6d0e6;
+  --input: #c4bcd8;
+  --ring: #ad370a;
+  --running: #4f46e5;
+  --running-foreground: #ffffff;
+}
+:root.dark[data-color-theme="dusk"] {
+  --background: #0a0812;
+  --foreground: #f0edf9;
+  --card: #14101f;
+  --card-foreground: #f0edf9;
+  --popover: #1b1729;
+  --popover-foreground: #f0edf9;
+  --primary: #fb923c;
+  --primary-foreground: #1d1006;
+  --secondary: #1b1729;
+  --secondary-foreground: #f0edf9;
+  --muted: #14101f;
+  --muted-foreground: #8f89aa;
+  --accent: #262039;
+  --accent-foreground: #fdba74;
+  --border: #2a2442;
+  --input: #352e50;
+  --ring: #fb923c;
+  --running: #8b92f8;
+  --running-foreground: #a5abff;
+}
+
+/* Dark values for the progress tokens. Last on purpose: this block must win over every palette's light
+   block of equal specificity (the sunset and dusk ring colours above). */
+:root.dark {
+  --state-needs: #fb923c;
+  --state-ai: #8b92f8;
+  --state-done: #4ade80;
+  --state-reopened: #fb7185;
+  --state-now: #fde047;
+  --ring-a: var(--brand-first);
+  --ring-b: var(--brand-middle);
+  --ring-c: var(--brand-last);
+}

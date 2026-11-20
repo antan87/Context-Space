@@ -1,9 +1,9 @@
 {
   "scanner": 2,
-  "total": 707,
+  "total": 702,
   "byKind": {
-    "tiny": 354,
-    "palette": 277,
+    "tiny": 353,
+    "palette": 273,
     "arbitrary": 59,
     "hex": 17
   },
@@ -19,7 +19,6 @@
     "arbitrary: shadow-[0_1px_--theme(--color-black/4%)]": 12,
     "palette: text-purple-400": 11,
     "hex: #D97757": 10,
-    "palette: text-amber-400": 7,
     "tiny: text-[8px]": 7,
     "arbitrary: rounded-[calc(var(--radius-lg)-1px)]": 6,
     "palette: bg-blue-500": 6,
@@ -30,12 +29,12 @@
     "palette: text-sky-400": 6,
     "palette: bg-emerald-400": 5,
     "palette: bg-sky-500": 5,
+    "palette: text-amber-400": 5,
     "palette: text-emerald-500": 5,
     "arbitrary: rounded-[calc(var(--radius-md)-1px)]": 4,
     "arbitrary: rounded-[inherit]": 4,
     "palette: border-purple-500": 4,
     "palette: border-sky-500": 4,
-    "palette: text-amber-600": 4,
     "palette: text-blue-400": 4,
     "palette: text-pink-400": 4,
     "palette: text-slate-300": 4,
@@ -65,6 +64,7 @@
     "palette: border-rose-500": 2,
     "palette: from-amber-500": 2,
     "palette: from-purple-600": 2,
+    "palette: text-amber-600": 2,
     "palette: text-blue-300": 2,
     "palette: text-cyan-400": 2,
     "palette: text-indigo-300": 2,
@@ -130,12 +130,11 @@
     "palette: to-orange-400": 1,
     "palette: to-orange-500": 1,
     "palette: via-orange-500": 1,
-    "tiny: text-[.625rem]": 1,
-    "tiny: text-[10.5px]": 1
+    "tiny: text-[.625rem]": 1
   },
   "byFolder": {
     "pages": 164,
-    "features/changes": 133,
+    "features/changes": 129,
     "components/ui": 94,
     "features/workrooms": 80,
     "app": 48,
@@ -154,7 +153,6 @@
     "features/workspace-shell": 2,
     ".": 1,
     "components": 1,
-    "design": 1,
     "features/overview": 1
   }
 }

@@ -238,3 +238,73 @@ describe('ctxspace plan now', () => {
     expect(now.options.map((o) => o.long)).toContain('--clear');
   });
 });
+
+describe('ctxspace plan migrate --dry-run', () => {
+  let out: string;
+  beforeEach(async () => { out = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plan-migrate-out-'))); });
+  afterEach(async () => { await fs.rm(out, { recursive: true, force: true }); });
+
+  async function run(...args: string[]) {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((text?: unknown) => { lines.push(String(text)); });
+    const failures: string[] = [];
+    const program = new Command().exitOverride();
+    registerPlanCommand(program, (error) => { failures.push(error instanceof Error ? error.message : String(error)); });
+    await program.parseAsync(['node', 'ctxspace', 'plan', 'migrate', '-w', root, ...args]);
+    vi.mocked(console.log).mockRestore();
+    return { lines, failures };
+  }
+
+  it('says in plain words what it found and exits 0 when everything maps and round trips', async () => {
+    const { lines, failures } = await run('--dry-run', '--out', path.join(out, 'o'));
+    expect(failures).toEqual([]);
+    const text = lines.join('\n');
+    expect(text).toContain('Rehearsal only: nothing in this workspace was changed.');
+    expect(text).toContain('Everything maps');
+    expect(text).toContain('PLAN.md round trip: identical');
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it('exits 3 when it worked but something is listed', async () => {
+    await fs.writeFile(path.join(root, 'contextspace-board.json'), JSON.stringify({ version: 1, revision: 1, positions: {}, links: [], cards: [{ id: '00000001-1111-4222-8333-444455556666', kind: 'note', title: 'Lost', body: '', pinned: false, archived: false, by: 'user', at: '2026-11-01T10:00:00.000Z', step: 'no-such-step' }] }));
+    const { lines } = await run('--dry-run', '--out', path.join(out, 'o'));
+    expect(lines.join('\n')).toContain('no-such-step');
+    expect(process.exitCode).toBe(3);
+  });
+
+  it('prints only JSON with --json (stdout stays clean) and carries the exit code', async () => {
+    const { lines } = await run('--dry-run', '--json', '--out', path.join(out, 'o'));
+    expect(lines).toHaveLength(1);
+    const report = JSON.parse(lines[0]!);
+    expect(report).toMatchObject({ result: 'ok', exitCode: 0, plan: { source: 'file' }, roundTrip: { identical: true } });
+    expect(report.snapshot.file).toBe(path.join(out, 'o', 'contextspace-data.json'));
+  });
+
+  it('reports the resolved output path when --out goes through a link (macOS /var, Windows short names)', async () => {
+    const link = path.join(out, 'link');
+    await fs.mkdir(path.join(out, 'real'));
+    await fs.symlink(path.join(out, 'real'), link, 'junction');
+    const { lines } = await run('--dry-run', '--json', '--out', path.join(link, 'o'));
+    const report = JSON.parse(lines[0]!);
+    expect(report.snapshot.file).toBe(path.join(await fs.realpath(link), 'o', 'contextspace-data.json'));
+    expect(report.snapshot.file).not.toBe(path.join(link, 'o', 'contextspace-data.json'));
+  });
+
+  it('exits 1 without --dry-run (only the rehearsal exists yet) and for an out folder inside the workspace', async () => {
+    const a = await run('--json');
+    expect(JSON.parse(a.lines[0]!)).toMatchObject({ ok: false, code: 'invalid' });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+    const b = await run('--dry-run', '--json', '--out', path.join(root, '.contextspace'));
+    expect(JSON.parse(b.lines[0]!).error).toMatch(/inside the workspace/);
+    expect(process.exitCode).toBe(1);
+    await expect(fs.access(path.join(root, '.contextspace', 'workspace.db'))).rejects.toThrow();
+  });
+
+  it('is registered with its options', () => {
+    const program = new Command();
+    registerPlanCommand(program, () => undefined);
+    const migrate = program.commands.find((c) => c.name() === 'plan')!.commands.find((c) => c.name() === 'migrate')!;
+    expect(migrate.options.map((o) => o.long)).toEqual(expect.arrayContaining(['--dry-run', '--out', '--json']));
+  });
+});

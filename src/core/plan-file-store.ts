@@ -89,6 +89,14 @@ async function readAt(location: Location): Promise<PlanFileRead> {
   return { text: '', plan: parsePlanFile(''), source: 'none' };
 }
 
+/**
+ * The plan as it stands, read only: it notes nothing, moves nothing and writes nothing (the migration rehearsal looks at
+ * a workspace this way). `readPlanFile` is the one that keeps the log of what changed.
+ */
+export async function readPlanTextReadOnly(workspacePath: string): Promise<PlanFileRead> {
+  return readAt(await locate(workspacePath));
+}
+
 /** Reads the plan, and notes what changed in the file since ContextSpace last looked. */
 export async function readPlanFile(workspacePath: string): Promise<PlanFileRead> {
   const location = await locate(workspacePath);

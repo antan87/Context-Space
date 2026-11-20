@@ -6,7 +6,11 @@ import { describe, expect, it } from 'vitest';
  * used to be one, so `outline-none` on a field never took effect and a focused input drew its own ring and the
  * outline of this rule on top of it. These checks keep that rule where utilities can replace it.
  */
-const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+/** The stylesheet with its local `@import "./….css"` lines replaced by the imported file, in place, so the rules come in the order the browser's cascade sees them. */
+function readCssWithImports(url: URL): string {
+  return readFileSync(url, 'utf8').replace(/^@import "(\.[^"]+\.css)";$/gm, (_all, file: string) => readCssWithImports(new URL(file, url)));
+}
+const css = readCssWithImports(new URL('./index.css', import.meta.url)).replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** Top-level blocks: their selector or at-rule, and their body. */
 function topLevelBlocks(source: string): Array<{ selector: string; body: string }> {

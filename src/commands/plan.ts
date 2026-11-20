@@ -14,6 +14,7 @@ import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { PlanError, type PlanActor } from '../core/plan.js';
 import { PLAN_FILE, PlanFileError, addToPlan, answerDecision, findPlanItem, openDecisions, planItems, setDone, type PlanFile } from '../core/plan-file.js';
 import { changePlanFile, clearPlanNow, readPlanChanges, readPlanChecks, readPlanFile, runPlanCheck, setPlanNow } from '../core/plan-file-store.js';
+import { rehearseMigration, renderRehearsal } from '../core/plan-migrate-rehearsal.js';
 import { planFileToJson, proofWords, renderPlanChanges, renderPlanStanding, standingLine } from '../core/plan-file-text.js';
 
 /** Options every `ctxspace plan` command takes. */
@@ -47,6 +48,7 @@ export const PLAN_EXAMPLES = [
   '  ctxspace plan now "Write the CSV writer"              say which step you are working on, so the board shows it',
   '  ctxspace plan now --clear                              say nobody is working on a particular step',
   '  ctxspace plan log                                      what changed lately, and who changed it',
+  '  ctxspace plan migrate --dry-run                        rehearse the move to the workspace database; changes nothing',
   '',
   `Most changes need no command: edit ${PLAN_FILE} directly.`,
 ].join('\n');
@@ -204,6 +206,19 @@ async function contextFor(options: PlanCommonOptions): Promise<PlanCommandContex
 }
 
 /**
+ * `ctxspace plan migrate --dry-run`: builds a database from today's files in a folder of its own and says what it found.
+ * Exit code 0 when everything maps and the plan round-trips, 3 when it worked but something is listed, 1 when it failed.
+ */
+export async function planMigrate(context: PlanCommandContext, options: { dryRun?: boolean; out?: string }): Promise<void> {
+  if (!options.dryRun) {
+    throw new PlanFileError('Only the rehearsal exists so far: run "ctxspace plan migrate --dry-run". It builds a database from the plan and the Board in a temp folder, says what it found, and changes nothing.', 'invalid');
+  }
+  const report = await rehearseMigration(context.workspacePath, { out: options.out });
+  context.print(context.json ? JSON.stringify(report, null, 2) : renderRehearsal(report));
+  if (report.exitCode !== 0) process.exitCode = report.exitCode;
+}
+
+/**
  * Adds `ctxspace plan` and its verbs to the CLI. `fail` reports an error the way every other command does; with
  * --json the error is printed as JSON and the exit code is still 1.
  */
@@ -267,6 +282,11 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
       if (!options.clear && words.length === 0) throw new PlanFileError('Name the step you are working on, or use --clear.', 'invalid');
       return planNow(context, words.join(' '), Boolean(options.clear));
     }));
+
+  common(plan.command('migrate').description('Rehearse the move to the workspace database: builds one from today\'s files in a temp folder, says what it found, and changes nothing')
+    .option('--dry-run', 'Rehearse only (the only mode so far)')
+    .option('--out <dir>', 'Keep the rehearsal database and files in this folder (never inside the workspace)'))
+    .action(action<PlanCommonOptions & { dryRun?: boolean; out?: string }, []>((context, options) => planMigrate(context, options)));
 
   common(plan.command('log').description('What changed lately, and who changed it'))
     .action(action<PlanCommonOptions, []>((context) => planLog(context)));

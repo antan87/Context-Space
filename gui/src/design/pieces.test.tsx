@@ -2,22 +2,16 @@ import { createElement, createRef, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { cn } from '../lib/utils.js';
-import { Composer, foldSurface, FreshDot, Mark, Pill, PILL_LEGACY, rowSurface, StepCheck, type PillTone } from './index.js';
+import { readFileSync } from 'node:fs';
+import { CardFrame, Composer, foldSurface, FreshDot, Mark, KindLabel, KIND_LABEL, Pill, rowSurface, StepCheck, type KindLabelKind, type PillTone } from './index.js';
 
 const html = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element);
 
 /** The small pieces of the design module (DS4). The cards' golden markup pins them in place; these pin each piece on its own. */
 describe('Pill', () => {
-  it('draws today\'s kind tag by default (the legacy look), whatever the tone', () => {
-    const legacy = '<span class="rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">note</span>';
-    expect(PILL_LEGACY).toBe('rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground');
-    expect(html(createElement(Pill, null, 'note'))).toBe(legacy);
-    expect(html(createElement(Pill, { tone: 'ai' }, 'note'))).toBe(legacy);
-  });
-
   it('puts a given class first, as the cards wrote shrink-0', () => {
-    expect(html(createElement(Pill, { className: 'shrink-0' }, 'commit')))
-      .toBe('<span class="shrink-0 rounded bg-muted/80 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">commit</span>');
+    expect(html(createElement(Pill, { className: 'shrink-0' }, 'x')))
+      .toBe('<span class="shrink-0 inline-flex items-center rounded-sm px-1.5 text-xs font-medium leading-4 bg-muted text-muted-foreground">x</span>');
   });
 
   it('keeps the text it is given', () => {
@@ -35,10 +29,34 @@ describe('Pill', () => {
       warning: 'bg-warning/12 text-warning-foreground',
     };
     for (const [tone, classes] of Object.entries(expected)) {
-      const out = html(createElement(Pill, { tone: tone as PillTone, look: 'hairline' }, 'x'));
+      const out = html(createElement(Pill, { tone: tone as PillTone }, 'x'));
       expect(out).toBe(`<span class="inline-flex items-center rounded-sm px-1.5 text-xs font-medium leading-4 ${classes}">x</span>`);
       expect(out).not.toContain('text-[10.5px]');
     }
+  });
+});
+
+describe('KindLabel', () => {
+  const kinds: KindLabelKind[] = ['note', 'commit', 'picture', 'html', 'pdf', 'markdown', 'other'];
+
+  it('draws a hidden icon and the word, muted, at the Board\'s meta size, with no box', () => {
+    for (const kind of kinds) {
+      const out = html(createElement(KindLabel, { kind }));
+      expect(out.startsWith(`<span class="${KIND_LABEL}"><svg `)).toBe(true);
+      expect(out).toMatch(/<svg [^>]*aria-hidden="true"/);
+      expect(out).toMatch(/<svg [^>]*class="[^"]*size-3\.5/);
+      expect(out.endsWith(`</svg>${kind}</span>`)).toBe(true);
+    }
+    expect(KIND_LABEL).toContain('text-[length:var(--type-board-meta-size)]');
+    expect(KIND_LABEL).toContain('font-normal');
+    expect(KIND_LABEL).toContain('text-muted-foreground');
+    expect(KIND_LABEL).not.toMatch(/\b(bg-|border|rounded|px-|py-)/);
+  });
+
+  it('gives each kind its own icon and takes a given class last', () => {
+    const icons = new Set(kinds.map((kind) => /<svg .*<\/svg>/.exec(html(createElement(KindLabel, { kind })))?.[0]));
+    expect(icons.size).toBe(kinds.length);
+    expect(html(createElement(KindLabel, { kind: 'commit', className: 'mt-1' }))).toMatch(/^<span class="inline-flex [^"]* mt-1"><svg/);
   });
 });
 
@@ -119,39 +137,78 @@ describe('StepCheck (DS5b)', () => {
 });
 
 describe('RowSurface (DS5b)', () => {
-  const NOW = 'rounded-xl border border-l-4 border-primary/40 border-l-state-now bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3';
+  const NOW = 'rounded-card border border-border border-l-3 border-l-state-now bg-card pl-3.25 pr-3';
   const set = (value: string) => value.split(/\s+/).sort();
 
   it('draws the Now surface with its left rule, and a quiet row without one', () => {
     expect(rowSurface({ now: true })).toBe(NOW);
     expect(rowSurface({ now: false })).toBe('rounded-lg px-1');
     expect(rowSurface({ now: false })).not.toContain('border-l-state-now');
-    expect(rowSurface({ now: true, hover: 'hover:bg-primary/5' })).toBe(`${NOW} hover:bg-primary/5`);
+    expect(rowSurface({ now: true, hover: 'hover:bg-row-hover-now-soft' })).toBe(`${NOW} hover:bg-row-hover-now-soft`);
   });
 
   it('keeps the stripe: twMerge drops no class of the Now surface, in any caller\'s composition', () => {
     expect(set(cn('relative flex', rowSurface({ now: true }), 'text-left'))).toEqual(set(`relative flex ${NOW} text-left`));
-    expect(rowSurface({ now: true })).toContain('border-l-4 border-primary/40 border-l-state-now');
+    expect(rowSurface({ now: true })).toContain('border-border border-l-3 border-l-state-now');
+  });
+
+  it('draws the Now surface as a hairline card with a 3 px rule: no gradient, no tinted outline, no 4 px rule', () => {
+    for (const surface of [rowSurface({ now: true }), foldSurface(true)]) {
+      expect(surface).toContain('rounded-card');
+      expect(surface).toContain('border-border');
+      expect(surface).toContain('border-l-3');
+      expect(surface).toContain('border-l-state-now');
+      expect(surface).toContain('bg-card');
+      expect(surface).not.toMatch(/gradient|from-|via-|border-primary|border-l-4|rounded-xl/);
+    }
+    // The text starts where it did: a 3 px rule and 13 px of padding make 16 px, as 4 px and 12 px did.
+    expect(rowSurface({ now: true })).toContain('pl-3.25');
   });
 
   it('draws the folded row in the order the fold has always had', () => {
-    expect(foldSurface(true)).toBe('rounded-xl border px-3 text-left hover:bg-accent/30 border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent border-l-4 border-l-state-now');
-    expect(foldSurface(false)).toBe('rounded-xl border px-3 text-left hover:bg-accent/30 border-border/60 bg-card/50');
+    expect(foldSurface(true)).toBe(`text-left ${NOW} hover:bg-row-hover`);
+    expect(foldSurface(false)).toBe('text-left rounded-card border border-border bg-card px-3 hover:bg-row-hover hover:border-border-hover');
+    expect(foldSurface(false)).not.toMatch(/rounded-xl|border-border\/60|bg-card\/50/);
+  });
+
+  it('draws a fold that is not pressable with no hover at all, and a fold button keeps its hover', () => {
+    for (const current of [false, true]) {
+      expect(foldSurface(current, { hover: false }).split(/\s+/).filter((name) => name.includes('hover:'))).toEqual([]);
+      expect(foldSurface(current)).toContain('hover:bg-row-hover');
+    }
+    expect(foldSurface(false)).toContain('hover:border-border-hover');
+    expect(foldSurface(false, { hover: false })).toContain('border-border');
+  });
+
+  it('draws the Commits list\'s PR heading (a plain div, not a button) with no hover', () => {
+    const source = readFileSync(new URL('../features/changes/CommitsView.tsx', import.meta.url), 'utf8');
+    const heading = /data-testid="commit-pr-heading"\s*className=\{([^\n]*)\}/.exec(source);
+    expect(heading, 'the heading is found').not.toBeNull();
+    expect(heading![1]).toContain('foldSurface(false, { hover: false })');
+    expect(heading![1]).not.toMatch(/hover:[\w[-]/);
+  });
+
+  it('hovers with an opaque mix over the card, not a see-through colour over the canvas', () => {
+    const tokens = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8');
+    expect(tokens).toContain('--color-row-hover: color-mix(in oklab, var(--accent) 30%, var(--card));');
+    expect(tokens).toContain('--color-row-hover-now: color-mix(in oklab, var(--primary) 10%, var(--card));');
+    expect(tokens).toContain('--color-row-hover-now-soft: color-mix(in oklab, var(--primary) 5%, var(--card));');
+    for (const surface of [rowSurface({ now: true, hover: 'hover:bg-row-hover-now' }), foldSurface(true), foldSurface(false)]) expect(surface).not.toMatch(/hover:bg-(accent|primary)\//);
   });
 
   // The two step-row sites that write the Now surface in a different order than the helper (not in any golden snapshot): the class SET after
   // twMerge must be the same as before. (Proof (a) of the packet; computed style and pictures are proofs (b) and (c).)
   it('keeps each moved site\'s class set after twMerge (the class-order proof)', () => {
     const was = {
-      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 border-l-4 border-l-state-now hover:bg-primary/5'),
+      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-card border border-border border-l-3 border-l-state-now bg-card pl-3.25 pr-3 hover:bg-row-hover-now-soft'),
       headQuiet: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-lg px-1'),
-      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 hover:bg-primary/10 border-l-4 border-l-state-now'),
+      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-card border border-border bg-card pl-3.25 pr-3 hover:bg-row-hover-now border-l-3 border-l-state-now'),
       toggleQuiet: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-lg px-1 hover:bg-accent/30'),
     };
     const now = {
-      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-primary/5' })),
+      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-row-hover-now-soft' })),
       headQuiet: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: false })),
-      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-primary/10' })),
+      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-row-hover-now' })),
       toggleQuiet: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: false, hover: 'hover:bg-accent/30' })),
     };
     for (const key of Object.keys(was) as (keyof typeof was)[]) {
@@ -225,5 +282,88 @@ describe('Composer (DS6)', () => {
       .toBe(`<textarea class="${cn(wasClass(false), 'min-h-[200px] extra')}"></textarea>`);
     expect(cn(wasClass(false), 'min-h-[200px] extra')).toContain('min-h-[200px]');
     expect(cn(wasClass(false), 'min-h-[200px] extra')).not.toContain('min-h-[140px]');
+  });
+});
+
+/** The Hairline card frame (R1a): the frame's classes in each state, and the tokens they use. */
+describe('CardFrame, Hairline', () => {
+  const classes = (props: Parameters<typeof CardFrame>[0] extends infer P ? Partial<P> : never = {}) =>
+    /<article[^>]*? class="([^"]*)"/.exec(html(createElement(CardFrame, { labelledBy: 't', ...props }, 'x')))![1]!.split(' ');
+  const tokens = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8');
+
+  it('has 8 px corners, a 1 px border and no shadow at rest, in a plain card', () => {
+    const c = classes();
+    expect(c).toContain('rounded-card');
+    expect(c).toContain('border');
+    expect(c).toContain('border-border');
+    expect(c).toContain('bg-card');
+    expect(c.filter((name) => /^shadow-/.test(name) || /^ring/.test(name) || name === 'rounded-xl')).toEqual([]);
+  });
+
+  it('animates the border, shadow, lift (the `translate` property, not `transform`) and the pressable tint', () => {
+    const transition = classes().find((name) => name.startsWith('transition-['))!;
+    for (const property of ['border-color', 'box-shadow', 'translate', 'background-color']) expect(transition).toContain(property);
+    expect(transition).not.toContain('transform');
+  });
+
+  it('lifts 1 px, shows its hover shadow and takes the hover border only on hover, and the motion only without reduced motion', () => {
+    const c = classes();
+    expect(c).toContain('hover:border-border-hover');
+    expect(c).toContain('motion-safe:hover:-translate-y-px');
+    expect(c).toContain('motion-safe:hover:shadow-card-hover');
+    expect(c).toContain('duration-120');
+    expect(c).toContain('ease-out');
+    expect(c.filter((name) => /^hover:(shadow|-translate)/.test(name))).toEqual([]);
+  });
+
+  it('keeps a primary border for pinned, even on hover', () => {
+    const c = classes({ pinned: true });
+    expect(c).toContain('border-primary/50');
+    expect(c.filter((name) => name.includes('border-border'))).toEqual([]);
+  });
+
+  it('is dashed, muted and at 70 % when archived, and archived wins over pinned', () => {
+    for (const c of [classes({ archived: true }), classes({ archived: true, pinned: true })]) {
+      expect(c).toEqual(expect.arrayContaining(['border-dashed', 'border-border/70', 'bg-muted/70', 'text-muted-foreground']));
+      expect(c).not.toContain('border-primary/50');
+      // No opacity on the card: it would weaken the text, the focus ring and the reading mark.
+      expect(c.filter((name) => /(^|:)opacity-/.test(name))).toEqual([]);
+    }
+    expect(classes({ archived: true, compact: true, reading: true })).toEqual(expect.arrayContaining(['has-[:focus-visible]:ring-2', 'has-[:focus-visible]:ring-ring', 'outline-primary']));
+    expect(classes({ archived: true, compact: true, reading: true }).filter((name) => /(^|:)opacity-/.test(name))).toEqual([]);
+  });
+
+  it('is a 1 px primary border plus a 1 px inner ring when reading, not the old ring-2', () => {
+    const c = classes({ reading: true });
+    expect(c).toEqual(expect.arrayContaining(['border-primary', 'hover:border-primary', 'outline-1', '-outline-offset-2', 'outline-primary']));
+    expect(c).not.toContain('ring-2');
+    expect(c).not.toContain('hover:border-border-hover');
+  });
+
+  it('keeps the keyboard ring (2 px --ring) on a compact card, and a pressable card is still a brick', () => {
+    expect(classes({ compact: true })).toEqual(expect.arrayContaining(['has-[:focus-visible]:ring-2', 'has-[:focus-visible]:ring-ring']));
+    expect(classes({ onPress: () => {} })).toEqual(expect.arrayContaining(['board-brick', 'cursor-pointer']));
+  });
+
+  it('draws only with tokens that exist: the radius, shadow, hover border and divider, and the type scales', () => {
+    for (const [name, value] of [['--r-sm', '4px'], ['--r-md', '6px'], ['--r-lg', '8px'], ['--r-xl', '12px'], ['--r-full', '9999px'],
+      ['--shadow-hover', '0 1px 2px rgb(0 0 0 / .06)'], ['--shadow-raised', '0 8px 24px rgb(0 0 0 / .12)'], ['--border-hover', '#afb8c1']] as const) {
+      expect(tokens, name).toContain(`${name}: ${value};`);
+    }
+    for (const [name, value] of [['--shadow-hover', '0 1px 2px rgb(0 0 0 / .4)'], ['--shadow-raised', '0 8px 24px rgb(0 0 0 / .5)'], ['--border-hover', '#484f58']] as const) {
+      expect(tokens, `${name} in dark`).toContain(`    ${name}: ${value};`);
+    }
+    expect(tokens).toContain('--divider: color-mix(in srgb, var(--border) 60%, transparent);');
+    expect(tokens).toContain('--radius-card: var(--r-lg);');
+    expect(tokens).toContain('--shadow-card-hover: var(--shadow-hover);');
+    expect(tokens).toContain('--color-border-hover: var(--border-hover);');
+    for (const kind of ['area-title', 'panel-title', 'card-title', 'ui', 'reading', 'meta', 'label']) {
+      for (const part of ['size', 'leading']) {
+        expect(tokens, `--type-${kind}-${part}`).toContain(`--type-${kind}-${part}:`);
+        expect(tokens, `--type-board-${kind}-${part}`).toContain(`--type-board-${kind}-${part}:`);
+      }
+      expect(tokens, `--type-${kind}-weight`).toContain(`--type-${kind}-weight:`);
+    }
+    expect(tokens).toContain('--type-board-meta-size: 13.5px;');
   });
 });

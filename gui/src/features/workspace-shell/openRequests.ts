@@ -58,6 +58,10 @@ function createRequestStore<T>() {
       latest.delete(workspace);
       for (const listener of listeners) listener();
     },
+    /** Drops whatever request waits for this workspace, whatever its id. */
+    discard(workspace: string): void {
+      if (latest.delete(workspace)) for (const listener of listeners) listener();
+    },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -255,4 +259,27 @@ export function openBoardStep(workspace: string, step: CommitStepLink): number {
 }
 export function useBoardStepRequest(workspace: string): OpenRequest<BoardStepRequest> | null {
   return useSyncExternalStore(boardStepRequests.subscribe, () => boardStepRequests.get(workspace), () => null);
+}
+
+/** Asks the Board of a workspace to show its overview level (out of an Area, reader closed) with the keyboard in it. */
+export interface BoardOverviewRequest { at: number; /** Set when the person pressed or typed anything after asking: the keyboard is theirs then. */ acted: boolean }
+export const boardOverviewRequests = createRequestStore<BoardOverviewRequest>();
+/** A request that waited longer than this (the Board never became the open part) is dropped, so a later visit is not pulled. */
+export const BOARD_OVERVIEW_REQUEST_MS = 5000;
+export function showBoardOverview(workspace: string): number {
+  const request: BoardOverviewRequest = { at: Date.now(), acted: false };
+  // The Board may load after the person has already clicked into the chat and started typing; it must know.
+  const end = () => { request.acted = true; stop(); };
+  const stop = () => {
+    document.removeEventListener('pointerdown', end, true);
+    document.removeEventListener('keydown', end, true);
+    clearTimeout(timer);
+  };
+  document.addEventListener('pointerdown', end, true);
+  document.addEventListener('keydown', end, true);
+  const timer = setTimeout(stop, BOARD_OVERVIEW_REQUEST_MS);
+  return boardOverviewRequests.open(workspace, request);
+}
+export function useBoardOverviewRequest(workspace: string): OpenRequest<BoardOverviewRequest> | null {
+  return useSyncExternalStore(boardOverviewRequests.subscribe, () => boardOverviewRequests.get(workspace), () => null);
 }

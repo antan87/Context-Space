@@ -15,6 +15,10 @@ export const CHAT_LAYOUT = {
   maxPercent: 75,
   /** Below this width there is no room for a usable chat and a panel side by side, so the panel gets the screen. */
   besideMinPx: 1000,
+  /** The least width the panel (the Board) keeps beside the chat, so the chat cannot be dragged over it. */
+  panelMinPx: 360,
+  /** What sits beside the two panes in the same row: the workspace rail (compact, 44 px) and the divider. */
+  edgePx: 52,
 } as const;
 
 export interface ChatLayoutState {
@@ -68,4 +72,14 @@ export function useChatLayout(): ChatLayoutState {
 /** Whether a panel can open beside the chat in a page this wide. */
 export function hasRoomBeside(widthPx: number): boolean {
   return widthPx >= CHAT_LAYOUT.besideMinPx;
+}
+
+/**
+ * The chat's share that really fits a body this wide: the saved share, held back so the panel, the divider and the
+ * workspace rail always stay on screen. The saved share itself is not changed, so a wider window gives it back.
+ */
+export function fittingChatPercent(percent: number, bodyPx: number): number {
+  if (!(bodyPx > 0)) return clampChatPercent(percent);
+  const room = Math.floor(((bodyPx - CHAT_LAYOUT.panelMinPx - CHAT_LAYOUT.edgePx) / bodyPx) * 100);
+  return Math.max(CHAT_LAYOUT.minPercent, Math.min(clampChatPercent(percent), room));
 }
