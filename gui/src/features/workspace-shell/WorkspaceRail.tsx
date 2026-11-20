@@ -39,11 +39,13 @@ interface WorkspaceRailProps {
  */
 export function WorkspaceRail({ workspaceId, section, archived = false, badges = {}, compact = false }: WorkspaceRailProps) {
   const base = `/workspaces/${encodeURIComponent(workspaceId)}`;
+  // No width animation: the chat lays itself over a box beside this rail, and only watches that box's size, so a rail that
+  // is still sliding from 64 to 44 px leaves the chat over the wrong place for good.
   return (
     <nav
       aria-label="Workspace"
       className={cn(
-        'fixed inset-x-0 bottom-0 z-30 flex shrink-0 border-t border-border bg-card/95 backdrop-blur md:static md:inset-auto md:z-auto md:flex-col md:border-l md:border-t-0 md:bg-card/60 md:py-1.5 md:backdrop-blur-none transition-all duration-200',
+        'fixed inset-x-0 bottom-0 z-30 flex shrink-0 border-t border-border bg-card/95 backdrop-blur md:static md:inset-auto md:z-auto md:flex-col md:border-l md:border-t-0 md:bg-card/60 md:py-1.5 md:backdrop-blur-none',
         compact ? 'md:w-11' : 'md:w-16'
       )}
     >

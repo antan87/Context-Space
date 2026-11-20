@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { planFile } from './planData';
+import { boardFile, boardFileCard, checkpoint, planFile, step } from './planData';
 
 /**
  * The chat is the centre of the app. It takes most of the screen, the other parts of a workspace
@@ -103,6 +103,173 @@ test.describe('the chat is central, with other parts beside it', () => {
     // Board is on the left; the terminal keeps its chosen share.
     expect(panel.x + panel.width).toBeLessThanOrEqual(chat.x + 1);
     await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toBeVisible();
+  });
+
+  // The app's own default is the slim sidebar; at 1100 px a docked one leaves no room for Split.
+  test.describe('with the slim sidebar', () => {
+  test.use({ sidebarDocked: false });
+  for (const [width, height] of [[1100, 700], [1280, 800], [1440, 900]] as const) {
+    test(`keeps the whole workspace rail on screen in Split at ${width}x${height}, also with the chat dragged wide`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await page.goto('/#/workspaces/alpha/board');
+      await expect(chatOf(page)).toBeVisible();
+      const board = page.getByRole('region', { name: 'Board', exact: true });
+      await expect(board).toBeVisible();
+      const check = async () => {
+        const rail = (await destinations(page).boundingBox())!;
+        expect(rail.x + rail.width).toBeLessThanOrEqual(width + 0.5);
+        expect(rail.width).toBeGreaterThan(30);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        const chat = await boxOf(chatOf(page));
+        const panel = await boxOf(board);
+        expect(panel.x + panel.width).toBeLessThanOrEqual(chat.x + 1);
+        expect(chat.x + chat.width).toBeLessThanOrEqual(rail.x + 1);
+        expect(panel.width).toBeGreaterThanOrEqual(340);
+      };
+      await check();
+      // Drag the divider as far toward the Board as it goes, and then as far the other way.
+      const divider = page.getByRole('separator', { name: 'Resize the workspace panes' });
+      const handle = (await divider.boundingBox())!;
+      await page.mouse.move(handle.x + 2, handle.y + 100);
+      await page.mouse.down();
+      await page.mouse.move(256, handle.y + 100, { steps: 6 });
+      await page.mouse.up();
+      await check();
+      const wide = await divider.boundingBox();
+      await page.mouse.move(wide!.x + 2, wide!.y + 100);
+      await page.mouse.down();
+      await page.mouse.move(width - 60, wide!.y + 100, { steps: 6 });
+      await page.mouse.up();
+      await check();
+    });
+  }
+
+  test('an old saved chat width that no longer fits is clamped for the screen, not lost', async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page.addInitScript((key) => { try { localStorage.setItem(key, JSON.stringify({ hidden: false, percent: 75 })); } catch { /* Storage can be unavailable. */ } }, LAYOUT_KEY);
+    await page.goto('/#/workspaces/alpha/board');
+    await expect(chatOf(page)).toBeVisible();
+    // The divider announces the maximum that fits here, not the saved 75.
+    await expect(page.getByRole('separator', { name: 'Resize the workspace panes' })).toHaveAttribute('aria-valuemax', '60');
+    const rail = (await destinations(page).boundingBox())!;
+    expect(rail.x + rail.width).toBeLessThanOrEqual(1100.5);
+    expect((await boxOf(page.getByRole('region', { name: 'Board', exact: true }))).width).toBeGreaterThanOrEqual(340);
+    expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!).percent, LAYOUT_KEY)).toBe(75);
+  });
+
+  });
+
+  test('"Open plan & sources" on the overview opens the Board with the plan in view and the focus inside it', async ({ page }) => {
+    await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planFile({ checkpoints: [checkpoint('Cache invoice lookups', { steps: [step('Cache the totals')] })] }) }));
+    await page.goto('/#/workspaces/alpha/overview');
+    await page.getByRole('button', { name: 'Open plan & sources' }).click();
+    await expect(page).toHaveURL(/#\/workspaces\/alpha\/board$/);
+    const board = page.getByRole('region', { name: 'Board', exact: true });
+    await expect(board).toBeVisible();
+    await expect(board.getByText('Cache invoice lookups').first()).toBeVisible();
+    await expect.poll(() => page.evaluate(() => {
+      const region = document.querySelector('[role="region"][aria-label="Board"]');
+      return Boolean(region && region.contains(document.activeElement) && document.activeElement !== document.body);
+    })).toBe(true);
+  });
+
+  test.describe('"Open plan & sources" when the Board was left in a deeper place', () => {
+    const planWithSteps = () => planFile({ checkpoints: [checkpoint('Cache invoice lookups', { steps: [step('Cache the totals'), step('Expire them on change')] })] });
+    const focusInBoard = (page: Page) => page.evaluate(() => {
+      const region = document.querySelector('[role="region"][aria-label="Board"]');
+      const active = document.activeElement;
+      return Boolean(region && active && active !== document.body && region.contains(active) && !active.closest('[inert]'));
+    });
+    async function leaveAndPress(page: Page) {
+      await destinations(page).getByRole('link', { name: 'Overview', exact: true }).click();
+      await expect(page).toHaveURL(/#\/workspaces\/alpha\/overview$/);
+      await page.getByRole('button', { name: 'Open plan & sources' }).click();
+      await expect(page).toHaveURL(/#\/workspaces\/alpha\/board$/);
+    }
+
+    test('inside an Area, it steps out so the plan is in view, and the focus is on a card, not on the page', async ({ page }) => {
+      await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planWithSteps() }));
+      await page.goto('/#/workspaces/alpha/board');
+      const card = page.locator('#board-overview button.board-area').first();
+      await card.click();
+      await expect(page.locator('#board-area')).toBeVisible();
+      await leaveAndPress(page);
+      await expect(page.locator('#board-area')).toHaveCount(0);
+      await expect(page.locator('#board-overview button.board-area').first()).toBeVisible();
+      await expect.poll(() => focusInBoard(page)).toBe(true);
+    });
+
+    test('inside an Area with a picture open in the reader, it closes the reader, steps out and puts the focus in the overview', async ({ page }) => {
+      await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planWithSteps() }));
+      await page.route('**/api/workspace/*/documents/file**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64') }));
+      await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [boardFileCard(2, 'board-pictures/a.png', { title: 'The overview', step: undefined, area: 'checkpoint:cache-invoice-lookups' })] }) }));
+      await page.goto('/#/workspaces/alpha/board');
+      await page.getByTestId('view-mode-board').click();
+      // The picture's card is in an Area: step in, then open it in the reader.
+      await page.locator('#board-overview button[aria-label^="Show the 1 picture"]').first().click();
+      await page.locator('#board-area').getByRole('button', { name: 'Open The overview' }).click();
+      await expect(page.locator('[data-board-reader]')).toBeVisible();
+      await leaveAndPress(page);
+      await expect(page.locator('[data-board-reader]')).toHaveCount(0);
+      await expect(page.locator('#board-area')).toHaveCount(0);
+      await expect(page.locator('#board-overview button.board-area').first()).toBeVisible();
+      await expect.poll(() => focusInBoard(page)).toBe(true);
+    });
+
+    const inChat = (page: Page) => page.evaluate(() => Boolean(document.activeElement?.closest('[role="region"][aria-label="CLI Chat"]')));
+    async function focusChat(page: Page) {
+      await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+      await chatOf(page).locator('textarea').first().focus();
+      expect(await inChat(page)).toBe(true);
+    }
+
+    test('leaving the Board right after the press, or stepping into an Area, ends the wish: coming back with the keyboard in the chat leaves it there', async ({ page }) => {
+      await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planWithSteps() }));
+      for (const leave of ['rail', 'area'] as const) {
+        await page.goto('/#/workspaces/alpha/overview');
+        await page.getByRole('button', { name: 'Open plan & sources' }).click();
+        if (leave === 'rail') await destinations(page).getByRole('link', { name: 'Skills' }).click();
+        else await page.locator('#board-overview button.board-area').first().click();
+        await expect(leave === 'rail' ? page.getByRole('region', { name: 'Board', exact: true }) : page.locator('#board-area')).toBeHidden({ timeout: 100 }).catch(() => undefined);
+        if (leave === 'rail') await expect(destinations(page).getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
+        else await expect(page.locator('#board-area')).toBeVisible();
+        await focusChat(page);
+        if (leave === 'rail') {
+          await page.keyboard.press('Control+2');
+          await expect(page).toHaveURL(/#\/workspaces\/alpha\/board$/);
+        }
+        await page.waitForTimeout(800);
+        expect(await inChat(page), `after leaving by ${leave}: ` + await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120))).toBe(true);
+      }
+    });
+
+    test('typing in the chat right after the press is not taken by the Board', async ({ page }) => {
+      await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planWithSteps() }));
+      await page.goto('/#/workspaces/alpha/overview');
+      await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
+      await page.getByRole('button', { name: 'Open plan & sources' }).click();
+      // A press in the chat, which the terminal answers by taking the keyboard.
+      await chatOf(page).click({ position: { x: 60, y: 120 } });
+      await chatOf(page).locator('textarea').first().focus();
+      for (const letter of 'hello') { await page.keyboard.type(letter); await page.waitForTimeout(40); expect(await inChat(page), `after typing ${letter}`).toBe(true); }
+      await page.waitForTimeout(800);
+      expect(await inChat(page)).toBe(true);
+    });
+
+    test('a later visit to the Board is not pulled into the canvas by an earlier press', async ({ page }) => {
+      await page.route('**/api/workspace/*/plan', (route) => route.fulfill({ json: planWithSteps() }));
+      await page.goto('/#/workspaces/alpha/overview');
+      await page.getByRole('button', { name: 'Open plan & sources' }).click();
+      await expect.poll(() => focusInBoard(page)).toBe(true);
+      await destinations(page).getByRole('link', { name: 'Skills' }).click();
+      await expect(page).toHaveURL(/#\/workspaces\/alpha\/skills$/);
+      await expect(destinations(page).getByRole('link', { name: 'Skills' })).toHaveAttribute('aria-current', 'page');
+      const link = destinations(page).getByRole('link', { name: 'Board', exact: true });
+      await link.click();
+      await expect(page).toHaveURL(/#\/workspaces\/alpha\/board$/);
+      await page.waitForTimeout(600);
+      expect(await focusInBoard(page)).toBe(false);
+    });
   });
 
   test('closing the part gives the chat the whole width back', async ({ page }) => {

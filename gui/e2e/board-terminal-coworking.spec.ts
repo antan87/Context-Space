@@ -562,7 +562,8 @@ test.describe('Board overview in Split mode: small cards', () => {
     await divider.focus();
     const before = await overview.locator('.react-flow__node-areaMini').count();
     for (let i = 0; i < 14; i++) await page.keyboard.press('ArrowLeft');
-    await expect(divider).toHaveAttribute('aria-valuenow', '75');
+    // As wide as the chat goes at 1100 px: the Board keeps 360 px, with the divider and the rail on screen (UX1), so not the saved maximum of 75.
+    await expect(divider).toHaveAttribute('aria-valuenow', '60');
     await board.getByRole('button', { name: 'Board ›' }).click();
     await expect(board.locator('#board-area')).toHaveCount(0);
     await atRest(page);
