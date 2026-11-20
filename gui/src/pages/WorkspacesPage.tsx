@@ -1,3 +1,4 @@
+import { isAskLine, type AskLine } from '../features/board/askText.js';
 import { pointAndAskText, type LineRange } from '../features/board/lineNotes.js';
 import { lazy, Suspense, useState, useEffect, useCallback, type ComponentProps } from 'react';
 import {
@@ -278,7 +279,8 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     });
   }, [selected, roomBeside, layout.hidden, subTab, onSelectTab]);
 
-  const askInCLI = useCallback((context: string, range?: LineRange) => {
+  const askInCLI = useCallback((context: string | AskLine, range?: LineRange) => {
+    if (isAskLine(context)) return sendToSession(context.line);
     return sendToSession(range ? pointAndAskText(context, range.line, range.endLine) : `Regarding ${context}: `);
   }, [sendToSession]);
 

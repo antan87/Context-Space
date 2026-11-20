@@ -31,6 +31,7 @@ import type { DocumentPreviewData } from '../work-guidance/DocumentPreview.js';
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
 import { DiagramFixContext, DiagramFullScreenContext } from '../../components/diagramFixContext.js';
+import { askCard, type AskLine } from './askText.js';
 import { diagramFixRequest, isQuestionFile } from './questionsArea.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { isKnowledgeFile } from '../knowledge/knowledgeIndex.js';
@@ -106,7 +107,7 @@ export function BoardReader({
   nextTitle?: string;
   previousTitle?: string;
   indexInfo?: { current: number; total: number };
-  onAskInCLI?: (context: string, range?: LineRange) => void | Promise<unknown>;
+  onAskInCLI?: (context: string | AskLine, range?: LineRange) => void | Promise<unknown>;
   readOnly?: boolean;
 }) {
   const codeOpen = useCodeWindowOpen(workspaceId);
@@ -549,8 +550,7 @@ export function BoardReader({
             <button
               type="button"
               onClick={() => {
-                const summary = target.title || path;
-                onAskInCLI(summary);
+                onAskInCLI(askCard({ kind: 'file', id: target.card, title: target.title, path: repo ? `${repo.name}/${path}` : path }));
               }}
               className="nodrag nopan inline-flex h-7 items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 text-xs font-medium text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-colors cursor-pointer"
               title="Ask about this document in CLI"

@@ -6,6 +6,7 @@ import { Button, CardFrame, KindLabel, Menu, MenuItem, MenuPopup, MenuTrigger } 
 import { safeCopyToClipboard } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import { NoteDialog } from '../NoteDialog.js';
+import { askCard } from '../askText.js';
 import { BoardActionsContext, firstControl } from '../boardActions.js';
 import type { NoteNode } from '../boardLayout.js';
 import { Anchors, brickPress, Byline, CardMark, CardText, ReadAll, useCut } from './cardParts.js';
@@ -105,8 +106,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           {actions.askInCLI && (
             <MenuItem
               onClick={() => {
-                const noteSummary = data.title?.trim() || data.text?.slice(0, 60).trim() || 'note';
-                actions.askInCLI?.(noteSummary);
+                actions.askInCLI?.(askCard({ kind: 'note', id, title: data.title, text: data.text }));
               }}
               className="flex items-center gap-2 text-[12.5px]"
             >
@@ -224,8 +224,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                const noteSummary = data.title?.trim() || data.text?.slice(0, 60).trim() || 'note';
-                actions.askInCLI?.(noteSummary);
+                actions.askInCLI?.(askCard({ kind: 'note', id, title: data.title, text: data.text }));
               }}
               className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] shrink-0 items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
               title={`Ask about "${data.title || 'note'}" in CLI`}

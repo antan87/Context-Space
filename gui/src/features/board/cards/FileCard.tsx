@@ -5,6 +5,7 @@ import { PanelRightOpen, type LucideIcon } from 'lucide-react';
 import { Button, CardFrame, CARD_BRICK as BRICK, CARD_FOCUS, KIND_ICON, KindLabel } from '../../../design/index.js';
 import { cn } from '../../../lib/utils.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, firstControl, pictureSrc } from '../boardActions.js';
+import { askCard } from '../askText.js';
 import { imageAlt, type FileNode, type FileType } from '../boardLayout.js';
 import { Anchors, brickPress, CardMark, CardText, hasDragSelection, ReadAll, TITLE_BUTTON, useCut } from './cardParts.js';
 
@@ -212,8 +213,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              const fileSummary = data.title?.trim() || data.path?.trim() || 'file';
-              actions.askInCLI?.(fileSummary);
+              actions.askInCLI?.(askCard({ kind: 'file', id, title: data.title, path: data.path }));
             }}
             className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
             title={`Ask about "${data.title || data.path || 'file'}" in CLI`}
