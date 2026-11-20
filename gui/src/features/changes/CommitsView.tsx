@@ -641,7 +641,7 @@ export function CommitsList({
                               {section.kind === 'pr' && pr && prStateLabel && (
                                 <div
                                   data-testid="commit-pr-heading"
-                                  className={cn(foldSurface(false), 'mb-0.5 flex min-h-7 min-w-0 items-center gap-1 px-1 py-0.5')}
+                                  className={cn(foldSurface(false, { hover: false }), 'mb-0.5 flex min-h-7 min-w-0 items-center gap-1 px-1 py-0.5')}
                                 >
                                   <button
                                     type="button"

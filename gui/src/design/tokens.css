@@ -152,6 +152,11 @@
   --radius-card: var(--r-lg);
   --shadow-card-hover: var(--shadow-hover);
   --color-border-hover: var(--border-hover);
+  /* The hover fill of a row that sits on the card surface: an opaque mix over the card (as `.board-brick:hover` does), never a see-through colour,
+     so a hovered row is lighter than the card in dark and darker in light, and the canvas never shows through. */
+  --color-row-hover: color-mix(in oklab, var(--accent) 30%, var(--card));
+  --color-row-hover-now: color-mix(in oklab, var(--primary) 10%, var(--card));
+  --color-row-hover-now-soft: color-mix(in oklab, var(--primary) 5%, var(--card));
 
   --animate-skeleton: skeleton 2s -1s infinite linear;
   @keyframes skeleton {

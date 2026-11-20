@@ -209,6 +209,19 @@ describe.each(PALETTES.flatMap((palette) => THEMES.map((theme) => [palette, them
     expect(contrast(resolve(tokens['--state-now']!, tokens), resolve(tokens[surface]!, tokens))).toBeGreaterThanOrEqual(3);
   });
 
+  // R1c: the Now row's 3 px rule is the only colour of the row, so it must stand out from the card it sits on and from the canvas around it.
+  it.each(surfaces)('the Now row\'s 3 px rule (--state-now) is visible on %s (3:1)', (surface) => {
+    expect(contrast(resolve(tokens['--state-now']!, tokens), resolve(tokens[surface]!, tokens))).toBeGreaterThanOrEqual(3);
+  });
+
+  // Fix round 1: a hovered row on the card must move away from the card the right way: lighter in dark, darker in light, never toward the canvas.
+  it.each([['--accent', 30], ['--primary', 10], ['--primary', 5]] as const)('a row hover of %s at %s %% over the card moves away from the card the right way', (token, pct) => {
+    const card = resolve(tokens['--card']!, tokens);
+    const mixed = resolve(`color-mix(in srgb, var(${token}) ${pct}%, var(--card))`, tokens);
+    if (theme === 'dark') expect(luminance(mixed)).toBeGreaterThan(luminance(card));
+    else expect(luminance(mixed)).toBeLessThan(luminance(card));
+  });
+
   it('keeps arcs that are still ahead faintly visible against the card (1.2:1) without competing with finished ones', () => {
     const card = resolve(tokens['--card']!, tokens);
     const dim = contrast(resolve(tokens['--ring-dim']!, tokens), card);

@@ -324,7 +324,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       <div
         className={cn(
           'relative flex h-full w-full items-center gap-2 overflow-hidden text-left',
-          rowSurface({ now: Boolean(data.prominent), hover: data.prominent ? 'hover:bg-primary/5' : undefined })
+          rowSurface({ now: Boolean(data.prominent), hover: data.prominent ? 'hover:bg-row-hover-now-soft' : undefined })
         )}
       >
         <Anchors />
@@ -353,7 +353,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       type="button" data-row-control={data.rowId} aria-expanded={data.expanded} aria-label={label} disabled={!actions}
       onClick={(e) => { if (!hasDragSelection(e.currentTarget, e)) actions?.toggleRow?.(data.rowId); }}
       className={cn('board-row-control nodrag nopan select-text relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left',
-        rowSurface({ now: Boolean(data.prominent), hover: data.prominent ? 'hover:bg-primary/10' : 'hover:bg-accent/30' }))}
+        rowSurface({ now: Boolean(data.prominent), hover: data.prominent ? 'hover:bg-row-hover-now' : 'hover:bg-accent/30' }))}
     >
       {body}
       <Chevron aria-hidden="true" className={cn('size-4 shrink-0 text-muted-foreground', data.prominent ? 'absolute right-3 top-1/2 -translate-y-1/2' : 'board-row-chevron')} />

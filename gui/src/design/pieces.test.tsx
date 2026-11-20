@@ -137,39 +137,78 @@ describe('StepCheck (DS5b)', () => {
 });
 
 describe('RowSurface (DS5b)', () => {
-  const NOW = 'rounded-xl border border-l-4 border-primary/40 border-l-state-now bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3';
+  const NOW = 'rounded-card border border-border border-l-3 border-l-state-now bg-card pl-3.25 pr-3';
   const set = (value: string) => value.split(/\s+/).sort();
 
   it('draws the Now surface with its left rule, and a quiet row without one', () => {
     expect(rowSurface({ now: true })).toBe(NOW);
     expect(rowSurface({ now: false })).toBe('rounded-lg px-1');
     expect(rowSurface({ now: false })).not.toContain('border-l-state-now');
-    expect(rowSurface({ now: true, hover: 'hover:bg-primary/5' })).toBe(`${NOW} hover:bg-primary/5`);
+    expect(rowSurface({ now: true, hover: 'hover:bg-row-hover-now-soft' })).toBe(`${NOW} hover:bg-row-hover-now-soft`);
   });
 
   it('keeps the stripe: twMerge drops no class of the Now surface, in any caller\'s composition', () => {
     expect(set(cn('relative flex', rowSurface({ now: true }), 'text-left'))).toEqual(set(`relative flex ${NOW} text-left`));
-    expect(rowSurface({ now: true })).toContain('border-l-4 border-primary/40 border-l-state-now');
+    expect(rowSurface({ now: true })).toContain('border-border border-l-3 border-l-state-now');
+  });
+
+  it('draws the Now surface as a hairline card with a 3 px rule: no gradient, no tinted outline, no 4 px rule', () => {
+    for (const surface of [rowSurface({ now: true }), foldSurface(true)]) {
+      expect(surface).toContain('rounded-card');
+      expect(surface).toContain('border-border');
+      expect(surface).toContain('border-l-3');
+      expect(surface).toContain('border-l-state-now');
+      expect(surface).toContain('bg-card');
+      expect(surface).not.toMatch(/gradient|from-|via-|border-primary|border-l-4|rounded-xl/);
+    }
+    // The text starts where it did: a 3 px rule and 13 px of padding make 16 px, as 4 px and 12 px did.
+    expect(rowSurface({ now: true })).toContain('pl-3.25');
   });
 
   it('draws the folded row in the order the fold has always had', () => {
-    expect(foldSurface(true)).toBe('rounded-xl border px-3 text-left hover:bg-accent/30 border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent border-l-4 border-l-state-now');
-    expect(foldSurface(false)).toBe('rounded-xl border px-3 text-left hover:bg-accent/30 border-border/60 bg-card/50');
+    expect(foldSurface(true)).toBe(`text-left ${NOW} hover:bg-row-hover`);
+    expect(foldSurface(false)).toBe('text-left rounded-card border border-border bg-card px-3 hover:bg-row-hover hover:border-border-hover');
+    expect(foldSurface(false)).not.toMatch(/rounded-xl|border-border\/60|bg-card\/50/);
+  });
+
+  it('draws a fold that is not pressable with no hover at all, and a fold button keeps its hover', () => {
+    for (const current of [false, true]) {
+      expect(foldSurface(current, { hover: false }).split(/\s+/).filter((name) => name.includes('hover:'))).toEqual([]);
+      expect(foldSurface(current)).toContain('hover:bg-row-hover');
+    }
+    expect(foldSurface(false)).toContain('hover:border-border-hover');
+    expect(foldSurface(false, { hover: false })).toContain('border-border');
+  });
+
+  it('draws the Commits list\'s PR heading (a plain div, not a button) with no hover', () => {
+    const source = readFileSync(new URL('../features/changes/CommitsView.tsx', import.meta.url), 'utf8');
+    const heading = /data-testid="commit-pr-heading"\s*className=\{([^\n]*)\}/.exec(source);
+    expect(heading, 'the heading is found').not.toBeNull();
+    expect(heading![1]).toContain('foldSurface(false, { hover: false })');
+    expect(heading![1]).not.toMatch(/hover:[\w[-]/);
+  });
+
+  it('hovers with an opaque mix over the card, not a see-through colour over the canvas', () => {
+    const tokens = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8');
+    expect(tokens).toContain('--color-row-hover: color-mix(in oklab, var(--accent) 30%, var(--card));');
+    expect(tokens).toContain('--color-row-hover-now: color-mix(in oklab, var(--primary) 10%, var(--card));');
+    expect(tokens).toContain('--color-row-hover-now-soft: color-mix(in oklab, var(--primary) 5%, var(--card));');
+    for (const surface of [rowSurface({ now: true, hover: 'hover:bg-row-hover-now' }), foldSurface(true), foldSurface(false)]) expect(surface).not.toMatch(/hover:bg-(accent|primary)\//);
   });
 
   // The two step-row sites that write the Now surface in a different order than the helper (not in any golden snapshot): the class SET after
   // twMerge must be the same as before. (Proof (a) of the packet; computed style and pictures are proofs (b) and (c).)
   it('keeps each moved site\'s class set after twMerge (the class-order proof)', () => {
     const was = {
-      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 border-l-4 border-l-state-now hover:bg-primary/5'),
+      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-card border border-border border-l-3 border-l-state-now bg-card pl-3.25 pr-3 hover:bg-row-hover-now-soft'),
       headQuiet: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', 'rounded-lg px-1'),
-      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-xl border border-primary/40 bg-gradient-to-r from-state-now/10 via-primary/5 to-transparent px-3 hover:bg-primary/10 border-l-4 border-l-state-now'),
+      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-card border border-border bg-card pl-3.25 pr-3 hover:bg-row-hover-now border-l-3 border-l-state-now'),
       toggleQuiet: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', 'rounded-lg px-1 hover:bg-accent/30'),
     };
     const now = {
-      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-primary/5' })),
+      head: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-row-hover-now-soft' })),
       headQuiet: cn('relative flex h-full w-full items-center gap-2 overflow-hidden text-left', rowSurface({ now: false })),
-      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-primary/10' })),
+      toggle: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: true, hover: 'hover:bg-row-hover-now' })),
       toggleQuiet: cn('board-row-control nodrag nopan relative flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left', rowSurface({ now: false, hover: 'hover:bg-accent/30' })),
     };
     for (const key of Object.keys(was) as (keyof typeof was)[]) {
