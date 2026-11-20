@@ -27,7 +27,7 @@ import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type Checkpo
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
 import { CARD_BRICK as BRICK, CARD_FOCUS, chipClass, FreshDot, needsSurface, StepCheck } from '../../design/index.js';
 import { askCard } from './askText.js';
-import { Anchors, brickPress, hasDragSelection, TITLE_BUTTON } from './cards/cardParts.js';
+import { Anchors, AskCompact, brickPress, hasDragSelection, TITLE_BUTTON } from './cards/cardParts.js';
 import { summaryLabel } from './summaryLabel.js';
 import { BoardNote } from './cards/NoteCard.js';
 import { BoardFile } from './cards/FileCard.js';
@@ -1048,7 +1048,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
       aria-labelledby={shaId}
       aria-current={reading ? 'true' : undefined}
       onClick={opens ? (event) => brickPress(event, (card) => firstControl(card)) : undefined}
-      className={cn('relative flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-card-foreground shadow-xs', CARD_FOCUS, opens && BRICK, reading && 'ring-2 ring-primary')}
+      className={cn('group relative flex h-full w-full flex-col justify-center gap-1 overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-card-foreground shadow-xs', CARD_FOCUS, opens && BRICK, reading && 'ring-2 ring-primary')}
     >
       <Anchors />
       {data.fresh && <span aria-hidden="true" className="board-fresh" />}
@@ -1110,6 +1110,7 @@ export function BoardCommit({ id, data }: NodeProps<CommitNode>) {
           </span>
         </div>
       )}
+      <AskCompact card={{ kind: 'commit', sha: data.sha, subject: data.subject, repo: commit?.repo }} label={`commit ${data.sha}`} className="bottom-1 right-1" />
     </article>;
   }
   return <article

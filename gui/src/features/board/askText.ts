@@ -12,6 +12,9 @@ export type AskCard =
 export interface AskLine { readonly line: string }
 export const isAskLine = (value: unknown): value is AskLine => typeof value === 'object' && value !== null && typeof (value as AskLine).line === 'string';
 
+/** The id of a card `board_read` can show: a real board card has a uuid. A generated card (`wsfile:…`, `document:…`, an answer card) has an id the board file does not know, so it is not named. */
+export const boardCardId = (id: string | undefined): string | undefined => (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : undefined);
+
 const MAX_TITLE = 80;
 
 /** One line of plain words: no control characters or line separators, marks that would break the quotes turned into ' and the length cut with "…". */

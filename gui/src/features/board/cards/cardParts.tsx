@@ -1,11 +1,12 @@
 import { useContext, useLayoutEffect, useMemo, useState, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Pin } from 'lucide-react';
+import { Pin, Terminal } from 'lucide-react';
 
 import { ChatMarkdown } from '../../../components/ChatMarkdown.js';
 import { Badge, Button, Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger, FreshDot, Mark } from '../../../design/index.js';
 import { cn } from '../../../lib/utils.js';
 import { BoardActionsContext, bylineText, cardLinks } from '../boardActions.js';
+import { askCard, type AskCard } from '../askText.js';
 import type { CardData } from '../boardLayout.js';
 
 const SIDES = [[Position.Top, 'top'], [Position.Right, 'right'], [Position.Bottom, 'bottom'], [Position.Left, 'left']] as const;
@@ -192,6 +193,31 @@ export function brickPress(event: MouseEvent<HTMLElement>, find: (card: HTMLElem
 
 /** The title of a compact card that opens, which is the card's one stop for the keyboard. The press of the whole card does what it does. */
 export const TITLE_BUTTON = 'nodrag nopan select-text flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm text-left outline-hidden hover:underline disabled:pointer-events-none';
+
+/**
+ * "Ask in CLI" on a compact card (a document row, a picture, a file, a commit), which has no menu and no room for a labelled button.
+ * One small icon button laid over a corner of the card, after the card's main press target and not inside it: it shows on hover and
+ * on keyboard focus (the card must carry `group`), is 28 px (25 px on screen at the Area's 0.9 zoom), and types the same line as the
+ * full card's button. Nothing is drawn for a read-only workspace, or when there is no AI session to ask.
+ */
+export function AskCompact({ card, label, className }: { card: AskCard; label: string; className: string }) {
+  const actions = useContext(BoardActionsContext);
+  if (!actions?.askInCLI || actions.readOnly) return null;
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        actions.askInCLI?.(askCard(card));
+      }}
+      className={cn('btn-ask-card nodrag nopan absolute z-10 inline-flex size-7 cursor-pointer items-center justify-center rounded-md border border-border/80 bg-card text-primary pointer-events-none opacity-0 shadow-xs transition-opacity hover:border-primary/50 hover:bg-accent focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:pointer-events-auto group-hover:opacity-100', className)}
+      aria-label={`Ask in CLI about ${label}`}
+      title={`Ask in CLI about ${label}`}
+    >
+      <Terminal aria-hidden="true" className="size-3.5" />
+    </button>
+  );
+}
 
 /**
  * Whether the text in an element is cut off by its line clamp. Measured again when `key` changes and whenever the element

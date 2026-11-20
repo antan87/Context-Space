@@ -217,13 +217,126 @@ test.describe('Board & Terminal Unified Co-Working', () => {
     await page.locator('.board-overview-plane button.board-area').first().click();
     await expect(page.getByRole('button', { name: 'Board ›' })).toBeVisible();
 
-    // The compact cards of an Area have no "Ask in CLI" button on a picture or a commit; a picture is asked about from its reader
+    // A picture is asked about from its reader (the compact card has its own action: see the next test)
     await page.getByRole('button', { name: 'Open Export screen' }).click();
     const reader = page.getByRole('region', { name: 'Reader', exact: true });
     await expect(reader).toBeVisible();
     await reader.getByRole('button', { name: /Ask in CLI/ }).click();
     await expect.poll(() => typedInputs.at(-1)).toBe('About board-pictures/export.png (board card "Export screen", 00000000-0000-4000-8000-000000000002): ');
     expect(typedInputs.join('')).not.toMatch(/[\r\n]/);
+  });
+
+  test('"Ask in CLI" on a compact picture card types the card\'s line, leaves the press alone, and is reached and used from the keyboard', async ({ page }) => {
+    await page.route('**/api/workspace/*/board', (route) => route.fulfill({ json: boardFile({ cards: [boardFileCard(2, 'board-pictures/export.png', { title: 'Export screen' })] }) }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('.board-overview-plane button.board-area').first().click();
+    await expect(page.getByRole('button', { name: 'Board ›' })).toBeVisible();
+
+    const card = page.locator('#board-area article').filter({ has: page.getByRole('button', { name: 'Open Export screen' }) });
+    const ask = card.getByRole('button', { name: 'Ask in CLI about Export screen' });
+    await card.hover();
+    await expect(ask).toBeVisible();
+    await expect(ask).toHaveCSS('opacity', '1');
+    const box = (await ask.boundingBox())!;
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(24);
+    await ask.click();
+    await expect.poll(() => typedInputs.at(-1)).toBe('About board-pictures/export.png (board card "Export screen", 00000000-0000-4000-8000-000000000002): ');
+    expect(typedInputs.join('')).not.toMatch(/[\r\n]/);
+    // The action opened nothing: the reader is not there
+    await expect(page.getByRole('region', { name: 'Reader', exact: true })).toHaveCount(0);
+
+    // Back on the Board only, the keyboard: Tab from the card's own button reaches the action, and Enter asks
+    await page.getByTestId('view-mode-board').click();
+    typedInputs.length = 0;
+    await page.getByRole('button', { name: 'Open Export screen' }).focus();
+    await page.keyboard.press('Tab');
+    await expect(ask).toBeFocused();
+    await expect(ask).toHaveCSS('opacity', '1');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => typedInputs.at(-1)).toBe('About board-pictures/export.png (board card "Export screen", 00000000-0000-4000-8000-000000000002): ');
+    expect(typedInputs.join('')).not.toMatch(/[\r\n]/);
+
+    // A press on the card (not on the action) still opens the reader
+    await page.getByTestId('view-mode-board').click();
+    await card.click({ position: { x: 20, y: 20 } });
+    await expect(page.getByRole('region', { name: 'Reader', exact: true })).toBeVisible();
+  });
+
+  test('"Ask in CLI" on a compact commit card types the commit\'s line, and a press on the card still opens the commit', async ({ page }) => {
+    await page.route('**/api/workspace/*/news', (route) => route.fulfill({
+      json: whatsNew({ empty: false, commits: [{ repo: 'NexusFlow', more: 0, commits: [{ sha: 'a11111111111', author: 'Dev', subject: 'feat: add CSV writer', at: new Date(Date.now() - 600_000).toISOString() }] }] }),
+    }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('.board-overview-plane button.board-area').first().click();
+    await expect(page.getByRole('button', { name: 'Board ›' })).toBeVisible();
+
+    const card = page.locator('#board-area article').filter({ has: page.getByRole('button', { name: 'Open feat: add CSV writer' }) });
+    const ask = card.getByRole('button', { name: 'Ask in CLI about commit a111111' });
+    await card.hover();
+    await expect(ask).toBeVisible();
+    const box = (await ask.boundingBox())!;
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(24);
+    await ask.click();
+    await expect.poll(() => typedInputs.at(-1)).toBe('About commit a111111 "feat: add CSV writer" in NexusFlow: ');
+    expect(typedInputs.join('')).not.toMatch(/[\r\n]/);
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toHaveCount(0);
+
+    // Keyboard: Tab from the subject button reaches the action; Enter asks again
+    await page.getByTestId('view-mode-board').click();
+    typedInputs.length = 0;
+    await page.getByRole('button', { name: 'Open feat: add CSV writer' }).focus();
+    await page.keyboard.press('Tab');
+    await expect(ask).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => typedInputs.at(-1)).toBe('About commit a111111 "feat: add CSV writer" in NexusFlow: ');
+
+    // A press on the card opens the commit in Review, as before
+    await page.getByTestId('view-mode-board').click();
+    await card.click({ position: { x: 30, y: 8 } });
+    await expect(page.getByRole('region', { name: 'Review', exact: true })).toBeVisible();
+    await expect(page.getByRole('treeitem', { name: /feat: add CSV writer/ })).toBeVisible();
+  });
+
+  test('"Ask in CLI" on the compact document row and picture card of the Workspace files Area types the path (no board card id), and a press still opens the reader', async ({ page }) => {
+    const ago = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+    await page.route('**/api/workspace/*/files', (route) => route.fulfill({
+      json: { files: [{ path: 'PLAN.md', modifiedAt: ago(1), size: 120 }, { path: 'shots/pic.png', modifiedAt: ago(2), size: 128 }], truncated: false, errors: [] },
+    }));
+    await page.goto('/#/workspaces/demo/board');
+    await page.locator('.board-overview-plane button.board-area').filter({ hasText: /Workspace files/ }).click();
+    await expect(page.getByRole('button', { name: 'Board ›' })).toBeVisible();
+
+    for (const [id, label, line] of [
+      ['wsfile:PLAN.md', 'Ask in CLI about PLAN.md', 'About PLAN.md: '],
+      ['wsfile:shots/pic.png', 'Ask in CLI about pic.png', 'About shots/pic.png ("pic.png"): '],
+    ] as const) {
+      await page.getByTestId('view-mode-board').click();
+      typedInputs.length = 0;
+      const card = page.locator(`#board-area .react-flow__node[data-id="${id}"] article`);
+      const ask = card.getByRole('button', { name: label });
+      await card.hover();
+      await expect(ask).toBeVisible();
+      await expect(ask).toHaveCSS('opacity', '1');
+      await expect(ask).toHaveCSS('pointer-events', 'auto');
+      const box = (await ask.boundingBox())!;
+      expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(24);
+      await ask.click();
+      await expect.poll(() => typedInputs.at(-1)).toBe(line);
+      expect(typedInputs.join('')).not.toMatch(/[\r\n]/);
+      await expect(page.getByRole('region', { name: 'Reader', exact: true })).toHaveCount(0);
+
+      // A press on the card (not on the action) still opens the reader
+      await page.getByTestId('view-mode-board').click();
+      await card.click({ position: { x: 20, y: 20 } });
+      await expect(page.getByRole('region', { name: 'Reader', exact: true })).toBeVisible();
+      // Ask from the reader: no board card id either
+      typedInputs.length = 0;
+      await page.getByRole('region', { name: 'Reader', exact: true }).getByRole('button', { name: /Ask in CLI/ }).click();
+      await expect.poll(() => typedInputs.at(-1)).toBe(line);
+      await page.getByTestId('view-mode-board').click();
+      await page.getByRole('region', { name: 'Reader', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
+      await expect(page.getByRole('region', { name: 'Reader', exact: true })).toHaveCount(0);
+    }
   });
 });
 

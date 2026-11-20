@@ -5,9 +5,9 @@ import { PanelRightOpen, type LucideIcon } from 'lucide-react';
 import { Button, CardFrame, CARD_BRICK as BRICK, CARD_FOCUS, KIND_ICON, KindLabel } from '../../../design/index.js';
 import { cn } from '../../../lib/utils.js';
 import { BoardActionsContext, BoardReadingContext, bylineText, firstControl, pictureSrc } from '../boardActions.js';
-import { askCard } from '../askText.js';
+import { askCard, boardCardId } from '../askText.js';
 import { imageAlt, type FileNode, type FileType } from '../boardLayout.js';
-import { Anchors, brickPress, CardMark, CardText, hasDragSelection, ReadAll, TITLE_BUTTON, useCut } from './cardParts.js';
+import { Anchors, AskCompact, brickPress, CardMark, CardText, hasDragSelection, ReadAll, TITLE_BUTTON, useCut } from './cardParts.js';
 
 const FILE_LABEL: Record<FileType, string> = { image: 'Picture', html: 'HTML page', pdf: 'PDF', markdown: 'Markdown', other: 'File' };
 const FILE_ICON: Record<FileType, LucideIcon> = { image: KIND_ICON.picture, html: KIND_ICON.html, pdf: KIND_ICON.pdf, markdown: KIND_ICON.markdown, other: KIND_ICON.other };
@@ -86,6 +86,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
         ) : (
           <div className="flex h-full w-full min-w-0 items-center gap-2.5 px-3">{content}</div>
         )}
+        <AskCompact card={{ kind: 'file', id: boardCardId(id), title: data.title, path: data.path }} label={data.title || data.path} className="right-1 top-1/2 -translate-y-1/2" />
       </article>
     );
   }
@@ -143,6 +144,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
             </span>
           )}
         </div>
+        <AskCompact card={{ kind: 'file', id: boardCardId(id), title: data.title, path: data.path }} label={data.title || data.path} className="right-1.5 top-1.5" />
       </article>
     );
   }
@@ -178,6 +180,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
           <CardText ref={textRef} text={data.text} cut={textCut} className="board-text-compact line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
         </div>
       </div>
+      <AskCompact card={{ kind: 'file', id: boardCardId(id), title: data.title, path: data.path }} label={data.title || data.path} className="bottom-1 right-1" />
     </CardFrame>;
   }
   return <CardFrame archived={data.archived} pinned={data.pinned} fresh={data.fresh} freshKey={data.updatedAt} anchors={<Anchors />} labelledBy={titleId} reading={reading} onPress={actions ? (event) => brickPress(event, (card) => firstControl(card, 'button[aria-label^="Open "]')) : undefined}>
@@ -208,12 +211,12 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
       <div className="flex items-center gap-1 shrink-0">
         <Button size="xs" variant="ghost" className="nodrag nopan h-6 px-1.5 text-xs" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" className="size-3" />Open</Button>
         {(titleCut || textCut) && <ReadAll data={data} />}
-        {actions?.askInCLI && !actions.readOnly && !data.readOnly && (
+        {actions?.askInCLI && !actions.readOnly && (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              actions.askInCLI?.(askCard({ kind: 'file', id, title: data.title, path: data.path }));
+              actions.askInCLI?.(askCard({ kind: 'file', id: boardCardId(id), title: data.title, path: data.path }));
             }}
             className="btn-ask-card nodrag nopan inline-flex h-6 min-h-[24px] items-center gap-1 rounded border border-border/80 px-2 text-[11.5px] font-medium text-primary hover:border-primary/50 hover:bg-primary/10 transition-colors cursor-pointer"
             title={`Ask about "${data.title || data.path || 'file'}" in CLI`}
