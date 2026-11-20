@@ -37,6 +37,7 @@ import {
   Field,
   FieldDescription,
   FieldLabel,
+  chipClass,
   foldSurface,
   FreshDot,
   IconButton,
@@ -58,6 +59,7 @@ import {
   PopoverTrigger,
   Radio,
   RadioGroup,
+  needsSurface,
   rowSurface,
   ScrollArea,
   Select,
@@ -202,6 +204,12 @@ export function DesignPieces() {
         <State name="quiet"><div className={`${rowSurface({ now: false })} w-56 py-2 text-[13px]`}>A step, quiet</div></State>
         <State name="folded"><div className={`${foldSurface(false)} w-56 py-2 text-[13px]`}>A folded row</div></State>
         <State name="current fold"><div className={`${foldSurface(true)} w-56 py-2 text-[13px]`}>The current folded row</div></State>
+      </Piece>
+      <Piece id="needs-surface" name="needsSurface and chipClass" note="What waits for you: the card surface with a 3 px orange rule, nothing filled. A suggested answer is a chip: 28 px, a 1 px border, no fill.">
+        <State name="Waits for you"><div className={`${needsSurface()} w-56 px-3 py-2 text-[13px]`}>Waits for you: which cache?</div></State>
+        <State name="chip"><button type="button" className={`${chipClass()} text-[13px]`}>Redis</button></State>
+        <State name="chip selected"><button type="button" aria-pressed="true" className={`${chipClass({ selected: true })} text-[13px]`}>Postgres</button></State>
+        <State name="chip disabled"><button type="button" disabled className={`${chipClass()} text-[13px]`}>Memcached</button></State>
       </Piece>
       <Piece id="composer" name="Composer" note="The multi-line field of the Board's writing surfaces.">
         <State name="empty"><Composer aria-label="Empty composer" value={empty} onChange={setEmpty} placeholder="Write Markdown, lists, notes, or links..." rows={3} className="w-72" /></State>

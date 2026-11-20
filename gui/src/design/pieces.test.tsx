@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { cn } from '../lib/utils.js';
 import { readFileSync } from 'node:fs';
-import { CardFrame, Composer, foldSurface, FreshDot, Mark, KindLabel, KIND_LABEL, Pill, rowSurface, StepCheck, type KindLabelKind, type PillTone } from './index.js';
+import { CardFrame, chipClass, Composer, foldSurface, needsSurface, FreshDot, Mark, KindLabel, KIND_LABEL, Pill, rowSurface, StepCheck, type KindLabelKind, type PillTone } from './index.js';
 
 const html = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element);
 
@@ -133,6 +133,36 @@ describe('StepCheck (DS5b)', () => {
     };
     expect(press({ busy: false })).toEqual(['stop', 'toggle']);
     expect(press({ busy: true })).toEqual(['stop']);
+  });
+});
+
+describe('needsSurface and chipClass (R1d)', () => {
+  it('draws the Waits for you surface as a hairline card with a 3 px orange rule: no fill, no tinted outline, no shadow', () => {
+    const surface = needsSurface();
+    expect(surface).toBe('rounded-card border border-border border-l-3 border-l-state-needs bg-card');
+    expect(surface).not.toMatch(/warning|shadow|gradient|bg-state|bg-primary|border-state-needs|border-l-4|border-l-2|rounded-xl/);
+    expect(cn('flex h-full', surface, 'text-left')).toContain('border-border border-l-3 border-l-state-needs');
+  });
+
+  it('draws a chip 28 px high with --r-md corners and a 1 px border, and no fill', () => {
+    const chip = chipClass();
+    expect(chip).toContain('h-7');
+    expect(chip).toContain('rounded-chip');
+    expect(chip).toMatch(/ border /);
+    expect(chip).toContain('border-border');
+    expect(chip).toContain('bg-transparent');
+    expect(chip).not.toMatch(/\bbg-(?!transparent)[a-z]|hover:bg-/);
+    expect(chip).toContain('hover:border-border-hover');
+    expect(chip).toContain('disabled:opacity-50');
+    expect(chip).toContain('focus-visible:ring-2');
+  });
+
+  it('draws a selected chip with a primary border and an 8 % primary tint', () => {
+    const chip = chipClass({ selected: true });
+    expect(chip).toContain('border-primary');
+    expect(chip).toContain('bg-primary/8');
+    expect(chip).not.toContain('border-border');
+    expect(chip).not.toContain('bg-transparent');
   });
 });
 

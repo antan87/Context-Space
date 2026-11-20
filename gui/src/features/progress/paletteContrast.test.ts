@@ -214,6 +214,11 @@ describe.each(PALETTES.flatMap((palette) => THEMES.map((theme) => [palette, them
     expect(contrast(resolve(tokens['--state-now']!, tokens), resolve(tokens[surface]!, tokens))).toBeGreaterThanOrEqual(3);
   });
 
+  // R1d: the Waits for you box's 3 px rule is its only colour, so it must stand out from the card it sits on and from the canvas around it.
+  it.each(surfaces)('the Waits for you box\'s 3 px rule (--state-needs) is visible on %s (3:1)', (surface) => {
+    expect(contrast(resolve(tokens['--state-needs']!, tokens), resolve(tokens[surface]!, tokens))).toBeGreaterThanOrEqual(3);
+  });
+
   // Fix round 1: a hovered row on the card must move away from the card the right way: lighter in dark, darker in light, never toward the canvas.
   it.each([['--accent', 30], ['--primary', 10], ['--primary', 5]] as const)('a row hover of %s at %s %% over the card moves away from the card the right way', (token, pct) => {
     const card = resolve(tokens['--card']!, tokens);

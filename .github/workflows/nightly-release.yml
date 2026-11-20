@@ -30,8 +30,10 @@ concurrency:
 jobs:
   ship:
     runs-on: ubuntu-latest
-    # release:ship waits for CI and the release run; the release itself can take a while.
-    timeout-minutes: 180
+    # release:ship waits for the version PR's checks and then for main's checks on the bump commit (each CI run takes
+    # about 1.5-1.8 h), then dispatches the release. 180/150 min ran out twice (19 and 20 Nov) with main's checks still
+    # running; GitHub allows a hosted job 360 min.
+    timeout-minutes: 330
     steps:
       - name: Require the release token
         env:
@@ -67,4 +69,4 @@ jobs:
           GIT_AUTHOR_EMAIL: 'github-actions[bot]@users.noreply.github.com'
           GIT_COMMITTER_NAME: 'github-actions[bot]'
           GIT_COMMITTER_EMAIL: 'github-actions[bot]@users.noreply.github.com'
-        run: node scripts/release-ship.mjs --timeout 150 --poll 60
+        run: node scripts/release-ship.mjs --timeout 300 --poll 60

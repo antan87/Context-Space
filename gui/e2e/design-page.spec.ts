@@ -12,7 +12,7 @@ test.use({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' });
 /** The pieces, by the heading each one has (`design-piece-<id>`). */
 const PIECES: Array<[id: string, heading: string]> = [
   ['button', 'Button'], ['icon-button', 'IconButton'], ['badge', 'Badge and StatusBadge'], ['card-frame', 'CardFrame'], ['pill', 'Pill'], ['kind-label', 'KindLabel'], ['mark', 'Mark'],
-  ['fresh-dot', 'FreshDot'], ['step-check', 'StepCheck'], ['row-surface', 'rowSurface and foldSurface'], ['composer', 'Composer'],
+  ['fresh-dot', 'FreshDot'], ['step-check', 'StepCheck'], ['row-surface', 'rowSurface and foldSurface'], ['needs-surface', 'needsSurface and chipClass'], ['composer', 'Composer'],
   ['input', 'Input, Textarea and Field'], ['choices', 'Checkbox, Switch, Radio and Select'], ['tabs', 'Tabs'], ['alert', 'Alert, Empty and Card'],
   ['small-things', 'Kbd, Separator, Skeleton, Spinner, ScrollArea and ContextRing'], ['overlays', 'Dialog, AlertDialog, Sheet, Menu, Popover and Tooltip'],
 ];

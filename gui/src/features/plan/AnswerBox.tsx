@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react';
+import { chipClass } from '../../design/index.js';
+import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { suggestedAnswers } from './planView.js';
@@ -12,6 +14,8 @@ export interface AnswerBoxProps {
   error?: string;
   /** Resolves true once the answer is in the plan. */
   onAnswer: (answer: string) => Promise<boolean>;
+  /** Draw the suggested answers as Hairline chips (the chat pane's question bar) instead of outline buttons. */
+  chips?: boolean;
 }
 
 /**
@@ -19,7 +23,7 @@ export interface AnswerBoxProps {
  * as it is or to change; the box takes several lines, and Ctrl+Enter or the button sends it. The answer goes into
  * the plan, where every AI reads it.
  */
-export function AnswerBox({ question, detail, busy = false, error, onAnswer }: AnswerBoxProps) {
+export function AnswerBox({ question, detail, busy = false, error, onAnswer, chips = false }: AnswerBoxProps) {
   const [answer, setAnswer] = useState('');
   const [sending, setSending] = useState(false);
   const form = useRef<HTMLFormElement>(null);
@@ -32,7 +36,12 @@ export function AnswerBox({ question, detail, busy = false, error, onAnswer }: A
   };
   return <>
     {options.length > 0 && <div role="group" aria-label="Suggested answers" className="flex flex-wrap gap-1.5">
-      {options.map((option) => <Button key={option} size="xs" variant="outline" title="Puts this answer in the box" onClick={() => { setAnswer(option); form.current?.querySelector('textarea')?.focus(); }}>{option}</Button>)}
+      {options.map((option) => {
+        const pick = () => { setAnswer(option); form.current?.querySelector('textarea')?.focus(); };
+        return chips
+          ? <button key={option} type="button" className={cn(chipClass(), 'text-[12px]')} title="Puts this answer in the box" onClick={pick}>{option}</button>
+          : <Button key={option} size="xs" variant="outline" title="Puts this answer in the box" onClick={pick}>{option}</Button>;
+      })}
     </div>}
     <form ref={form} className="flex items-end gap-1.5" onSubmit={(event) => { event.preventDefault(); submit(); }}>
       <Textarea

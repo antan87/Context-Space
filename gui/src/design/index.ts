@@ -19,6 +19,6 @@ export { Mark, type MarkProps } from './Mark.js';
 export { FreshDot, type FreshDotProps } from './FreshDot.js';
 // The step checkbox of the Area's rows and the Checkpoint card, and the Now/Next step surface of the rows (DS5b).
 export { StepCheck, type StepCheckProps } from './StepCheck.js';
-export { rowSurface, foldSurface, type RowSurfaceOptions } from './RowSurface.js';
+export { rowSurface, foldSurface, needsSurface, chipClass, type RowSurfaceOptions, type ChipOptions } from './RowSurface.js';
 // The multi-line text field of the Board's writing surfaces (DS6); the note dialog's body is its first user.
 export { Composer, type ComposerProps } from './Composer.js';

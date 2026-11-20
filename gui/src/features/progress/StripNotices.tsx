@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Check, CircleHelp, ListChecks, RotateCcw } from 'lucide-react';
 
+import { cn } from '../../lib/utils.js';
+import { needsSurface } from '../../design/index.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { AnswerBox } from '../plan/AnswerBox.js';
@@ -26,15 +28,15 @@ export interface PlanQuestionBarProps {
 export function PlanQuestionBar({ item, more, busy, error, onAnswer, onShowAll }: PlanQuestionBarProps) {
   const why = questionWhy(item.detail);
   return (
-    <div role="group" aria-label="A question in the plan waits for your answer" className="flex items-start gap-2.5 border-t border-[color-mix(in_oklab,var(--state-needs)_45%,transparent)] bg-[color-mix(in_oklab,var(--state-needs)_7%,var(--card))] px-3 py-2">
+    <div role="group" aria-label="A question in the plan waits for your answer" className={cn(needsSurface(), 'mx-2 my-2 flex items-start gap-2.5 py-2 pl-2.25 pr-3')}>
       <CircleHelp aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[var(--state-needs)]" />
       <div className="min-w-0 flex-1 space-y-1.5">
-        <p className="text-[11px] text-muted-foreground">{item.context}</p>
+        <p className="text-[12px] text-muted-foreground">{item.context}</p>
         <p className="line-clamp-3 break-words text-[13px] leading-snug text-foreground"><InlinePlanMarkdown content={item.title} /></p>
         {why && <p className="line-clamp-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{why}</p>}
-        <AnswerBox question={item.title} detail={item.detail} busy={busy} error={error} onAnswer={onAnswer} />
+        <AnswerBox question={item.title} detail={item.detail} busy={busy} error={error} onAnswer={onAnswer} chips />
         {more > 0 && (
-          <button type="button" onClick={onShowAll} className="cursor-pointer text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded">
+          <button type="button" onClick={onShowAll} className="cursor-pointer text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded">
             {more === 1 ? '1 more waits for you' : `${more} more wait for you`}
           </button>
         )}

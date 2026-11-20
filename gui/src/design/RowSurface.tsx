@@ -30,3 +30,27 @@ export function foldSurface(current: boolean, { hover = true }: { hover?: boolea
   return cn('text-left', current ? NOW_SURFACE : 'rounded-card border border-border bg-card px-3',
     hover && 'hover:bg-row-hover', hover && !current && 'hover:border-border-hover');
 }
+
+// Hairline (R1d): the Waits for you box is the other half of the 3 px rule (Now has the first): a 1 px --border outline, the card surface, no fill, no tinted
+// outline, no shadow, and a 3 px rule in --state-needs. The caller adds layout (and, where the text must start at a fixed place, its own left padding).
+const NEEDS_SURFACE = 'rounded-card border border-border border-l-3 border-l-state-needs bg-card';
+
+/** The surface of anything that waits for the person: the card surface with a 3 px `--state-needs` rule at its left, and nothing filled. */
+export function needsSurface(): string {
+  return NEEDS_SURFACE;
+}
+
+export interface ChipOptions {
+  /** The chosen answer: a primary border and an 8 % primary tint. */
+  selected?: boolean;
+}
+
+/**
+ * A suggested answer, as a chip (Hairline): 28 px high, `--r-md` corners, a 1 px border and no fill; selected, a primary border and an 8 % primary tint.
+ * The caller adds the text size (the Board draws it at 13.5 so that it stays 12 px at the least zoom) and its own layout. It styles a real button.
+ */
+export function chipClass({ selected = false }: ChipOptions = {}): string {
+  return cn('nodrag nopan inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded-chip border bg-transparent px-2.5 font-medium text-foreground transition-colors',
+    'cursor-pointer disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+    selected ? 'border-primary bg-primary/8' : 'border-border hover:border-border-hover');
+}
