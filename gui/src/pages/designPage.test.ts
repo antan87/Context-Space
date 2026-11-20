@@ -31,7 +31,7 @@ describe('the design page', () => {
       expect(exported, `${name} is exported`).toContain(name);
       expect(SOURCE, `${name} is drawn`).toMatch(new RegExp(`<${name}\\b`));
     }
-    for (const name of ['rowSurface', 'foldSurface']) expect(SOURCE, `${name} is drawn`).toContain(`${name}(`);
+    for (const name of ['rowSurface', 'foldSurface', 'needsSurface', 'chipClass']) expect(SOURCE, `${name} is drawn`).toContain(`${name}(`);
     const loose = exported.filter((name) => !DRAWN.some((root) => name.startsWith(root)) && !Object.keys(NOT_DRAWN).some((root) => name.startsWith(root)));
     expect(loose, `exports with no place on the design page (draw them in DesignPieces.tsx or say why not in NOT_DRAWN)`).toEqual([]);
     for (const root of Object.keys(NOT_DRAWN)) expect(exported.some((name) => name.startsWith(root)), `${root} still exists`).toBe(true);

@@ -7,6 +7,7 @@ import { IconButton } from '../../components/ui/icon-button.js';
 import { Popover, PopoverPopup } from '../../components/ui/popover.js';
 import { ApiError } from '../../lib/api/client.js';
 import { focusText as textOf, focusWord, type Focus } from '../plan/focus.js';
+import { chipClass, needsSurface } from '../../design/index.js';
 import { cn } from '../../lib/utils.js';
 import type { OpenQuestion, ProgressFacts, WorkGuidance } from '../../types.js';
 import { ProgressPanel } from './ProgressPanel.js';
@@ -105,25 +106,25 @@ export interface AnswerBarProps {
 export function AnswerBar({ question, context, earlier, acknowledging, onFill, onAcknowledge, onShowAll }: AnswerBarProps) {
   const options = question.options ?? [];
   return (
-    <div role="group" aria-label="The AI is waiting for your answer" className="flex items-start gap-2.5 border-b border-[color-mix(in_oklab,var(--state-needs)_45%,transparent)] bg-[color-mix(in_oklab,var(--state-needs)_7%,var(--card))] px-3 py-2">
+    <div role="group" aria-label="The AI is waiting for your answer" className={cn(needsSurface(), 'mx-2 my-2 flex items-start gap-2.5 py-2 pl-2.25 pr-3')}>
       <MessageCircleQuestion aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-[var(--state-needs)]" />
       <div className="min-w-0 flex-1">
-        {context && <p className="mb-0.5 text-[11px] text-muted-foreground">{context}</p>}
+        {context && <p className="mb-0.5 text-[12px] text-muted-foreground">{context}</p>}
         {/* The agent wrote this: plain text only. */}
         <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px] leading-snug text-foreground">{question.message}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
           {options.length > 0 && (
             <div role="group" aria-label="Suggested answers" className="flex flex-wrap gap-1.5">
               {options.map((option) => (
-                <Button key={option} size="xs" variant="outline" title="Adds this to the chat prompt. You press Enter." onClick={() => onFill(option)}>{option}</Button>
+                <button key={option} type="button" className={cn(chipClass(), 'text-[12px]')} title="Adds this to the chat prompt. You press Enter." onClick={() => onFill(option)}>{option}</button>
               ))}
             </div>
           )}
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[12px] text-muted-foreground">
             {options.length > 0 ? 'Pick one and press Enter, or type your own answer in the chat.' : 'Type your answer in the chat and press Enter.'}
           </span>
           {earlier > 0 && (
-            <button type="button" onClick={onShowAll} className="cursor-pointer text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded">
+            <button type="button" onClick={onShowAll} className="cursor-pointer text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded">
               {earlier === 1 ? '1 earlier question' : `${earlier} earlier questions`}
             </button>
           )}

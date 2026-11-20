@@ -230,7 +230,7 @@ function compact(item: LaneCard): LaneCard {
 }
 
 /** The type of the answer buttons on a waiting decision's card, in px, and what a button adds to the width of its words (its padding and border). */
-const ANSWER = { size: 13, pad: 22, gap: 6, ghostPad: 16, ghostSize: 12.5, margin: 1.12 } as const;
+const ANSWER = { size: 13.5, pad: 22, gap: 6, ghostPad: 16, ghostSize: 13.5, margin: 1.12 } as const;
 /** What the card of a waiting decision keeps for itself on the width of its node: the frame's padding, the card's border and padding. */
 const DECISION_SIDES = 44;
 

@@ -150,6 +150,7 @@
 
   /* Hairline utilities (rounded-card, shadow-card-hover, border-border-hover). The existing radius scale above is unchanged. */
   --radius-card: var(--r-lg);
+  --radius-chip: var(--r-md);
   --shadow-card-hover: var(--shadow-hover);
   --color-border-hover: var(--border-hover);
   /* The hover fill of a row that sits on the card surface: an opaque mix over the card (as `.board-brick:hover` does), never a see-through colour,

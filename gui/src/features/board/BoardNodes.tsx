@@ -25,7 +25,7 @@ import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLin
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
 import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode, type UncommittedNode } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
-import { CARD_BRICK as BRICK, CARD_FOCUS, FreshDot, StepCheck } from '../../design/index.js';
+import { CARD_BRICK as BRICK, CARD_FOCUS, chipClass, FreshDot, needsSurface, StepCheck } from '../../design/index.js';
 import { Anchors, brickPress, hasDragSelection, TITLE_BUTTON } from './cards/cardParts.js';
 import { summaryLabel } from './summaryLabel.js';
 import { BoardNote } from './cards/NoteCard.js';
@@ -277,8 +277,9 @@ function useDecisionAnswer({ decision, onAnswer }: WaitingDecisionCardProps) {
   return { actions, options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError: () => { setDismissed(failure); setError(null); }, submitAnswer };
 }
 
-const ANSWER_BUTTON = 'nodrag nopan inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md border border-border/80 bg-background/80 px-2.5 text-[13px] font-medium text-foreground transition-colors hover:bg-accent cursor-pointer disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
-const GHOST_BUTTON = 'nodrag nopan inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
+// Hairline (R1d): the suggested answers are chips (28 px, `--r-md`, a 1 px border, no fill). 13.5 px text is 12 px at the least zoom of the overview (0.9).
+const ANSWER_BUTTON = `${chipClass()} text-[13.5px]`;
+const GHOST_BUTTON = 'nodrag nopan inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
 
 /** Asks about the question in the CLI; the question without its marks. */
 function AskInCliButton({ question }: { question: string }) {
@@ -372,7 +373,7 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
       {...answerPressGuard}
       data-testid={`decision-card-${decision.key}`}
       style={{ height: ROW_SIZE.decisionCard }}
-      className="relative nodrag nopan box-border outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col justify-between overflow-hidden rounded-lg border border-warning/40 bg-warning/8 px-2.5 py-[7px] text-foreground shadow-2xs"
+      className="relative nodrag nopan box-border outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col justify-between overflow-hidden rounded-lg border border-border px-2.5 py-[7px] text-foreground"
     >
       <div className="flex items-start gap-2">
         <CircleHelp aria-hidden="true" className="mt-px size-4 shrink-0 text-warning-foreground" />
@@ -391,12 +392,12 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
         <span data-answer-gap="" className="w-1.5 shrink-0" />
       </div>
       </div>
-      {/* The line takes 24 px of the card's height, but is 32 px tall (4 px pulled back above and below, into the card's padding), so that a focus
-          ring (2 px and 1 px offset) is whole inside the clip. Rendered measurements keep every shown button whole. */}
-      <div ref={answerLine} className="-my-1 flex h-8 min-w-0 items-center gap-1.5">
+      {/* The line takes 24 px of the card's height, but is 36 px tall (6 px pulled back above and below, into the question's line box and the card's padding), so that a
+          28 px chip sits 2 px up into the question's line box and keeps 5 px under it in the tightest card (74), and a focus ring (2 px and 1 px offset) is whole inside the clip. Rendered measurements keep every shown button whole. */}
+      <div ref={answerLine} className="-my-1.5 flex h-9 min-w-0 items-center gap-1.5">
         {displayError ? (
           <>
-            <p role="alert" className="min-w-0 flex-1 truncate text-[12.5px] text-destructive" title={displayError}>{displayError}</p>
+            <p role="alert" className="min-w-0 flex-1 truncate text-[13.5px] text-destructive" title={displayError}>{displayError}</p>
             <button type="button" onClick={() => { setAgain(true); dismissError(); }} className={GHOST_BUTTON}>Answer again</button>
           </>
         ) : fit.shown.length > 0 && (
@@ -485,7 +486,7 @@ function FullDecisionCard(props: WaitingDecisionCardProps) {
       tabIndex={-1}
       {...answerPressGuard}
       data-testid={`decision-card-${decision.key}`}
-      className="nodrag nopan outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/8 p-2.5 text-foreground transition-colors shadow-2xs"
+      className={cn('nodrag nopan outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 flex flex-col gap-2 p-2.5 text-foreground transition-colors', needsSurface())}
     >
       <div className="flex items-start gap-2">
         <CircleHelp aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
@@ -503,7 +504,7 @@ function FullDecisionCard(props: WaitingDecisionCardProps) {
               type="button"
               disabled={saving}
               onClick={() => void submitAnswer(option)}
-              className="nodrag nopan inline-flex min-h-6 items-center rounded-md border border-border/80 bg-background/80 hover:bg-accent px-2 text-[12.5px] font-medium text-foreground transition-colors cursor-pointer disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+              className={cn(chipClass(), 'text-[12.5px]')}
             >
               {option}
             </button>
@@ -579,7 +580,7 @@ function CheckpointCheckFooter({ data, cpKey }: { data: CheckpointData; cpKey: s
   return (
     <footer className="mt-auto flex items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-3 py-1.5">
       <span
-        className={cn('truncate text-[12.5px]', checkError ? 'text-destructive font-medium' : 'text-muted-foreground')}
+        className={cn('truncate text-[13.5px] leading-[18px]', checkError ? 'text-destructive font-medium' : 'text-muted-foreground')}
         role={checkError ? 'alert' : undefined}
         title={checkError ?? (typeof data.check === 'string' ? data.check : undefined)}
       >
@@ -596,7 +597,7 @@ function CheckpointCheckFooter({ data, cpKey }: { data: CheckpointData; cpKey: s
           }
         }}
         className={cn(
-          'nodrag nopan inline-flex min-h-6 items-center gap-1 rounded border border-border/80 bg-background px-2 py-0.5 text-[12.5px] font-medium text-foreground hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 transition-colors',
+          'nodrag nopan inline-flex min-h-6 items-center gap-1 rounded border border-border/80 bg-background px-2 py-0.5 text-[13.5px] leading-4 font-medium text-foreground hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 transition-colors',
           !isBusy && actions?.runCheck && 'cursor-pointer'
         )}
       >
@@ -651,16 +652,16 @@ function WaitingFrame({ id, data, border, titleId, width }: { id?: string; data:
   const paged = expanded && data.moreWaiting > 0;
   const pagerRoom = paged ? ROW_SIZE.pager + ROW_SIZE.gap + 4 : 0;
   const noticeApart = lost && paged && (width ?? ROW_SIZE.decisionWidth) < 540;
-  const notice = <p role="status" title="The question changed in the plan; your answer was not sent." className={cn('min-w-0 break-words text-[12.5px] leading-[14px] text-muted-foreground', noticeApart ? 'shrink-0 px-3 pb-0.5' : 'ml-1 flex-1')}>Question changed; answer not sent</p>;
+  const notice = <p role="status" title="The question changed in the plan; your answer was not sent." className={cn('min-w-0 break-words text-[13.5px] leading-[14px] text-muted-foreground', noticeApart ? 'shrink-0 px-3 pb-0.5' : 'ml-1 flex-1')}>Question changed; answer not sent</p>;
   const cpKey = data.checkpointKey ?? (id ? id.replace(/^area:checkpoint:|^checkpoint:/, '') : undefined);
 
-  return <article ref={frame} tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs', border)}>
+  return <article ref={frame} tabIndex={-1} aria-labelledby={titleId} className={cn('flex h-full w-full flex-col overflow-hidden text-card-foreground', data.waiting.length > 0 ? needsSurface() : cn('rounded-card border bg-card', border))}>
     <Anchors />
     <header className="flex h-8 shrink-0 items-center gap-1.5 px-3 pt-1" style={pagerRoom ? { paddingRight: pagerRoom } : undefined}>
       {data.waiting.length > 0 ? (
         <>
           <span aria-hidden="true" className="size-2 rounded-full bg-state-needs" />
-          <h2 id={titleId} className="shrink-0 whitespace-nowrap text-[13px] font-semibold leading-5 text-foreground">Waits for you</h2>
+          <h2 id={titleId} className="shrink-0 whitespace-nowrap text-[13.5px] font-semibold leading-5 text-foreground">Waits for you</h2>
         </>
       ) : (
         <>
@@ -681,7 +682,7 @@ function WaitingFrame({ id, data, border, titleId, width }: { id?: string; data:
     {(data.moreWaiting > 0 || expanded) && <button
       type="button" data-row-control={data.rowId} aria-expanded={expanded} disabled={!actions} onClick={() => data.rowId && actions?.toggleRow?.(data.rowId)}
       aria-label={expanded ? 'Show fewer decisions waiting for you' : `Show ${data.moreWaiting} more decisions waiting for you`}
-      className="board-row-control nodrag nopan flex shrink-0 items-center justify-center border-t border-border/60 px-3 text-[12.5px] font-medium text-foreground hover:bg-accent/40" style={{ height: BOARD_SIZE.moreRow + 6 }}
+      className="board-row-control nodrag nopan flex shrink-0 items-center justify-center border-t border-border/60 px-3 text-[13.5px] font-medium text-foreground hover:bg-accent/40" style={{ height: BOARD_SIZE.moreRow + 6 }}
     >{expanded ? 'Show fewer' : `+${data.moreWaiting} more`}</button>}
     {data.check && !data.done && cpKey && (
       <CheckpointCheckFooter data={data} cpKey={cpKey} />
@@ -835,7 +836,7 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
   };
 
   const waiting = data.waiting.length + data.moreWaiting;
-  const border = waiting ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border';
+  const border = data.done ? 'border-success/50' : 'border-border';
   if (!data.open) {
     return <FoldedGroup id={id} className={cn('rounded-xl border bg-card text-card-foreground hover:bg-accent/40', border)}
       label={summaryLabel(data.kind === 'plan'
@@ -872,7 +873,7 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
       {data.waiting.map((decision) => (
         <WaitingDecisionCard key={decision.key} decision={decision} onAnswer={handleAnswer} />
       ))}
-      {data.moreWaiting > 0 && <li className="flex items-center border-l-2 border-warning bg-warning/8 px-3 text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}>+{data.moreWaiting} more waiting</li>}
+      {data.moreWaiting > 0 && <li className="flex items-center gap-1.5 px-3 text-[12.5px] text-muted-foreground" style={{ height: BOARD_SIZE.moreRow }}><span aria-hidden="true" className="size-2 rounded-full bg-state-needs" />+{data.moreWaiting} more waiting</li>}
     </ul>}
     {!data.waitingOnly && <div className="nowheel min-h-0 flex-1 overflow-y-auto px-3">
       <ul>
@@ -1493,7 +1494,7 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
   const [failedPics, setFailedPics] = useState<string[]>([]);
   const visiblePics = data.pictures.filter((pic) => !failedPics.includes(pic.path));
   const waiting = data.waitingCount;
-  const border = waiting > 0 ? 'border-warning/60' : data.done ? 'border-success/50' : 'border-border';
+  const border = data.done ? 'border-success/50' : 'border-border';
   const countItems = areaCountItems(data);
   const stepsLabel = areaSteps(data);
   const progress = data.stepsTotal ? (data.stepsDone / data.stepsTotal) * 100 : 0;
