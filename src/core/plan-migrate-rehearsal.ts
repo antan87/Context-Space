@@ -90,6 +90,10 @@ export function rehearsalExitCode(report: Pick<RehearsalReport, 'roundTrip' | 'u
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const validTime = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value));
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** A workspace-relative path as the report writes it: with `/` on every platform (a Windows `\\` never reaches the report). */
+export function relativePosix(from: string, to: string, flavour: Pick<typeof path, 'relative' | 'sep'> = path): string {
+  return flavour.relative(from, to).split(flavour.sep).join('/');
+}
 const closeQuietly = (db: WorkspaceDb) => { try { db.close(); } catch { /* already closed */ } };
 
 /** The deepest folder of `target` that exists, resolved through links, with the rest put back: where a path really is. */
@@ -297,7 +301,7 @@ async function rehearse(root: string, folder: string, options: RehearsalOptions,
       // the state file the way the app finds it (`.contextspace/state.json`, then the older names), read only
       const found = await resolveWorkspaceFilePath(root, 'state');
       if (found.exists) {
-        stateName = path.relative(root, found.path);
+        stateName = relativePosix(root, found.path);
         try {
           const state = await loadWorkspaceState(root, { strict: true });
           for (const [key, value] of Object.entries(isObject(state.planChecks) ? state.planChecks : {})) if (isObject(value)) checks[key] = value as LegacyCheck;

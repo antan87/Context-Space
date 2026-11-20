@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { setActiveStorageProvider } from './adapters/registry.js';
 import { openWorkspaceDb, listBlocks, listCards, listLinks, listPositions, getNow, listChanges, listCheckRuns, exportPortableSnapshot } from './workspace-db/index.js';
-import { rehearseMigration, renderRehearsal, rehearsalExitCode, matchPlanItems } from './plan-migrate-rehearsal.js';
+import { rehearseMigration, renderRehearsal, rehearsalExitCode, matchPlanItems, relativePosix } from './plan-migrate-rehearsal.js';
 import { parsePlanFile, planItems } from './plan-file.js';
 
 const PLAN = `# CSV export
@@ -381,6 +381,21 @@ describe('the unhappy paths', () => {
   });
 });
 
+
+describe('paths in the report', () => {
+  it('are workspace-relative with / on every platform, even when the platform joins with \\', () => {
+    expect(relativePosix('C:\\ws', 'C:\\ws\\.contextspace\\state.json', path.win32)).toBe('.contextspace/state.json');
+    expect(relativePosix('/ws', '/ws/.contextspace-state.json', path.posix)).toBe('.contextspace-state.json');
+  });
+
+  it('name an older state file with / (the Not read list leaves it out, and a corrupt one is named with /)', async () => {
+    await write('PLAN.md', PLAN);
+    await write('.contextspace/state.json', '{"x":');
+    const report = await rehearseMigration(root, { out: path.join(scratch, 'out') });
+    expect(report.skipped.map((x) => x.input)).toContain('.contextspace/state.json');
+    expect([...report.skipped.map((x) => x.input), ...report.notRead].some((x) => x.includes('\\'))).toBe(false);
+  });
+});
 
 describe('fix round 1', () => {
   const stateOnly = (name: string) => write(name, JSON.stringify({ workspacePath: root, repos: {}, updatedAt: AT, planChecks: { 'reports-export-to-csv': { lastVerificationSha: 'abc1234', lastVerificationStatus: 'pass', canProgress: true, at: AT } } }));

@@ -241,7 +241,7 @@ describe('ctxspace plan now', () => {
 
 describe('ctxspace plan migrate --dry-run', () => {
   let out: string;
-  beforeEach(async () => { out = await fs.mkdtemp(path.join(os.tmpdir(), 'plan-migrate-out-')); });
+  beforeEach(async () => { out = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plan-migrate-out-'))); });
   afterEach(async () => { await fs.rm(out, { recursive: true, force: true }); });
 
   async function run(...args: string[]) {
@@ -278,6 +278,16 @@ describe('ctxspace plan migrate --dry-run', () => {
     const report = JSON.parse(lines[0]!);
     expect(report).toMatchObject({ result: 'ok', exitCode: 0, plan: { source: 'file' }, roundTrip: { identical: true } });
     expect(report.snapshot.file).toBe(path.join(out, 'o', 'contextspace-data.json'));
+  });
+
+  it('reports the resolved output path when --out goes through a link (macOS /var, Windows short names)', async () => {
+    const link = path.join(out, 'link');
+    await fs.mkdir(path.join(out, 'real'));
+    await fs.symlink(path.join(out, 'real'), link, 'junction');
+    const { lines } = await run('--dry-run', '--json', '--out', path.join(link, 'o'));
+    const report = JSON.parse(lines[0]!);
+    expect(report.snapshot.file).toBe(path.join(await fs.realpath(link), 'o', 'contextspace-data.json'));
+    expect(report.snapshot.file).not.toBe(path.join(link, 'o', 'contextspace-data.json'));
   });
 
   it('exits 1 without --dry-run (only the rehearsal exists yet) and for an out folder inside the workspace', async () => {
