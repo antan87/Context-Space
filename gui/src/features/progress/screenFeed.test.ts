@@ -232,4 +232,11 @@ describe('connectScreenFeed', () => {
     source!.emit('commits', JSON.stringify({ type: 'commits', timestamp: base.timestamp }), base.timestamp);
     expect(lives).toEqual([{ type: 'commits', timestamp: base.timestamp } as unknown as LiveEvent]);
   });
+
+  it('parses and forwards files live events', () => {
+    connect();
+    const [source] = FakeSource.all;
+    source!.emit('files', JSON.stringify({ type: 'files', timestamp: base.timestamp }), base.timestamp);
+    expect(lives).toEqual([{ type: 'files', timestamp: base.timestamp }]);
+  });
 });
