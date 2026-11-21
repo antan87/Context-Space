@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { ensurePlanStore } from './lifecycle.js';
+import { ensurePlanStore, readPlanReadOnly } from './lifecycle.js';
 import {
   DETAIL_MAX,
   ID_PATTERN,
@@ -26,6 +26,7 @@ import {
 import { PLANNING_NOTES_FILE, PLANNING_NOTES_TEMPLATE, withPlanningNotesLock } from './planning-notes.js';
 import { deleteWorkspaceFile, readWorkspaceFile, workspaceFileExists, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
+import { WorkspaceMovedError, readSwitch } from './workspace-db-switch.js';
 import type { PlanKind } from './plan-words.js';
 
 export const PLAN_ARCHIVE_DIR = '.contextspace/archive';
@@ -246,6 +247,8 @@ export function applyPlanningNotes(plan: PlanDocument, parsed: ParsedNotes, at: 
  * once. Every reader that people or AI tools see (`ctxspace plan`, the Plan tab) starts here.
  */
 export async function preparePlan(workspacePath: string): Promise<PlanDocument> {
+  // Moved to the workspace database: the older planning is read as it is, and nothing is moved or written.
+  if (readSwitch(workspacePath)) return readPlanReadOnly(workspacePath);
   await importPlanningNotes(workspacePath);
   return ensurePlanStore(workspacePath);
 }
@@ -279,6 +282,8 @@ export async function importPlanningNotes(workspacePath: string, now = new Date(
   // The milestones must be in the plan before the notes can add to them.
   await ensurePlanStore(workspacePath);
   return withPlanningNotesLock(workspacePath, async () => {
+    const moved = readSwitch(workspacePath);
+    if (moved) throw new WorkspaceMovedError(moved);
     let content: string;
     try { content = await readWorkspaceFile(workspacePath, feature.id, PLANNING_NOTES_FILE); }
     catch (error) {

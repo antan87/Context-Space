@@ -96,6 +96,19 @@ afterEach(async () => {
   await fs.rm(scratch, { recursive: true, force: true });
 });
 
+describe('a PLAN.md saved with CRLF line endings', () => {
+  it('reads every item, maps the cards to them, and round-trips with its own line endings', async () => {
+    await fullWorkspace();
+    await write('PLAN.md', PLAN.replace(/\n/g, '\r\n'));
+    const report = await rehearseMigration(root, { out: path.join(scratch, 'out') });
+    expect(report.keyProblems).toEqual([]);
+    expect(report.plan).toMatchObject({ source: 'file', items: 7 });
+    expect(report.remapped).toMatchObject({ cardAreas: 1, cardSteps: 1 });
+    expect(report.roundTrip.identical).toBe(true);
+    expect(await fs.readFile(path.join(scratch, 'out', 'PLAN.md'), 'utf8')).toContain('\r\n');
+  });
+});
+
 describe('the rehearsal on a full workspace', () => {
   it('counts every kind of data and remaps every reference it can', async () => {
     await fullWorkspace();

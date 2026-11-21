@@ -21,6 +21,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { execa } from 'execa';
 import { acquireLock } from './locks.js';
+import { WorkspaceMovedError, movedMessage, readSwitch } from './workspace-db-switch.js';
 import { PLAN_FILE } from './plan-file.js';
 import { CHANGES_KEPT, readPlanChanges, readPlanFile, type PlanFileChange } from './plan-file-store.js';
 import { describeKnowledgeEntry, knowledgeEntryId, parseKnowledgeEntries, readWorkspaceKnowledge, type KnowledgeEntryType } from './knowledge.js';
@@ -299,6 +300,9 @@ async function updateSeenFile(root: string, change: (seen: SeenFile) => string):
     staleMs: 30_000, timeoutMs: 10_000, timeoutMessage: 'Another session is saving what it has seen. Retry.',
   });
   try {
+    // A workspace moved to its database keeps what each reader saw there; the old file is not written any more.
+    const moved = readSwitch(root);
+    if (moved) throw new WorkspaceMovedError(moved);
     const seen = await readSeenFile(root);
     const readers = { ...seen.readers };
     const pending = { ...seen.pending };
@@ -1006,7 +1010,11 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unavailable.add(candidate); }
   }
   const nextRecord = recordOf(snapshot, now.toISOString(), incomingRefs, record, unavailable);
-  if (options.mark) await saveRecord(root, name, nextRecord);
+  const moved = readSwitch(root);
+  if (moved && (options.mark || options.pending)) {
+    // The report is still made (an AI reads it when it starts), but nothing is recorded in the old seen file.
+    problems.push(`${movedMessage(moved)} What this report showed is not recorded as seen.`);
+  } else if (options.mark) await saveRecord(root, name, nextRecord);
   else if (options.pending) {
     // Only remove repaired identities, under the lock and only if the reader has not changed since our snapshot.
     await updateSeenFile(root, (seen) => {

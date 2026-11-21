@@ -189,6 +189,15 @@ export async function rehearseMigration(workspacePath: string, options: Rehearsa
   }
 }
 
+/**
+ * Builds the database the real move puts in place, in `folder` (which the move makes inside the workspace's
+ * `.contextspace/`, beside the live path): the same build and the same report as the rehearsal. `root` is the
+ * workspace's real path. The caller holds the workspace's locks and checks the report before using anything.
+ */
+export async function buildMigrationDatabase(root: string, folder: string): Promise<RehearsalReport> {
+  return rehearse(root, folder, {}, performance.now());
+}
+
 async function rehearse(root: string, folder: string, options: RehearsalOptions, started: number): Promise<RehearsalReport> {
   const featureId = (await loadFeatureConfig(root))?.id ?? path.basename(root);
   const skipped: Skipped[] = [];
@@ -219,7 +228,10 @@ async function rehearse(root: string, folder: string, options: RehearsalOptions,
     else skip(PLAN_FILE, `there is no ${PLAN_FILE} and no ${OLD_STORE}`, 'the plan: the database starts with no plan');
   }
   const planText = read.text;
-  const parsed = parsePlanFile(planText);
+  // The plan reader splits on \n only, so a PLAN.md saved with CRLF line endings would read as no items at all. The
+  // database keeps the file's own line ending (and the round trip below compares the text as it is); only the reader
+  // that makes the old keys sees it normalised.
+  const parsed = parsePlanFile(planText.replace(/\r\n/g, '\n'));
   const items = planItems(parsed);
 
   let db: WorkspaceDb | null = null;

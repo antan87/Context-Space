@@ -25,6 +25,7 @@ import { openableDocumentName } from './root-documents.js';
 import { cleanScreenBlock, cleanScreenText } from './screen-clean.js';
 import { appendScreenEvent } from './screen-events.js';
 import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
+import { movedMessage, readSwitch } from './workspace-db-switch.js';
 import { loadFeatureConfig } from './workspace.js';
 
 export const BOARD_FILE = 'contextspace-board.json';
@@ -368,9 +369,21 @@ async function readAt(location: Location): Promise<Board> {
   return rebuild(parsed);
 }
 
-/** Reads the board. */
+/**
+ * Reads the board. A workspace moved to its database has no Board file any more (it is in the move's archive) and
+ * nothing reads the database for the app until DB3b, so the read is refused with the same words as a write, rather
+ * than showing an empty board that would look like lost cards.
+ */
 export async function readBoard(workspacePath: string): Promise<Board> {
-  return readAt(await locate(workspacePath));
+  const location = await locate(workspacePath);
+  refuseWhenMoved(location.root);
+  return readAt(location);
+}
+
+/** The Board's own refusal when the workspace was moved to its database (the switch is on, in any state). */
+function refuseWhenMoved(root: string): void {
+  const record = readSwitch(root);
+  if (record) throw new BoardConflictError(movedMessage(record));
 }
 
 const LOG_ACTIONS: readonly string[] = ['add_card', 'update_card', 'remove_card', 'move', 'link', 'unlink'];
@@ -753,6 +766,7 @@ export async function changeBoard(workspacePath: string, changes: unknown, optio
       const feature = await loadFeatureConfig(location.root);
       if (!feature) throw new BoardWorkspaceError();
       assertWorkspaceActive(feature, 'change the board');
+      refuseWhenMoved(location.root);
       const board = await readAt(location);
       if (options.revision !== undefined && options.revision !== board.revision) {
         throw new BoardConflictError(`The board changed in another session: it is at revision ${board.revision}, not ${options.revision}. Read it again, then repeat the change.`);

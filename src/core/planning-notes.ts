@@ -5,6 +5,7 @@ import { acquireLock, createMutationQueue } from './locks.js';
 import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
+import { WorkspaceMovedError, readSwitch } from './workspace-db-switch.js';
 
 /**
  * The old hand-written planning notes. Retired: refresh and `ctxspace plan` move them into the plan
@@ -72,6 +73,8 @@ async function mutate<T>(root: string, operation: () => Promise<T>) {
 
 export async function savePlanningNotes(root: string, expectedRevision: string, content: string) {
   return mutate(root, async () => {
+    const moved = readSwitch(root);
+    if (moved) throw new WorkspaceMovedError(moved); // the older planning notes feed the plan, which lives in the database once moved
     const current = await readPlanningNotes(root);
     if (current.revision !== expectedRevision) throw new Error('Planning notes changed in another session. Reload before saving.');
     const feature = await loadFeatureConfig(root);

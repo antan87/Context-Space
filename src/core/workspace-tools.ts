@@ -55,6 +55,19 @@ export async function runtimeVersion(entry: string): Promise<string | undefined>
 const SHELL_ARG = "'((?:[^']|'\\\\'')*)'";
 const unquoteShell = (value: string) => value.replaceAll("'\\''", "'");
 
+/**
+ * The program (entry file) a launcher written by {@link generateWorkspaceTools} runs: the shell form
+ * (`exec '<command>' '<entry>' "$@"`) or the Windows form (`"<command>" "<entry>" %*`). Null when the text is in neither
+ * form (a launcher someone wrote by hand, or an older shape).
+ */
+export function launcherEntry(text: string): string | null {
+  const exec = new RegExp(`^exec ${SHELL_ARG} ${SHELL_ARG} "\\$@"$`, 'm').exec(text);
+  if (exec) return unquoteShell(exec[2]!);
+  const cmd = /^"([^"\r\n]*)" "([^"\r\n]*)" %\*\r?$/m.exec(text);
+  if (cmd) return cmd[2]!.replaceAll('%%', '%');
+  return null;
+}
+
 /** Every runtime this workspace's launcher and MCP configs already point at, as written by an earlier refresh. */
 async function configuredRuntimes(root: string): Promise<CliRuntime[]> {
   const found: CliRuntime[] = [];

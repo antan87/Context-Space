@@ -13,6 +13,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { acquireLock, createMutationQueue } from './locks.js';
 import { atomicWriteJson } from '../resources/fs-safety.js';
+import { WorkspaceMovedError, readSwitch } from './workspace-db-switch.js';
 
 import type { RepoSyncState, SyncStatus, WorkspaceState, WorkspaceVerificationReport } from '../types.js';
 import { BRAND_CONFIG, resolveWorkspaceFilePath, resolveWorkspaceFilePathSync } from './constants.js';
@@ -80,6 +81,9 @@ export async function saveWorkspaceState(state: WorkspaceState): Promise<void> {
 
 const runWorkspaceConfigMutation = createMutationQueue();
 
+/** The fields of the state that belong to the plan, and so stop changing once a workspace moved to its database. */
+const PLAN_STATE_FIELDS = ['planChecks', 'planEvidence', 'lifecycle'] as const;
+
 /** Mutate fresh state under a cross-process lock; keep callbacks short and synchronous. */
 export async function mutateWorkspaceState<T>(
   workspacePath: string,
@@ -96,7 +100,14 @@ export async function mutateWorkspaceState<T>(
     });
     try {
       const state = await loadWorkspaceState(root, { strict: true });
+      const before = JSON.stringify(PLAN_STATE_FIELDS.map((field) => state[field] ?? null));
       const result = mutation(state);
+      // The plan's data in state.json (its checks, the older lifecycle and its evidence) is a source the move to the
+      // workspace database reads: once moved, nothing changes it here. Every other part of the state is written as before.
+      if (JSON.stringify(PLAN_STATE_FIELDS.map((field) => state[field] ?? null)) !== before) {
+        const moved = readSwitch(root);
+        if (moved) throw new WorkspaceMovedError(moved);
+      }
       await saveWorkspaceState(state);
       return result;
     } finally {

@@ -1,7 +1,9 @@
 import * as fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import * as path from 'node:path';
-import { assertFileHandleMatchesPath, assertNoLinkedPathComponents, readFileHandleAtMost } from '../resources/fs-safety.js';
+import { assertFileHandleMatchesPath, assertNoLinkedPathComponents, atomicWriteFile, readFileHandleAtMost } from '../resources/fs-safety.js';
+import { acquireLock } from './locks.js';
+import { WorkspaceMovedError, readSwitch } from './workspace-db-switch.js';
 
 const textExtensions = new Set(['.md', '.markdown', '.mdx', '.txt', '.rst', '.adoc', '.csv', '.tsv', '.log', '.mmd']);
 /**
@@ -88,6 +90,29 @@ function folderPath(root: string, folder: string) {
 }
 
 const isDataFile = (name: string) => dataExtensions.has(path.extname(name).toLowerCase());
+
+/**
+ * What the documents panel may not save or move: ContextSpace's own store files at the workspace root
+ * (`contextspace.json`, `contextspace-board.json`, `contextspace-plan.json`, `contextspace-data.json`, …), which the
+ * listing already leaves out; and, while the workspace is moved to its database (or being moved or restored), the plan
+ * files the move archives and exports (PLAN.md, the older planning notes).
+ */
+function refuseStoreFile(root: string, name: string): void {
+  const segments = name.split('/');
+  if (segments.length !== 1) return;
+  if (isDataFile(name) && /^contextspace/i.test(name)) throw new Error(`${name} is ContextSpace's own store file, not a document: change it through ContextSpace.`);
+  if (/^(plan\.md|contextspace-milestones\.md)$/i.test(name)) {
+    const moved = readSwitch(root);
+    if (moved) throw new WorkspaceMovedError(moved);
+  }
+}
+
+/** Runs a save or move of PLAN.md under the plan's own lock, so it cannot land between a move's check and its rename. */
+async function withPlanLock<T>(root: string, names: string[], run: () => Promise<T>): Promise<T> {
+  if (!names.some((name) => /^plan\.md$/i.test(name))) return run();
+  const release = await acquireLock(path.join(root, '.contextspace', 'plan-file.lock'), { staleMs: 60_000, timeoutMs: 10_000, timeoutMessage: 'The plan is busy in another session. Retry.' });
+  try { return await run(); } finally { await release(); }
+}
 
 export interface ListRootDocumentsOptions {
   /** Workspace-relative folders (with `/`) that hold a repository; the data files inside them are not listed. */
@@ -185,11 +210,13 @@ export async function writeRootDocument(root: string, name: string, content: str
   const normalizedName = name.replace(/\\/g, '/').replace(/^\/+/, '');
   const target = documentPath(root, normalizedName, 'save');
   await assertNoLinkedPathComponents(root, target);
+  let mode: number | undefined;
   try {
     const stat = await fs.lstat(target);
     if (stat.isDirectory()) {
       throw new Error(`Cannot save document: "${normalizedName}" is a directory.`);
     }
+    mode = stat.mode & 0o7777;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
@@ -205,8 +232,16 @@ export async function writeRootDocument(root: string, name: string, content: str
   if (bytes.length > MAX_TEXT_BYTES) {
     throw new Error(`This document exceeds the ${MAX_TEXT_BYTES / 1024 / 1024} MB preview limit.`);
   }
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, bytes);
+  refuseStoreFile(root, normalizedName);
+  await withPlanLock(root, [normalizedName], async () => {
+    refuseStoreFile(root, normalizedName); // again under the lock, right before the write
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    // A temp file, then a rename: a reader never sees half a document. The saved file keeps the old one's permission
+    // bits (0600 stays 0600, an executable stays executable). It is a new file, so another hard link to the old one keeps
+    // the old text. On Windows the bits are only the read-only flag, and a rename refused there falls back to copying
+    // over the old file in place.
+    await atomicWriteFile(target, bytes, undefined, { mode });
+  });
   const stat = await fs.stat(target);
   return {
     name: normalizedName,
@@ -262,8 +297,14 @@ export async function moveRootDocument(root: string, from: string, to: string) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  await fs.mkdir(path.dirname(toTarget), { recursive: true });
-  await fs.rename(fromTarget, toTarget);
+  refuseStoreFile(root, fromNormalized);
+  refuseStoreFile(root, toNormalized);
+  await withPlanLock(root, [fromNormalized, toNormalized], async () => {
+    refuseStoreFile(root, fromNormalized);
+    refuseStoreFile(root, toNormalized);
+    await fs.mkdir(path.dirname(toTarget), { recursive: true });
+    await fs.rename(fromTarget, toTarget);
+  });
   return { from: fromNormalized, to: toNormalized };
 }
 
