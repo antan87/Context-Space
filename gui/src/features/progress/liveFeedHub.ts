@@ -4,7 +4,7 @@
  * shown without the chat, an AI working in another terminal and a chat that is hidden all see changes as they happen.
  *
  * The hub also asks the queries to read again: PLAN.md and what hangs on it when the plan changes, the progress facts
- * after any event, and the board on a board event and whenever the connection (re)opens (the stream replays screen
+ * after any event, the Workspace files listing on a files event, and the board on a board event and whenever the connection (re)opens (the stream replays screen
  * events to a screen that connects, but never board events). It keeps the recent screen events, so a subscriber that
  * arrives after the connection was opened by another one still has them: the stream replays only on first connect.
  * Plain functions over an injected connection, so it is tested with a fake one.
@@ -15,7 +15,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { API_BASE } from '../../lib/apiBase.js';
 import { progressFactsKey } from '../../lib/api/queries.js';
 import type { LiveEvent, ScreenEvent } from '../../types.js';
-import { boardKey } from '../board/boardData.js';
+import { boardKey, workspaceFilesKey } from '../board/boardData.js';
 import { planFileKey } from '../plan/planFile.js';
 import { newsKey, recentCommitsKey, type RecentCommits } from '../plan/whatsNew.js';
 import { addScreenEvent, connectScreenFeed, type ScreenFeedOptions } from './screenFeed.js';
@@ -51,13 +51,13 @@ export function createLiveFeedHub(connect: (options: ScreenFeedOptions) => { clo
   const entries = new Map<string, Entry>();
 
   function open(workspace: string, queryClient: QueryClient): Entry {
-    const entry: Entry = { queryClient, listeners: new Set(), state: EMPTY_FEED, close: () => {}, timers: [undefined, undefined] };
+    const entry: Entry = { queryClient, listeners: new Set(), state: EMPTY_FEED, close: () => {}, timers: [undefined, undefined, undefined] };
     const set = (next: FeedState) => {
       if (next === entry.state) return;
       entry.state = next;
       for (const listener of [...entry.listeners]) listener(next);
     };
-    const later = (slot: 0 | 1, run: () => void) => {
+    const later = (slot: 0 | 1 | 2, run: () => void) => {
       clearTimeout(entry.timers[slot]);
       entry.timers[slot] = setTimeout(run, REFRESH_DELAY_MS);
     };
@@ -70,6 +70,11 @@ export function createLiveFeedHub(connect: (options: ScreenFeedOptions) => { clo
           // An AI that arranges the board sends a burst of changes; they are read together. A board event says nothing the
           // strip shows, so it does not ask for fresh progress facts.
           later(0, () => invalidate(boardKey(workspace)));
+          return;
+        }
+        if (live.type === 'files') {
+          // A burst of written documents is listed once. The listing is the only thing that changes: no progress facts.
+          later(2, () => invalidate(workspaceFilesKey(workspace)));
           return;
         }
         if (live.type === 'commits') {
@@ -86,6 +91,8 @@ export function createLiveFeedHub(connect: (options: ScreenFeedOptions) => { clo
           } else {
             invalidate(key);
           }
+          // The Board marks which commits are new from the news, so that is read again too.
+          invalidate(newsKey(workspace));
           return;
         }
         // PLAN.md changed by an AI's own edit or the CLI shows at once everywhere it is read, not at the next poll.

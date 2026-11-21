@@ -28,11 +28,14 @@ import {
   parseInputRequestEntry,
   type InputRequest,
 } from './attention.js';
-import { resolveWorkspaceChatLedger } from './constants.js';
+import { LEGACY_MANIFEST_FILE, PRIMARY_MANIFEST_FILE, resolveWorkspaceChatLedger } from './constants.js';
 import { subscribePullRequestsSettled } from './merge-detection.js';
 import { PLAN_FILE, PLAN_NOW_FILE } from './plan-file.js';
 import { readLedgerTail } from './ledger-tail.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
+import { resolveFeatureRepoPath } from '../utils/feature.js';
+import { createCommitWatcher } from './repo-watch.js';
+import { workspaceFileScope, workspaceFilesSignature } from './workspace-files.js';
 import {
   cleanLineNumber as lineNumber,
   cleanRelativePath as relativePath,
@@ -58,6 +61,8 @@ export const BOARD_EVENTS_MAX_BYTES = 512 * 1024;
 const TAIL_BYTES = 256 * 1024;
 /** How often the live feed looks for new lines. */
 export const SCREEN_FEED_POLL_MS = 1000;
+/** How often the live feed looks for new or changed documents: a walk of the workspace's folders, so less often than the ledgers. */
+export const SCREEN_FILES_POLL_MS = 3000;
 
 export const SCREEN_TITLE_LIMIT = 120;
 export const SCREEN_REASON_LIMIT = 300;
@@ -91,8 +96,10 @@ export type LiveEvent =
   | { type: 'answered'; timestamp: string }
   /** PLAN.md changed on disk, whoever changed it (an AI's own edit, the CLI, another window): read it again. */
   | { type: 'plan'; timestamp: string }
-  /** Background PR lookup settled for a repository in this workspace: refresh recent commits. */
-  | { type: 'commits'; timestamp: string };
+  /** A commit landed or a branch moved in a repository of this workspace, or a background PR lookup settled: read recent commits again. */
+  | { type: 'commits'; timestamp: string }
+  /** A document was added, removed or changed in the workspace folder (what the Workspace files list shows): list it again. */
+  | { type: 'files'; timestamp: string };
 
 // ─── Cleaning ───────────────────────────────────────────────────────────────
 
@@ -310,6 +317,11 @@ export async function appendScreenEvent(
 
 // ─── The live feed ──────────────────────────────────────────────────────────
 
+/** The manifest changes when repositories are added or isolated, so what the feed watches is worked out again then. */
+async function manifestSignature(workspaceRoot: string): Promise<string> {
+  return signature([path.join(workspaceRoot, PRIMARY_MANIFEST_FILE), path.join(workspaceRoot, LEGACY_MANIFEST_FILE)]);
+}
+
 async function signature(files: readonly string[]): Promise<string> {
   const parts = await Promise.all(files.map((file) => fs.stat(file).then((s) => `${s.size}:${s.mtimeMs}`, () => 'none')));
   return parts.join('|');
@@ -407,6 +419,8 @@ export async function* watchLiveEvents(
     since?: number;
     signal?: AbortSignal;
     pollMs?: number;
+    /** How often documents are looked at; only tests change it. */
+    filesPollMs?: number;
     now?: () => number;
     /** Called after each read of the files with how many events it held and how many the feed remembers. For tests and diagnostics. */
     onRead?: (state: { window: number; remembered: number }) => void;
@@ -424,6 +438,21 @@ export async function* watchLiveEvents(
   const nowFile = path.join(workspaceRoot, PLAN_NOW_FILE);
   let planLast: string | undefined;
   const pendingPrRepos = new Set<string>();
+  // Commits and documents are noticed from `stat`s alone: no `git`, no file read. Which repositories and folders to
+  // look at comes from the manifest, which is read again only when it changes.
+  const commitWatcher = createCommitWatcher();
+  let scope: { signature: string; value: Awaited<ReturnType<typeof workspaceFileScope>> | null } | undefined;
+  let commitsLast: string | undefined;
+  let filesLast: string | undefined;
+  let polls = 0;
+  const filesEvery = Math.max(1, Math.round((options.filesPollMs ?? SCREEN_FILES_POLL_MS) / Math.max(1, pollMs)));
+  const currentScope = async () => {
+    const signature = await manifestSignature(workspaceRoot);
+    if (!scope || scope.signature !== signature) {
+      scope = { signature, value: await workspaceFileScope(workspaceRoot).catch(() => null) };
+    }
+    return scope.value;
+  };
   let wakePause: (() => void) | null = null;
   const unsubscribePrs = subscribePullRequestsSettled((repoPath) => {
     pendingPrRepos.add(path.resolve(repoPath));
@@ -450,10 +479,24 @@ export async function* watchLiveEvents(
       const now = clock();
       const commitsEvent = await drainSettledCommitsEvent(now);
       if (commitsEvent) yield commitsEvent;
+      const commitsYielded = Boolean(commitsEvent);
       // A plan written by any tool is on screen within a poll, not at the next read of the plan.
       const planNow = await signature([planFile, nowFile]);
       if (planLast !== undefined && planNow !== planLast) yield { type: 'plan', timestamp: new Date(now).toISOString() };
       planLast = planNow;
+      const workspaceScope = await currentScope();
+      if (workspaceScope) {
+        const repoPaths = workspaceScope.feature.repos.map((repo) => path.resolve(resolveFeatureRepoPath(workspaceScope.feature, workspaceRoot, repo)));
+        const commitsNow = await commitWatcher.signature(repoPaths);
+        if (commitsLast !== undefined && commitsNow !== commitsLast && !commitsYielded) yield { type: 'commits', timestamp: new Date(now).toISOString() };
+        commitsLast = commitsNow;
+        if (polls % filesEvery === 0) {
+          const filesNow = await workspaceFilesSignature(workspaceRoot, workspaceScope);
+          if (filesLast !== undefined && filesNow !== filesLast) yield { type: 'files', timestamp: new Date(now).toISOString() };
+          filesLast = filesNow;
+        }
+      }
+      polls += 1;
       // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.
       const files = await liveFiles(workspaceRoot);
       const current = await signature([files.screen, files.board, ...files.chat]);

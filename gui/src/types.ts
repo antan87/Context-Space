@@ -990,6 +990,8 @@ export type LiveEvent =
   | { type: 'plan'; timestamp: string }
   /** Background PR metadata finished loading: read recent commits again. */
   | { type: 'commits'; timestamp: string }
+  /** A document was added, removed or changed in the workspace folder: list the Workspace files again. */
+  | { type: 'files'; timestamp: string }
   /** The board was changed by someone: read it again. It is never a screen event, so the strip never shows it. */
   | { type: 'board'; timestamp: string; revision: number };
 

@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { progressFactsKey } from '../../lib/api/queries.js';
 import type { LiveEvent, ScreenEvent } from '../../types.js';
-import { boardKey } from '../board/boardData.js';
+import { boardKey, workspaceFilesKey } from '../board/boardData.js';
 import { planFileKey } from '../plan/planFile.js';
-import { recentCommitsKey } from '../plan/whatsNew.js';
+import { newsKey, recentCommitsKey } from '../plan/whatsNew.js';
 import { EMPTY_FEED, REFRESH_DELAY_MS, createLiveFeedHub, type FeedState } from './liveFeedHub.js';
 import type { ScreenFeedOptions } from './screenFeed.js';
 
@@ -160,9 +160,17 @@ describe('liveFeedHub', () => {
   it('invalidates recentCommitsKey without triggering progressFacts when a commits event arrives', () => {
     listen();
     fake.live({ type: 'commits', timestamp: '2026-10-23T10:00:00.000Z' } as unknown as LiveEvent);
-    expect(invalidated).toEqual([recentCommitsKey('demo')]);
+    expect(invalidated).toEqual([recentCommitsKey('demo'), newsKey('demo')]);
     vi.advanceTimersByTime(REFRESH_DELAY_MS);
-    expect(invalidated).toEqual([recentCommitsKey('demo')]);
+    expect(invalidated).toEqual([recentCommitsKey('demo'), newsKey('demo')]);
+  });
+
+  it('reads the Workspace files listing again on a files event, once for a burst, and nothing else', () => {
+    listen();
+    for (let i = 0; i < 5; i += 1) fake.live({ type: 'files', timestamp: `2026-10-23T10:00:0${i}.000Z` });
+    expect(invalidated).toEqual([]);
+    vi.advanceTimersByTime(REFRESH_DELAY_MS);
+    expect(invalidated).toEqual([workspaceFilesKey('demo')]);
   });
 
   it('re-invalidates after an in-flight cold recentCommits fetch resolves with prsPending=true when commits SSE arrived mid-flight', async () => {

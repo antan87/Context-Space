@@ -3,6 +3,7 @@ import { test, expect } from "./fixtures";
 import {
   boardFile,
   boardNote,
+  whatsNew,
 } from "./planData";
 import {
   workspace,
@@ -18,6 +19,8 @@ import {
   routeChanging,
   routeFacts,
   liveBoard,
+  frame,
+  viewAtRest,
 } from "./boardHelpers";
 
 test.use({ workspacesData: [[workspace], { option: true }], viewport: { width: 1280, height: 800 } });
@@ -206,5 +209,51 @@ test.describe('Board, live', () => {
     await expect(strip).toBeVisible();
     await afterSomeFrames(page);
     expect(await feed.open()).toBe(1);
+  });
+  test('lists the new documents the AI wrote when a files event arrives, without waiting for the 3-minute poll', async ({ page }) => {
+    await routeBoard(page);
+    await routeChanging(page, 99);
+    const hours = (n: number) => new Date(Date.now() - n * 3_600_000).toISOString();
+    let released = false;
+    let reads = 0;
+    await page.route('**/api/workspace/demo/files', (route) => {
+      reads += 1;
+      const files = [{ path: 'docs/spec.txt', modifiedAt: hours(2), size: 90 }, { path: 'notes/ideas.txt', modifiedAt: hours(3), size: 90 }];
+      if (released) files.push({ path: 'docs/fresh-design.md', modifiedAt: hours(0), size: 120 });
+      return route.fulfill({ json: { files, truncated: false, errors: [] } });
+    });
+    const state = { released: false };
+    const release = await liveBoard(page, state, frame('files', { timestamp: new Date().toISOString() }, 'f1'), 'none');
+    await page.getByRole('button', { name: 'Board ›' }).click();
+    await viewAtRest(page);
+    const area = board(page);
+    await expect(area.getByRole('button', { name: 'Workspace files, 2 documents', exact: true })).toBeVisible();
+    const before = reads;
+    released = true;
+    release();
+    await expect(area.getByRole('button', { name: 'Workspace files, 3 documents', exact: true })).toBeVisible();
+    expect(reads).toBeGreaterThan(before);
+  });
+
+  test('shows a commit the AI made when a commits event arrives, and reads the commits once for each', async ({ page }) => {
+    await routeBoard(page);
+    const state = await routeChanging(page, 99);
+    const older = { sha: 'a91f2e0c4d5b', author: 'Anna', subject: 'Write the CSV writer', at: minutesAgo(30) };
+    const newer = { sha: 'bbbbbbb1234567', author: 'claude', subject: 'Queue large exports', at: minutesAgo(0) };
+    let released = false;
+    const asked = { news: 0, recent: 0 };
+    const listed = () => [{ repo: 'api', more: 0, commits: released ? [newer, older] : [older] }];
+    await page.route('**/api/workspace/demo/news', (route) => { asked.news += 1; return route.fulfill({ json: whatsNew({ commits: listed() }) }); });
+    await page.route('**/api/workspace/demo/recent-commits', (route) => { asked.recent += 1; return route.fulfill({ json: { at: new Date().toISOString(), from: minutesAgo(4000), commits: listed() } }); });
+    const release = await liveBoard(page, state, frame('commits', { timestamp: new Date().toISOString() }, 'c1'), 'none');
+    const canvas = board(page);
+    await expect(canvas.getByRole('article', { name: 'a91f2e0' })).toBeVisible();
+    await expect(canvas.getByRole('article', { name: 'bbbbbbb' })).toHaveCount(0);
+    const before = { ...asked };
+    released = true;
+    release();
+    await expect(canvas.getByRole('article', { name: 'bbbbbbb' })).toBeVisible();
+    expect(asked.recent).toBeGreaterThan(before.recent);
+    expect(asked.news).toBeGreaterThan(before.news);
   });
 });

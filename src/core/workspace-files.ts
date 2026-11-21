@@ -1,5 +1,6 @@
 /** Read-only workspace-owned files. Repository roots remain under repository APIs. */
 import * as fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import * as path from 'node:path';
 import { loadWorkspaceManifest } from './workspace.js';
@@ -80,6 +81,44 @@ export async function listWorkspaceFiles(root: string) {
   }
   await scan(root, '', 0);
   return { files: files.sort((a, b) => a.path.localeCompare(b.path)), truncated, errors: errors.sort(), limits: { depth: MAX_DEPTH, entries: MAX_ENTRIES } };
+}
+
+/**
+ * A cheap fingerprint of what {@link listWorkspaceFiles} would show: the same folders, hidden and ignored names and
+ * repository exclusions, the same limits, from names, sizes and modification times only. It reads no file contents,
+ * and opens no file. It differs when a listed file is added, removed or changed. `scope` may be passed to spare the
+ * manifest read.
+ */
+export async function workspaceFilesSignature(root: string, scope?: Pick<Awaited<ReturnType<typeof workspaceFileScope>>, 'excluded'>): Promise<string> {
+  const { excluded } = scope ?? await workspaceFileScope(root);
+  const hash = createHash('sha1');
+  let entries = 0;
+  async function scan(dir: string, prefix: string, depth: number): Promise<void> {
+    if (excluded(dir)) return;
+    let children;
+    try { children = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    children.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const folders: Array<{ target: string; name: string }> = [];
+    const stats: Promise<void>[] = [];
+    const parts: string[] = [];
+    for (const entry of children) {
+      if (++entries > MAX_ENTRIES) return;
+      if (entry.isSymbolicLink() || isClosedSegment(entry.name) || IGNORED_DIRECTORIES.has(entry.name)) continue;
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const target = path.join(dir, entry.name);
+      if (excluded(target)) continue;
+      if (entry.isDirectory()) { if (depth < MAX_DEPTH) folders.push({ target, name }); }
+      else if (entry.isFile()) {
+        const index = parts.push('') - 1;
+        stats.push(fs.lstat(target).then((s) => { parts[index] = `${name}:${s.size}:${s.mtimeMs}`; }, () => { parts[index] = `${name}:gone`; }));
+      }
+    }
+    await Promise.all(stats);
+    hash.update(`${prefix}/${parts.join(',')};`);
+    for (const folder of folders) await scan(folder.target, folder.name, depth + 1);
+  }
+  await scan(root, '', 0);
+  return hash.digest('hex');
 }
 
 export async function readWorkspaceFile(root: string, name: string) {
