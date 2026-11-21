@@ -61,7 +61,8 @@ async function fullWorkspace(plan = PLAN) {
   await write('.contextspace/plan-seen.json', JSON.stringify({ hash: 'abc', items: { 'write-the-csv-writer': { kind: 'step', text: 'Write the CSV writer', done: true } } }));
   await write('.contextspace/seen.json', JSON.stringify({ version: 1, readers: { claude: { at: '2026-11-05T00:00:00.000Z', repos: {}, knowledge: [], documents: [] } }, pending: {} }));
   // deliberately not in the form JSON.stringify(…, null, 2) makes: a put-back state file must be these exact bytes
-  await write('.contextspace/state.json', `{"workspacePath":"${root}","repos":{},"updatedAt":"${AT}","planChecks":{"reports-export-to-csv":{"lastVerificationStatus":"pass","canProgress":true,"at":"${AT}"}}}`);
+  // (the path goes through JSON.stringify: a Windows path's backslashes are not valid JSON as they stand)
+  await write('.contextspace/state.json', `{"workspacePath":${JSON.stringify(root)},"repos":{},"updatedAt":"${AT}","planChecks":{"reports-export-to-csv":{"lastVerificationStatus":"pass","canProgress":true,"at":"${AT}"}}}`);
 }
 
 /** sha256 of every file under the workspace, by relative path with `/`. */

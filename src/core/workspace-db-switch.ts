@@ -42,14 +42,21 @@ export const switchPath = (root: string): string => path.join(root, ...SWITCH_FI
 /** The switch, or null when it is off (no file). A file that is there but cannot be read is `unreadable`, which counts as on. */
 export function readSwitch(root: string): SwitchRecord | null {
   const file = switchPath(root);
+  let text: string;
   try {
-    lstatSync(file);
+    text = readFileSync(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { state: 'unreadable' };
+    // Read first, then look: a dangling link (or anything else standing there) still counts as on.
+    try {
+      lstatSync(file);
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    }
     return { state: 'unreadable' };
   }
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<SwitchRecord>;
+    const parsed = JSON.parse(text) as Partial<SwitchRecord>;
     if (parsed && (parsed.state === 'moving' || parsed.state === 'on' || parsed.state === 'restoring')) {
       return {
         state: parsed.state,

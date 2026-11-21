@@ -202,3 +202,28 @@ describe('with the switch off again', () => {
     await markSeen(root, 'claude', AT).catch((error: unknown) => { expect((error as Error).name).toBe('NewsChangedError'); });
   });
 });
+
+describe('readSwitch reads first and looks after (CodeQL: no check-then-read)', () => {
+  let dir: string;
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-switch-read-')); await fs.mkdir(path.join(dir, '.contextspace'), { recursive: true }); });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('no file is off', () => {
+    expect(readSwitch(dir)).toBeNull();
+  });
+
+  it('a switch that cannot be parsed counts as on (unreadable)', async () => {
+    await fs.writeFile(path.join(dir, ...SWITCH_FILE.split('/')), '{"state":');
+    expect(readSwitch(dir)).toEqual({ state: 'unreadable' });
+  });
+
+  it('a folder where the switch should be counts as on (unreadable)', async () => {
+    await fs.mkdir(path.join(dir, ...SWITCH_FILE.split('/')));
+    expect(readSwitch(dir)).toEqual({ state: 'unreadable' });
+  });
+
+  it.skipIf(process.platform === 'win32')('a dangling link where the switch should be still counts as on (unreadable), never as off', async () => {
+    await fs.symlink(path.join(dir, 'gone.json'), path.join(dir, ...SWITCH_FILE.split('/')));
+    expect(readSwitch(dir)).toEqual({ state: 'unreadable' });
+  });
+});
