@@ -21,6 +21,8 @@ import { planFileFromStore } from './plan-file-convert.js';
 import { deleteWorkspaceFile, readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
 import { loadWorkspaceState, mutateWorkspaceState } from './workspace-state.js';
+import { stripExport } from './workspace-db/index.js';
+import { movedMessage, readSwitch } from './workspace-db-switch.js';
 import type { PlanEvidence } from '../types.js';
 
 /** Where the older store is kept once the plan moved to PLAN.md, and the files ContextSpace keeps beside it. */
@@ -81,8 +83,20 @@ async function textFromOldStore(location: Location): Promise<string | null> {
   return planFileFromStore(plan, { title: feature?.name || feature?.branchName || 'Plan', goal: objective || feature?.description });
 }
 
+/**
+ * Refuses when the workspace was moved to its database (the switch is on, in any state): nothing here may write an old
+ * file then. Called under the plan lock, right before a write.
+ */
+function refuseWhenMoved(location: Location): void {
+  const record = readSwitch(location.root);
+  if (record) throw new PlanFileError(movedMessage(record), 'conflict');
+}
+
 async function readAt(location: Location): Promise<PlanFileRead> {
-  const text = await readOptional(location, PLAN_FILE);
+  const raw = await readOptional(location, PLAN_FILE);
+  // A moved workspace's PLAN.md is the database's export: its header line and id comments come off, which gives back
+  // exactly the plan that was moved (the move proves that round trip), so every reader sees the same items and keys.
+  const text = raw !== null && readSwitch(location.root) ? stripExport(raw) : raw;
   if (text !== null) return { text, plan: parsePlanFile(text), source: 'file' };
   const converted = await textFromOldStore(location);
   if (converted !== null) return { text: converted, plan: parsePlanFile(converted), source: 'store' };
@@ -101,7 +115,8 @@ export async function readPlanTextReadOnly(workspacePath: string): Promise<PlanF
 export async function readPlanFile(workspacePath: string): Promise<PlanFileRead> {
   const location = await locate(workspacePath);
   const read = await readAt(location);
-  if (read.source === 'file') await noticeChanges(location, read, 'file').catch(() => undefined);
+  // A moved workspace keeps no log in the old files: reading it writes nothing.
+  if (read.source === 'file' && !readSwitch(location.root)) await noticeChanges(location, read, 'file').catch(() => undefined);
   return read;
 }
 
@@ -122,6 +137,7 @@ export async function changePlanFile(
   const location = await locate(workspacePath);
   const release = await lockOf(location);
   try {
+    refuseWhenMoved(location);
     await moveOldStore(location);
     const current = await readAt(location);
     // Whatever changed in the file before this change is someone else's; a plan that starts here starts empty.
@@ -143,6 +159,7 @@ export async function movePlanToFile(workspacePath: string): Promise<boolean> {
   const location = await locate(workspacePath);
   const release = await lockOf(location);
   try {
+    if (readSwitch(location.root)) return false; // a moved workspace's plan is in its database
     return await moveOldStore(location);
   } finally {
     await release();
@@ -232,6 +249,7 @@ async function noticeChanges(location: Location, read: PlanFileRead, by: string,
   const release = options.locked ? null : await lockOf(location).catch(() => null);
   if (!options.locked && !release) return;
   try {
+    if (readSwitch(location.root)) return; // moved while this waited for the lock: the old files are not written any more
     if (seen) {
       const changes = planChanges(seen.items, read.plan, by, new Date().toISOString());
       if (changes.length) {
@@ -297,6 +315,7 @@ export async function setPlanNow(workspacePath: string, key: string, by: string,
   const location = await locate(workspacePath);
   const release = await lockOf(location);
   try {
+    refuseWhenMoved(location);
     const { plan } = await readAt(location);
     const step = workableSteps(plan).find((candidate) => candidate.key === key);
     if (!step) {
@@ -319,6 +338,7 @@ export async function clearPlanNow(workspacePath: string): Promise<boolean> {
   const location = await locate(workspacePath);
   const release = await lockOf(location);
   try {
+    refuseWhenMoved(location);
     const had = (await readNowRecord(location)) !== null;
     if (had) await writeNow(location, null);
     return had;
@@ -345,6 +365,8 @@ export async function readPlanChecks(workspacePath: string): Promise<Record<stri
  * keeps the result as its proof. It does not tick the checkpoint: whoever ran it does, once it passed.
  */
 export async function runPlanCheck(workspacePath: string, key: string, options: { timeoutMs?: number } = {}): Promise<PlanEvidence> {
+  const location = await locate(workspacePath);
+  refuseWhenMoved(location); // before a check that may take minutes, and again under the state lock below
   const { plan } = await readPlanFile(workspacePath);
   const checkpoint = plan.checkpoints.find((candidate) => candidate.key === key);
   if (!checkpoint) throw new Error(`There is no checkpoint "${key}" in ${PLAN_FILE}.`);
@@ -356,6 +378,9 @@ export async function runPlanCheck(workspacePath: string, key: string, options: 
     canProgress: report.canProgress,
     at: new Date().toISOString(),
   };
-  await mutateWorkspaceState(workspacePath, (state) => { state.planChecks = { ...state.planChecks, [key]: evidence }; });
+  await mutateWorkspaceState(workspacePath, (state) => {
+    refuseWhenMoved(location);
+    state.planChecks = { ...state.planChecks, [key]: evidence };
+  });
   return evidence;
 }

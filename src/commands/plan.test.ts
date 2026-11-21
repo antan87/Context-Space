@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { Command } from 'commander';
 import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
-import { setActiveStorageProvider } from '../core/adapters/registry.js';
+import { getStorageProvider, setActiveStorageProvider } from '../core/adapters/registry.js';
 import { changePlan } from '../core/plan.js';
 import { parsePlanFile } from '../core/plan-file.js';
 import { readPlanChanges, readPlanNow } from '../core/plan-file-store.js';
@@ -13,7 +13,11 @@ const PASSED = { overallStatus: 'pass', canProgress: true, repos: [{ headSha: 'a
 const FAILED = { overallStatus: 'fail', canProgress: false, repos: [{ headSha: 'abc1234def5678' }] };
 const check = vi.hoisted(() => ({ result: undefined as unknown }));
 vi.mock('../core/verify.js', () => ({ verifyWorkspace: async () => check.result }));
-import { findByWords, planNow as planNowCommand, planAdd, planAnswer, planChangeBy, planCheck, planDone, planLog, planShow, registerPlanCommand, type PlanCommandContext } from './plan.js';
+// The move looks for older ContextSpace processes on this machine; a test sees none (the check has its own tests).
+vi.mock('../core/older-writers.js', async (original) => ({ ...await original<typeof import('../core/older-writers.js')>(), findOlderWriters: async () => [] }));
+import { findByWords, planNow as planNowCommand, planAdd, planAnswer, planChangeBy, planCheck, planDone, planLog, planMigrate, planShow, registerPlanCommand, type PlanCommandContext } from './plan.js';
+import { readSwitch } from '../core/workspace-db-switch.js';
+import { stripExport } from '../core/workspace-db/index.js';
 
 let root: string;
 let printed: string[];
@@ -290,8 +294,8 @@ describe('ctxspace plan migrate --dry-run', () => {
     expect(report.snapshot.file).not.toBe(path.join(link, 'o', 'contextspace-data.json'));
   });
 
-  it('exits 1 without --dry-run (only the rehearsal exists yet) and for an out folder inside the workspace', async () => {
-    const a = await run('--json');
+  it('exits 1 for an out folder inside the workspace, and for --out without --dry-run', async () => {
+    const a = await run('--json', '--out', path.join(out, 'o'));
     expect(JSON.parse(a.lines[0]!)).toMatchObject({ ok: false, code: 'invalid' });
     expect(process.exitCode).toBe(1);
     process.exitCode = undefined;
@@ -305,6 +309,84 @@ describe('ctxspace plan migrate --dry-run', () => {
     const program = new Command();
     registerPlanCommand(program, () => undefined);
     const migrate = program.commands.find((c) => c.name() === 'plan')!.commands.find((c) => c.name() === 'migrate')!;
-    expect(migrate.options.map((o) => o.long)).toEqual(expect.arrayContaining(['--dry-run', '--out', '--json']));
+    expect(migrate.options.map((o) => o.long)).toEqual(expect.arrayContaining(['--dry-run', '--out', '--json', '--status', '--from-backup']));
+    expect(program.commands.find((c) => c.name() === 'plan')!.commands.find((c) => c.name() === 'restore')).toBeDefined();
+  });
+});
+
+describe('ctxspace plan migrate, --status and restore', () => {
+  beforeEach(() => { setActiveStorageProvider(getStorageProvider('local')); });
+
+  async function run(...args: string[]) {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((text?: unknown) => { lines.push(String(text)); });
+    const failures: string[] = [];
+    const program = new Command().exitOverride();
+    registerPlanCommand(program, (error) => { failures.push(error instanceof Error ? error.message : String(error)); });
+    await program.parseAsync(['node', 'ctxspace', 'plan', ...args]);
+    vi.mocked(console.log).mockRestore();
+    return { lines, failures, text: lines.join('\n') };
+  }
+
+  it('moves, shows the status, and restores, each saying which workspace it acted on', async () => {
+    const moved = await run('migrate', '-w', root);
+    expect(moved.failures).toEqual([]);
+    expect(moved.text).toContain('Moved to the workspace database.');
+    expect(moved.text).toContain(`Workspace: ${root}`);
+    const archive = readSwitch(root)!.archive!;
+    expect(moved.text).toContain(`Undo it with \`ctxspace plan restore ${archive}\``);
+    expect(stripExport(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8'))).toBe(PLAN);
+
+    const status = await run('migrate', '--status', '--json', '-w', root);
+    expect(status.lines).toHaveLength(1);
+    expect(JSON.parse(status.lines[0]!)).toMatchObject({ workspace: root, moved: 'on', archive, database: 'present' });
+
+    const again = await run('migrate', '--json', '-w', root);
+    expect(JSON.parse(again.lines[0]!)).toMatchObject({ ok: false, code: 'conflict', error: expect.stringMatching(/already moved/) });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+
+    const dry = await run('migrate', '--dry-run', '-w', root);
+    expect(dry.failures[0]).toMatch(/moved to the workspace database already/);
+
+    const restored = await run('restore', archive, '-w', root);
+    expect(restored.failures).toEqual([]);
+    expect(restored.text).toContain('Restored: the workspace is back on its old files');
+    expect(restored.text).toContain(`Workspace: ${root}`);
+    expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(PLAN);
+    expect(readSwitch(root)).toBeNull();
+  });
+
+  it('prints only JSON with --json, and a refusal carries the build report', async () => {
+    await fs.writeFile(path.join(root, 'contextspace-board.json'), '{ broken');
+    const refused = await run('migrate', '--json', '-w', root);
+    expect(refused.lines).toHaveLength(1);
+    const body = JSON.parse(refused.lines[0]!);
+    expect(body).toMatchObject({ ok: false, code: 'conflict', report: { exitCode: 3 } });
+    expect(body.error).toMatch(/Nothing was changed/);
+    expect(readSwitch(root)).toBeNull();
+    process.exitCode = undefined;
+    await fs.rm(path.join(root, 'contextspace-board.json'));
+    const ok = await run('migrate', '--json', '-w', root);
+    expect(ok.lines).toHaveLength(1);
+    expect(JSON.parse(ok.lines[0]!)).toMatchObject({ ok: true, workspace: root, how: 'fresh' });
+  });
+
+  it('refuses to act when the workspace found from the current folder is not that folder (a copy pointing at its original)', async () => {
+    const copy = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plan-copy-')));
+    try {
+      const before = await fs.readFile(path.join(root, 'PLAN.md'), 'utf8');
+      const here = context({ explicitWorkspace: false, cwd: copy });
+      await expect(planMigrate(here, {})).rejects.toThrow(new RegExp(`You are in ${copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, but the workspace found from here is`));
+      await expect(planMigrate(here, { status: true })).rejects.toThrow(/--workspace <path>/);
+      expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(before);
+      expect(readSwitch(root)).toBeNull();
+      // inside the workspace (a subfolder) it acts
+      await fs.mkdir(path.join(root, 'docs'));
+      await planMigrate(context({ explicitWorkspace: false, cwd: path.join(root, 'docs') }), { status: true });
+      expect(output()).toContain('Not moved');
+    } finally {
+      await fs.rm(copy, { recursive: true, force: true });
+    }
   });
 });

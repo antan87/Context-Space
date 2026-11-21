@@ -9,12 +9,21 @@
  */
 
 import { Command, Option } from 'commander';
+import { realpathSync } from 'node:fs';
+import * as path from 'node:path';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { runsInsideAiTool } from '../utils/ai-tool.js';
 import { PlanError, type PlanActor } from '../core/plan.js';
 import { PLAN_FILE, PlanFileError, addToPlan, answerDecision, findPlanItem, openDecisions, planItems, setDone, type PlanFile } from '../core/plan-file.js';
 import { changePlanFile, clearPlanNow, readPlanChanges, readPlanChecks, readPlanFile, runPlanCheck, setPlanNow } from '../core/plan-file-store.js';
 import { rehearseMigration, renderRehearsal } from '../core/plan-migrate-rehearsal.js';
+import {
+  MoveRefusedError, migrateStatus, migrateWorkspace, recoverDatabase, renderMigrateResult, renderMigrateStatus, renderRecover, renderRestoreResult, restoreWorkspace,
+  type MigrateOptions,
+} from '../core/plan-migrate.js';
+import { readSwitch } from '../core/workspace-db-switch.js';
+import { dbFilePath } from '../core/workspace-db/index.js';
+import { existsSync } from 'node:fs';
 import { planFileToJson, proofWords, renderPlanChanges, renderPlanStanding, standingLine } from '../core/plan-file-text.js';
 
 /** Options every `ctxspace plan` command takes. */
@@ -33,6 +42,10 @@ export interface PlanCommandContext {
   json: boolean;
   print: (text: string) => void;
   now?: Date;
+  /** Set by the command line: whether `--workspace` named the workspace. When false, the workspace came from the current folder. */
+  explicitWorkspace?: boolean;
+  /** The folder the command runs in (the command line sets it). */
+  cwd?: string;
 }
 
 /** Examples in the help, so nobody has to search for how a change is typed. */
@@ -49,6 +62,9 @@ export const PLAN_EXAMPLES = [
   '  ctxspace plan now --clear                              say nobody is working on a particular step',
   '  ctxspace plan log                                      what changed lately, and who changed it',
   '  ctxspace plan migrate --dry-run                        rehearse the move to the workspace database; changes nothing',
+  '  ctxspace plan migrate                                  move this workspace to its database (the old files go to an archive)',
+  '  ctxspace plan migrate --status                         moved or not, when, the archive, and anything that needs doing',
+  '  ctxspace plan restore .contextspace/archive/pre-db-…   undo the move: the old files come back byte for byte',
   '',
   `Most changes need no command: edit ${PLAN_FILE} directly.`,
 ].join('\n');
@@ -202,20 +218,73 @@ async function contextFor(options: PlanCommonOptions): Promise<PlanCommandContex
   const workspacePath = await resolveWorkspaceQuiet(options.workspace);
   if (!workspacePath) throw new PlanFileError('No workspace here. Run this inside a workspace folder, or pass --workspace <path>.', 'not_found');
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  return { workspacePath, by: planChangeBy(options, process.env, interactive), json: Boolean(options.json), print: (text) => console.log(text) };
+  return { workspacePath, by: planChangeBy(options, process.env, interactive), json: Boolean(options.json), print: (text) => console.log(text), explicitWorkspace: Boolean(options.workspace), cwd: process.cwd() };
+}
+
+const real = (p: string) => { try { return realpathSync.native(p); } catch { return path.resolve(p); } };
+
+/**
+ * The move and the restore act on the workspace they were asked for. A copy of a workspace still carries the
+ * original's contextspace.json, which points back at the original folder: run inside the copy, the workspace found
+ * would be the original. So when the workspace came from the current folder and the current folder is not inside it,
+ * nothing happens until `--workspace` names it.
+ */
+function assertActsHere(context: PlanCommandContext): void {
+  if (context.explicitWorkspace !== false) return;
+  const here = real(context.cwd ?? process.cwd());
+  const workspace = real(context.workspacePath);
+  const rel = path.relative(workspace, here);
+  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return;
+  throw new PlanFileError(`You are in ${here}, but the workspace found from here is ${workspace} (the contextspace.json here points there; this folder may be a copy). Nothing was changed. Say which workspace to act on with --workspace <path>.`, 'invalid');
 }
 
 /**
  * `ctxspace plan migrate --dry-run`: builds a database from today's files in a folder of its own and says what it found.
  * Exit code 0 when everything maps and the plan round-trips, 3 when it worked but something is listed, 1 when it failed.
  */
-export async function planMigrate(context: PlanCommandContext, options: { dryRun?: boolean; out?: string }): Promise<void> {
-  if (!options.dryRun) {
-    throw new PlanFileError('Only the rehearsal exists so far: run "ctxspace plan migrate --dry-run". It builds a database from the plan and the Board in a temp folder, says what it found, and changes nothing.', 'invalid');
+export async function planMigrate(
+  context: PlanCommandContext,
+  options: { dryRun?: boolean; out?: string; status?: boolean; fromBackup?: string },
+  seams: Pick<MigrateOptions, 'afterStep' | 'findOlderWriters' | 'backup'> = {},
+): Promise<void> {
+  assertActsHere(context);
+  const modes = [options.dryRun, options.status, options.fromBackup !== undefined].filter(Boolean).length;
+  if (modes > 1) throw new PlanFileError('Use one of --dry-run, --status and --from-backup at a time.', 'invalid');
+  if (options.status) {
+    const status = await migrateStatus(context.workspacePath);
+    context.print(context.json ? JSON.stringify(status, null, 2) : renderMigrateStatus(status));
+    return;
   }
-  const report = await rehearseMigration(context.workspacePath, { out: options.out });
-  context.print(context.json ? JSON.stringify(report, null, 2) : renderRehearsal(report));
-  if (report.exitCode !== 0) process.exitCode = report.exitCode;
+  const root = real(context.workspacePath);
+  if (options.dryRun) {
+    if (readSwitch(root)) throw new PlanFileError(`This workspace was moved to the workspace database already (or a move or restore is under way), so there is nothing to rehearse. See \`ctxspace plan migrate --status\`.`, 'conflict');
+    const report = await rehearseMigration(context.workspacePath, { out: options.out });
+    context.print(context.json ? JSON.stringify(report, null, 2) : renderRehearsal(report));
+    if (report.exitCode !== 0) process.exitCode = report.exitCode;
+    return;
+  }
+  if (options.out) throw new PlanFileError('--out is for the rehearsal (--dry-run): the move itself writes only inside the workspace.', 'invalid');
+  try {
+    // A moved workspace whose database went missing: bring it back (never start an empty one), or say how.
+    if (options.fromBackup !== undefined || (readSwitch(root)?.state === 'on' && !existsSync(dbFilePath(root)))) {
+      const recovered = await recoverDatabase(context.workspacePath, { fromBackup: options.fromBackup, by: context.by });
+      context.print(context.json ? JSON.stringify({ ok: true, ...recovered }, null, 2) : renderRecover(recovered));
+      return;
+    }
+    const result = await migrateWorkspace(context.workspacePath, { by: context.by, now: context.now, ...seams });
+    context.print(context.json ? JSON.stringify({ ok: true, ...result }, null, 2) : renderMigrateResult(result));
+  } catch (error) {
+    if (!(error instanceof MoveRefusedError) || !context.json) throw error;
+    context.print(JSON.stringify({ ok: false, error: error.message, code: error.code, ...(error.report ? { report: error.report } : {}), ...(error.olderWriters ? { olderWriters: error.olderWriters } : {}) }, null, 2));
+    process.exitCode = 1;
+  }
+}
+
+/** `ctxspace plan restore <archive>`: undoes the move to the workspace database; the old files come back byte for byte. */
+export async function planRestore(context: PlanCommandContext, archive: string): Promise<void> {
+  assertActsHere(context);
+  const result = await restoreWorkspace(context.workspacePath, archive, { by: context.by }, context.cwd ?? process.cwd());
+  context.print(context.json ? JSON.stringify({ ok: true, ...result }, null, 2) : renderRestoreResult(result));
 }
 
 /**
@@ -283,10 +352,15 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
       return planNow(context, words.join(' '), Boolean(options.clear));
     }));
 
-  common(plan.command('migrate').description('Rehearse the move to the workspace database: builds one from today\'s files in a temp folder, says what it found, and changes nothing')
-    .option('--dry-run', 'Rehearse only (the only mode so far)')
-    .option('--out <dir>', 'Keep the rehearsal database and files in this folder (never inside the workspace)'))
-    .action(action<PlanCommonOptions & { dryRun?: boolean; out?: string }, []>((context, options) => planMigrate(context, options)));
+  common(plan.command('migrate').description('Move this workspace to its workspace database (the old files go to an archive, and `plan restore` brings them back); --dry-run rehearses and changes nothing')
+    .option('--dry-run', 'Rehearse only: build a database in a temp folder, say what it found, change nothing')
+    .option('--out <dir>', 'With --dry-run: keep the rehearsal database and files in this folder (never inside the workspace)')
+    .option('--status', 'Moved or not, when, the archive, and anything that needs doing')
+    .option('--from-backup <name>', 'A moved workspace whose database is missing: bring back this backup from .contextspace/backups/'))
+    .action(action<PlanCommonOptions & { dryRun?: boolean; out?: string; status?: boolean; fromBackup?: string }, []>((context, options) => planMigrate(context, options)));
+
+  common(plan.command('restore').description('Undo the move to the workspace database: the old files come back byte for byte, and the database is moved aside, never deleted').argument('<archive>', 'The move\'s archive folder, as `plan migrate --status` names it'))
+    .action(action<PlanCommonOptions, [string]>((context, _options, archive) => planRestore(context, archive)));
 
   common(plan.command('log').description('What changed lately, and who changed it'))
     .action(action<PlanCommonOptions, []>((context) => planLog(context)));

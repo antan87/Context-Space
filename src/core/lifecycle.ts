@@ -39,6 +39,7 @@ import { loadFeatureConfig, resolveRepoInfos } from './workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
 import { getRepoBranch, getAheadBehind } from '../utils/multi-git.js';
 import { loadWorkspaceState, mutateWorkspaceState } from './workspace-state.js';
+import { readSwitch } from './workspace-db-switch.js';
 import { verifyWorkspace } from './verify.js';
 
 /**
@@ -354,7 +355,10 @@ export function lifecycleView(
 
 type PlanFileView = NonNullable<Awaited<ReturnType<typeof planFileIfAny>>>;
 
-async function loadView(workspacePath: string, options: { write: boolean }): Promise<{ plan: PlanDocument; lifecycle: WorkspaceLifecycle; file?: PlanFileView }> {
+async function loadView(workspacePath: string, requested: { write: boolean }): Promise<{ plan: PlanDocument; lifecycle: WorkspaceLifecycle; file?: PlanFileView }> {
+  // A workspace moved to its database (or being moved or restored) is only read here: nothing older is moved into the
+  // plan store and nothing is recorded in state.json. A change still asked for is refused by the store and the state.
+  const options = { write: requested.write && !readSwitch(workspacePath) };
   // A workspace whose plan is PLAN.md: its checkpoints are the milestones, and nothing older is moved or written.
   const file = await planFileIfAny(workspacePath);
   if (file) {

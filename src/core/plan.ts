@@ -22,6 +22,7 @@ import { staleQuestions } from './plan-freshness.js';
 import { readWorkspaceFile, writeWorkspaceFile } from './storage.js';
 import { loadFeatureConfig } from './workspace.js';
 import { assertNoLinkedPathComponents } from '../resources/fs-safety.js';
+import { movedMessage, readSwitch } from './workspace-db-switch.js';
 import {
   ANSWERED_IN_CHAT,
   KIND_WORDS,
@@ -363,6 +364,10 @@ async function savePlanMutation<T>(
       timeoutMessage: 'The plan is busy in another session. Retry.',
     });
     try {
+      // contextspace-plan.json is one of the files a move to the workspace database archives: never written once moved.
+      const moved = readSwitch(root);
+      // 'not_allowed', not 'conflict': callers turn a conflict into "changed in another session", which this is not.
+      if (moved) throw new PlanError(movedMessage(moved), 'not_allowed');
       const raw = await readRaw(root, featureId);
       const plan = raw === null ? emptyPlan() : parsePlan(raw);
       const before = JSON.stringify(plan);
