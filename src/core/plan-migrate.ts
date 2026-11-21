@@ -34,7 +34,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { getActiveStorageProvider, isBuiltInLocalStorageProvider } from './adapters/registry.js';
 import { getGeneratorVersion } from './analysis-cache.js';
-import { resolveWorkspaceFilePath, resolveWorkspaceFilePathSync } from './constants.js';
+import { BRAND_CONFIG, resolveWorkspaceFilePath, resolveWorkspaceFilePathSync } from './constants.js';
 import { acquireLock, type ReleaseLock } from './locks.js';
 import { PlanFileError } from './plan-file.js';
 import { buildMigrationDatabase, relativePosix, renderRehearsal, type RehearsalReport } from './plan-migrate-rehearsal.js';
@@ -134,7 +134,50 @@ export class ArchiveIncompleteError extends MoveRefusedError {
   }
 }
 
+/** A record (switch, manifest, state) names a path outside its allowed place in the workspace. */
+class UnsafeRecordPathError extends MoveRefusedError {}
+
 // ─── Small helpers ───────────────────────────────────────────────────────────
+
+const KNOWN_STATE_PATHS: ReadonlySet<string> = new Set([
+  BRAND_CONFIG.files.state.primary,
+  BRAND_CONFIG.files.state.legacy,
+  ...(BRAND_CONFIG.files.state.fallbacks ?? []),
+]);
+
+type RelPlace = 'any' | 'archive' | 'staging' | 'state' | 'name';
+
+/**
+ * Checks a workspace-relative path read from a record: string, POSIX-only (no `\\`), no empty/`.`/`..` parts,
+ * no `:`, NUL or control characters, not absolute on POSIX or Windows, and inside its fixed place when one applies.
+ */
+function checkedRel(value: unknown, place: RelPlace = 'any'): string | null {
+  if (typeof value !== 'string' || !value || /[\x00-\x1f\x7f:\\]/.test(value)) return null;
+  if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) return null;
+  const parts = value.split(/[\\/]/);
+  if (parts.some((part) => !part || part === '.' || part === '..' || /[. ]$/.test(part))) return null;
+  if (place === 'archive') return parts.length === 3 && parts[0] === '.contextspace' && parts[1] === 'archive' ? value : null;
+  if (place === 'staging') return parts.length === 2 && parts[0] === '.contextspace' && parts[1]!.startsWith(STAGING_PREFIX) && parts[1]!.length > STAGING_PREFIX.length ? value : null;
+  if (place === 'state') return KNOWN_STATE_PATHS.has(value) ? value : null;
+  if (place === 'name') return parts.length === 1 ? value : null;
+  return value;
+}
+
+function unsafePathMessage(file: string, field: string, value: unknown, place: RelPlace = 'any'): string {
+  const shown = typeof value === 'string' ? value : (JSON.stringify(value) ?? String(value));
+  if (!checkedRel(value, 'any')) {
+    return `${file} (${field}) names a path outside the workspace: ${shown}. Nothing was changed.`;
+  }
+  if (place === 'name') {
+    return `${file} (${field}) is not a single safe name: ${shown}. Nothing was changed.`;
+  }
+  const where = place === 'archive' ? `${ARCHIVE_ROOT}/` : place === 'staging' ? `.contextspace/${STAGING_PREFIX}*` : 'the workspace state file locations';
+  return `${file} (${field}) names a path outside ${where}: ${shown}. Nothing was changed.`;
+}
+
+function unsafePathError(file: string, field: string, value: unknown, place: RelPlace = 'any'): UnsafeRecordPathError {
+  return new UnsafeRecordPathError(unsafePathMessage(file, field, value, place));
+}
 
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
 const toFs = (root: string, rel: string): string => path.join(root, ...rel.split('/'));
@@ -211,20 +254,35 @@ async function moveInto(file: string, dir: string, name: string): Promise<string
   throw new Error(`no free name for ${name} in ${dir}`);
 }
 
-/** Makes `sub` (relative, `/` or native) inside `dir` and flushes each new folder's entry in its parent. */
+/** Makes `sub` (relative, `/` or native) inside `dir` and flushes each new folder's entry in its parent. Never walks through links. */
 async function mkdirSynced(dir: string, sub: string): Promise<void> {
   let at = dir;
   for (const part of sub.split(/[\\/]/).filter((p) => p && p !== '.')) {
+    if (part === '..') throw unsafePathError('workspace path', 'path', sub);
     const next = path.join(at, part);
-    if (!(await exists(next))) { await fs.mkdir(next); await syncDirectory(at); }
+    let stat;
+    try { stat = await fs.lstat(next); } catch (error) {
+      if (errorCode(error) !== 'ENOENT') throw error;
+      await fs.mkdir(next);
+      await syncDirectory(at);
+      at = next;
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new MoveRefusedError(`${part} is a link. ContextSpace does not move or write through links (one could point outside the workspace). Nothing was changed: replace it with the real file or folder, then try again.`);
+    }
     at = next;
   }
 }
 
 /** Never follows a link out of the workspace: every folder on the way to `rel`, and the file itself, must be real. */
 async function refuseLinks(root: string, rel: string): Promise<void> {
+  const parts = rel.split(/[\\/]/);
+  if (!rel || path.posix.isAbsolute(rel) || path.win32.isAbsolute(rel) || /[\x00-\x1f\x7f:]/.test(rel) || parts.some((p) => !p || p === '.' || p === '..' || /[. ]$/.test(p))) {
+    throw unsafePathError('workspace path', 'path', rel);
+  }
   let current = root;
-  for (const segment of rel.split('/')) {
+  for (const segment of parts) {
     current = path.join(current, segment);
     let stat;
     try { stat = await fs.lstat(current); } catch (error) { if (errorCode(error) === 'ENOENT') return; throw error; }
@@ -273,14 +331,44 @@ async function writeSwitch(root: string, record: SwitchRecord): Promise<void> {
 const archiveDir = (root: string, archive: string) => toFs(root, archive);
 const archivedFile = (root: string, archive: string, rel: string) => path.join(archiveDir(root, archive), 'files', ...rel.split('/'));
 
-/** A manifest read from anywhere, checked: ours, and naming only files inside the workspace. Null when it is not. */
-function checkedManifest(value: unknown, archive: string): Manifest | null {
-  const parsed = value as Manifest | null;
-  if (parsed?.format !== 'contextspace-pre-db-archive' || !Array.isArray(parsed.sources) || parsed.archive !== archive || typeof parsed.id !== 'string') return null;
-  for (const source of parsed.sources) {
-    if (typeof source.path !== 'string' || source.path.split('/').some((part) => part === '..' || part === '') || path.isAbsolute(source.path)) return null;
+type ManifestCheck =
+  | { ok: true; manifest: Manifest }
+  | { ok: false; kind: 'invalid' }
+  | { ok: false; kind: 'unsafe-path'; field: string; value: unknown; place: RelPlace };
+
+/** A manifest read from anywhere, checked: ours, well-formed, and naming only paths inside their places in the workspace. */
+function checkedManifest(value: unknown, archive: string): ManifestCheck {
+  if (!checkedRel(archive, 'archive')) return { ok: false, kind: 'unsafe-path', field: 'archive', value: archive, place: 'archive' };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, kind: 'invalid' };
+  const parsed = value as Record<string, unknown>;
+  if (parsed.format !== 'contextspace-pre-db-archive' || !Array.isArray(parsed.sources)) return { ok: false, kind: 'invalid' };
+  if (typeof parsed.archive !== 'string') return { ok: false, kind: 'invalid' };
+  if (!checkedRel(parsed.archive, 'archive')) return { ok: false, kind: 'unsafe-path', field: 'archive', value: parsed.archive, place: 'archive' };
+  if (parsed.archive !== archive) return { ok: false, kind: 'invalid' };
+  if (typeof parsed.id !== 'string') return { ok: false, kind: 'invalid' };
+  if (!checkedRel(parsed.id, 'name')) return { ok: false, kind: 'unsafe-path', field: 'id', value: parsed.id, place: 'name' };
+  if (typeof parsed.staging !== 'string') return { ok: false, kind: 'invalid' };
+  if (!checkedRel(parsed.staging, 'staging')) return { ok: false, kind: 'unsafe-path', field: 'staging', value: parsed.staging, place: 'staging' };
+  const state = parsed.state as Record<string, unknown> | null | undefined;
+  if (!state || typeof state !== 'object' || Array.isArray(state) || typeof state.path !== 'string') return { ok: false, kind: 'invalid' };
+  if (!checkedRel(state.path, 'state')) return { ok: false, kind: 'unsafe-path', field: 'state.path', value: state.path, place: 'state' };
+  if (typeof state.existed !== 'boolean') return { ok: false, kind: 'invalid' };
+  const ignore = parsed.ignore as Record<string, unknown> | null | undefined;
+  if (!ignore || typeof ignore !== 'object' || Array.isArray(ignore) || typeof ignore.existed !== 'boolean' || typeof ignore.sha256 !== 'string' || !Array.isArray(ignore.added) || ignore.added.some((line) => typeof line !== 'string')) {
+    return { ok: false, kind: 'invalid' };
   }
-  return parsed;
+  const exports = parsed.exports as Record<string, unknown> | null | undefined;
+  if (!exports || typeof exports !== 'object' || Array.isArray(exports) || typeof exports.plan !== 'string' || typeof exports.data !== 'string') {
+    return { ok: false, kind: 'invalid' };
+  }
+  for (let i = 0; i < parsed.sources.length; i += 1) {
+    const source = parsed.sources[i] as Record<string, unknown> | null | undefined;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return { ok: false, kind: 'invalid' };
+    if (typeof source.path !== 'string') return { ok: false, kind: 'invalid' };
+    if (!checkedRel(source.path, 'any')) return { ok: false, kind: 'unsafe-path', field: `sources[${i}].path`, value: source.path, place: 'any' };
+    if (typeof source.sha256 !== 'string' || (source.action !== 'move' && source.action !== 'copy')) return { ok: false, kind: 'invalid' };
+  }
+  return { ok: true, manifest: value as Manifest };
 }
 
 /**
@@ -290,38 +378,60 @@ function checkedManifest(value: unknown, archive: string): Manifest | null {
  * names this archive is used, and `from` says which.
  */
 async function readManifestFrom(root: string, archive: string): Promise<{ manifest: Manifest; from: string }> {
+  if (!checkedRel(archive, 'archive')) throw unsafePathError(SWITCH_FILE, 'archive', archive, 'archive');
+  await refuseLinks(root, `${archive}/${MANIFEST}`);
   const file = path.join(archiveDir(root, archive), MANIFEST);
+  const fileRel = relativePosix(root, file);
   let problem = '';
   try {
-    const found = checkedManifest(JSON.parse(await fs.readFile(file, 'utf8')), archive);
-    if (found) return { manifest: found, from: relativePosix(root, file) };
+    const checked = checkedManifest(JSON.parse(await fs.readFile(file, 'utf8')), archive);
+    if (checked.ok) return { manifest: checked.manifest, from: fileRel };
+    if (checked.kind === 'unsafe-path') throw unsafePathError(fileRel, checked.field, checked.value, checked.place);
     problem = 'it is not a ContextSpace archive manifest for this archive';
   } catch (error) {
+    if (error instanceof UnsafeRecordPathError) throw error;
     problem = reason(error);
   }
   // the copy in the state file's record
   try {
     const state = await resolveWorkspaceFilePath(root, 'state');
+    const stateRel = relativePosix(root, state.path);
+    await refuseLinks(root, stateRel);
     const record = (JSON.parse(await fs.readFile(state.path, 'utf8')) as { workspaceDb?: { manifest?: unknown } }).workspaceDb;
-    const found = checkedManifest(record?.manifest, archive);
-    if (found) return { manifest: found, from: `${relativePosix(root, state.path)} (workspaceDb.manifest)` };
-  } catch { /* next copy */ }
+    const checked = checkedManifest(record?.manifest, archive);
+    if (checked.ok) return { manifest: checked.manifest, from: `${stateRel} (workspaceDb.manifest)` };
+    if (checked.kind === 'unsafe-path') throw unsafePathError(stateRel, `workspaceDb.manifest.${checked.field}`, checked.value, checked.place);
+  } catch (error) {
+    if (error instanceof MoveRefusedError) throw error;
+    /* next copy */
+  }
   // the copy in a database's import record: the live one, any staged one, then the ones a restore moved into the archive
   const dot = path.join(root, '.contextspace');
   const dir = archiveDir(root, archive);
+  await refuseLinks(root, `${archive}/database`);
+  await refuseLinks(root, `${archive}/staging`);
   const archivedDbs = (await fs.readdir(path.join(dir, 'database')).catch(() => [] as string[])).filter((n) => /^workspace\.db(\.\d+)?$/.test(n)).map((n) => path.join(dir, 'database', n));
   const files = [
     dbFilePath(root),
-    ...(await fs.readdir(dot).catch(() => [] as string[])).filter((n) => n.startsWith(STAGING_PREFIX)).map((n) => dbFilePath(path.join(dot, n))),
+    ...(await fs.readdir(dot).catch(() => [] as string[])).filter((n) => checkedRel(`.contextspace/${n}`, 'staging')).map((n) => dbFilePath(path.join(dot, n))),
     ...archivedDbs,
     dbFilePath(path.join(dir, 'staging')),
   ];
   for (const dbFile of files) {
-    if (!existsSync(dbFile)) continue;
-    const found = checkedManifest(importRecordIn(dbFile)?.manifest, archive);
-    if (found) return { manifest: found, from: `${relativePosix(root, dbFile)} (its import record)` };
+    try {
+      const dbRel = relativePosix(root, dbFile);
+      await refuseLinks(root, dbRel);
+      await refuseLinks(root, `${dbRel}-journal`);
+      if (!existsSync(dbFile)) continue;
+      const checked = checkedManifest(importRecordIn(dbFile)?.manifest, archive);
+      if (checked.ok) return { manifest: checked.manifest, from: `${dbRel} (its import record)` };
+      if (checked.kind === 'unsafe-path') throw unsafePathError(dbRel, `import_record.manifest.${checked.field}`, checked.value, checked.place);
+    } catch (error) {
+      if (error instanceof MoveRefusedError) throw error;
+      /* skip unreadable or bad database record */
+    }
   }
-  throw new PlanFileError(`The archive's manifest ${relativePosix(root, file)} cannot be read (${problem}), and no copy of it was found in the state file or a database, so ContextSpace cannot tell which files belong where. Nothing was changed. Every original file is either in its place or in ${archive}/files/.`, 'conflict');
+  throw new PlanFileError(`The archive's manifest ${fileRel} cannot be read (${problem}), and no copy of it was found in the state file or a database, so ContextSpace cannot tell which files belong where. Nothing was changed. Every original file is either in its place or in ${archive}/files/.`, 'conflict');
 }
 
 async function readManifest(root: string, archive: string): Promise<Manifest> {
@@ -347,6 +457,8 @@ function importRecordIn(file: string): { manifest?: unknown } | null {
  * from it (a damaged one is kept beside it as manifest.json.damaged), so the archive describes itself once more.
  */
 async function readManifestRepairing(root: string, archive: string): Promise<Manifest> {
+  if (!checkedRel(archive, 'archive')) throw unsafePathError(SWITCH_FILE, 'archive', archive, 'archive');
+  await refuseLinks(root, `${archive}/${MANIFEST}`);
   const { manifest, from } = await readManifestFrom(root, archive);
   const file = path.join(archiveDir(root, archive), MANIFEST);
   if (from !== relativePosix(root, file)) {
@@ -357,29 +469,67 @@ async function readManifestRepairing(root: string, archive: string): Promise<Man
 }
 
 /** The archive of the move this workspace is in, when the switch file cannot say: the state file's record, else the newest archive with a manifest and no `restored.json`. */
-async function currentArchiveGuess(root: string): Promise<string | null> {
+async function currentArchiveGuess(root: string): Promise<{ archive: string | null; problem?: string }> {
   const undone = (archive: string) => exists(path.join(archiveDir(root, archive), 'restored.json'));
+  let problem: string | undefined;
+  try {
+    await refuseLinks(root, `${ARCHIVE_ROOT}/x`);
+  } catch (error) {
+    return { archive: null, problem: reason(error) };
+  }
   try {
     const state = await resolveWorkspaceFilePath(root, 'state');
+    const stateRel = relativePosix(root, state.path);
+    await refuseLinks(root, stateRel);
     const archive = (JSON.parse(await fs.readFile(state.path, 'utf8')) as { workspaceDb?: { archive?: unknown } }).workspaceDb?.archive;
-    if (typeof archive === 'string' && archive.startsWith(`${ARCHIVE_ROOT}/pre-db-`) && !archive.slice(ARCHIVE_ROOT.length + 1).includes('/') && await exists(archiveDir(root, archive)) && !(await undone(archive))) return archive;
-  } catch { /* below */ }
+    if (archive !== undefined && archive !== null) {
+      const safe = checkedRel(archive, 'archive');
+      if (!safe) {
+        problem = unsafePathMessage(stateRel, 'workspaceDb.archive', archive, 'archive');
+      } else if (safe.startsWith(`${ARCHIVE_ROOT}/pre-db-`)) {
+        await refuseLinks(root, `${safe}/restored.json`);
+        const stat = await fs.lstat(archiveDir(root, safe)).catch(() => null);
+        if (stat?.isDirectory() && !(await undone(safe))) return { archive: safe };
+      }
+    }
+  } catch (error) {
+    if (error instanceof MoveRefusedError) problem = reason(error);
+    /* below */
+  }
   const names = (await fs.readdir(toFs(root, ARCHIVE_ROOT)).catch(() => [] as string[])).filter((n) => n.startsWith('pre-db-')).sort().reverse();
   for (const name of names) {
-    const archive = `${ARCHIVE_ROOT}/${name}`;
+    const archive = checkedRel(`${ARCHIVE_ROOT}/${name}`, 'archive');
+    if (!archive) continue;
+    try {
+      await refuseLinks(root, `${archive}/restored.json`);
+    } catch (error) {
+      if (error instanceof MoveRefusedError) problem ??= reason(error);
+      continue;
+    }
     if (await undone(archive)) continue;
-    if (await readManifest(root, archive).then(() => true, () => false)) return archive;
+    try {
+      await readManifest(root, archive);
+      return { archive, ...(problem ? { problem } : {}) };
+    } catch (error) {
+      if (error instanceof MoveRefusedError) problem ??= reason(error);
+    }
   }
-  return null;
+  return { archive: null, ...(problem ? { problem } : {}) };
 }
 
 /** Whether the move had finished, when the switch file cannot say: its record in the state file or the live database says `done`. */
 async function moveFinished(root: string, manifest: Manifest): Promise<boolean> {
   try {
     const state = await resolveWorkspaceFilePath(root, 'state');
+    await refuseLinks(root, relativePosix(root, state.path));
     const record = (JSON.parse(await fs.readFile(state.path, 'utf8')) as { workspaceDb?: { id?: unknown; status?: unknown } }).workspaceDb;
     if (record?.id === manifest.id && record.status === 'done') return true;
-  } catch { /* the database */ }
+  } catch (error) {
+    if (error instanceof MoveRefusedError) throw error;
+    /* the database */
+  }
+  await refuseLinks(root, DB_REL);
+  await refuseLinks(root, `${DB_REL}-journal`);
   if (!existsSync(dbFilePath(root))) return false;
   let db: WorkspaceDb | null = null;
   try { db = openQuiet(root, true); const record = readImportRecord(db); return record?.id === manifest.id && record.status === 'done'; } catch { return false; } finally { db?.close(); }
@@ -436,11 +586,14 @@ function importIdAt(folder: string): string | null {
 // ─── Refusals before anything moves ─────────────────────────────────────────
 
 function refuseForState(record: SwitchRecord, root: string): never {
+  if (record.archive !== undefined && record.archive !== '' && !checkedRel(record.archive, 'archive')) {
+    throw unsafePathError(SWITCH_FILE, 'archive', record.archive, 'archive');
+  }
   if (record.state === 'on') {
-    throw new MoveRefusedError(`This workspace was already moved to the workspace database${record.at ? ` on ${record.at}` : ''}. Nothing was changed. See \`ctxspace plan migrate --status\`; undo it with \`ctxspace plan restore ${record.archive ?? '<archive>'}\`.`);
+    throw new MoveRefusedError(`This workspace was already moved to the workspace database${record.at ? ` on ${record.at}` : ''}. Nothing was changed. See \`ctxspace plan migrate --status\`; undo it with \`ctxspace plan restore ${record.archive || '<archive>'}\`.`);
   }
   if (record.state === 'restoring') {
-    throw new MoveRefusedError(`A restore of this workspace was interrupted. Nothing was changed. Finish it first: \`ctxspace plan restore ${record.archive ?? '<archive>'}\`.`);
+    throw new MoveRefusedError(`A restore of this workspace was interrupted. Nothing was changed. Finish it first: \`ctxspace plan restore ${record.archive || '<archive>'}\`.`);
   }
   throw new MoveRefusedError(`${SWITCH_FILE} is there but cannot be read, so ContextSpace cannot tell what state ${root} is in. Nothing was changed. \`ctxspace plan migrate --status\` names the move it belongs to; undo that one with \`ctxspace plan restore <archive>\`.`);
 }
@@ -474,7 +627,11 @@ export async function migrateWorkspace(workspacePath: string, options: MigrateOp
     throw new MoveRefusedError('This workspace keeps its files through a storage adapter other than the built-in local one, which cannot hold the workspace database yet. Nothing was changed.');
   }
   await refuseLinks(root, `${ARCHIVE_ROOT}/x`);
+  await refuseLinks(root, SWITCH_FILE);
   const first = readSwitch(root);
+  if (first?.archive !== undefined && first.archive !== '' && !checkedRel(first.archive, 'archive')) {
+    throw unsafePathError(SWITCH_FILE, 'archive', first.archive, 'archive');
+  }
   if (first && first.state !== 'moving') refuseForState(first, root);
   const hook = options.afterStep;
   const stopped = new Set<unknown>();
@@ -485,28 +642,37 @@ export async function migrateWorkspace(workspacePath: string, options: MigrateOp
     return await moveUnderLocks(root, seam, started);
   } catch (error) {
     if (stopped.has(error)) throw error;
+    if (error instanceof UnsafeRecordPathError) throw error;
     const now = readSwitch(root);
+    const safeArchive = checkedRel(now?.archive, 'archive');
     if (error instanceof ArchiveIncompleteError && now?.state === 'moving') {
       // Neither finishing nor undoing can go ahead until the missing files are back: say only what works.
       throw new MoveRefusedError(`${error.message.replace(/\s*Nothing was changed\.?/g, '').trim()} Until then this workspace stays in the middle of a move (${error.archive}), and every old writer refuses.`);
     }
     if (error instanceof MoveRefusedError && now?.state === 'moving') {
       // A refusal while a move is half done changed nothing more, but the workspace is not as it was: say so.
-      throw new MoveRefusedError(`${error.message.replace(/\s*Nothing was changed\.?/g, '').trim()} Nothing more was changed, but this workspace is still in the middle of a move (${now.archive ?? 'its archive'}), and every old writer refuses until it is settled. Run \`ctxspace plan migrate\` again to finish it, or \`ctxspace plan restore ${now.archive ?? '<archive>'}\` to undo it.`, error.report, error.olderWriters);
+      throw new MoveRefusedError(`${error.message.replace(/\s*Nothing was changed\.?/g, '').trim()} Nothing more was changed, but this workspace is still in the middle of a move (${safeArchive ?? 'its archive'}), and every old writer refuses until it is settled. Run \`ctxspace plan migrate\` again to finish it, or \`ctxspace plan restore ${safeArchive ?? '<archive>'}\` to undo it.`, error.report, error.olderWriters);
     }
     if (error instanceof PlanFileError) throw error;
-    throw new PlanFileError(now?.archive
-      ? `The move stopped (${reason(error)}). Nothing is lost: every old file is in its place or in ${now.archive}/files/, and every old writer refuses until this is settled. Run \`ctxspace plan migrate\` again to finish it, or \`ctxspace plan restore ${now.archive}\` to undo it.`
+    throw new PlanFileError(safeArchive
+      ? `The move stopped (${reason(error)}). Nothing is lost: every old file is in its place or in ${safeArchive}/files/, and every old writer refuses until this is settled. Run \`ctxspace plan migrate\` again to finish it, or \`ctxspace plan restore ${safeArchive}\` to undo it.`
       : `The move stopped before it changed anything (${reason(error)}). Nothing was changed.`, 'conflict');
   }
 }
 
 async function moveUnderLocks(root: string, options: MigrateOptions, started: number): Promise<MigrateResult> {
   return withWorkspaceLocks(root, async () => {
+    await refuseLinks(root, `${ARCHIVE_ROOT}/x`);
+    await refuseLinks(root, SWITCH_FILE);
     const record = readSwitch(root);
+    if (record?.archive !== undefined && record.archive !== '' && !checkedRel(record.archive, 'archive')) {
+      throw unsafePathError(SWITCH_FILE, 'archive', record.archive, 'archive');
+    }
     if (record && record.state !== 'moving') refuseForState(record, root);
     if (record?.state === 'moving') {
       if (!record.archive) throw new MoveRefusedError(`${SWITCH_FILE} says a move is under way but names no archive. Nothing was changed. See \`ctxspace plan migrate --status\`.`);
+      await refuseLinks(root, DB_REL);
+      await refuseLinks(root, `${DB_REL}-journal`);
       const manifest = await readManifestRepairing(root, record.archive);
       if (importIdAt(root) === manifest.id) {
         return finish(root, await continueMove(root, manifest, options), 'resumed', started, options);
@@ -651,6 +817,19 @@ async function freshMove(root: string, options: MigrateOptions): Promise<Manifes
 
 /** Steps 5 to 8. Each one looks at what is on disk first, so running it again after an interruption finishes the move. */
 async function continueMove(root: string, manifest: Manifest, options: MigrateOptions): Promise<Manifest> {
+  for (const rel of [
+    `${manifest.archive}/x`, `${manifest.archive}/files`, `${manifest.archive}/came-back`, `${manifest.archive}/staging`,
+    manifest.staging, `${manifest.staging}/${DB_REL}`, `${manifest.staging}/${DB_REL}-journal`,
+    manifest.state.path, IGNORE_REL, DB_REL, `${DB_REL}-journal`, 'PLAN.md', DATA_FILE, SWITCH_FILE,
+    `.contextspace/.PLAN.md.${manifest.id}.tmp`, `.contextspace/.${DATA_FILE}.${manifest.id}.tmp`,
+  ]) {
+    await refuseLinks(root, rel);
+  }
+  for (const entry of manifest.sources) {
+    await refuseLinks(root, entry.path);
+    await refuseLinks(root, `${manifest.archive}/files/${entry.path}`);
+    await refuseLinks(root, `${manifest.archive}/came-back/${entry.path}`);
+  }
   const abort = async (why: string, kept: Array<{ path: string; keptAs: string }> = []): Promise<never> => {
     const undone = await rollBack(root, manifest, { by: options.by, why });
     throw new PlanFileError(abortMessage(why, manifest.archive, [...kept, ...undone.cameBack], undone.leftAsTheyAre, undone.newerInPlace), 'conflict');
@@ -689,7 +868,9 @@ async function continueMove(root: string, manifest: Manifest, options: MigrateOp
   const planEntry = manifest.sources.find((s) => s.path === 'PLAN.md');
   const placeNew = async (rel: string, text: string): Promise<void> => {
     const target = toFs(root, rel);
-    const temp = path.join(root, '.contextspace', `.${path.basename(rel)}.${manifest.id}.tmp`);
+    const tempRel = `.contextspace/.${path.basename(rel)}.${manifest.id}.tmp`;
+    await refuseLinks(root, tempRel);
+    const temp = toFs(root, tempRel);
     await writeFileSynced(temp, text);
     try {
       await placeExclusive(temp, target);
@@ -792,7 +973,9 @@ async function moveSourceIntoArchive(root: string, manifest: Manifest, entry: So
     return;
   }
   if (await hashFile(live) !== entry.sha256) return abort(`${entry.path} changed during the move`);
+  await refuseLinks(root, entry.path);
   await refuseLinks(root, `${manifest.archive}/files/${entry.path}`);
+  await refuseLinks(root, `${manifest.archive}/came-back/${entry.path}`);
   await mkdirSynced(archiveDir(root, manifest.archive), path.posix.dirname(`files/${entry.path}`));
   await renameSynced(live, archived); // the archive path is new, so nothing is replaced
   if (await hashFile(archived) !== entry.sha256) {
@@ -844,14 +1027,22 @@ export async function restoreWorkspace(workspacePath: string, archiveArg: string
   if (!isBuiltInLocalStorageProvider(getActiveStorageProvider())) {
     throw new MoveRefusedError('This workspace keeps its files through a storage adapter other than the built-in local one. Nothing was changed.');
   }
+  await refuseLinks(root, `${ARCHIVE_ROOT}/x`);
+  await refuseLinks(root, SWITCH_FILE);
   const archive = await resolveArchive(root, archiveArg, cwd);
   return withWorkspaceLocks(root, async () => {
+    await refuseLinks(root, SWITCH_FILE);
+    await refuseLinks(root, `${archive}/${MANIFEST}`);
+    await refuseLinks(root, `${archive}/restored.json`);
     const record = readSwitch(root);
     if (!record) {
       const restored = await fs.readFile(path.join(archiveDir(root, archive), 'restored.json'), 'utf8').then((t) => JSON.parse(t) as { at?: string }, () => null);
       throw new MoveRefusedError(restored
         ? `This workspace is not moved: ${archive} was already restored${restored.at ? ` on ${restored.at}` : ''}. Nothing was changed.`
         : `This workspace is not moved to the workspace database, so there is nothing to restore. Nothing was changed.`);
+    }
+    if (record.archive !== undefined && record.archive !== '' && !checkedRel(record.archive, 'archive')) {
+      throw unsafePathError(SWITCH_FILE, 'archive', record.archive, 'archive');
     }
     let finished = record.state === 'on' || record.finished === true;
     let manifest: Manifest;
@@ -882,13 +1073,23 @@ export async function restoreWorkspace(workspacePath: string, archiveArg: string
 
 /** The archive the person named, as the workspace-relative path the switch keeps; refused unless it is a folder in `.contextspace/archive/`. */
 async function resolveArchive(root: string, arg: string, cwd: string): Promise<string> {
+  await refuseLinks(root, `${ARCHIVE_ROOT}/x`);
   const candidates = path.isAbsolute(arg) ? [arg] : [path.join(root, arg), path.resolve(cwd, arg)];
+  for (const candidate of candidates) {
+    const relToRoot = path.relative(root, path.resolve(candidate)).split(path.sep).join('/');
+    if (checkedRel(relToRoot, 'archive')) await refuseLinks(root, relToRoot);
+  }
   const archiveRoot = await fs.realpath(toFs(root, ARCHIVE_ROOT)).catch(() => null);
   for (const candidate of candidates) {
     const real = await fs.realpath(candidate).catch(() => null);
     if (!real || !archiveRoot) continue;
     const rel = path.relative(archiveRoot, real);
-    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && !rel.includes(path.sep)) return `${ARCHIVE_ROOT}/${rel}`;
+    if (!rel || rel.includes('/') || rel.includes('\\')) continue;
+    const archive = checkedRel(`${ARCHIVE_ROOT}/${rel}`, 'archive');
+    if (!archive) continue;
+    await refuseLinks(root, archive);
+    const stat = await fs.lstat(toFs(root, archive)).catch(() => null);
+    if (stat?.isDirectory()) return archive;
   }
   throw new MoveRefusedError(`${arg} is not an archive of this workspace (one of the folders in ${ARCHIVE_ROOT}/). Nothing was changed. \`ctxspace plan migrate --status\` names the archive.`);
 }
@@ -902,13 +1103,28 @@ async function resolveArchive(root: string, arg: string, cwd: string): Promise<s
 async function rollBack(root: string, manifest: Manifest, options: { by: string; why: string; finished?: boolean; afterStep?: RestoreOptions['afterStep'] }): Promise<RestoreResult> {
   const dir = archiveDir(root, manifest.archive);
   const result: RestoreResult = { workspace: root, archive: manifest.archive, putBack: [], databaseKeptAs: [], exportsKeptAs: [], cameBack: [], leftAsTheyAre: [], newerInPlace: [], state: 'unchanged', notes: [] };
-  await refuseLinks(root, `${manifest.archive}/x`);
+  for (const rel of [
+    `${manifest.archive}/x`, `${manifest.archive}/restored.json`,
+    `${manifest.archive}/database`, `${manifest.archive}/database/workspace.db`, `${manifest.archive}/database/workspace.db-journal`,
+    `${manifest.archive}/exports`, `${manifest.archive}/exports/PLAN.md`, `${manifest.archive}/exports/${DATA_FILE}`,
+    `${manifest.archive}/came-back`, `${manifest.archive}/came-back/PLAN.md`, `${manifest.archive}/came-back/${DATA_FILE}`,
+    `${manifest.archive}/staging`,
+    `${manifest.archive}/files/${manifest.state.path}`, `${manifest.archive}/files/${IGNORE_REL}`,
+    manifest.staging, `${manifest.staging}/${DB_REL}`, `${manifest.staging}/${DB_REL}-journal`,
+    manifest.state.path, IGNORE_REL, DB_REL, `${DB_REL}-journal`, 'PLAN.md', DATA_FILE, SWITCH_FILE,
+  ]) {
+    await refuseLinks(root, rel);
+  }
+  const currentState = await resolveWorkspaceFilePath(root, 'state');
+  await refuseLinks(root, relativePosix(root, currentState.path));
 
   // 1. check, before anything changes
   const changed: string[] = [];
   const untrustedCopies = new Set<string>();
   for (const entry of manifest.sources) {
     await refuseLinks(root, entry.path);
+    await refuseLinks(root, `${manifest.archive}/files/${entry.path}`);
+    await refuseLinks(root, `${manifest.archive}/came-back/${entry.path}`);
     const archivedHash = await hashFile(archivedFile(root, manifest.archive, entry.path));
     // An archive copy that is not the file the move archived does not stop the restore: something that ignores
     // ContextSpace's locks (an editor, a git checkout) saved the file while the move was renaming it. That newer
@@ -1042,7 +1258,9 @@ async function moveIntoExact(from: string, to: string): Promise<string> {
 async function restoreMovedStateRecord(root: string, manifest: Manifest, notes: string[]): Promise<void> {
   const now = await resolveWorkspaceFilePath(root, 'state');
   const rel = relativePosix(root, now.path);
-  if (rel === manifest.state.path || !now.exists) return;
+  if (rel === manifest.state.path) return;
+  await refuseLinks(root, rel);
+  if (!now.exists) return;
   try {
     const value = JSON.parse(await fs.readFile(now.path, 'utf8')) as Record<string, unknown>;
     const record = value.workspaceDb as { id?: unknown } | undefined;
@@ -1141,62 +1359,120 @@ async function replacedCandidate(root: string): Promise<string | null> {
 /** `ctxspace plan migrate --status`. Reads only. */
 export async function migrateStatus(workspacePath: string): Promise<MigrateStatus> {
   const root = await fs.realpath(workspacePath);
-  const record = readSwitch(root);
-  const liveDb = existsSync(dbFilePath(root));
+  const offers: string[] = [];
+  const addOffer = (message: string) => { if (!offers.includes(message)) offers.push(message); };
+  const dotLinkProblem = await refuseLinks(root, '.contextspace').then(() => null, (error) => reason(error));
+  if (dotLinkProblem) {
+    return { workspace: root, moved: 'no', database: 'none', backups: [], cameBack: [], earlier: [], offers: [dotLinkProblem] };
+  }
+  let switchLinkProblem: string | null = null;
+  try { await refuseLinks(root, SWITCH_FILE); } catch (error) { switchLinkProblem = reason(error); }
+  const record = switchLinkProblem ? ({ state: 'unreadable' as const }) : readSwitch(root);
+  let dbLinkProblem: string | null = null;
+  try { await refuseLinks(root, DB_REL); } catch (error) { dbLinkProblem = reason(error); }
+  const liveDb = !dbLinkProblem && existsSync(dbFilePath(root));
+  let backupsLinkProblem: string | null = null;
+  try { await refuseLinks(root, '.contextspace/backups'); } catch (error) { backupsLinkProblem = reason(error); }
+  const badSwitchArchive = record?.archive !== undefined && record.archive !== '' && !checkedRel(record.archive, 'archive');
+  const switchArchive = record?.archive && !badSwitchArchive ? record.archive : undefined;
   const status: MigrateStatus = {
     workspace: root, moved: record ? (record.state === 'unreadable' ? 'unreadable' : record.state) : 'no',
-    ...(record?.at ? { at: record.at } : {}), ...(record?.by ? { by: record.by } : {}), ...(record?.archive ? { archive: record.archive } : {}),
+    ...(record?.at ? { at: record.at } : {}), ...(record?.by ? { by: record.by } : {}), ...(switchArchive ? { archive: switchArchive } : {}),
     database: record ? (liveDb ? 'present' : 'missing') : (liveDb ? 'stray' : 'none'),
-    backups: listBackups(root), cameBack: [], earlier: [], offers: [],
+    backups: backupsLinkProblem ? [] : listBackups(root), cameBack: [], earlier: [], offers,
   };
-  // A switch that cannot be read still belongs to a move: name its archive as the current one, not as an earlier move.
-  const guessed = record && (record.state === 'unreadable' || !record.archive) ? await currentArchiveGuess(root) : null;
-  if (guessed) status.archive = guessed;
-  const archives = await fs.readdir(toFs(root, ARCHIVE_ROOT)).catch(() => [] as string[]);
-  for (const name of archives.filter((n) => n.startsWith('pre-db-')).sort()) {
-    const rel = `${ARCHIVE_ROOT}/${name}`;
-    if (rel === status.archive) continue;
-    const restored = await fs.readFile(path.join(toFs(root, rel), 'restored.json'), 'utf8').then((t) => JSON.parse(t) as { at?: string }, () => null);
-    status.earlier.push({ archive: rel, ...(restored?.at ? { restoredAt: restored.at } : {}) });
+  let archiveLinkProblem: string | null = null;
+  try {
+    await refuseLinks(root, `${ARCHIVE_ROOT}/x`);
+  } catch (error) {
+    archiveLinkProblem = reason(error);
   }
-  if (!record) {
-    if (status.database === 'stray') status.offers.push(`${DB_REL} is there, but no move says it belongs to this workspace, so nothing uses it. \`ctxspace plan migrate\` will not start until it is moved out of .contextspace/.`);
+  if (switchLinkProblem) addOffer(switchLinkProblem);
+  if (dbLinkProblem) addOffer(dbLinkProblem);
+  if (backupsLinkProblem) addOffer(backupsLinkProblem);
+  // A switch that cannot be read still belongs to a move: name its archive as the current one, not as an earlier move.
+  const guess = !archiveLinkProblem && record && (record.state === 'unreadable' || !switchArchive)
+    ? await currentArchiveGuess(root)
+    : { archive: null };
+  if (guess.archive) status.archive = guess.archive;
+  if (!archiveLinkProblem) {
+    const archives = await fs.readdir(toFs(root, ARCHIVE_ROOT)).catch(() => [] as string[]);
+    for (const name of archives.filter((n) => n.startsWith('pre-db-')).sort()) {
+      const rel = checkedRel(`${ARCHIVE_ROOT}/${name}`, 'archive');
+      if (!rel || rel === status.archive) continue;
+      if (await refuseLinks(root, rel).then(() => false, () => true)) continue;
+      const restoredSafe = await refuseLinks(root, `${rel}/restored.json`).then(() => true, (error) => { addOffer(reason(error)); return false; });
+      const restored = restoredSafe
+        ? await fs.readFile(path.join(toFs(root, rel), 'restored.json'), 'utf8').then((t) => JSON.parse(t) as { at?: string }, () => null)
+        : null;
+      status.earlier.push({ archive: rel, ...(restored?.at ? { restoredAt: restored.at } : {}) });
+    }
+  }
+  if (archiveLinkProblem) addOffer(archiveLinkProblem);
+  if (badSwitchArchive) {
+    addOffer(unsafePathMessage(SWITCH_FILE, 'archive', record!.archive, 'archive'));
+    if (guess.problem) addOffer(guess.problem);
     return status;
   }
-  if (record.state === 'unreadable' || !record.archive) {
-    status.offers.push(guessed
-      ? `${SWITCH_FILE} cannot be read (a power cut can leave it empty), so every old writer refuses. The move it belongs to is ${guessed}: undo it with \`ctxspace plan restore ${guessed}\`, then move again with \`ctxspace plan migrate\` if you want.`
-      : `${SWITCH_FILE} cannot be read, so every old writer refuses, and no archive in ${ARCHIVE_ROOT}/ has a readable manifest that was not restored already. Look at the folders there.`);
+  if (!record) {
+    if (status.database === 'stray') addOffer(`${DB_REL} is there, but no move says it belongs to this workspace, so nothing uses it. \`ctxspace plan migrate\` will not start until it is moved out of .contextspace/.`);
+    return status;
+  }
+  if (record.state === 'unreadable' || !switchArchive) {
+    if (guess.problem) addOffer(guess.problem);
+    let unsafeGuess = false;
+    if (guess.archive && !archiveLinkProblem) {
+      try { await readManifest(root, guess.archive); } catch (error) {
+        if (error instanceof MoveRefusedError) { unsafeGuess = true; addOffer(reason(error)); }
+      }
+    }
+    if (!unsafeGuess && !switchLinkProblem) {
+      addOffer(guess.archive
+        ? `${SWITCH_FILE} cannot be read (a power cut can leave it empty), so every old writer refuses. The move it belongs to is ${guess.archive}: undo it with \`ctxspace plan restore ${guess.archive}\`, then move again with \`ctxspace plan migrate\` if you want.`
+        : `${SWITCH_FILE} cannot be read, so every old writer refuses, and no archive in ${ARCHIVE_ROOT}/ has a readable manifest that was not restored already. Look at the folders there.`);
+    }
     return status;
   }
   let manifest: Manifest | null = null;
-  try { manifest = await readManifest(root, record.archive); } catch (error) { status.offers.push(reason(error)); }
-  if (record.state === 'moving') status.offers.push(`The move did not finish. Finish it with \`ctxspace plan migrate\`, or undo it with \`ctxspace plan restore ${record.archive}\`.`);
-  if (record.state === 'restoring') status.offers.push(`A restore did not finish. Finish it with \`ctxspace plan restore ${record.archive}\`.`);
+  let unsafeManifest = false;
+  if (!archiveLinkProblem) {
+    try { manifest = await readManifest(root, switchArchive); } catch (error) {
+      if (error instanceof MoveRefusedError) unsafeManifest = true;
+      addOffer(reason(error));
+    }
+  }
+  if (!unsafeManifest && !archiveLinkProblem) {
+    if (record.state === 'moving') addOffer(`The move did not finish. Finish it with \`ctxspace plan migrate\`, or undo it with \`ctxspace plan restore ${switchArchive}\`.`);
+    if (record.state === 'restoring') addOffer(`A restore did not finish. Finish it with \`ctxspace plan restore ${switchArchive}\`.`);
+  }
   if (manifest && record.state === 'on') {
     for (const entry of manifest.sources.filter((s) => s.action === 'move' && s.path !== 'PLAN.md')) {
       if (await exists(toFs(root, entry.path))) status.cameBack.push({ path: entry.path, note: 'came back after the move (an older ContextSpace wrote it); it is ignored, and the move\'s copy is in the archive' });
     }
-    const planHash = await hashFile(toFs(root, 'PLAN.md'));
-    if (planHash !== manifest.exports.plan) status.cameBack.push({ path: 'PLAN.md', note: planHash === null ? 'is gone; the database still holds the plan' : 'was edited after the move; the edit is not in the database (importing hand edits comes later)' });
+    const planSafe = await refuseLinks(root, 'PLAN.md').then(() => true, (error) => { addOffer(reason(error)); return false; });
+    if (planSafe) {
+      const planHash = await hashFile(toFs(root, 'PLAN.md'));
+      if (planHash !== manifest.exports.plan) status.cameBack.push({ path: 'PLAN.md', note: planHash === null ? 'is gone; the database still holds the plan' : 'was edited after the move; the edit is not in the database (importing hand edits comes later)' });
+    }
   }
-  if (record.state === 'on' && !liveDb) {
+  if (record.state === 'on' && !liveDb && !dbLinkProblem) {
     const replaced = await replacedCandidate(root);
     if (replaced) {
       status.replaced = `.contextspace/${replaced}`;
-      status.offers.push(`The workspace database is missing, but the one a backup restore was replacing is still here (${status.replaced}): an interrupted restore. Put it back with \`ctxspace plan migrate\`.`);
+      addOffer(`The workspace database is missing, but the one a backup restore was replacing is still here (${status.replaced}): an interrupted restore. Put it back with \`ctxspace plan migrate\`.`);
     } else {
-      status.offers.push(...missingOffers(root, record, status.backups));
+      for (const offer of missingOffers(root, record, status.backups)) addOffer(offer);
     }
   }
   return status;
 }
 
 function missingOffers(root: string, record: SwitchRecord, backups: string[]): string[] {
+  const safeArchive = checkedRel(record.archive, 'archive');
   const offers = [`The workspace database is missing. This workspace was moved${record.at ? ` on ${record.at}` : ''}, so it is not a new workspace, and ContextSpace will not start an empty one.`];
   if (backups[0]) offers.push(`Bring back the newest backup (${backups[0]}): \`ctxspace plan migrate --from-backup ${backups[0]}\`.`);
   if (existsSync(toFs(root, DATA_FILE))) offers.push(`${DATA_FILE} holds the plan, the cards and the links as the database last wrote them; rebuilding a database from it comes with the next part (DB3d).`);
-  offers.push(`Or undo the move: \`ctxspace plan restore ${record.archive ?? '<archive>'}\` puts the old files back.`);
+  offers.push(`Or undo the move: \`ctxspace plan restore ${safeArchive ?? '<archive>'}\` puts the old files back.`);
   return offers;
 }
 
@@ -1209,20 +1485,38 @@ export interface RecoverResult { workspace: string; recovered: string; from: 're
  */
 export async function recoverDatabase(workspacePath: string, options: { fromBackup?: string; by: string }): Promise<RecoverResult> {
   const root = await fs.realpath(workspacePath);
+  await refuseLinks(root, SWITCH_FILE);
+  await refuseLinks(root, DB_REL);
+  await refuseLinks(root, `${DB_REL}-journal`);
   return withWorkspaceLocks(root, async () => {
+    await refuseLinks(root, SWITCH_FILE);
+    await refuseLinks(root, DB_REL);
+    await refuseLinks(root, `${DB_REL}-journal`);
     const record = readSwitch(root);
     if (record?.state !== 'on') throw new MoveRefusedError('Only a workspace that was moved to the workspace database can have its database brought back. Nothing was changed.');
+    if (record.archive !== undefined && record.archive !== '' && !checkedRel(record.archive, 'archive')) {
+      throw unsafePathError(SWITCH_FILE, 'archive', record.archive, 'archive');
+    }
     const live = dbFilePath(root);
     if (existsSync(live)) throw new MoveRefusedError(`The workspace database is there (${DB_REL}); nothing needs bringing back. Nothing was changed.`);
-    if (options.fromBackup) {
-      if (options.fromBackup.includes('/') || options.fromBackup.includes('\\') || !listBackups(root).includes(options.fromBackup)) {
-        throw new MoveRefusedError(`${options.fromBackup} is not one of this workspace's backups (${listBackups(root).join(', ') || 'there are none'}). Nothing was changed.`);
+    if (options.fromBackup !== undefined) {
+      await refuseLinks(root, '.contextspace/backups');
+      const backups = listBackups(root);
+      if (!checkedRel(options.fromBackup, 'name') || !backups.includes(options.fromBackup)) {
+        throw new MoveRefusedError(`${options.fromBackup} is not one of this workspace's backups (${backups.join(', ') || 'there are none'}). Nothing was changed.`);
       }
+      await refuseLinks(root, `.contextspace/backups/${options.fromBackup}`);
       const restored = restoreBackup(root, options.fromBackup);
       return { workspace: root, recovered: `.contextspace/backups/${options.fromBackup}`, from: 'backup', dbId: restored.dbId };
     }
     const replaced = await replacedCandidate(root);
-    if (!replaced) throw new MoveRefusedError(missingOffers(root, record, listBackups(root)).join('\n'));
+    if (!replaced) {
+      const backups = await refuseLinks(root, '.contextspace/backups').then(() => listBackups(root), () => [] as string[]);
+      throw new MoveRefusedError(missingOffers(root, record, backups).join('\n'));
+    }
+    if (!checkedRel(replaced, 'name')) throw unsafePathError('.contextspace', 'replaced', replaced, 'name');
+    await refuseLinks(root, `.contextspace/${replaced}`);
+    await refuseLinks(root, `.contextspace/${replaced}-journal`);
     const from = path.join(root, '.contextspace', replaced);
     if (await exists(`${live}-journal`)) throw new MoveRefusedError(`There is a journal at ${DB_REL}-journal but no database beside it. Nothing was changed: move that journal away first (keep it), then try again.`);
     // the journal first, so the database is never openable without the journal it may need

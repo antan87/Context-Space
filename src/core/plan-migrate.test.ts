@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalStorageAdapter } from './adapters/local-storage.js';
 import { getStorageProvider, setActiveStorageProvider } from './adapters/registry.js';
+import { PlanFileError } from './plan-file.js';
 import { migrateStatus, migrateWorkspace, recoverDatabase, restoreWorkspace, MoveRefusedError, type MigrateOptions, type MigrateStep } from './plan-migrate.js';
 import { rehearseMigration } from './plan-migrate-rehearsal.js';
 import { defaultDeps, findOlderWriters } from './older-writers.js';
@@ -65,14 +67,16 @@ async function fullWorkspace(plan = PLAN) {
   await write('.contextspace/state.json', `{"workspacePath":${JSON.stringify(root)},"repos":{},"updatedAt":"${AT}","planChecks":{"reports-export-to-csv":{"lastVerificationStatus":"pass","canProgress":true,"at":"${AT}"}}}`);
 }
 
-/** sha256 of every file under the workspace, by relative path with `/`. */
+/** sha256 of every file under the workspace (and target of any link), by relative path with `/`. */
 async function treeHash(dir = root): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   const walk = async (d: string) => {
     for (const entry of await fs.readdir(d, { withFileTypes: true })) {
       const full = path.join(d, entry.name);
       const rel = path.relative(dir, full).split(path.sep).join('/');
-      if (entry.isDirectory()) await walk(full); else out[rel] = createHash('sha256').update(await fs.readFile(full)).digest('hex');
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.isSymbolicLink()) out[rel] = `symlink:${await fs.readlink(full)}`;
+      else out[rel] = createHash('sha256').update(await fs.readFile(full)).digest('hex');
     }
   };
   await walk(dir);
@@ -891,5 +895,594 @@ describe('a half-moved workspace that was copied (fix round 3, note 3)', () => {
     } finally {
       await fs.rm(copy, { recursive: true, force: true });
     }
+  });
+});
+
+describe('paths read from records stay inside the workspace (DB3a paths)', () => {
+  it('refuses switch archive "../outside" without touching outside files or changing the workspace, and --status reports it', async () => {
+    await fullWorkspace();
+    await expect(migrateWorkspace(root, stopAt('recorded'))).rejects.toThrow('stopped after recorded');
+    const realArchive = readSwitch(root)!.archive!;
+    const realManifest = JSON.parse(await read(`${realArchive}/manifest.json`));
+    const outsideName = `${path.basename(root)}-outside-archive`;
+    const outside = path.join(path.dirname(root), outsideName);
+    const badArchive = `../${outsideName}`;
+    await fs.mkdir(path.join(outside, 'files'), { recursive: true });
+    try {
+      const externalPlan = '# External\n\n## Steps\n\n- [ ] Imported from outside\n';
+      await fs.writeFile(path.join(outside, 'files', 'PLAN.md'), externalPlan);
+      await fs.writeFile(path.join(outside, 'sentinel.txt'), 'outside-sentinel');
+      const outsideManifest = {
+        ...realManifest,
+        archive: badArchive,
+        state: { path: '.contextspace/state.json', existed: false },
+        sources: [{ path: 'PLAN.md', sha256: createHash('sha256').update(externalPlan).digest('hex'), bytes: Buffer.byteLength(externalPlan), action: 'move' }],
+      };
+      await fs.writeFile(path.join(outside, 'manifest.json'), JSON.stringify(outsideManifest, null, 2));
+      await fs.writeFile(path.join(root, SWITCH_FILE), JSON.stringify({ state: 'moving', archive: badArchive, id: realManifest.id }));
+
+      const before = await treeHash();
+      const beforeOutside = await treeHash(outside);
+
+      const err = await migrateWorkspace(root, opts()).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toContain(SWITCH_FILE);
+      expect((err as Error).message).toContain('archive');
+      expect((err as Error).message).toContain(`names a path outside the workspace: ${badArchive}. Nothing was changed.`);
+
+      const restoreErr = await restoreWorkspace(root, realArchive, { by: 'user' }).catch((e: unknown) => e);
+      expect(restoreErr).toBeInstanceOf(MoveRefusedError);
+      expect((restoreErr as Error).message).toContain(`names a path outside the workspace: ${badArchive}. Nothing was changed.`);
+
+      const status = await migrateStatus(root);
+      expect(status.archive).not.toBe(badArchive);
+      expect(status.offers.join('\n')).toContain(`${SWITCH_FILE} (archive) names a path outside the workspace: ${badArchive}. Nothing was changed.`);
+      expect(status.offers.join('\n')).not.toContain(`ctxspace plan restore ${badArchive}`);
+
+      expect(await treeHash()).toEqual(before);
+      expect(await treeHash(outside)).toEqual(beforeOutside);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses manifest staging "../victim" on restore and --status without moving victim or repairing manifest.json', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const victimName = `${path.basename(root)}-victim`;
+    const victim = path.join(path.dirname(root), victimName);
+    const badStaging = `../${victimName}`;
+    await fs.mkdir(victim, { recursive: true });
+    try {
+      await fs.writeFile(path.join(victim, 'sentinel.txt'), 'do-not-move');
+      const manifestFile = path.join(root, result.archive, 'manifest.json');
+      const manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+      manifest.staging = badStaging;
+      await fs.writeFile(manifestFile, JSON.stringify(manifest, null, 2));
+
+      const before = await treeHash();
+      const beforeVictim = await treeHash(victim);
+
+      const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toContain(`${result.archive}/manifest.json`);
+      expect((err as Error).message).toContain('staging');
+      expect((err as Error).message).toContain(`names a path outside the workspace: ${badStaging}. Nothing was changed.`);
+
+      const status = await migrateStatus(root);
+      expect(status.offers.join('\n')).toContain(`names a path outside the workspace: ${badStaging}. Nothing was changed.`);
+
+      expect(await treeHash()).toEqual(before);
+      expect(await treeHash(victim)).toEqual(beforeVictim);
+    } finally {
+      await fs.rm(victim, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses manifest state.path "../outside.json" on restore and --status without unlinking outside file or changing the workspace', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const outsideName = `${path.basename(root)}-outside.json`;
+    const outsideJson = path.join(path.dirname(root), outsideName);
+    const badStatePath = `../${outsideName}`;
+    await fs.writeFile(outsideJson, '{}');
+    try {
+      const manifestFile = path.join(root, result.archive, 'manifest.json');
+      const manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+      manifest.state = { path: badStatePath, existed: false };
+      await fs.writeFile(manifestFile, JSON.stringify(manifest, null, 2));
+
+      const before = await treeHash();
+
+      const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toContain(`${result.archive}/manifest.json`);
+      expect((err as Error).message).toContain('state.path');
+      expect((err as Error).message).toContain(`names a path outside the workspace: ${badStatePath}. Nothing was changed.`);
+
+      const status = await migrateStatus(root);
+      expect(status.offers.join('\n')).toContain(`names a path outside the workspace: ${badStatePath}. Nothing was changed.`);
+
+      expect(await fs.readFile(outsideJson, 'utf8')).toBe('{}');
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(outsideJson, { force: true });
+    }
+  });
+
+  for (const badPath of ['..\\..\\x', '.', 'C:x'] as const) {
+    it(`refuses manifest sources path ${JSON.stringify(badPath)} on restore and --status without changing anything`, async () => {
+      await fullWorkspace();
+      const result = await migrateWorkspace(root, opts());
+      const sentinel = path.join(path.dirname(root), `${path.basename(root)}-sentinel.txt`);
+      await fs.writeFile(sentinel, 'keep-sentinel');
+      try {
+        const manifestFile = path.join(root, result.archive, 'manifest.json');
+        const manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+        manifest.sources[0].path = badPath;
+        await fs.writeFile(manifestFile, JSON.stringify(manifest, null, 2));
+
+        const before = await treeHash();
+
+        const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(MoveRefusedError);
+        expect((err as Error).message).toContain(`${result.archive}/manifest.json`);
+        expect((err as Error).message).toContain('sources[0].path');
+        expect((err as Error).message).toContain(`names a path outside the workspace: ${badPath}. Nothing was changed.`);
+
+        const status = await migrateStatus(root);
+        expect(status.offers.join('\n')).toContain(`names a path outside the workspace: ${badPath}. Nothing was changed.`);
+
+        expect(await fs.readFile(sentinel, 'utf8')).toBe('keep-sentinel');
+        expect(await treeHash()).toEqual(before);
+      } finally {
+        await fs.rm(sentinel, { force: true });
+      }
+    });
+  }
+
+  it('skips sources: [null] in a candidate database instead of throwing TypeError, and changes nothing when no valid copy exists', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const sentinel = path.join(path.dirname(root), `${path.basename(root)}-null-sentinel.txt`);
+    await fs.writeFile(sentinel, 'keep-sentinel');
+    try {
+      await fs.writeFile(path.join(root, result.archive, 'manifest.json'), '');
+      const state = JSON.parse(await read('.contextspace/state.json'));
+      delete state.workspaceDb;
+      await write('.contextspace/state.json', JSON.stringify(state));
+
+      const db = new DatabaseSync(path.join(root, '.contextspace', 'workspace.db'));
+      try {
+        const row = db.prepare("SELECT value FROM meta WHERE key = 'import_record'").get() as { value: string };
+        const rec = JSON.parse(row.value);
+        rec.manifest.sources = [null];
+        db.prepare("UPDATE meta SET value = ? WHERE key = 'import_record'").run(JSON.stringify(rec));
+      } finally {
+        db.close();
+      }
+
+      const before = await treeHash();
+
+      const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(err).not.toBeInstanceOf(TypeError);
+      expect(err).toBeInstanceOf(PlanFileError);
+      expect((err as Error).message).toMatch(/cannot be read[\s\S]*no copy of it was found[\s\S]*Nothing was changed/);
+
+      const status = await migrateStatus(root);
+      expect(status.offers.join('\n')).not.toMatch(/Cannot read properties of null/);
+      expect(status.offers.join('\n')).toMatch(/cannot be read/);
+
+      expect(await fs.readFile(sentinel, 'utf8')).toBe('keep-sentinel');
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(sentinel, { force: true });
+    }
+  });
+
+  it('skips a candidate database with sources: [null] and falls back to the next valid database copy', async () => {
+    await fullWorkspace();
+    const before = await treeHash();
+    const result = await migrateWorkspace(root, opts());
+    // keep a valid copy in an archived database, then corrupt the live database's manifest sources to [null]
+    await fs.mkdir(path.join(root, result.archive, 'database'), { recursive: true });
+    await fs.copyFile(path.join(root, '.contextspace', 'workspace.db'), path.join(root, result.archive, 'database', 'workspace.db'));
+    await fs.writeFile(path.join(root, result.archive, 'manifest.json'), '');
+    const state = JSON.parse(await read('.contextspace/state.json'));
+    delete state.workspaceDb;
+    await write('.contextspace/state.json', JSON.stringify(state));
+
+    const db = new DatabaseSync(path.join(root, '.contextspace', 'workspace.db'));
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = 'import_record'").get() as { value: string };
+      const rec = JSON.parse(row.value);
+      rec.manifest.sources = [null];
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'import_record'").run(JSON.stringify(rec));
+    } finally {
+      db.close();
+    }
+
+    await restoreWorkspace(root, result.archive, { by: 'user' });
+    expect(withoutMoveLeftovers(await treeHash())).toEqual(before);
+  });
+
+  it('refuses a symlinked .contextspace/archive on restore before repairing or touching files outside the workspace', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const outsideArchive = path.join(path.dirname(root), `${path.basename(root)}-ext-archive`);
+    const archiveRootPath = path.join(root, '.contextspace', 'archive');
+    await fs.rename(archiveRootPath, outsideArchive);
+    try {
+      try {
+        await fs.symlink(outsideArchive, archiveRootPath, process.platform === 'win32' ? 'junction' : 'dir');
+      } catch (error) {
+        if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+          await fs.rename(outsideArchive, archiveRootPath);
+          return;
+        }
+        throw error;
+      }
+      const archiveName = path.basename(result.archive);
+      await fs.writeFile(path.join(outsideArchive, archiveName, 'manifest.json'), '');
+      await fs.writeFile(path.join(outsideArchive, 'sentinel.txt'), 'keep-outside');
+
+      const before = await treeHash();
+      const beforeOutside = await treeHash(outsideArchive);
+
+      const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toMatch(/\.contextspace\/archive is a link[\s\S]*Nothing was changed/);
+      expect(await treeHash(outsideArchive)).toEqual(beforeOutside);
+      expect(await fs.readFile(path.join(outsideArchive, archiveName, 'manifest.json'), 'utf8')).toBe('');
+
+      const status = await migrateStatus(root);
+      expect(status.offers.join('\n')).toMatch(/\.contextspace\/archive is a link/);
+
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(outsideArchive, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a backslash archive guess from state.json in --status and leaves outside files and workspace untouched', async () => {
+    await fullWorkspace();
+    const outsideName = `${path.basename(root)}-guess-outside`;
+    const outside = path.join(path.dirname(root), outsideName);
+    const badArchive = `.contextspace/archive/pre-db-x\\..\\..\\..\\..\\${outsideName}`;
+    await fs.mkdir(outside, { recursive: true });
+    try {
+      await fs.writeFile(path.join(outside, 'sentinel.txt'), 'keep-outside');
+      await write(SWITCH_FILE, ''); // unreadable switch -> migrateStatus calls currentArchiveGuess
+      await write('.contextspace/state.json', JSON.stringify({ workspacePath: root, workspaceDb: { archive: badArchive } }));
+      if (process.platform !== 'win32') {
+        // On POSIX, backslashes are literal filename characters: creating this folder makes HEAD's exists() return true just as Windows traversal to `outside` does.
+        await fs.mkdir(path.join(root, '.contextspace', 'archive', `pre-db-x\\..\\..\\..\\..\\${outsideName}`), { recursive: true });
+      }
+
+      const before = await treeHash();
+      const beforeOutside = await treeHash(outside);
+
+      const status = await migrateStatus(root);
+      expect(status.archive).toBeUndefined();
+      expect(status.offers.join('\n')).toContain(`.contextspace/state.json (workspaceDb.archive) names a path outside the workspace: ${badArchive}. Nothing was changed.`);
+      expect(status.offers.join('\n')).not.toContain(`ctxspace plan restore ${badArchive}`);
+
+      expect(await treeHash()).toEqual(before);
+      expect(await treeHash(outside)).toEqual(beforeOutside);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses manifest state.path pointing to a non-state file inside the workspace, staging outside .db-staging-*, and non-object ignore/exports', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const manifestFile = path.join(root, result.archive, 'manifest.json');
+    const origText = await fs.readFile(manifestFile, 'utf8');
+    const sentinel = path.join(path.dirname(root), `${path.basename(root)}-inws-sentinel.txt`);
+    await fs.writeFile(sentinel, 'keep');
+    try {
+      // 1. state.path pointing to PLAN.md with existed: false
+      const m1 = JSON.parse(origText);
+      m1.state = { path: 'PLAN.md', existed: false };
+      await fs.writeFile(manifestFile, JSON.stringify(m1, null, 2));
+      const b1 = await treeHash();
+      const e1 = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(e1).toBeInstanceOf(MoveRefusedError);
+      expect((e1 as Error).message).toContain('state.path');
+      expect((e1 as Error).message).toContain('Nothing was changed.');
+      expect(await treeHash()).toEqual(b1);
+
+      // 2. staging pointing to .contextspace/backups
+      const m2 = JSON.parse(origText);
+      m2.staging = '.contextspace/backups';
+      await fs.writeFile(manifestFile, JSON.stringify(m2, null, 2));
+      const b2 = await treeHash();
+      const e2 = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(e2).toBeInstanceOf(MoveRefusedError);
+      expect((e2 as Error).message).toContain('staging');
+      expect((e2 as Error).message).toContain('Nothing was changed.');
+      expect(await treeHash()).toEqual(b2);
+
+      // 3. malformed ignore / exports shapes in manifest.json (with no backup copies) fail cleanly instead of throwing TypeError
+      const state = JSON.parse(await read('.contextspace/state.json'));
+      delete state.workspaceDb;
+      await write('.contextspace/state.json', JSON.stringify(state));
+      const db = new DatabaseSync(path.join(root, '.contextspace', 'workspace.db'));
+      try { db.prepare("DELETE FROM meta WHERE key = 'import_record'").run(); } finally { db.close(); }
+      for (const patch of [{ ignore: null }, { exports: null }] as const) {
+        const bad = { ...JSON.parse(origText), ...patch };
+        await fs.writeFile(manifestFile, JSON.stringify(bad, null, 2));
+        const b3 = await treeHash();
+        const e3 = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+        expect(e3).toBeInstanceOf(PlanFileError);
+        expect(e3).not.toBeInstanceOf(TypeError);
+        expect((e3 as Error).message).toMatch(/cannot be read[\s\S]*Nothing was changed/);
+        expect(await treeHash()).toEqual(b3);
+      }
+
+      expect(await fs.readFile(sentinel, 'utf8')).toBe('keep');
+    } finally {
+      await fs.rm(sentinel, { force: true });
+    }
+  });
+
+  it('refuses a symlinked .contextspace/workspace.db on resumed migrate before importIdAt opens or mutates an external SQLite database', async () => {
+    await fullWorkspace();
+    await expect(migrateWorkspace(root, stopAt('recorded'))).rejects.toThrow('stopped after recorded');
+    const outsideDb = path.join(path.dirname(root), `${path.basename(root)}-external.db`);
+    const db = new DatabaseSync(outsideDb);
+    try {
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA user_version = 1; CREATE TABLE notes(x INTEGER); INSERT INTO notes VALUES (42);');
+    } finally {
+      db.close();
+    }
+    try {
+      try {
+        await fs.symlink(outsideDb, path.join(root, '.contextspace', 'workspace.db'));
+      } catch (error) {
+        if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return;
+        throw error;
+      }
+      const before = await treeHash();
+      const beforeDbHash = createHash('sha256').update(await fs.readFile(outsideDb)).digest('hex');
+
+      const err = await migrateWorkspace(root, opts()).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toMatch(/\.contextspace\/workspace\.db is a link/);
+      expect(createHash('sha256').update(await fs.readFile(outsideDb)).digest('hex')).toBe(beforeDbHash);
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(outsideDb, { force: true });
+      await fs.rm(`${outsideDb}-wal`, { force: true });
+      await fs.rm(`${outsideDb}-shm`, { force: true });
+    }
+  });
+
+  it('refuses symlinked archive subdirectories (database/, exports/, came-back/) on restore without moving workspace files outside', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const outsideDir = path.join(path.dirname(root), `${path.basename(root)}-sub-links`);
+    const outDb = path.join(outsideDir, 'db');
+    const outExp = path.join(outsideDir, 'exp');
+    const outBack = path.join(outsideDir, 'back');
+    await fs.mkdir(outDb, { recursive: true });
+    await fs.mkdir(outExp, { recursive: true });
+    await fs.mkdir(outBack, { recursive: true });
+    await fs.writeFile(path.join(outsideDir, 'sentinel.txt'), 'keep');
+    try {
+      const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+      try {
+        await fs.symlink(outDb, path.join(root, result.archive, 'database'), linkType);
+        await fs.symlink(outExp, path.join(root, result.archive, 'exports'), linkType);
+        await fs.symlink(outBack, path.join(root, result.archive, 'came-back'), linkType);
+      } catch (error) {
+        if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return;
+        throw error;
+      }
+      const before = await treeHash();
+      const beforeOutside = await treeHash(outsideDir);
+
+      const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toMatch(/database is a link[\s\S]*Nothing was changed/);
+      expect(await treeHash(outsideDir)).toEqual(beforeOutside);
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a symlinked archived state file on restore even if omitted from manifest.sources', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const secret = path.join(path.dirname(root), `${path.basename(root)}-secret.json`);
+    await fs.writeFile(secret, '{"leaked":"secret"}\n');
+    try {
+      const manifestFile = path.join(root, result.archive, 'manifest.json');
+      const manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+      manifest.sources = manifest.sources.filter((s: { path: string }) => s.path !== '.contextspace/state.json');
+      await fs.writeFile(manifestFile, JSON.stringify(manifest, null, 2));
+      const archState = path.join(root, result.archive, 'files', '.contextspace', 'state.json');
+      await fs.unlink(archState);
+      try {
+        await fs.symlink(secret, archState);
+      } catch (error) {
+        if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return;
+        throw error;
+      }
+      await fs.unlink(path.join(root, '.contextspace', 'state.json'));
+
+      const before = await treeHash();
+      const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toMatch(/state\.json is a link[\s\S]*Nothing was changed/);
+      expect(await fs.readFile(secret, 'utf8')).toBe('{"leaked":"secret"}\n');
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(secret, { force: true });
+    }
+  });
+
+  it('refuses a symlinked deterministic export temp file (.contextspace/.PLAN.md.<id>.tmp) during resumed migrate', async () => {
+    await fullWorkspace();
+    await expect(migrateWorkspace(root, stopAt('database'))).rejects.toThrow('stopped after database');
+    const sw = readSwitch(root)!;
+    const victim = path.join(path.dirname(root), `${path.basename(root)}-tmp-victim.txt`);
+    await fs.writeFile(victim, 'ORIGINAL');
+    try {
+      try {
+        await fs.symlink(victim, path.join(root, '.contextspace', `.PLAN.md.${sw.id}.tmp`));
+      } catch (error) {
+        if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return;
+        throw error;
+      }
+      const before = await treeHash();
+
+      const err = await migrateWorkspace(root, opts()).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MoveRefusedError);
+      expect((err as Error).message).toMatch(/\.PLAN\.md\..*\.tmp is a link/);
+      expect(await fs.readFile(victim, 'utf8')).toBe('ORIGINAL');
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(victim, { force: true });
+    }
+  });
+
+  it('rejects whitespace-only and Windows trailing dot/space segments in manifest and switch records', async () => {
+    await fullWorkspace();
+    const result = await migrateWorkspace(root, opts());
+    const manifestFile = path.join(root, result.archive, 'manifest.json');
+    const origManifest = await fs.readFile(manifestFile, 'utf8');
+    const sentinel = path.join(path.dirname(root), `${path.basename(root)}-trail-sentinel.txt`);
+    await fs.writeFile(sentinel, 'keep');
+    try {
+      for (const badPath of [' ', '.. ', '...', 'a/ ', 'PLAN.md.'] as const) {
+        const m = JSON.parse(origManifest);
+        m.sources[0].path = badPath;
+        await fs.writeFile(manifestFile, JSON.stringify(m, null, 2));
+        const before = await treeHash();
+        const err = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(MoveRefusedError);
+        expect((err as Error).message).toContain(`names a path outside the workspace: ${badPath}. Nothing was changed.`);
+        expect(await treeHash()).toEqual(before);
+      }
+      await fs.writeFile(manifestFile, origManifest);
+      await write(SWITCH_FILE, JSON.stringify({ state: 'on', archive: '.contextspace/archive/ ' }));
+      const beforeSw = await treeHash();
+      const swErr = await restoreWorkspace(root, result.archive, { by: 'user' }).catch((e: unknown) => e);
+      expect(swErr).toBeInstanceOf(MoveRefusedError);
+      expect((swErr as Error).message).toContain('names a path outside the workspace: .contextspace/archive/ . Nothing was changed.');
+      expect(await treeHash()).toEqual(beforeSw);
+      expect(await fs.readFile(sentinel, 'utf8')).toBe('keep');
+    } finally {
+      await fs.rm(sentinel, { force: true });
+    }
+  });
+
+  it('reports unsafe manifest paths under an unreadable switch in --status and never follows a symlinked restored.json', async () => {
+    await fullWorkspace();
+    const one = await migrateWorkspace(root, opts());
+    await restoreWorkspace(root, one.archive, { by: 'user' });
+    const two = await migrateWorkspace(root, opts());
+    const secret = path.join(path.dirname(root), `${path.basename(root)}-restored-secret.json`);
+    await fs.writeFile(secret, '{"at":"leaked-from-outside"}\n');
+    try {
+      // 1. Unreadable switch, no state record, unsafe manifest in archive `two`
+      await write(SWITCH_FILE, '');
+      const st = JSON.parse(await read('.contextspace/state.json'));
+      delete st.workspaceDb;
+      await write('.contextspace/state.json', JSON.stringify(st));
+      const mPath = path.join(root, two.archive, 'manifest.json');
+      const m = JSON.parse(await fs.readFile(mPath, 'utf8'));
+      m.staging = '../victim';
+      await fs.writeFile(mPath, JSON.stringify(m, null, 2));
+
+      // 2. Earlier archive `one` has symlinked restored.json
+      const restoredPath = path.join(root, one.archive, 'restored.json');
+      let linkedRestored = false;
+      await fs.unlink(restoredPath);
+      try {
+        await fs.symlink(secret, restoredPath);
+        linkedRestored = true;
+      } catch (error) {
+        if (!(process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? ''))) throw error;
+      }
+
+      const before = await treeHash();
+      const status = await migrateStatus(root);
+      expect(status.archive).toBeUndefined();
+      expect(status.offers.join('\n')).toContain('names a path outside the workspace: ../victim. Nothing was changed.');
+      if (linkedRestored) {
+        expect(status.earlier.find((e) => e.archive === one.archive)?.restoredAt).toBeUndefined();
+        expect(status.offers.join('\n')).toMatch(/restored\.json is a link/);
+      }
+      expect(await fs.readFile(secret, 'utf8')).toBe('{"at":"leaked-from-outside"}\n');
+      expect(await treeHash()).toEqual(before);
+    } finally {
+      await fs.rm(secret, { force: true });
+    }
+  });
+
+  it('recoverDatabase rejects empty --from-backup and refuses symlinked replaced database files', async () => {
+    await fullWorkspace();
+    await migrateWorkspace(root, opts());
+    const liveDb = path.join(root, '.contextspace', 'workspace.db');
+    const replacedPath = path.join(root, '.contextspace', 'workspace.db.replaced-1');
+    await fs.rename(liveDb, replacedPath);
+
+    // 1. empty string --from-backup "" must be refused rather than silently recovering replaced-1
+    const beforeEmpty = await treeHash();
+    const emptyErr = await recoverDatabase(root, { fromBackup: '', by: 'user' }).catch((e: unknown) => e);
+    expect(emptyErr).toBeInstanceOf(MoveRefusedError);
+    expect((emptyErr as Error).message).toContain('is not one of this workspace\'s backups');
+    expect(await treeHash()).toEqual(beforeEmpty);
+
+    // 2. symlinked replaced-1 must be refused without touching outside target
+    const outside = path.join(path.dirname(root), `${path.basename(root)}-replaced-outside.db`);
+    await fs.rename(replacedPath, outside);
+    try {
+      try {
+        await fs.symlink(outside, replacedPath);
+      } catch (error) {
+        if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return;
+        throw error;
+      }
+      const beforeLink = await treeHash();
+      const outsideHash = createHash('sha256').update(await fs.readFile(outside)).digest('hex');
+      const linkErr = await recoverDatabase(root, { by: 'user' }).catch((e: unknown) => e);
+      expect(linkErr).toBeInstanceOf(MoveRefusedError);
+      expect((linkErr as Error).message).toMatch(/workspace\.db\.replaced-1 is a link/);
+      expect(createHash('sha256').update(await fs.readFile(outside)).digest('hex')).toBe(outsideHash);
+      expect(await treeHash()).toEqual(beforeLink);
+    } finally {
+      await fs.rm(outside, { force: true });
+    }
+  });
+
+  it('skips a wrong-archive candidate database with an empty id and falls back to the valid archive database copy', async () => {
+    await fullWorkspace();
+    const before = await treeHash();
+    const result = await migrateWorkspace(root, opts());
+    await fs.mkdir(path.join(root, result.archive, 'database'), { recursive: true });
+    await fs.copyFile(path.join(root, '.contextspace', 'workspace.db'), path.join(root, result.archive, 'database', 'workspace.db'));
+    await fs.writeFile(path.join(root, result.archive, 'manifest.json'), '');
+    const state = JSON.parse(await read('.contextspace/state.json'));
+    delete state.workspaceDb;
+    await write('.contextspace/state.json', JSON.stringify(state));
+
+    const db = new DatabaseSync(path.join(root, '.contextspace', 'workspace.db'));
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = 'import_record'").get() as { value: string };
+      const rec = JSON.parse(row.value);
+      rec.manifest.archive = '.contextspace/archive/pre-db-other-move';
+      rec.manifest.id = '';
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'import_record'").run(JSON.stringify(rec));
+    } finally {
+      db.close();
+    }
+
+    await restoreWorkspace(root, result.archive, { by: 'user' });
+    expect(withoutMoveLeftovers(await treeHash())).toEqual(before);
   });
 });
