@@ -319,7 +319,7 @@ export interface BoardChangePayload {
 
 /**
  * Changes the board with small operations (add/update/remove card, move, link, unlink).
- * On success, updates the query cache `boardKey(workspace)` with `cleanBoard(result)`.
+ * On success, updates the query cache unless it already holds a newer snapshot of the same database.
  */
 export function useChangeBoard(workspace: string | null) {
   const queryClient = useQueryClient();
@@ -338,7 +338,10 @@ export function useChangeBoard(workspace: string | null) {
     },
     onSuccess: (board) => {
       if (workspace) {
-        queryClient.setQueryData(boardKey(workspace), board);
+        queryClient.setQueryData<BoardView>(boardKey(workspace), (cached) => {
+          if (cached && board.dbId && cached.dbId === board.dbId && cached.revision > board.revision) return undefined;
+          return board;
+        });
       }
     },
     onError: (err) => {

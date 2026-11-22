@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
   Button,
   Checkbox,
@@ -14,7 +14,6 @@ import {
   Spinner,
 } from '../../design/index.js';
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
-import { ApiError } from '../../lib/api/client.js';
 import { safeCopyToClipboard } from '../../lib/clipboard.js';
 import {
   conflictCurrent,
@@ -79,6 +78,7 @@ export function NoteDialog({
   const pinId = useId();
 
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const conflictFirstButtonRef = useRef<HTMLButtonElement>(null);
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -99,12 +99,24 @@ export function NoteDialog({
   // normal saves diff against initial, while "Save yours over theirs" sends only touched fields differing from theirs.
   const initialRef = useRef({ title: '', body: '', pinned: false, area: '', step: '' });
   const touchedRef = useRef(new Set<NoteField>());
+  // Incremented on every open, close, note switch or unmount so a slow save settling later changes nothing on screen.
+  const sessionRef = useRef(0);
+  // Synchronous re-entrancy guard so two clicks in the same tick send one save.
+  const submittingRef = useRef(false);
 
   // What the fields start from is read when the dialog opens or switches to another note, and at no other time: the board changing under
   // an open dialog (a live change, the plan read again) must never overwrite what is typed.
   const latest = useRef({ note, defaultAreaId, defaultStepKey, areas });
   useEffect(() => { latest.current = { note, defaultAreaId, defaultStepKey, areas }; });
   const noteId = note?.id;
+  useLayoutEffect(() => {
+    sessionRef.current += 1;
+    submittingRef.current = false;
+    return () => {
+      sessionRef.current += 1;
+      submittingRef.current = false;
+    };
+  }, [open, noteId]);
   useEffect(() => {
     if (!open) return undefined;
     const { note: current, defaultAreaId: area0, defaultStepKey: step0, areas: choices } = latest.current;
@@ -150,6 +162,10 @@ export function NoteDialog({
     return () => clearTimeout(timer);
   }, [open, noteId]);
 
+  useEffect(() => {
+    if (conflict) conflictFirstButtonRef.current?.focus();
+  }, [conflict]);
+
   const selectedAreaObj = areas.find((a) => a.id === area);
   const availableSteps = selectedAreaObj?.steps ?? [];
   const areaMissing = Boolean(area && !selectedAreaObj);
@@ -171,8 +187,9 @@ export function NoteDialog({
 
   /** `rev`: the revision to save against; by default the one the edit started from. */
   const handleSave = useCallback(async (rev: number | undefined = baseRev, resolving?: NoteConflictCurrent | null) => {
+    if (!open || submittingRef.current) return;
     const cleanTitle = title.trim();
-    if (!cleanTitle || isSubmitting) return;
+    if (!cleanTitle) return;
     const cleanBody = body.slice(0, 4000);
 
     let payload: Parameters<NoteDialogProps['onSave']>[0];
@@ -216,12 +233,14 @@ export function NoteDialog({
       };
     }
 
-    if (resolving && rev !== undefined) setBaseRev(rev);
+    submittingRef.current = true;
+    const session = sessionRef.current;
     setIsSubmitting(true);
     setError(null);
     setSameAsTheirs(false);
     try {
       const res = await onSave(payload);
+      if (sessionRef.current !== session) return;
       if (res !== false) {
         setConflict(null);
         setSameAsTheirs(false);
@@ -230,6 +249,7 @@ export function NoteDialog({
         setError('Could not save note. Please check your connection and try again.');
       }
     } catch (err) {
+      if (sessionRef.current !== session) return;
       // Someone changed the note meanwhile: nothing was saved, and what was typed stays in the fields
       if (isNoteConflict(err)) {
         setConflict({ current: conflictCurrent(err) });
@@ -237,25 +257,27 @@ export function NoteDialog({
         setCopied(false);
         setError(null);
       } else {
-        if (err instanceof ApiError && err.status === 400) {
-          setConflict(null);
-          setSameAsTheirs(false);
-        }
+        // Keep any active conflict panel on 400/503/other errors so the next save still compares against their version.
         setError(err instanceof Error ? err.message : 'Could not save note.');
       }
     } finally {
-      setIsSubmitting(false);
+      if (sessionRef.current === session) {
+        submittingRef.current = false;
+        setIsSubmitting(false);
+      }
     }
-  }, [baseRev, title, isSubmitting, onSave, body, pinned, isEdit, area, step, onOpenChange]);
+  }, [open, baseRev, title, onSave, body, pinned, isEdit, area, step, onOpenChange]);
 
   const copyMine = useCallback(async () => {
-    setCopied(await safeCopyToClipboard(`${title.trim()}\n\n${body}`));
+    const session = sessionRef.current;
+    const ok = await safeCopyToClipboard(`${title.trim()}\n\n${body}`);
+    if (sessionRef.current === session) setCopied(ok);
   }, [title, body]);
 
   // Plain functions: they only run on a press, and read the conflict as it is then.
   const loadTheirs = () => {
     const current = conflict?.current;
-    if (!current) return;
+    if (!current || submittingRef.current) return;
     const snap = {
       title: current.title,
       body: current.body ?? '',
@@ -274,6 +296,7 @@ export function NoteDialog({
     setConflict(null);
     setSameAsTheirs(false);
     setError(null);
+    titleInputRef.current?.focus();
   };
 
   const saveMineAnyway = () => {
@@ -311,6 +334,7 @@ export function NoteDialog({
   }, [handleSave, conflict]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+    if (!open) return;
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       if (!conflict) void handleSave();
@@ -318,7 +342,7 @@ export function NoteDialog({
       e.preventDefault();
       onOpenChange(false);
     }
-  }, [handleSave, onOpenChange, conflict]);
+  }, [open, handleSave, onOpenChange, conflict]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -372,12 +396,12 @@ export function NoteDialog({
                   </details>
                 )}
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" size="xs" variant="outline" className="text-[12.5px]" onClick={() => void copyMine()}>
+                  <Button ref={conflictFirstButtonRef} type="button" size="xs" variant="outline" className="text-[12.5px]" onClick={() => void copyMine()}>
                     {copied ? 'Copied your text' : 'Copy your text'}
                   </Button>
                   {conflict.current && (
                     <>
-                      <Button type="button" size="xs" variant="outline" className="text-[12.5px]" onClick={loadTheirs} title="Replaces what you typed with their version">
+                      <Button type="button" size="xs" variant="outline" className="text-[12.5px]" onClick={loadTheirs} disabled={isSubmitting} title="Replaces what you typed with their version">
                         Load their version
                       </Button>
                       <Button type="button" size="xs" className="text-[12.5px]" onClick={saveMineAnyway} disabled={isSubmitting || !title.trim()}>
@@ -419,6 +443,7 @@ export function NoteDialog({
                 }}
                 placeholder="Note title..."
                 maxLength={200}
+                readOnly={isSubmitting}
                 required
                 className="text-sm"
               />
@@ -484,6 +509,7 @@ export function NoteDialog({
                   }}
                   placeholder="Write Markdown, lists, notes, or links..."
                   maxLength={4000}
+                  readOnly={isSubmitting}
                   rows={5}
                   mono={font === 'mono'}
                 />
@@ -508,6 +534,7 @@ export function NoteDialog({
                   <select
                     id={areaId}
                     value={area}
+                    disabled={isSubmitting}
                     onChange={(e) => handleAreaChange(e.target.value)}
                     className="block h-8.5 w-full rounded-lg border border-input bg-background px-2.5 text-[13px] text-foreground outline-none focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/20"
                   >
@@ -537,7 +564,7 @@ export function NoteDialog({
                       setSameAsTheirs(false);
                       setStep(e.target.value);
                     }}
-                    disabled={availableSteps.length === 0 && !step}
+                    disabled={isSubmitting || (availableSteps.length === 0 && !step)}
                     className="block h-8.5 w-full rounded-lg border border-input bg-background px-2.5 text-[13px] text-foreground outline-none disabled:opacity-60 focus-visible:border-ring focus-visible:ring-[2px] focus-visible:ring-ring/20"
                   >
                     <option value="">(None / General Area)</option>
@@ -563,6 +590,7 @@ export function NoteDialog({
                 <Checkbox
                   id={pinId}
                   checked={pinned}
+                  disabled={isSubmitting}
                   onCheckedChange={(checked) => {
                     touchedRef.current.add('pinned');
                     setSameAsTheirs(false);

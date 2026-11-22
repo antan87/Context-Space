@@ -144,6 +144,60 @@ async function stepInto(page: Page, name: RegExp) {
   await expect(page.locator('#board-area')).toBeVisible();
 }
 
+/** Hold one reply after the database has produced its snapshot. Other mutations still go through. */
+async function watchBoardSaves(page: Page, id: string) {
+  let next: { number: number; ready: () => void; release: Promise<void> } | undefined;
+  let sequence = 0;
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    window.fetch = async (...args) => {
+      const response = await fetch(...args);
+      const held = response.headers.get('x-e2e-held-save');
+      if (held) {
+        const json = response.json.bind(response);
+        response.json = async () => {
+          const data: unknown = await json();
+          // Let the mutation finish consuming the JSON and React paint the result.
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            document.documentElement.dataset.handledBoardSave = held;
+          }));
+          return data;
+        };
+      }
+      return response;
+    };
+  });
+  await page.route(`**/api/workspace/${id}/board/changes`, async (route) => {
+    if (route.request().method() !== 'POST' || !next) return route.fallback();
+    const held = next;
+    next = undefined;
+    const url = new URL(route.request().url());
+    const response = await route.fetch({ url: `${SERVER}${url.pathname}${url.search}` });
+    held.ready();
+    await held.release;
+    await route.fulfill({ response, headers: {
+      ...response.headers(),
+      'access-control-expose-headers': 'x-e2e-held-save',
+      'x-e2e-held-save': String(held.number),
+    } });
+  });
+  return () => {
+    const number = ++sequence;
+    let ready!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    next = { number, ready, release: new Promise<void>((resolve) => { release = resolve; }) };
+    return {
+      started,
+      release,
+      async settle() {
+        release();
+        await expect(page.locator('html')).toHaveAttribute('data-handled-board-save', String(number));
+      },
+    };
+  };
+}
+
 test.describe('the Board on a workspace moved to its database (real backend)', () => {
   test('ticks a step and answers a question: both land in the database and in PLAN.md', async ({ page }) => {
     const { id, root } = movedWorkspace();
@@ -630,5 +684,403 @@ test.describe('the Board on a workspace moved to its database (real backend)', (
     await expect(dialog).toHaveCount(0);
     const finalCard = (await api(id, 'board')).cards.find((c: any) => c.id === note.id);
     expect(finalCard).toMatchObject({ body: 'Now genuinely different.', pinned: true, rev: 3 });
+  });
+
+  test('after a 400 during a conflict, clearing the vanished step sends the person choice or says nothing differs (never silently closes)', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const plan = await api(id, 'plan');
+    const cp = plan.checkpoints.find((c: any) => c.title === 'Reports export to CSV');
+    const step0 = cp.steps.find((s: any) => s.text === 'Write the CSV writer');
+    const step1 = cp.steps.find((s: any) => s.text === 'Background job queue for large exports');
+    const step2 = cp.steps.find((s: any) => s.text === 'Download link in the report page');
+    const note = (await api(id, 'board')).cards[0];
+    // Start with no step so clearing the vanished step back to "" matches the starting value (R6b)
+    aiApplies(root, [{ op: 'card.update', id: note.id, step: null }]);
+
+    const saveRequests: any[] = [];
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().includes(`/api/workspace/${id}/board/changes`)) {
+        try { saveRequests.push(req.postDataJSON()); } catch { /* ignore */ }
+      }
+    });
+
+    await openBoard(page, id, root);
+    await stepInto(page, /Reports export to CSV/);
+
+    // Part 1: AI removes step2 and assigns step1 -> 409 -> Save over -> 400 -> clear step -> Save sends step: null (never silently closes keeping step1)
+    const card = page.locator('#board-area').getByRole('article', { name: 'Export leaks memory' });
+    await card.dblclick();
+    const dialog = page.getByRole('dialog');
+    const stepSelect = dialog.getByLabel(/^Step/);
+    await expect(stepSelect).toHaveValue('');
+    await stepSelect.selectOption(step2.key);
+
+    aiApplies(root, [
+      { op: 'card.update', id: note.id, step: step1.key },
+      { op: 'remove', id: step2.key, rev: 1 },
+    ]);
+
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    const conflict = dialog.getByTestId('note-conflict');
+    await expect(conflict).toBeVisible();
+
+    await conflict.getByRole('button', { name: 'Save yours over theirs' }).click();
+    await expect(dialog.getByRole('alert').filter({ hasText: /step is no longer on the plan/i })).toBeVisible();
+
+    await stepSelect.selectOption('');
+    const reqsBefore = saveRequests.length;
+    if (await conflict.isVisible()) {
+      await conflict.getByRole('button', { name: 'Save yours over theirs' }).click();
+    } else {
+      await dialog.getByRole('button', { name: 'Save changes' }).click();
+    }
+    await expect(dialog).toHaveCount(0);
+
+    expect(saveRequests.length).toBe(reqsBefore + 1);
+    expect(saveRequests.at(-1)?.changes?.[0]).toEqual({
+      op: 'update_card',
+      id: note.id,
+      rev: 3,
+      step: null,
+    });
+    const after1 = (await api(id, 'board')).cards.find((c: any) => c.id === note.id);
+    expect(after1.step).toBeUndefined();
+    expect(after1).toMatchObject({ rev: 4, updatedBy: 'user' });
+
+    // Part 2: AI removes step0 and edits only body (leaving step null) -> 409 -> Save over -> 400 -> clear step -> says nothing differs, stays open (never silently closes)
+    await card.dblclick();
+    await expect(dialog).toBeVisible();
+    await expect(stepSelect).toHaveValue('');
+    await stepSelect.selectOption(step0.key);
+
+    aiApplies(root, [
+      { op: 'card.update', id: note.id, body: 'AI updated body while removing step0' },
+      { op: 'remove', id: step0.key, rev: 1 },
+    ]);
+
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    await expect(conflict).toBeVisible();
+    await conflict.getByRole('button', { name: 'Save yours over theirs' }).click();
+    await expect(dialog.getByRole('alert').filter({ hasText: /step is no longer on the plan/i })).toBeVisible();
+
+    await stepSelect.selectOption('');
+    const reqsBefore2 = saveRequests.length;
+    if (await conflict.isVisible()) {
+      await conflict.getByRole('button', { name: 'Save yours over theirs' }).click();
+    } else {
+      await dialog.getByRole('button', { name: 'Save changes' }).click();
+    }
+    await expect(dialog).toBeVisible();
+    await expect(conflict).toContainText('Your version is the same as theirs');
+    expect(saveRequests.length).toBe(reqsBefore2);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test('Ctrl+Enter and form submit cannot create a second note during the close animation', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    await openBoard(page, id, root);
+    const holdNextSave = await watchBoardSaves(page, id);
+    await stepInto(page, /Reports export to CSV/);
+    await page.addStyleTag({ content: '[data-slot="dialog-popup"] { transition-duration: 2s !important; }' });
+
+    const creates: string[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith(`/api/workspace/${id}/board/changes`)) {
+        creates.push(request.postDataJSON().changes[0].op);
+      }
+    });
+    await page.locator('#board-area').getByRole('button', { name: 'Add a note' }).locator('visible=true').first().click();
+    const popup = page.locator('[data-slot="dialog-popup"]');
+    const title = popup.getByPlaceholder('Note title...');
+    await title.fill('Create once');
+
+    const save = holdNextSave();
+    try {
+      await title.press('Control+Enter');
+      await save.started;
+      await title.press('Escape');
+      await expect(popup).toHaveAttribute('data-ending-style', '');
+      // Target the still-mounted form even if the dialog has already returned focus.
+      await title.dispatchEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true });
+      await popup.locator('form').dispatchEvent('submit', { bubbles: true, cancelable: true });
+      await save.settle();
+      await expect(popup).toHaveCount(0);
+      expect(creates).toEqual(['add_card']);
+      expect((await api(id, 'board')).cards.filter((card: any) => card.title === 'Create once')).toHaveLength(1);
+    } finally {
+      save.release();
+    }
+  });
+
+  test('a slow retry after a rejected conflict save locks the draft fields until it finishes', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const [note] = (await api(id, 'board')).cards;
+    const plan = await api(id, 'plan');
+    const checkpoint = plan.checkpoints.find((c: any) => c.title === 'Reports export to CSV');
+    const removed = checkpoint.steps.find((s: any) => s.text === 'Download link in the report page');
+    await openBoard(page, id, root);
+    const holdNextSave = await watchBoardSaves(page, id);
+    await stepInto(page, /Reports export to CSV/);
+    await page.locator('#board-area').getByRole('article', { name: note.title }).dblclick();
+
+    const dialog = page.getByRole('dialog');
+    const body = dialog.getByLabel('Body', { exact: true });
+    const step = dialog.getByLabel(/^Step/);
+    const saveMine = dialog.getByRole('button', { name: 'Save yours over theirs' });
+    await body.fill('Draft before retry');
+    await step.selectOption(removed.key);
+    aiApplies(root, [
+      { op: 'card.update', id: note.id, body: 'Their draft' },
+      { op: 'remove', id: removed.key, rev: 1 },
+    ]);
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    await saveMine.click();
+    await expect(dialog.getByRole('alert').filter({ hasText: /step is no longer on the plan/i })).toBeVisible();
+    await step.selectOption('');
+
+    const retry = holdNextSave();
+    try {
+      await saveMine.click();
+      await retry.started;
+      await body.press('End');
+      await page.keyboard.insertText('Typing during the retry');
+      await expect(body).toHaveValue('Draft before retry');
+      await expect(dialog.getByPlaceholder('Note title...')).not.toBeEditable();
+      await expect(step).toBeDisabled();
+      await retry.settle();
+      await expect(dialog).toHaveCount(0);
+      expect((await api(id, 'board')).cards[0]).toMatchObject({ body: 'Draft before retry' });
+    } finally {
+      retry.release();
+    }
+  });
+
+  test('an older note save reply cannot undo another note’s pin on the Board', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const [note] = (await api(id, 'board')).cards;
+    aiApplies(root, [{ op: 'card.add', kind: 'note', title: 'Pin this note', area: note.area }]);
+    await openBoard(page, id, root);
+    const holdNextSave = await watchBoardSaves(page, id);
+    await stepInto(page, /Reports export to CSV/);
+
+    const area = page.locator('#board-area');
+    await area.getByRole('article', { name: note.title }).dblclick();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByPlaceholder('Note title...').fill('Saved while pinning');
+    const save = holdNextSave();
+    try {
+      await dialog.getByRole('button', { name: 'Save changes' }).click();
+      await save.started;
+      await dialog.getByRole('button', { name: 'Cancel' }).click();
+      await expect(dialog).toHaveCount(0);
+
+      const other = area.getByRole('article', { name: 'Pin this note' });
+      await other.getByRole('button', { name: 'Actions for Pin this note' }).click({ force: true });
+      await page.getByRole('menuitem', { name: 'Pin note' }).click();
+      const pinned = other.getByText('Pinned.', { exact: true });
+      await expect(pinned).toBeAttached();
+      await save.settle();
+      await expect(area.getByRole('article', { name: 'Saved while pinning' })).toBeVisible();
+      await expect(pinned).toBeAttached();
+    } finally {
+      save.release();
+    }
+  });
+
+  test('a slow save of one note settling after opening another note does not leak its conflict or close the new dialog', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const plan = await api(id, 'plan');
+    const cp = plan.checkpoints.find((c: any) => c.title === 'Reports export to CSV');
+    const noteA = (await api(id, 'board')).cards[0];
+    aiApplies(root, [{ op: 'card.add', kind: 'note', title: 'Second note', body: 'Note B body.', area: `checkpoint:${cp.key}` }]);
+    const noteB = (await api(id, 'board')).cards.find((c: any) => c.title === 'Second note');
+    expect(noteB).toBeDefined();
+
+    await openBoard(page, id, root);
+
+    const holdNextSave = await watchBoardSaves(page, id);
+
+    await stepInto(page, /Reports export to CSV/);
+
+    const cardA = page.locator('#board-area').getByRole('article', { name: 'Export leaks memory' });
+    const cardB = page.locator('#board-area').getByRole('article', { name: 'Second note' });
+    const dialog = page.getByRole('dialog');
+    const title = dialog.getByPlaceholder('Note title...');
+    const body = dialog.getByPlaceholder('Write Markdown, lists, notes, or links...');
+    const conflict = dialog.getByTestId('note-conflict');
+
+    // Part 1: Note A save settles with 409 after user closes A and opens Note B -> B shows nothing of A's conflict
+    await cardA.dblclick();
+    await expect(dialog).toBeVisible();
+    await body.fill('In-flight edit on Note A');
+    aiApplies(root, [{ op: 'card.update', id: noteA.id, body: 'AI changed Note A before save' }]);
+
+    const gate1 = holdNextSave();
+    try {
+      await dialog.getByRole('button', { name: 'Save changes' }).click();
+      await gate1.started;
+
+      await dialog.getByRole('button', { name: 'Cancel' }).click();
+      await expect(dialog).toHaveCount(0);
+
+      await cardB.dblclick();
+      await expect(dialog).toBeVisible();
+      await expect(title).toHaveValue('Second note');
+      await body.fill('Typing in Note B');
+
+      await gate1.settle();
+    } finally {
+      gate1.release();
+    }
+
+    await expect(dialog).toBeVisible();
+    await expect(title).toHaveValue('Second note');
+    await expect(body).toHaveValue('Typing in Note B');
+    await expect(conflict).toHaveCount(0);
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    await expect(dialog).toHaveCount(0);
+    expect((await api(id, 'board')).cards.find((c: any) => c.id === noteB.id)).toMatchObject({ body: 'Typing in Note B' });
+
+    // Part 2: Note A save settles with 200 success after user closes A and opens Note B -> B is not closed
+    await cardA.dblclick();
+    await expect(dialog).toBeVisible();
+    await expect(body).toHaveValue('AI changed Note A before save');
+    await body.fill('Slow success on Note A');
+
+    const gate2 = holdNextSave();
+    try {
+      await dialog.getByRole('button', { name: 'Save changes' }).click();
+      await gate2.started;
+
+      await dialog.getByRole('button', { name: 'Cancel' }).click();
+      await expect(dialog).toHaveCount(0);
+
+      await cardB.dblclick();
+      await expect(dialog).toBeVisible();
+      await expect(title).toHaveValue('Second note');
+      await body.fill('Uninterrupted edit in Note B');
+
+      await gate2.settle();
+    } finally {
+      gate2.release();
+    }
+
+    await expect(dialog).toBeVisible();
+    await expect(title).toHaveValue('Second note');
+    await expect(body).toHaveValue('Uninterrupted edit in Note B');
+
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    await expect(dialog).toHaveCount(0);
+    const finalCards = (await api(id, 'board')).cards;
+    expect(finalCards.find((c: any) => c.id === noteA.id)).toMatchObject({ body: 'Slow success on Note A' });
+    expect(finalCards.find((c: any) => c.id === noteB.id)).toMatchObject({ body: 'Uninterrupted edit in Note B' });
+  });
+
+  test('a second conflict after Load their version sends only fields touched after loading, keeping untouched AI edits', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const note = (await api(id, 'board')).cards[0];
+
+    const saveRequests: any[] = [];
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().includes(`/api/workspace/${id}/board/changes`)) {
+        try { saveRequests.push(req.postDataJSON()); } catch { /* ignore */ }
+      }
+    });
+
+    await openBoard(page, id, root);
+    await stepInto(page, /Reports export to CSV/);
+
+    const card = page.locator('#board-area').getByRole('article', { name: 'Export leaks memory' });
+    await card.dblclick();
+    const dialog = page.getByRole('dialog');
+    const title = dialog.getByPlaceholder('Note title...');
+    const body = dialog.getByPlaceholder('Write Markdown, lists, notes, or links...');
+    const pin = dialog.getByRole('checkbox');
+    const conflict = dialog.getByTestId('note-conflict');
+
+    // Touch title + pinned before first conflict
+    await title.fill('User v1 draft title');
+    await pin.click();
+    aiApplies(root, [{ op: 'card.update', id: note.id, title: 'AI v2 title', body: 'AI v2 body', pinned: false }]);
+
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    await expect(conflict).toBeVisible();
+
+    // Load their version -> clears prior touched fields (title, pinned)
+    await conflict.getByRole('button', { name: 'Load their version' }).click();
+    await expect(conflict).toHaveCount(0);
+    await expect(title).toBeFocused();
+    await expect(title).toHaveValue('AI v2 title');
+    await expect(body).toHaveValue('AI v2 body');
+    await expect(pin).not.toBeChecked();
+
+    // Touch ONLY body, hit a second conflict where AI changes title, body, and pinned, then revert body
+    await body.fill('User v2 draft body');
+    aiApplies(root, [{ op: 'card.update', id: note.id, title: 'AI v3 title', body: 'AI v3 body', pinned: true }]);
+
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    await expect(conflict).toBeVisible();
+
+    await body.fill('AI v2 body');
+    await conflict.getByRole('button', { name: 'Save yours over theirs' }).click();
+    await expect(dialog).toHaveCount(0);
+
+    expect(saveRequests.at(-1)?.changes?.[0]).toEqual({
+      op: 'update_card',
+      id: note.id,
+      rev: 3,
+      body: 'AI v2 body',
+    });
+    const after = (await api(id, 'board')).cards.find((c: any) => c.id === note.id);
+    expect(after).toMatchObject({
+      title: 'AI v3 title',
+      body: 'AI v2 body',
+      pinned: true,
+      rev: 4,
+      updatedBy: 'user',
+    });
+  });
+
+  test('a conflict focuses its first button and two clicks in one tick send one save', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const note = (await api(id, 'board')).cards[0];
+
+    const saveRequests: any[] = [];
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().includes(`/api/workspace/${id}/board/changes`)) {
+        try { saveRequests.push(req.postDataJSON()); } catch { /* ignore */ }
+      }
+    });
+
+    await openBoard(page, id, root);
+    await stepInto(page, /Reports export to CSV/);
+
+    const card = page.locator('#board-area').getByRole('article', { name: 'Export leaks memory' });
+    await card.dblclick();
+    const dialog = page.getByRole('dialog');
+    const body = dialog.getByPlaceholder('Write Markdown, lists, notes, or links...');
+    const conflict = dialog.getByTestId('note-conflict');
+
+    await body.fill('Draft hitting conflict');
+    aiApplies(root, [{ op: 'card.update', id: note.id, body: 'AI concurrent edit' }]);
+
+    await dialog.getByRole('button', { name: 'Save changes' }).click();
+    await expect(conflict).toBeVisible();
+    await expect(conflict.getByRole('button', { name: 'Copy your text' })).toBeFocused();
+
+    // Two synchronous clicks in the same JS tick must send only one save
+    const reqsBefore = saveRequests.length;
+    await conflict.getByRole('button', { name: 'Save yours over theirs' }).evaluate((el: HTMLButtonElement) => {
+      el.click();
+      el.click();
+    });
+    await expect(dialog).toHaveCount(0);
+    expect(saveRequests.length).toBe(reqsBefore + 1);
+    const after = (await api(id, 'board')).cards.find((c: any) => c.id === note.id);
+    expect(after).toMatchObject({ body: 'Draft hitting conflict', rev: 3, updatedBy: 'user' });
   });
 });
