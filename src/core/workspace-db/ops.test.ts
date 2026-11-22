@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { exportPlanMarkdown, getBlock, getCard, getItem, listBlocks, listCards, listLinks, listPositions, stripExport, type BatchResult } from './index.js';
+import { exportPlanMarkdown, getBlock, getCard, getItem, getNow, listBlocks, listCards, listLinks, listPositions, readDbId, stripExport, undo, type BatchResult } from './index.js';
 import { SAMPLE_PLAN, apply, cleanTemp, idOf, rev, seeded, applyBatch } from './testing.js';
 
 afterEach(cleanTemp);
@@ -318,5 +318,34 @@ describe('aliases and prefixes', () => {
     await apply(db, [{ op: 'link', from: uuid, to: r.ids.b! }, { op: 'place', node: '5b0e2c1', x: 5, y: 6 }]);
     expect(listLinks(db)[0]).toMatchObject({ from: r.ids.a, to: r.ids.b });
     expect(listPositions(db)[0]!.nodeId).toBe(r.ids.a);
+  });
+});
+
+describe('Now and forgetting a place (DB3b: the app writes them)', () => {
+  it('now names one open step that is not a heading for others; null clears it; each is a change that undo can take back', async () => {
+    const { db } = await seeded();
+    const step = idOf(db, 'Nested step one');
+    await apply(db, [{ op: 'now', id: step }], 'user');
+    expect(getNow(db)).toMatchObject({ itemId: step, by: 'user' });
+    for (const [words, why] of [['Write the file', /heading for open steps/], ['Query the report rows', /already done/], ['Reports export to CSV', /needs step/]] as const) {
+      const refusal = refused(await applyBatch(db, { ifRevision: rev(db), dbId: readDbId(db.sqlite), ops: [{ op: 'now', id: idOf(db, words) }] }, { by: 'user' }));
+      expect(refusal.errors[0]!.message, words).toMatch(why);
+    }
+    expect(getNow(db)).toMatchObject({ itemId: step });
+    const cleared = await apply(db, [{ op: 'now', id: null }], 'user');
+    expect(getNow(db)).toBeNull();
+    const back = await undo(db, cleared.seq, { by: 'user', dbId: readDbId(db.sqlite) });
+    expect(back.ok).toBe(true);
+    expect(getNow(db)).toMatchObject({ itemId: step });
+  });
+
+  it('place with x and y of null forgets the place, also of a node that is gone', async () => {
+    const { db } = await seeded();
+    const r = await apply(db, [{ op: 'card.add', title: 'A', as: 'a' }]);
+    const a = r.ids.a!;
+    await apply(db, [{ op: 'place', node: a, x: 1, y: 2 }]);
+    db.sqlite.prepare("INSERT INTO positions(node_id, x, y) VALUES ('checkpoint:old-words-key', 3, 4)").run();
+    await apply(db, [{ op: 'place', node: a, x: null, y: null }, { op: 'place', node: 'checkpoint:old-words-key', x: null, y: null }]);
+    expect(listPositions(db)).toEqual([]);
   });
 });

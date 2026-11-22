@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { readSwitch } from './workspace-db-switch.js';
 
 import {
   INPUT_REQUEST_HARNESS_LIMIT,
@@ -406,6 +407,17 @@ function forgetLeft(remembered: Set<string>, window: ReadonlySet<string>): void 
 }
 
 /**
+ * The poll token of a workspace moved to its database, `db_id:revision`, or null when it is not in its database. A read
+ * that fails for a moment (busy) keeps the last token, so it does not read as a change.
+ */
+export async function dbPollToken(workspaceRoot: string, last: string | null | undefined = null): Promise<string | null> {
+  if (readSwitch(workspaceRoot)?.state !== 'on') return null;
+  const { readAppDb } = await import('./workspace-db-app.js');
+  const { readDbId, readRevision } = await import('./workspace-db/index.js');
+  return readAppDb(workspaceRoot, (view) => `${readDbId(view.sqlite)}:${readRevision(view.sqlite)}`).catch(() => last ?? null);
+}
+
+/**
  * The live feed for one workspace: what the AI told the screen, the questions it
  * asked and when they were answered, oldest first. It first replays what is
  * recent (since `since`, at most the last {@link SCREEN_EVENT_REPLAY_LIMIT}), then yields
@@ -437,6 +449,7 @@ export async function* watchLiveEvents(
   // Saying which step is being worked on reads the plan again too.
   const nowFile = path.join(workspaceRoot, PLAN_NOW_FILE);
   let planLast: string | undefined;
+  let dbLast: string | null | undefined;
   const pendingPrRepos = new Set<string>();
   // Commits and documents are noticed from `stat`s alone: no `git`, no file read. Which repositories and folders to
   // look at comes from the manifest, which is read again only when it changes.
@@ -497,6 +510,16 @@ export async function* watchLiveEvents(
         }
       }
       polls += 1;
+      // A workspace moved to its database: the poll token is `db_id:revision` (one read), so any committed change, a
+      // restored or replaced database included (a new db_id at the same revision), reads the plan and the board again.
+      const token = await dbPollToken(workspaceRoot, dbLast);
+      if (dbLast !== undefined && token !== null && token !== dbLast) {
+        const timestamp = new Date(now).toISOString();
+        yield { type: 'plan', timestamp };
+        const revision = Number(token.slice(token.lastIndexOf(':') + 1));
+        yield { type: 'screen', event: { id: `db-${token}`, timestamp, harness: 'contextspace', event: 'board', payload: { revision, changes: 0 } } };
+      }
+      dbLast = token;
       // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.
       const files = await liveFiles(workspaceRoot);
       const current = await signature([files.screen, files.board, ...files.chat]);

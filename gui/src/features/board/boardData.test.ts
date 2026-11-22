@@ -263,3 +263,30 @@ describe('board change builders', () => {
   });
 });
 
+
+describe('a board from a workspace moved to its database (DB3b)', () => {
+  const AT = '2026-11-01T10:00:00.000Z';
+  const card = { id: 'k3m9a2', kind: 'note', title: 'A note', body: 'b', pinned: false, archived: false, by: 'user', at: AT, updatedBy: 'claude', updatedAt: AT, area: 'checkpoint:c3m9aq', step: 's7k2qa', rev: 4 };
+
+  it('keeps database card ids, each card’s rev and the board’s dbId; links and places of those cards stay', () => {
+    const board = cleanBoard({ revision: 9, dbId: '0f6b21ebd5f8bc44', store: 'database', cards: [card], links: [{ id: '00000011-1111-4222-8333-444455556666', from: 'k3m9a2', to: 'checkpoint:c3m9aq', by: 'user', at: AT }], positions: { k3m9a2: { x: 1, y: 2 } } });
+    expect(board.dbId).toBe('0f6b21ebd5f8bc44');
+    expect(board.cards[0]).toMatchObject({ id: 'k3m9a2', rev: 4, area: 'checkpoint:c3m9aq', step: 's7k2qa' });
+    expect(board.links).toHaveLength(1);
+    expect(board.positions).toEqual({ k3m9a2: { x: 1, y: 2 } });
+    expect(isBoardNodeId('k3m9a2')).toBe(true);
+    // not a card id: wrong letter, an i/l/o/u, or the wrong length
+    for (const id of ['s3m9a2', 'k3m9a', 'k3m9ai', 'k3m9a22']) expect(isBoardNodeId(id), id).toBe(false);
+  });
+
+  it('drops a rev that is not a positive whole number, and a dbId that is not hex', () => {
+    const board = cleanBoard({ revision: 1, dbId: '<script>', cards: [{ ...card, rev: 1.5 }, { ...card, id: 'k3m9a3', rev: -1 }] });
+    expect(board.dbId).toBeUndefined();
+    expect(board.cards.map((c) => c.rev)).toEqual([undefined, undefined]);
+  });
+
+  it('an edit sends the rev it started from', () => {
+    expect(updateNoteChange('k3m9a2', { body: 'x', rev: 4 })).toEqual({ op: 'update_card', id: 'k3m9a2', rev: 4, body: 'x' });
+    expect(updateNoteChange('k3m9a2', { pinned: true })).toEqual({ op: 'update_card', id: 'k3m9a2', pinned: true });
+  });
+});

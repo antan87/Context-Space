@@ -55,6 +55,7 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   link: ['from', 'to', 'label'],
   unlink: ['from', 'to', 'id'],
   place: ['node', 'x', 'y'],
+  now: ['id'],
 };
 const FIELD_HINTS: Record<string, string> = {
   title: 'text', name: 'text', question: 'text', parent: 'under', parentId: 'under', checkpoint: 'under', position: 'after',
@@ -667,6 +668,18 @@ export const OPS: Record<string, OpFn> = {
   },
 
   place(ctx, op) {
+    if (op.x === null && op.y === null) {
+      // x and y of null forget where the node was put, so the places of nodes that have gone do not pile up to the limit
+      let node: string;
+      try { node = canonicalNode(ctx.db, ctx.doc, op.node); } catch (error) {
+        if (typeof op.node !== 'string' || !op.node) throw error;
+        node = op.node; // a node that is gone may still have a place to forget
+      }
+      ctx.rec.capture('positions', node);
+      ctx.db.prepare('DELETE FROM positions WHERE node_id = ?').run(node);
+      ctx.log.push(`forget the place of ${node}`);
+      return;
+    }
     if (typeof op.x !== 'number' || typeof op.y !== 'number' || !Number.isFinite(op.x) || !Number.isFinite(op.y)) throw bad('place needs "node" and numeric "x" and "y".');
     if (Math.abs(op.x) > LIMITS.coordinate || Math.abs(op.y) > LIMITS.coordinate) throw bad(`x and y stay between -${LIMITS.coordinate} and ${LIMITS.coordinate}.`);
     const node = canonicalNode(ctx.db, ctx.doc, op.node);
@@ -677,6 +690,24 @@ export const OPS: Record<string, OpFn> = {
     ctx.rec.capture('positions', node);
     ctx.db.prepare('INSERT INTO positions(node_id, x, y) VALUES (?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET x = excluded.x, y = excluded.y').run(node, op.x, op.y);
     ctx.log.push(`place ${node} at ${op.x},${op.y}`);
+  },
+
+  now(ctx, op) {
+    ctx.rec.capture('now', 1);
+    if (op.id === null) {
+      ctx.db.prepare('DELETE FROM now WHERE id = 1').run();
+      ctx.log.push('now: no step is being worked on');
+      return;
+    }
+    const b = block(ctx, op.id, ['step']);
+    if (b.done) throw bad(`${b.id} is already done: "${clip(b.name ?? '', 80)}". Only an open step can be worked on now.`);
+    const all = ctx.doc.blocks;
+    const byId = new Map(all.map((x) => [x.id, x]));
+    if (all.some((x) => x.kind === 'step' && !x.done && isDescendant(byId, x, b))) {
+      throw bad(`${b.id} "${clip(b.name ?? '', 80)}" is a heading for open steps under it: name one of those.`);
+    }
+    ctx.db.prepare('INSERT INTO now(id, item_id, by, at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET item_id = excluded.item_id, by = excluded.by, at = excluded.at').run(b.id, ctx.by, ctx.at);
+    ctx.log.push(`now ${b.id} "${clip(b.name ?? '', 60)}"`);
   },
 };
 

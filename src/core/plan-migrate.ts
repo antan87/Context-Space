@@ -44,6 +44,7 @@ import {
   dbFilePath, exportPlanMarkdown, exportPortableSnapshot, listBackups, maybeBackup, openWorkspaceDb, readDbId, readImportRecord, readRevision,
   restoreBackup, stripExport, writeImportRecord, type DbImportRecord, type Unmapped, type WorkspaceDb,
 } from './workspace-db/index.js';
+import { exportHeaderOf } from './workspace-db-exports.js';
 import { SWITCH_FILE, readSwitch, switchPath, type SwitchRecord } from './workspace-db-switch.js';
 
 export const ARCHIVE_ROOT = '.contextspace/archive';
@@ -298,7 +299,7 @@ async function refuseLinks(root: string, rel: string): Promise<void> {
  * The locks today's writers take, in a fixed order: the plan (PLAN.md), the older planning notes and plan store (the
  * order the older plan's own move takes them in), the Board, the state, the seen file.
  */
-async function withWorkspaceLocks<T>(root: string, run: () => Promise<T>): Promise<T> {
+export async function withWorkspaceLocks<T>(root: string, run: () => Promise<T>): Promise<T> {
   const dot = path.join(root, '.contextspace');
   const locks = [
     { file: path.join(dot, 'plan-file.lock'), staleMs: 60_000 },
@@ -1187,7 +1188,9 @@ async function rollBack(root: string, manifest: Manifest, options: { by: string;
     const file = toFs(root, rel);
     const hash = await hashFile(file);
     if (hash === null) continue;
-    if (hash === digest) { result.exportsKeptAs.push(relativePosix(root, await moveInto(file, dir, `exports/${rel}`))); continue; }
+    // the move's own export, or a later one the app wrote from the database (DB3b): an untouched export, by its own header
+    const untouched = hash === digest || exportHeaderOf(rel, await fs.readFile(file, 'utf8').catch(() => '')) !== null;
+    if (untouched) { result.exportsKeptAs.push(relativePosix(root, await moveInto(file, dir, `exports/${rel}`))); continue; }
     const original = manifest.sources.find((s) => s.path === rel);
     if (original && hash === original.sha256) continue; // already put back by an earlier run, or never moved
     if (original && result.leftAsTheyAre.includes(rel)) continue; // changed before the move archived it: the person's own latest text
@@ -1452,7 +1455,9 @@ export async function migrateStatus(workspacePath: string): Promise<MigrateStatu
     const planSafe = await refuseLinks(root, 'PLAN.md').then(() => true, (error) => { addOffer(reason(error)); return false; });
     if (planSafe) {
       const planHash = await hashFile(toFs(root, 'PLAN.md'));
-      if (planHash !== manifest.exports.plan) status.cameBack.push({ path: 'PLAN.md', note: planHash === null ? 'is gone; the database still holds the plan' : 'was edited after the move; the edit is not in the database (importing hand edits comes later)' });
+      // the app writes PLAN.md again after each change (DB3b): an untouched export is not an edit
+      const planUntouched = planHash !== null && exportHeaderOf('PLAN.md', await fs.readFile(toFs(root, 'PLAN.md'), 'utf8').catch(() => '')) !== null;
+      if (planHash !== manifest.exports.plan && !planUntouched) status.cameBack.push({ path: 'PLAN.md', note: planHash === null ? 'is gone; the database still holds the plan' : 'was edited after the move; the edit is not in the database (importing hand edits comes later)' });
     }
   }
   if (record.state === 'on' && !liveDb && !dbLinkProblem) {

@@ -370,9 +370,9 @@ async function readAt(location: Location): Promise<Board> {
 }
 
 /**
- * Reads the board. A workspace moved to its database has no Board file any more (it is in the move's archive) and
- * nothing reads the database for the app until DB3b, so the read is refused with the same words as a write, rather
- * than showing an empty board that would look like lost cards.
+ * Reads the board file. A workspace moved to its database has no Board file any more (it is in the move's archive): the
+ * app reads its database (core/board-db-app), and this read, which the command line and MCP use until DB3c, is refused
+ * with the same words as a write, rather than showing an empty board that would look like lost cards.
  */
 export async function readBoard(workspacePath: string): Promise<Board> {
   const location = await locate(workspacePath);
@@ -536,7 +536,7 @@ export function parseBoardChanges(input: unknown, options: { allowCommitAbout?: 
 type Prepared = { change: BoardChange; filePath?: string; stepAreas?: Map<string, string> };
 
 /** A file card names a file that exists inside the workspace and that the documents panel can open. */
-async function checkCardFile(root: string, given: string): Promise<string> {
+export async function checkCardFile(root: string, given: string): Promise<string> {
   const raw = given.trim().replace(/\\/g, '/');
   if (raw.startsWith('/') || /^[a-zA-Z]:/.test(raw)) throw new BoardChangeError(`"${given}" is not inside the workspace. Give the path relative to the workspace folder, such as docs/overview.html.`);
   let name: string;

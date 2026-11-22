@@ -29,7 +29,9 @@ export type WorkspaceDbErrorCode =
   | 'backup_failed'
   /** The query was refused or stopped. */
   | 'query_refused'
-  | 'query_timeout';
+  | 'query_timeout'
+  /** The item changed before the action could start against the revision read. */
+  | 'rev_conflict';
 
 export class WorkspaceDbError extends Error {
   readonly code: WorkspaceDbErrorCode;

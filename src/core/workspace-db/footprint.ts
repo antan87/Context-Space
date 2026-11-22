@@ -148,6 +148,10 @@ export function footprintOf(db: DatabaseSync, doc: Doc, ops: readonly Op[]): Foo
         }
         break;
       }
+      case 'now':
+        // Now is one row: last write wins, but a batch that names a step still sees a change to it
+        if (target) keys.add(`blocks:${target.id}`);
+        break;
       default:
         break;
     }

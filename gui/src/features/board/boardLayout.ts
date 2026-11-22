@@ -189,6 +189,8 @@ export type CardData = {
   compact?: boolean;
   area?: string;
   step?: string;
+  /** The card's revision, from a workspace moved to its database: an edit sends it, so a change made meanwhile is refused, not overwritten. */
+  rev?: number;
 };
 export type NoteData = CardData;
 export type FileCardData = CardData & {
@@ -356,6 +358,7 @@ export function cardPlan(card: BoardCard, now: number): CardPlan {
     fresh: !card.archived && isFresh(card, now),
     area: card.area,
     step: card.step,
+    ...(card.rev !== undefined ? { rev: card.rev } : {}),
   };
   const z = card.pinned ? Z.pinned : Z.card;
   return card.kind === 'note'

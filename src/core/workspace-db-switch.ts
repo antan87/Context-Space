@@ -4,8 +4,9 @@
  *
  * It is one small file, `.contextspace/workspace-db-switch.json`, absent by default. While it is there, every writer of
  * the old files (PLAN.md through the plan store, the Board file, Now, the seen files, the plan checks in state.json)
- * refuses and says why, because until the app reads the database (DB3b) a write to an old file would be lost or would
- * split the workspace in two. Its states:
+ * refuses and says why: a write to an old file would be lost or would split the workspace in two. With the switch `on`,
+ * the app reads and writes the database instead (DB3b, core/workspace-db-app `storeOf`); the command line and MCP keep
+ * refusing until DB3c. Its states:
  * - `moving`: a move started and has not finished (or was interrupted). `ctxspace plan migrate` finishes or undoes it.
  * - `on`: the move finished.
  * - `restoring`: `ctxspace plan restore` started and has not finished. Running it again finishes it.
@@ -46,12 +47,15 @@ export function readSwitch(root: string): SwitchRecord | null {
   try {
     text = readFileSync(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { state: 'unreadable' };
-    // Read first, then look: a dangling link (or anything else standing there) still counts as on.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') return { state: 'unreadable' };
+    // Read first, then look: a dangling link (or anything else standing there) still counts as on;
+    // ENOTDIR on lstat means `.contextspace` itself is a file, so there is no switch.
     try {
       lstatSync(file);
     } catch (statError) {
-      if ((statError as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      const statCode = (statError as NodeJS.ErrnoException).code;
+      if (statCode === 'ENOENT' || statCode === 'ENOTDIR') return null;
     }
     return { state: 'unreadable' };
   }

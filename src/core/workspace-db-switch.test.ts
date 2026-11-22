@@ -22,6 +22,7 @@ import { changePlanFile, clearPlanNow, movePlanToFile, readPlanFile, runPlanChec
 import { migrateWorkspace, restoreWorkspace } from './plan-migrate.js';
 import { markSeen, whatsNew } from './whats-new.js';
 import { SWITCH_FILE, WorkspaceMovedError, readSwitch } from './workspace-db-switch.js';
+import { closeAppDb } from './workspace-db-app.js';
 import { registerBoardRoutes } from '../http/board-routes.js';
 import { registerPlanFileRoutes } from '../http/plan-file-routes.js';
 import { registerNewsRoutes } from '../http/news-routes.js';
@@ -86,6 +87,7 @@ beforeEach(async () => {
   verify.during = undefined;
 });
 afterEach(async () => {
+  await closeAppDb(); // the app's connections, and the backup a write scheduled, end before the folder goes
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -128,25 +130,42 @@ describe('with the switch on, every old writer refuses and writes nothing', () =
     expect(await fs.readFile(path.join(root, '.contextspace', 'state.json'), 'utf8')).toBe(stateBefore);
   });
 
-  it('an HTTP write route: the Board and the plan answer 409 with the sentence', async () => {
+  it('an HTTP write route (DB3b): with the move finished the Board, the plan and seen write the database and no old file; mid-move they answer 409 with the sentence', async () => {
     const app = new Hono();
     registerBoardRoutes(app, async () => root);
     registerPlanFileRoutes(app, async () => root);
     registerNewsRoutes(app, async () => root);
-    const before = await treeHash();
-    const post = async (url: string, body: unknown) => {
-      const response = await app.request(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      return { status: response.status, body: await response.json() as { error: string } };
+    const call = async (url: string, body?: unknown) => {
+      const response = await app.request(url, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as { error: string } & Record<string, any> };
     };
-    const board = await post('/api/workspace/csv/board/changes', { changes: [{ op: 'add_card', kind: 'note', title: 'New' }] });
-    expect(board.status).toBe(409);
-    expect(board.body.error).toMatch(MOVED);
-    const tick = await post('/api/workspace/csv/plan/steps/add-the-export-button/tick', { done: true, expected: 'Add the Export button' });
-    expect(tick.status).toBe(409);
-    expect(tick.body.error).toMatch(MOVED);
-    const seen = await post('/api/workspace/csv/news/seen', { reader: 'user', at: AT });
-    expect(seen.status).toBe(409);
-    expect(await treeHash()).toEqual(before);
+    // the old files the move archived, and the copied state file
+    const OLD = ['contextspace-board.json', '.contextspace/board-changes.jsonl', '.contextspace/plan-changes.jsonl', '.contextspace/plan-now.json', '.contextspace/plan-seen.json', '.contextspace/seen.json', 'contextspace-plan.json'];
+    const oldState = async () => Object.fromEntries(await Promise.all([...OLD, '.contextspace/state.json'].map(async (rel) => [rel, await fs.readFile(path.join(root, rel), 'utf8').catch(() => null)])));
+    const before = await oldState();
+
+    // mid-move or mid-restore: refused, nothing written
+    const record = readSwitch(root)!;
+    await fs.writeFile(path.join(root, SWITCH_FILE), JSON.stringify({ ...record, state: 'restoring' }));
+    const midTree = await treeHash();
+    const refused = await call('/api/workspace/csv/board/changes', { changes: [{ op: 'add_card', kind: 'note', title: 'New' }] });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/being restored/);
+    expect((await call('/api/workspace/csv/plan')).status).toBe(409);
+    expect(await treeHash()).toEqual(midTree);
+    await fs.writeFile(path.join(root, SWITCH_FILE), JSON.stringify(record));
+
+    const board = await call('/api/workspace/csv/board/changes', { changes: [{ op: 'add_card', kind: 'note', title: 'New' }] });
+    expect(board.status).toBe(200);
+    expect(board.body.cards.map((c: { title: string }) => c.title)).toContain('New');
+    const plan = (await call('/api/workspace/csv/plan')).body;
+    const step = plan.checkpoints[0].steps.find((s: { text: string }) => s.text === 'Add the Export button');
+    const tick = await call(`/api/workspace/csv/plan/steps/${step.key}/tick`, { done: true, expected: 'Add the Export button' });
+    expect(tick.status).toBe(200);
+    const news = await call('/api/workspace/csv/news?reader=user');
+    const seen = await call('/api/workspace/csv/news/seen', { reader: 'user', at: news.body.at });
+    expect(seen.status).toBe(200);
+    expect(await oldState()).toEqual(before);
   });
 
   it('a CLI verb: ctxspace plan done', async () => {
@@ -224,6 +243,19 @@ describe('readSwitch reads first and looks after (CodeQL: no check-then-read)', 
 
   it.skipIf(process.platform === 'win32')('a dangling link where the switch should be still counts as on (unreadable), never as off', async () => {
     await fs.symlink(path.join(dir, 'gone.json'), path.join(dir, ...SWITCH_FILE.split('/')));
+    expect(readSwitch(dir)).toEqual({ state: 'unreadable' });
+  });
+
+  it('a regular file at .contextspace counts as off (ENOTDIR)', async () => {
+    await fs.rm(path.join(dir, '.contextspace'), { recursive: true, force: true });
+    await fs.writeFile(path.join(dir, '.contextspace'), 'not a folder');
+    expect(readSwitch(dir)).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')('a link at the switch pointing through a regular file still counts as on (unreadable)', async () => {
+    const file = path.join(dir, 'plain-file');
+    await fs.writeFile(file, 'x');
+    await fs.symlink(path.join(file, 'child.json'), path.join(dir, ...SWITCH_FILE.split('/')));
     expect(readSwitch(dir)).toEqual({ state: 'unreadable' });
   });
 });

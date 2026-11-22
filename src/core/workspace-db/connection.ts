@@ -230,8 +230,8 @@ function openCore(workspacePath: string, options: OpenOptions, create: boolean):
       try { sqlite.close(); } catch { /* ignore */ }
     },
     readerConnection() {
-      if (readOnly) return sqlite;
       if (!this.isCurrent()) throw replaced();
+      if (readOnly) return sqlite;
       if (!reader) {
         reader = new DatabaseSync(file, { readOnly: true, allowExtension: false });
         reader.exec(`PRAGMA busy_timeout = ${options.busy === 'cli' ? CLI_BUSY_MS : 0}`);
@@ -243,6 +243,7 @@ function openCore(workspacePath: string, options: OpenOptions, create: boolean):
       while (pending.size) await Promise.allSettled([...pending]);
     },
     isCurrent() {
+      if (closed) return false;
       if (identity === '') return true;
       const now = identityOf(file);
       return now !== '' && now === identity; // a vanished file is not the one we opened

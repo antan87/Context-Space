@@ -47,18 +47,22 @@ const toRun = (r: Record<string, unknown>): CheckRun => ({
 
 /**
  * Writes the run row for a checkpoint, before its check runs. Throws when the item is not a checkpoint with a check
- * (nothing to run). The caller runs the check, then calls {@link finishCheckRun}.
+ * (nothing to run), or with `rev_conflict` when `expectedRev` does not match the item's live rev under the lock.
+ * The caller runs the check, then calls {@link finishCheckRun}.
  */
-export function startCheckRun(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string }): Promise<CheckRun> {
+export function startCheckRun(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string; expectedRev?: number }): Promise<CheckRun> {
   return db.serialize(() => startLocked(db, itemId, options));
 }
 
-async function startLocked(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string }): Promise<CheckRun> {
+async function startLocked(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string; expectedRev?: number }): Promise<CheckRun> {
   await beginImmediate(db);
   try {
     const item = db.sqlite.prepare("SELECT id, kind, rev, text, detail FROM blocks WHERE id = ?").get(itemId) as { id: string; kind: string; rev: number; text: string; detail: string } | undefined;
     if (!item) throw new WorkspaceDbError('invalid', `No plan item ${itemId}.`);
     if (item.kind !== 'checkpoint') throw new WorkspaceDbError('invalid', `${itemId} is a ${item.kind}; only a checkpoint has a check to run.`);
+    if (options.expectedRev !== undefined && Number(item.rev) !== options.expectedRev) {
+      throw new WorkspaceDbError('rev_conflict', 'This changed since you read it (someone else changed it meanwhile). Nothing was changed; look at it again.');
+    }
     const check = effectiveCheck(item.detail);
     if (check.kind === 'none') throw new WorkspaceDbError('invalid', `${itemId} has no Check: line, so there is nothing to run. Tick it directly.`);
     const hash = contentHash(item.text, item.detail);

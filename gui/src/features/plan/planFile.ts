@@ -16,6 +16,8 @@ export interface PlanProof {
 
 export interface PlanFileStep {
   key: string;
+  /** The item's revision, from a workspace moved to its database. */
+  rev?: number;
   text: string;
   done: boolean;
   /** The key of the step it is nested under: that step is a heading for it. */
@@ -24,6 +26,8 @@ export interface PlanFileStep {
 
 export interface PlanFileDecision {
   key: string;
+  /** The item's revision, from a workspace moved to its database. */
+  rev?: number;
   question: string;
   done: boolean;
   answer?: string;
@@ -36,6 +40,8 @@ export interface PlanFileDecision {
 
 export interface PlanFileCheckpoint {
   key: string;
+  /** The item's revision, from a workspace moved to its database. */
+  rev?: number;
   title: string;
   done: boolean;
   /** The command that proves it; `null` for the workspace's own checks; missing without a check. */
@@ -72,6 +78,10 @@ export interface PlanFileView {
   changes: PlanFileChange[];
   /** The step someone said they are working on now (an AI or a person), when it is still an open step. */
   now?: PlanNow | null;
+  /** A workspace moved to its database: every key is the item's id, each item carries its `rev`, and the poll token is `dbId:revision`. */
+  store?: 'database';
+  revision?: number;
+  dbId?: string;
 }
 
 /** Who said which step is being worked on now, and when. */

@@ -18,7 +18,7 @@ const decisionView = (decision: PlanDecision) => ({
   ...(decision.checkpoint ? { checkpoint: decision.checkpoint } : {}),
 });
 
-function view(read: PlanFileRead, checks: Record<string, PlanEvidence>, changes: Awaited<ReturnType<typeof readPlanChanges>>, now: PlanNow | null) {
+export function planViewOf(read: PlanFileRead, checks: Record<string, PlanEvidence>, changes: Awaited<ReturnType<typeof readPlanChanges>>, now: PlanNow | null) {
   const { plan } = read;
   const free = planText(read.text);
   return {
@@ -51,7 +51,7 @@ function view(read: PlanFileRead, checks: Record<string, PlanEvidence>, changes:
 /** Everything the Plan tab shows. */
 export async function planFileForApp(workspacePath: string) {
   const read = await readPlanFile(workspacePath);
-  return view(read, await readPlanChecks(workspacePath), await readPlanChanges(workspacePath, 15), await readPlanNow(workspacePath, read.plan));
+  return planViewOf(read, await readPlanChecks(workspacePath), await readPlanChanges(workspacePath, 15), await readPlanNow(workspacePath, read.plan));
 }
 
 export type PlanFileForApp = Awaited<ReturnType<typeof planFileForApp>>;

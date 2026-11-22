@@ -7,6 +7,7 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client.js';
+import { isNoteConflict } from './noteConflict.js';
 
 /** The same limits as the backend, so a reply cannot make the board draw more than the board allows. */
 export const BOARD_DATA_LIMITS = { cards: 500, links: 1000, positions: 2000, title: 200, text: 4000, label: 200, path: 1000, coordinate: 1_000_000 } as const;
@@ -31,6 +32,8 @@ interface CardBase {
   /** One line on why a person should look at the card, and when it was set. Not shown yet. */
   look?: string;
   lookAt?: string;
+  /** The card's revision, from a workspace moved to its database: an edit sends the one it started from. */
+  rev?: number;
 }
 export interface BoardNoteCard extends CardBase { kind: 'note'; body: string }
 export interface BoardFileCard extends CardBase {
@@ -55,6 +58,8 @@ export interface BoardPoint { x: number; y: number }
 
 export interface BoardView {
   revision: number;
+  /** The database the board was read from, for a workspace moved to it. */
+  dbId?: string;
   cards: BoardCard[];
   links: BoardLink[];
   /** By node id. The file may hold a place for a checkpoint, document or commit too, but the app uses only the places of cards. */
@@ -73,12 +78,15 @@ const DOCUMENT = new RegExp(`^document:${UUID_SOURCE}${COPY}$`);
 const COMMIT_TARGET = /^commit:[^\\/\u0000-\u001f\u007f]{1,200}:[0-9a-f]{7,64}$/;
 const COMMIT = new RegExp(`${COMMIT_TARGET.source.slice(0, -1)}${COPY}$`);
 
-/** Whether `value` is a card's id (a uuid). A card id can never read as a generated node's id, which has a prefix. */
-export const isCardId = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
+/** A card's id in a workspace moved to its database: `k` and five base-32 characters. */
+const DB_CARD_ID = /^k[0-9a-hjkmnp-tv-z]{5}$/;
+
+/** Whether `value` is a card's id (a uuid, or a database id). A card id can never read as a generated node's id, which has a prefix. */
+export const isCardId = (value: unknown): value is string => typeof value === 'string' && (UUID.test(value) || DB_CARD_ID.test(value));
 
 /** Whether `value` has the shape of a node id the board accepts: a card, or a checkpoint, document or commit. */
 export function isBoardNodeId(value: unknown): value is string {
-  return typeof value === 'string' && value.length <= 400 && (UUID.test(value) || CHECKPOINT.test(value) || DOCUMENT.test(value) || COMMIT.test(value));
+  return typeof value === 'string' && value.length <= 400 && (isCardId(value) || CHECKPOINT.test(value) || DOCUMENT.test(value) || COMMIT.test(value));
 }
 
 /** Whether `value` has the shape of an area id on the board: `checkpoint:<plan key>` or `plan:own`. */
@@ -123,6 +131,7 @@ function cleanCard(raw: unknown): BoardCard | null {
     ...(step ? { step } : {}),
     ...(about ? { about } : {}),
     ...(look ? { look, ...(validTime(raw.lookAt) ? { lookAt: raw.lookAt } : {}) } : {}),
+    ...(typeof raw.rev === 'number' && Number.isInteger(raw.rev) && raw.rev > 0 ? { rev: raw.rev } : {}),
   };
   if (raw.kind === 'note') return { ...base, kind: 'note', body: typeof raw.body === 'string' ? raw.body.slice(0, BOARD_DATA_LIMITS.text) : '' };
   if (raw.kind === 'file') {
@@ -175,7 +184,7 @@ export function cleanBoard(raw: unknown): BoardView {
     const point = kept < BOARD_DATA_LIMITS.positions && isBoardNodeId(id) ? cleanPoint(value) : null;
     if (point) { positions[id] = point; kept += 1; }
   }
-  return { revision: raw.revision, cards, links, positions };
+  return { revision: raw.revision, ...(typeof raw.dbId === 'string' && /^[0-9a-f]{1,64}$/.test(raw.dbId) ? { dbId: raw.dbId } : {}), cards, links, positions };
 }
 
 export const boardKey = (workspace: string | null) => ['board', workspace] as const;
@@ -263,6 +272,8 @@ export interface UpdateNoteChangeInput {
   archived?: boolean;
   area?: string | null;
   step?: string | null;
+  /** The revision the edit started from (a workspace moved to its database): a change made since is refused, not overwritten. */
+  rev?: number;
 }
 
 export function addNoteChange(note: AddNoteChangeInput) {
@@ -281,6 +292,7 @@ export function updateNoteChange(id: string, updates: UpdateNoteChangeInput) {
   return {
     op: 'update_card' as const,
     id,
+    ...(updates.rev !== undefined ? { rev: updates.rev } : {}),
     ...(updates.title !== undefined ? { title: updates.title.trim() } : {}),
     ...(updates.body !== undefined ? { body: updates.body } : {}),
     ...(updates.pinned !== undefined ? { pinned: updates.pinned } : {}),
@@ -302,6 +314,7 @@ export function deleteNoteChange(id: string) {
 export interface BoardChangePayload {
   changes: unknown[];
   revision?: number;
+  dbId?: string;
 }
 
 /**
@@ -328,8 +341,10 @@ export function useChangeBoard(workspace: string | null) {
         queryClient.setQueryData(boardKey(workspace), board);
       }
     },
-    onError: () => {
-      if (workspace) {
+    onError: (err) => {
+      // Leave the cached card in place during a 409 note conflict so an AI moving/archiving the note
+      // does not unmount the open conflict dialog and wipe what the person typed.
+      if (workspace && !isNoteConflict(err)) {
         void queryClient.invalidateQueries({ queryKey: boardKey(workspace) });
       }
     },

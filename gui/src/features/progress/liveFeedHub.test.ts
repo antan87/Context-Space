@@ -114,7 +114,7 @@ describe('liveFeedHub', () => {
     expect(invalidated).toEqual([boardKey('demo')]);
   });
 
-  it('reads the board again whenever the connection opens, because the stream does not replay board events', () => {
+  it('reads the board again whenever the connection opens, without invalidating the plan when the workspace is not in its database', () => {
     listen();
     fake.status(true);
     expect(invalidated).toEqual([boardKey('demo')]);
@@ -123,6 +123,24 @@ describe('liveFeedHub', () => {
     fake.status(true);
     expect(invalidated).toEqual([boardKey('demo'), boardKey('demo')]);
     expect(feed.map((state) => state.connected)).toEqual([false, true, false, true]);
+  });
+
+  it('also reads the plan again on (re)connect when the workspace is moved to its database', () => {
+    queryClient.setQueryData(planFileKey('demo'), { store: 'database' });
+    listen();
+    fake.status(true);
+    expect(invalidated).toEqual([boardKey('demo'), planFileKey('demo')]);
+    fake.status(false);
+    expect(invalidated).toHaveLength(2);
+    fake.status(true);
+    expect(invalidated).toEqual([boardKey('demo'), planFileKey('demo'), boardKey('demo'), planFileKey('demo')]);
+  });
+
+  it('also reads the plan again on (re)connect when only the cached board carries a database id', () => {
+    queryClient.setQueryData(boardKey('demo'), { revision: 1, dbId: '0123456789abcdef', cards: [], links: [], positions: {} });
+    listen();
+    fake.status(true);
+    expect(invalidated).toEqual([boardKey('demo'), planFileKey('demo')]);
   });
 
   it('reads the plan and what hangs on it when the plan changes, and the facts after any event', () => {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { storeOf } from './workspace-db-app.js';
 import { execa } from 'execa';
 
 import {
@@ -430,7 +431,10 @@ export async function listCommitNotes(workspacePath: string, options: ListCommit
  */
 export async function queryCommitNotes(workspacePath: string, options: { repo?: string; sha?: string } = {}): Promise<CommitNote[]> {
   const root = path.resolve(workspacePath);
-  const board = await readBoard(root);
+  // Only the app reads this: a workspace moved to its database is read there (the command line moves in DB3c).
+  const board = storeOf(root) === 'database'
+    ? await import('./board-db-app.js').then(({ boardDbForApp }) => boardDbForApp(root)) as unknown as { cards: Array<{ kind: string }> }
+    : await readBoard(root);
   let notes = readAllStoredCommitNotes(board.cards);
 
   if (options.repo !== undefined && options.repo !== '') {

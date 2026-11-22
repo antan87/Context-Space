@@ -91,8 +91,20 @@ export interface BoardActions {
   stepErrors?: Record<string, string>;
   /** Adds a new note card to the board. Returns true if successful. */
   addNote?: (note: { title: string; body?: string; area?: string; step?: string; pinned?: boolean }) => Promise<boolean>;
+  /** Opens the board-level edit dialog for a note card so live board/plan refreshes cannot unmount it mid-edit. */
+  editNote?: (note: {
+    id: string;
+    title: string;
+    body: string;
+    pinned: boolean;
+    archived?: boolean;
+    area?: string;
+    step?: string;
+    rev?: number;
+  }) => void;
   /** Updates an existing note card on the board. Returns true if successful. */
-  updateNote?: (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null }) => Promise<boolean>;
+  /** Rejects with the server's error when the note changed since the edit started (`rev`), so the dialog can keep what was typed. */
+  updateNote?: (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null; rev?: number }) => Promise<boolean>;
   /** Removes a card from the board. Returns true if successful. */
   deleteNote?: (id: string) => Promise<boolean>;
   /** Whether the board is in read-only mode (e.g. for archived workspaces). */

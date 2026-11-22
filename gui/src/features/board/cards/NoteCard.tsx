@@ -16,7 +16,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
   const titleId = useId();
   const markId = useId();
   const actions = useContext(BoardActionsContext);
-  const [editOpen, setEditOpen] = useState(false);
+  const [localEditOpen, setLocalEditOpen] = useState(false);
   const [titleRef, titleCut] = useCut<HTMLElement>(data.title);
   const [bodyRef, bodyCut] = useCut<HTMLDivElement>(data.text);
   // A body press reads; a double press edits. Wait briefly for the second press
@@ -29,7 +29,26 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
     clearTimeout(readTimer.current);
     clearTimeout(copyTimer.current);
   }, []);
-  useEffect(() => { if (editOpen) clearTimeout(readTimer.current); }, [editOpen]);
+
+  const editableNote = {
+    id,
+    title: data.title,
+    body: data.text,
+    pinned: data.pinned,
+    archived: data.archived,
+    area: data.area,
+    step: data.step,
+    ...(data.rev !== undefined ? { rev: data.rev } : {}),
+  };
+
+  const openEdit = () => {
+    clearTimeout(readTimer.current);
+    if (actions?.editNote) {
+      actions.editNote(editableNote);
+    } else if (actions) {
+      setLocalEditOpen(true);
+    }
+  };
 
   const copyNoteText = () => {
     const trimmedTitle = data.title.trim();
@@ -55,12 +74,12 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
         aria-label={`Edit ${data.title}`}
         onClick={(e) => {
           e.stopPropagation();
-          setEditOpen(true);
+          openEdit();
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.stopPropagation();
-            setEditOpen(true);
+            openEdit();
           }
         }}
       >
@@ -76,21 +95,21 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
         </MenuTrigger>
         <MenuPopup align="end" className="w-36 p-1">
           <MenuItem
-            onClick={() => setEditOpen(true)}
+            onClick={openEdit}
             className="flex items-center gap-2 text-[12.5px]"
           >
             <Pencil className="size-3.5" aria-hidden="true" />
             <span>Edit note</span>
           </MenuItem>
           <MenuItem
-            onClick={() => void actions.updateNote?.(id, { pinned: !data.pinned })}
+            onClick={() => void actions.updateNote?.(id, { pinned: !data.pinned }).catch(() => undefined)}
             className="flex items-center gap-2 text-[12.5px]"
           >
             <Pin className="size-3.5" aria-hidden="true" />
             <span>{data.pinned ? 'Unpin note' : 'Pin note'}</span>
           </MenuItem>
           <MenuItem
-            onClick={() => void actions.updateNote?.(id, { archived: !data.archived })}
+            onClick={() => void actions.updateNote?.(id, { archived: !data.archived }).catch(() => undefined)}
             className="flex items-center gap-2 text-[12.5px]"
           >
             <Archive className="size-3.5" aria-hidden="true" />
@@ -122,26 +141,16 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
     </div>
   );
 
-  const dialog = actions && (
+  // Standalone callers (such as the Design page) without a board-level edit dialog use a local dialog.
+  const fallbackDialog = actions && !actions.editNote ? (
     <NoteDialog
-      open={editOpen}
-      onOpenChange={setEditOpen}
-      note={{
-        id,
-        title: data.title,
-        body: data.text,
-        pinned: data.pinned,
-        archived: data.archived,
-        area: data.area,
-        step: data.step,
-      }}
+      open={localEditOpen}
+      onOpenChange={setLocalEditOpen}
+      note={editableNote}
       areas={actions.availableAreas}
-      onSave={async (updates) => {
-        const ok = await actions.updateNote?.(id, updates);
-        return ok;
-      }}
+      onSave={async (updates) => actions.updateNote?.(id, updates)}
     />
-  );
+  ) : null;
 
   if (data.compact) {
     const cut = titleCut || bodyCut;
@@ -172,10 +181,9 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           onDoubleClick={(event) => {
             // A double press inside a dialog the card opened bubbles up through React's tree, but is not on the card
             if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
-            clearTimeout(readTimer.current);
             if (actions?.readOnly) return;
             event.stopPropagation();
-            setEditOpen(true);
+            openEdit();
           }}
         >
           <div className="flex shrink-0 items-start gap-1.5">
@@ -189,7 +197,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           </div>
           <CardText ref={bodyRef} text={data.text} cut={bodyCut} className="board-text-compact line-clamp-2 max-h-[34px] shrink-0 overflow-hidden text-[13px] leading-[17px]" />
         </CardFrame>
-        {dialog}
+        {fallbackDialog}
       </>
     );
   }
@@ -203,7 +211,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
           if (actions?.readOnly) return;
           event.stopPropagation();
-          setEditOpen(true);
+          openEdit();
         }}
       >
         <div className="flex shrink-0 items-start justify-between gap-1.5">
@@ -235,7 +243,7 @@ export function BoardNote({ id, data }: NodeProps<NoteNode>) {
           )}
         </div>
       </CardFrame>
-      {dialog}
+      {fallbackDialog}
     </>
   );
 }

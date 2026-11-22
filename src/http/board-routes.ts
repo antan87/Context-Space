@@ -10,12 +10,20 @@ import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { ArchivedWorkspaceError } from '../core/archive-guard.js';
 import { BoardChangeError, BoardConflictError, BoardInputError, BoardWorkspaceError, changeBoard, readBoard } from '../core/board.js';
+import { boardDbForApp, changeBoardDb } from '../core/board-db-app.js';
+import { PlanDbChangeError } from '../core/plan-db-app.js';
+import { storeOf } from '../core/workspace-db-app.js';
+import { planErrorAnswer } from './plan-file-routes.js';
+import { WorkspaceMovedError } from '../core/workspace-db-switch.js';
+import { WorkspaceDbError } from '../core/workspace-db/index.js';
 
 /** A request is at most this many changes of a few thousand characters each. */
 const BODY_LIMIT = 1_000_000;
 
 const request = z.object({
   revision: z.number().int().nonnegative().optional(),
+  /** The database the board was read from (a workspace moved to its database): a replaced one refuses the change. */
+  dbId: z.string().min(1).max(64).optional(),
   // Each change is checked by the board, which says which change and field is wrong.
   changes: z.array(z.unknown()).min(1, 'Give at least one change.'),
 }).strict();
@@ -41,11 +49,16 @@ export function registerBoardRoutes(app: Hono, resolveWorkspace: (id: string) =>
         const issue = error.issues[0];
         return c.json({ error: issue ? `${issue.path.length ? `${issue.path.join('.')}: ` : ''}${issue.message}` : 'Invalid request.' }, 400);
       }
+      if (error instanceof PlanDbChangeError || error instanceof WorkspaceDbError || error instanceof WorkspaceMovedError) {
+        const answer = planErrorAnswer(error);
+        return c.json(answer.body, answer.status as 400);
+      }
       return c.json({ error: error instanceof Error ? error.message : String(error) }, statusOf(error));
     }
   };
 
-  app.get('/api/workspace/:id/board', handle((root) => readBoard(root)));
+  // A workspace moved to its database reads and writes the board there; any other reads and writes the board file.
+  app.get('/api/workspace/:id/board', handle((root) => (storeOf(root) === 'database' ? boardDbForApp(root) : readBoard(root))));
 
   app.post('/api/workspace/:id/board/changes',
     bodyLimit({ maxSize: BODY_LIMIT, onError: (c) => c.json({ error: 'That request is too large. Send fewer changes at once.' }, 413) }),
@@ -53,6 +66,10 @@ export function registerBoardRoutes(app: Hono, resolveWorkspace: (id: string) =>
       let body: unknown;
       try { body = await c.req.json(); } catch { throw new BoardInputError('The request must be JSON.'); }
       const input = request.parse(body);
+      if (storeOf(root) === 'database') {
+        const { board, results } = await changeBoardDb(root, input.changes, { by: 'user', ...(input.revision !== undefined ? { revision: input.revision } : {}), ...(input.dbId !== undefined ? { dbId: input.dbId } : {}) });
+        return { ...board, results };
+      }
       const { board, results } = await changeBoard(root, input.changes, { by: 'user', revision: input.revision });
       return { ...board, results };
     }));

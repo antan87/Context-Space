@@ -9,6 +9,7 @@ import { latestInputRequest } from './attention.js';
 import { questionTitle } from './plan-questions.js';
 import { openDecisions, type PlanFile } from './plan-file.js';
 import { readPlanChanges, readPlanChecks, readPlanFile, type PlanFileChange } from './plan-file-store.js';
+import { readSwitch } from './workspace-db-switch.js';
 import type { PlanEvidence } from '../types.js';
 
 /** How far back what an AI finished is listed. */
@@ -73,10 +74,13 @@ function fromPlan(plan: PlanFile, checks: Record<string, PlanEvidence>, changes:
 
 /** Everything that needs the user in one workspace. A source that cannot be read adds nothing. */
 export async function workspaceNeeds(workspaceId: string, workspacePath: string, now = Date.now()): Promise<WorkspaceNeeds> {
+  // Only the app reads this. A workspace moved to its database is read there, with its items keyed by id as the Board has them.
+  const moved = readSwitch(workspacePath)?.state === 'on';
+  const fromDb = moved ? await import('./plan-db-app.js').then(({ planDbParts }) => planDbParts(workspacePath)).catch(() => null) : null;
   const [read, checks, changes, request] = await Promise.all([
-    readPlanFile(workspacePath).catch(() => null),
-    readPlanChecks(workspacePath).catch(() => ({})),
-    readPlanChanges(workspacePath, 300).catch(() => []),
+    moved ? (fromDb ? { text: fromDb.read.text, plan: fromDb.read.plan, source: 'file' as const } : null) : readPlanFile(workspacePath).catch(() => null),
+    moved ? (fromDb?.checks ?? {}) : readPlanChecks(workspacePath).catch(() => ({})),
+    moved ? (fromDb?.changes ?? []) : readPlanChanges(workspacePath, 300).catch(() => []),
     latestInputRequest(workspacePath, now).catch(() => null),
   ]);
   const needs: WorkspaceNeeds = {

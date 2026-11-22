@@ -1,5 +1,5 @@
 import { lineNoteViewer } from '../changes/codeLineNotes.js';
-import { apiFetch } from '../../lib/api/client.js';
+import { ApiError, apiFetch } from '../../lib/api/client.js';
 import type { ReferenceTarget } from '../workspace-shell/openRequests.js';
 import type { LineRange } from './lineNotes.js';
 import type { AskLine } from './askText.js';
@@ -53,11 +53,12 @@ import {
   type LooseTab,
   type OverviewNode,
 } from './boardAreas.js';
-import { addNoteChange, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard, useWorkspaceFiles, workspaceFilesKey } from './boardData.js';
+import { addNoteChange, boardKey, deleteNoteChange, isBoardAreaId, updateNoteChange, useBoard, useChangeBoard, useWorkspaceFiles, workspaceFilesKey } from './boardData.js';
+import { isNoteConflict } from './noteConflict.js';
 import { questionsKey, useQuestions } from './questionsData.js';
 import { isAnswerCardId, refreshRequest } from './questionsArea.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
-import { NoteDialog } from './NoteDialog.js';
+import { NoteDialog, type NoteDialogProps } from './NoteDialog.js';
 import { fileTitle, readerDock } from './boardDock.js';
 import { boardEdges, oneLinePerPair, type BoardNode } from './boardLayout.js';
 import {
@@ -2119,20 +2120,27 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       if (added) setAddedNoteId(added.id);
       return true;
     } catch (err) {
+      if (err instanceof ApiError) throw err;
       console.error('Failed to add note:', err);
       return false;
     }
   }, [changeBoardMutation]);
 
-  const updateNote = useCallback(async (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null }) => {
+  const noteConflictSeen = useRef(false);
+
+  const updateNote = useCallback(async (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null; rev?: number }) => {
     try {
-      await changeBoardMutation.mutateAsync({ changes: [updateNoteChange(id, updates)] });
+      await changeBoardMutation.mutateAsync({ changes: [updateNoteChange(id, updates)], ...(board?.dbId ? { dbId: board.dbId } : {}) });
+      noteConflictSeen.current = false;
       return true;
     } catch (err) {
+      // Surface server errors (rev conflict, 503 Busy, 409 moved/replaced, 400 validation) so the dialog shows them plainly.
+      if (isNoteConflict(err)) noteConflictSeen.current = true;
+      if (err instanceof ApiError) throw err;
       console.error('Failed to update note:', err);
       return false;
     }
-  }, [changeBoardMutation]);
+  }, [changeBoardMutation, board?.dbId]);
 
   const deleteNote = useCallback(async (id: string) => {
     try {
@@ -2154,6 +2162,11 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const [createNoteOpen, setCreateNoteOpen] = useState(false);
   const [createNoteDefaults, setCreateNoteDefaults] = useState<{ areaId?: string; stepKey?: string }>({});
+  const [editingNote, setEditingNote] = useState<NonNullable<NoteDialogProps['note']> | null>(null);
+  useEffect(() => {
+    setEditingNote(null);
+    noteConflictSeen.current = false;
+  }, [workspaceId]);
 
   const openCreateNoteDialog = useCallback((defaultAreaId?: string, defaultStepKey?: string) => {
     let targetAreaId = defaultAreaId && isBoardAreaId(defaultAreaId) ? defaultAreaId : undefined;
@@ -2276,6 +2289,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     busyStepKeys,
     stepErrors,
     addNote,
+    editNote: setEditingNote,
     updateNote,
     deleteNote,
     availableAreas,
@@ -2312,6 +2326,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     busyStepKeys,
     stepErrors,
     addNote,
+    editNote: setEditingNote,
     updateNote,
     deleteNote,
     availableAreas,
@@ -2973,13 +2988,28 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         areas={availableAreas}
         onSave={async (newNote) => {
           return addNote({
-            title: newNote.title,
+            title: newNote.title ?? '',
             body: newNote.body,
             pinned: newNote.pinned,
             area: newNote.area ?? undefined,
             step: newNote.step ?? undefined,
           });
         }}
+      />
+      <NoteDialog
+        open={editingNote !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingNote(null);
+            if (noteConflictSeen.current) {
+              noteConflictSeen.current = false;
+              void queryClient.invalidateQueries({ queryKey: boardKey(workspaceId) });
+            }
+          }
+        }}
+        note={editingNote}
+        areas={availableAreas}
+        onSave={async (updates) => (editingNote ? updateNote(editingNote.id, updates) : false)}
       />
     </div>
   );
