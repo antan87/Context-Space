@@ -20,6 +20,9 @@ const echoed = () => z.string().trim().min(1);
 const REOPENED = 'Reopened: ';
 /** The item's revision as the app read it, from a workspace moved to its database. */
 const rev = z.number().int().positive();
+const databaseId = z.string().min(1).max(64);
+const observed = { rev: rev.optional(), dbId: databaseId.optional() };
+type AddStepStore = { store?: 'file' | 'database'; dbId?: string };
 
 /** What a person is told when a request fails validation: a too-long string says what the plan itself says. */
 function validationMessage(error: z.ZodError): string {
@@ -32,8 +35,8 @@ function validationMessage(error: z.ZodError): string {
 
 /** The changes a person can make in the tab. */
 export const planFileChangeSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('tick'), key, done: z.boolean(), expected: echoed(), rev: rev.optional() }).strict(),
-  z.object({ type: z.literal('answer'), key, answer: words(PLAN_LINE_MAX), expected: echoed(), rev: rev.optional() }).strict(),
+  z.object({ type: z.literal('tick'), key, done: z.boolean(), expected: echoed(), ...observed }).strict(),
+  z.object({ type: z.literal('answer'), key, answer: words(PLAN_LINE_MAX), expected: echoed(), ...observed }).strict(),
   z.object({ type: z.literal('add'), step: words(PLAN_LINE_MAX), checkpoint: key.optional() }).strict(),
   z.object({
     type: z.literal('decide'), checkpoint: key.optional(),
@@ -42,7 +45,7 @@ export const planFileChangeSchema = z.discriminatedUnion('type', [
     }).strict(),
   }).strict(),
   z.object({ type: z.literal('check'), key }).strict(),
-  z.object({ type: z.literal('reopen'), key, reason: words(PLAN_LINE_MAX - REOPENED.length), expected: echoed(), rev: rev.optional() }).strict(),
+  z.object({ type: z.literal('reopen'), key, reason: words(PLAN_LINE_MAX - REOPENED.length), expected: echoed(), ...observed }).strict(),
 ]);
 
 const STATUS_FOR: Record<PlanFileError['code'], number> = { not_found: 404, invalid: 400, conflict: 409 };
@@ -54,7 +57,29 @@ const STATUS_FOR: Record<PlanFileError['code'], number> = { not_found: 404, inva
 export const planForApp = (root: string) => (storeOf(root) === 'database' ? planDbForApp(root) : planFileForApp(root));
 
 /** One change as the person, in the store this workspace uses. */
-export const changePlanForApp = (root: string, change: PlanFileAppChange & { rev?: number }) => (storeOf(root) === 'database' ? changePlanDbForApp(root, change) : changePlanFileForApp(root, change));
+export async function changePlanForApp(root: string, change: PlanFileAppChange & { rev?: number; dbId?: string }, requestId?: string, addStepStore?: AddStepStore) {
+  const database = storeOf(root) === 'database';
+  if (change.type === 'add' && addStepStore) {
+    const { store, dbId } = addStepStore;
+    if ((requestId && !store) || (store === 'database' && !dbId) || (store !== 'database' && dbId)) {
+      throw new PlanDbChangeError('Read the plan before adding a step. Close this form and open Add step again.', 409, 'db_changed');
+    }
+    if (store && (store === 'database') !== database) {
+      throw new PlanDbChangeError(`The plan ${database ? 'moved to the workspace database' : 'was restored to a file'} since you opened Add step. Close this form and open Add step again.`, 409, 'db_changed');
+    }
+    if (dbId) change = { ...change, dbId };
+  }
+  if (database) {
+    if (change.rev !== undefined && change.dbId === undefined) {
+      throw new PlanDbChangeError('Send the rev and dbId from the plan you read. Read it again before saving.', 409, 'db_changed');
+    }
+    return changePlanDbForApp(root, change, { requestId });
+  }
+  if (change.rev !== undefined || change.dbId !== undefined) {
+    throw new PlanDbChangeError('This workspace uses PLAN.md. Read the plan again before changing it.', 409, 'db_changed');
+  }
+  return changePlanFileForApp(root, change);
+}
 
 /** How a failure is answered: the status, and the JSON (`code` says what kind of conflict, for the app). */
 export function planErrorAnswer(error: unknown): { status: number; body: Record<string, unknown> } {
@@ -83,14 +108,20 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
   app.get('/api/workspace/:id/plan', handle((root) => planForApp(root)));
 
   app.post('/api/workspace/:id/plan', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
-    const { change } = z.object({ change: planFileChangeSchema }).strict().parse(await c.req.json());
-    const { message } = await changePlanForApp(root, change);
-    return { message, plan: await planForApp(root) };
+    const { change, requestId, store, dbId } = z.object({
+      change: planFileChangeSchema,
+      requestId: z.string().regex(/^[\w.:@-]{1,100}$/).optional(),
+      store: z.enum(['file', 'database']).optional(),
+      dbId: databaseId.optional(),
+    }).strict().parse(await c.req.json());
+    const saved = await changePlanForApp(root, change, requestId, { store, dbId });
+    if ('plan' in saved && saved.plan) return saved;
+    return { message: saved.message, plan: await planForApp(root) };
   }));
 
   app.post('/api/workspace/:id/plan/decisions/:key/answer', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
     const decisionKey = key.parse(c.req.param('key'));
-    const body = z.object({ answer: words(PLAN_LINE_MAX), expected: echoed().optional(), rev: rev.optional() }).strict().parse(await c.req.json());
+    const body = z.object({ answer: words(PLAN_LINE_MAX), expected: echoed().optional(), ...observed }).strict().parse(await c.req.json());
     let expected = body.expected;
     if (!expected) {
       const currentPlan = await planForApp(root);
@@ -98,13 +129,13 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
       if (!found) throw new PlanFileError(`Nothing in ${PLAN_FILE} matches "${decisionKey}" any more. Read the plan again.`, 'not_found');
       expected = found.question;
     }
-    const { message } = await changePlanForApp(root, { type: 'answer', key: decisionKey, answer: body.answer, expected, ...(body.rev !== undefined ? { rev: body.rev } : {}) });
+    const { message } = await changePlanForApp(root, { type: 'answer', key: decisionKey, ...body, expected });
     return { message, plan: await planForApp(root) };
   }));
 
   app.post('/api/workspace/:id/plan/steps/:key/tick', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
     const stepKey = key.parse(c.req.param('key'));
-    const body = z.object({ done: z.boolean(), expected: echoed().optional(), rev: rev.optional() }).strict().parse(await c.req.json());
+    const body = z.object({ done: z.boolean(), expected: echoed().optional(), ...observed }).strict().parse(await c.req.json());
     let expected = body.expected;
     if (!expected) {
       const currentPlan = await planForApp(root);
@@ -113,7 +144,7 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
       if (!found) throw new PlanFileError(`Nothing in ${PLAN_FILE} matches "${stepKey}" any more. Read the plan again.`, 'not_found');
       expected = 'text' in found ? found.text : found.title;
     }
-    const { message } = await changePlanForApp(root, { type: 'tick', key: stepKey, done: body.done, expected, ...(body.rev !== undefined ? { rev: body.rev } : {}) });
+    const { message } = await changePlanForApp(root, { type: 'tick', key: stepKey, ...body, expected });
     return { message, plan: await planForApp(root) };
   }));
 

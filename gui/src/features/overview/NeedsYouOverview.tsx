@@ -1,8 +1,7 @@
 import { useId } from 'react';
 import { Link } from 'react-router-dom';
 import { CircleDashed, CircleHelp, CircleX, ListChecks, MessageCircleQuestion, RefreshCw } from 'lucide-react';
-import { Button } from '../../components/ui/button.js';
-import { Skeleton } from '../../components/ui/skeleton.js';
+import { Button, Skeleton } from '../../design/index.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { useChangePlanFile } from '../plan/planFile.js';
 import { AnswerBox } from '../plan/AnswerBox.js';
@@ -33,7 +32,7 @@ function QuestionCard({ item, workspace }: { item: QuestionNeed; workspace?: str
           <CircleHelp aria-hidden="true" className={`size-3.5 shrink-0 ${urgent ? 'text-[var(--state-needs)]' : ''}`} />
           <span className="truncate">{asked}</span>
         </p>
-        {item.holdsUp.length > 0 && <p className="rounded-full bg-[color-mix(in_oklab,var(--state-needs)_14%,transparent)] px-2 py-0.5 text-[11px] font-medium text-[var(--state-needs)]">
+        {item.holdsUp.length > 0 && <p className="rounded-full bg-[color-mix(in_oklab,var(--state-needs)_14%,transparent)] px-2 py-0.5 text-xs font-medium text-[var(--state-needs)]">
           Holds up {item.holdsUp.join(', ')}
         </p>}
       </div>
@@ -41,7 +40,7 @@ function QuestionCard({ item, workspace }: { item: QuestionNeed; workspace?: str
       {why && <p className="line-clamp-4 whitespace-pre-wrap break-words text-xs text-muted-foreground">{why}</p>}
       <AnswerBox
         question={item.text} detail={item.detail} error={change.error?.message}
-        onAnswer={(answer) => change.mutateAsync({ type: 'answer', key: item.id, answer, expected: item.text }).then(() => true, () => false)}
+        onAnswer={(answer) => change.mutateAsync({ type: 'answer', key: item.id, answer, expected: item.text, rev: item.rev, dbId: item.dbId }).then(() => true, () => false)}
       />
       <Link to={`${base(item.workspaceId)}/board`} className="inline-block text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">Open on the board</Link>
     </div>

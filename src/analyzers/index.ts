@@ -114,7 +114,7 @@ export interface CachedAnalysisResult {
 export async function analyzeAllReposCached(
   repos: RepoInfo[],
   workspacePath: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; saveCache?: boolean } = {},
 ): Promise<CachedAnalysisResult> {
   const cache = await loadAnalysisCache(workspacePath);
   const results = new Map<string, ProjectAnalysis>();
@@ -155,7 +155,7 @@ export async function analyzeAllReposCached(
   }
 
   try {
-    await saveAnalysisCache(workspacePath, cache, repos.map((r) => r.name));
+    if (options.saveCache !== false) await saveAnalysisCache(workspacePath, cache, repos.map((r) => r.name));
   } catch {
     // Cache persistence is best-effort; analysis results are still valid.
   }

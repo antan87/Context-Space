@@ -3,8 +3,12 @@ import {
   addWorkDocument, updateWorkDocument, updateWorkGuidance, getWorkContext,
   documentInputSchema, documentMetadataSchema, guidanceUpdateSchema,
 } from '../core/work-guidance.js';
-import { loadFeatureConfig } from '../core/workspace.js';
+import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
 import type { NexusFlowTool } from './tools.js';
+import { applyPlanBatch, planBatchSchema, planDbJson } from '../core/plan-db-command.js';
+import { storeOf } from '../core/workspace-db-app.js';
+import { readPlanTextReadOnly } from '../core/plan-file-store.js';
+import { boardActorName } from '../core/board.js';
 import { refreshPlanningContext } from '../core/planning-refresh.js';
 
 /** Publish and validate the same input contract used by the core mutations. */
@@ -13,12 +17,12 @@ function planningTool<T extends z.ZodObject>(
   description: string,
   schema: T,
   action: (input: z.output<T>, root: string) => Promise<unknown>,
-  destructiveHint = false,
+  hints: { readOnly?: boolean; destructive?: boolean } = {},
 ): NexusFlowTool {
   const inputSchema = z.toJSONSchema(schema, { io: 'input' });
   return {
     name, description,
-    annotations: { readOnlyHint: false, destructiveHint, idempotentHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: hints.readOnly ?? false, destructiveHint: hints.destructive ?? false, idempotentHint: hints.readOnly ?? false, openWorldHint: false },
     inputSchema: { ...inputSchema, additionalProperties: false, properties: {
       ...inputSchema.properties,
       workspaceId: { type: 'string', description: 'Optional ID/branchName of the workspace. Defaults to the workspace this server is bound to (or the current directory). Interactive and full sessions may name another workspace; other roles get an error for a different workspace.' },
@@ -29,8 +33,10 @@ function planningTool<T extends z.ZodObject>(
         z.string().optional().parse(_workspaceId);
         const validated = schema.strict().parse(input) as z.output<T>;
         if (!await loadFeatureConfig(ctx.workspacePath)) throw new Error('Workspace not found.');
-        const result = await action(validated, ctx.workspacePath);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        const root = (await findWorkspaceRoot(ctx.workspacePath)) ?? ctx.workspacePath;
+        storeOf(root); // Refuse transitional workspaces before a tool can change anything.
+        const result = await action(validated, root);
+        return { ...(result && typeof result === 'object' && 'ok' in result && result.ok === false ? { isError: true } : {}), content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { isError: true, content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }] };
       }
@@ -41,6 +47,21 @@ function planningTool<T extends z.ZodObject>(
 const revision = z.number().int().nonnegative();
 const addDocumentSchema = documentInputSchema.safeExtend({ revision });
 const updateDocumentSchema = documentMetadataSchema.extend({ revision, documentId: z.string().uuid() });
+
+export const planTools: NexusFlowTool[] = [
+  planningTool('read_plan',
+    'Read the plan. In a moved workspace it returns revision, dbId and stable item ids and revs. Use those with change_plan.',
+    z.object({}), async (_input, root) => {
+      return storeOf(root) === 'database' ? planDbJson(root) : readPlanTextReadOnly(root);
+    }, { readOnly: true }),
+  planningTool('change_plan',
+    'Apply an atomic batch of plan and Board ops on a moved workspace. Send the ids, revision and dbId from read_plan, and item or card revs for edits. A refused batch reports the current revision and every refused op. Pass a unique requestId and resend it with the same batch to retry safely. Adds return the requestId used. Removing a card requires ifRevision and dbId.',
+    planBatchSchema.extend({ harness: z.string().max(40).optional() }),
+    async ({ harness, ...input }, root) => {
+      const by = boardActorName(harness);
+      return applyPlanBatch(root, input, by && by !== 'user' ? by : 'ai');
+    }, { destructive: true }),
+];
 
 export const planningTools: NexusFlowTool[] = [
   planningTool('update_work_assignment',

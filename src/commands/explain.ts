@@ -8,6 +8,8 @@ import chalk from 'chalk';
 import type { Command } from 'commander';
 
 import { readQuestions, summarizeAnswers, type AnswerSummary } from '../core/questions.js';
+import { planDbParts } from '../core/plan-db-app.js';
+import { storeOf } from '../core/workspace-db-app.js';
 import { readPlanFile } from '../core/plan-file-store.js';
 import { areasOf } from '../mcp/board-tools.js';
 import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
@@ -51,7 +53,8 @@ export async function explainCommand(options: ExplainOptions = {}): Promise<bool
     const workspacePath = await resolveWorkspaceQuiet(options.workspace);
     if (!workspacePath) return fail('Not inside a ContextSpace workspace. Run this in a workspace folder, or pass -w <workspace>.');
     if (options.areas) {
-      const { plan } = await readPlanFile(workspacePath);
+      const { plan } = storeOf(workspacePath) === 'database'
+        ? (await planDbParts(workspacePath, 0)).read : await readPlanFile(workspacePath);
       const areas = areasOf(plan);
       if (options.json) console.log(JSON.stringify({ areas }, null, 2));
       else console.log(areas.items.length === 0 ? 'No Areas: the plan has no checkpoints.' : areas.items.map((item) => `${item.id}  ${item.title}${item.current ? '  (current)' : ''}`).join('\n'));

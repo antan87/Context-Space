@@ -45,7 +45,7 @@ import {
   restoreBackup, stripExport, writeImportRecord, type DbImportRecord, type Unmapped, type WorkspaceDb,
 } from './workspace-db/index.js';
 import { exportHeaderOf } from './workspace-db-exports.js';
-import { SWITCH_FILE, readSwitch, switchPath, type SwitchRecord } from './workspace-db-switch.js';
+import { SWITCH_FILE, readSwitch, switchLockPath, switchPath, type SwitchRecord } from './workspace-db-switch.js';
 
 export const ARCHIVE_ROOT = '.contextspace/archive';
 export const DATA_FILE = 'contextspace-data.json';
@@ -109,6 +109,7 @@ export interface MigrateResult {
   kept: string[];
   backup: string | null;
   backupProblem?: string;
+  instructionsProblem?: string;
   elapsedMs: number;
 }
 
@@ -302,6 +303,7 @@ async function refuseLinks(root: string, rel: string): Promise<void> {
 export async function withWorkspaceLocks<T>(root: string, run: () => Promise<T>): Promise<T> {
   const dot = path.join(root, '.contextspace');
   const locks = [
+    { file: switchLockPath(root), staleMs: 60_000 },
     { file: path.join(dot, 'plan-file.lock'), staleMs: 60_000 },
     { file: path.join(root, '.contextspace-planning.lock'), staleMs: 60_000 },
     { file: path.join(root, '.contextspace-plan.lock'), staleMs: 60_000 },
@@ -1549,7 +1551,8 @@ export function renderMigrateResult(result: MigrateResult): string {
     for (const u of result.unmapped) lines.push(`  - ${u.what}${u.card ? ` on card "${u.title ?? ''}"` : ''}: ${u.value}. ${u.reason}.`);
   }
   lines.push('', result.backup ? `First backup: ${result.backup}.` : `No backup was made${result.backupProblem ? ` (${result.backupProblem})` : ''}.`);
-  lines.push('Until the app reads the database, ContextSpace refuses every change to the old files here, and says so.');
+  lines.push('Read the plan with `ctxspace plan` and change it with `ctxspace plan apply`.');
+  lines.push(result.instructionsProblem ?? 'Regenerated assistant instructions for the database.');
   lines.push(`Undo it with \`ctxspace plan restore ${result.archive}\`.`);
   return lines.join('\n');
 }

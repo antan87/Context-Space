@@ -50,23 +50,27 @@ const toRun = (r: Record<string, unknown>): CheckRun => ({
  * (nothing to run), or with `rev_conflict` when `expectedRev` does not match the item's live rev under the lock.
  * The caller runs the check, then calls {@link finishCheckRun}.
  */
-export function startCheckRun(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string; expectedRev?: number }): Promise<CheckRun> {
+export function startCheckRun(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string; expectedRev?: number; dbId?: string; defaultCheck?: boolean }): Promise<CheckRun> {
   return db.serialize(() => startLocked(db, itemId, options));
 }
 
-async function startLocked(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string; expectedRev?: number }): Promise<CheckRun> {
+async function startLocked(db: WorkspaceDb, itemId: string, options: { by: string; sha?: string; expectedRev?: number; dbId?: string; defaultCheck?: boolean }): Promise<CheckRun> {
   await beginImmediate(db);
   try {
+    const dbId = readDbId(db.sqlite);
+    if (options.dbId !== undefined && options.dbId !== dbId) {
+      throw new WorkspaceDbError('replaced', `The database changed since you read it. Its dbId is now "${dbId}". Read the plan again.`);
+    }
     const item = db.sqlite.prepare("SELECT id, kind, rev, text, detail FROM blocks WHERE id = ?").get(itemId) as { id: string; kind: string; rev: number; text: string; detail: string } | undefined;
     if (!item) throw new WorkspaceDbError('invalid', `No plan item ${itemId}.`);
     if (item.kind !== 'checkpoint') throw new WorkspaceDbError('invalid', `${itemId} is a ${item.kind}; only a checkpoint has a check to run.`);
     if (options.expectedRev !== undefined && Number(item.rev) !== options.expectedRev) {
-      throw new WorkspaceDbError('rev_conflict', 'This changed since you read it (someone else changed it meanwhile). Nothing was changed; look at it again.');
+      throw new WorkspaceDbError('rev_conflict', `This changed since you read it. ${itemId} is now rev ${item.rev}. Nothing was changed; look at it again.`);
     }
-    const check = effectiveCheck(item.detail);
+    const parsed = effectiveCheck(item.detail);
+    const check = parsed.kind === 'none' && options.defaultCheck ? { kind: 'workspace', command: null } : parsed;
     if (check.kind === 'none') throw new WorkspaceDbError('invalid', `${itemId} has no Check: line, so there is nothing to run. Tick it directly.`);
     const hash = contentHash(item.text, item.detail);
-    const dbId = readDbId(db.sqlite);
     // A retry of a start whose answer was lost finds the run it already made, not a second one: the same checkpoint at the
     // same rev, content and check, by the same caller, still running.
     const again = db.sqlite.prepare("SELECT id FROM check_runs WHERE item_id = ? AND item_rev = ? AND content_hash = ? AND db_id = ? AND check_kind = ? AND command IS ? AND by = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
@@ -88,11 +92,11 @@ async function startLocked(db: WorkspaceDb, itemId: string, options: { by: strin
 }
 
 /** Records how the check ended. `passed` means exit code 0. Finishing twice is refused. */
-export function finishCheckRun(db: WorkspaceDb, runId: number, outcome: { exitCode: number; error?: boolean; dbId: string }): Promise<CheckRun> {
+export function finishCheckRun(db: WorkspaceDb, runId: number, outcome: { exitCode: number; error?: boolean; dbId: string; sha?: string }): Promise<CheckRun> {
   return db.serialize(() => finishLocked(db, runId, outcome));
 }
 
-async function finishLocked(db: WorkspaceDb, runId: number, outcome: { exitCode: number; error?: boolean; dbId: string }): Promise<CheckRun> {
+async function finishLocked(db: WorkspaceDb, runId: number, outcome: { exitCode: number; error?: boolean; dbId: string; sha?: string }): Promise<CheckRun> {
   await beginImmediate(db);
   try {
     const run = db.sqlite.prepare('SELECT status, legacy, db_id FROM check_runs WHERE id = ?').get(runId) as { status: string; legacy: number; db_id: string } | undefined;
@@ -103,7 +107,7 @@ async function finishLocked(db: WorkspaceDb, runId: number, outcome: { exitCode:
     }
     if (run.status !== 'running') throw new WorkspaceDbError('invalid', `Check run ${runId} already finished (${run.status}).`);
     const status = outcome.error ? 'error' : outcome.exitCode === 0 ? 'passed' : 'failed';
-    db.sqlite.prepare('UPDATE check_runs SET status = ?, exit_code = ?, finished_at = ? WHERE id = ?').run(status, outcome.exitCode, new Date().toISOString(), runId);
+    db.sqlite.prepare('UPDATE check_runs SET status = ?, exit_code = ?, finished_at = ?, sha = coalesce(?, sha) WHERE id = ?').run(status, outcome.exitCode, new Date().toISOString(), outcome.sha ?? null, runId);
     const finished = readRun(db.sqlite, runId);
     await commitTransaction(db);
     return finished;

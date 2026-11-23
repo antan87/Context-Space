@@ -15,7 +15,7 @@
  * `{ id }` expands one item or block; `{ all: true }` shows everything.
  */
 
-import { getRevision, getItem, getNow } from './reads.js';
+import { getRevision, getCard, getItem, getNow } from './reads.js';
 import { withSnapshot, type WorkspaceDb } from './connection.js';
 import { listCheckRuns } from './check-runs.js';
 
@@ -161,7 +161,11 @@ function whereWeStopped(rows: Row[]): string | null {
 
 function itemText(db: WorkspaceDb, id: string): string {
   const row = db.sqlite.prepare('SELECT id, kind, rev, text, name, detail, done FROM blocks WHERE id = ?').get(id) as { id: string; kind: string; rev: number; text: string; name: string | null; detail: string; done: number } | undefined;
-  if (!row) return `No plan block ${id}. Ids look like s7k2q; run \`ctxspace plan\`.\n`;
+  if (!row) {
+    const card = getCard(db, id);
+    if (card) return [`${card.id} ${card.kind} card rev ${card.rev}`, card.title, card.body ?? card.description ?? '', ''].join('\n');
+    return `No plan block ${id}. Ids look like s7k2q; run \`ctxspace plan\`.\n`;
+  }
   if (row.kind === 'heading' || row.kind === 'prose') return `${row.id} ${row.kind} rev ${row.rev}\n${row.text}\n`;
   const view = getItem(db, id)!;
   const lines = [`${row.id} ${row.kind} rev ${row.rev} ${row.done ? 'done' : 'open'}`, row.text.trim().replace(/^[-*+] \[[ xX]\] /, '')];

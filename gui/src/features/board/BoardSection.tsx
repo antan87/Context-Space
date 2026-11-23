@@ -11,17 +11,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Background, BackgroundVariant, ConnectionMode, MarkerType, ReactFlow, type DefaultEdgeOptions, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { Archive, ChevronLeft, Code2, Kanban, ListPlus, Plus, RefreshCw, StickyNote } from 'lucide-react';
 
-import { Badge } from '../../components/ui/badge.js';
-import { Button } from '../../components/ui/button.js';
-import { IconButton } from '../../components/ui/icon-button.js';
-import { Input } from '../../components/ui/input.js';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../../components/ui/empty.js';
-import { Spinner } from '../../components/ui/spinner.js';
+import { Badge, Button, Empty, EmptyDescription, EmptyHeader, EmptyMedia, IconButton, Input, Spinner } from '../../design/index.js';
 import { useWorkGuidance } from '../../lib/api/queries.js';
 import { cn } from '../../lib/utils.js';
 import { usePageVisible } from '../../lib/usePageVisible.js';
 import { useClockTick } from '../../lib/useClockTick.js';
-import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useSetPlanNow, useTickPlanStep } from '../plan/planFile.js';
+import { useAnswerDecision, useChangePlanFile, usePlanFile, useRunCheckpointCheck, useSetPlanNow, useTickPlanStep, type AnswerOptions } from '../plan/planFile.js';
 import { focusOf, focusSignature, stableNow, workableKeys } from '../plan/focus.js';
 import { boardNews, useIncomingCommits, useMarkNewsSeen, useRecentCommits, useWhatsNew } from '../plan/whatsNew.js';
 import { isTypingTarget } from '../../app/typingTarget.js';
@@ -2027,7 +2022,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const nowKeys = useMemo(() => workableKeys(planView), [planView]);
   const nowKey = focus?.source === 'set' ? focus.step?.key ?? null : null;
 
-  const answerDecision = useCallback(async (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => {
+  const answerDecision = useCallback(async (key: string, answer: string, expected?: string, options?: AnswerOptions) => {
     setDecisionErrors((prev) => {
       if (!prev[key]) return prev;
       const next = { ...prev };
@@ -2035,7 +2030,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return next;
     });
     try {
-      await answerMutation.mutateAsync({ key, answer, expected, ...(options?.optimistic === false ? { optimistic: false } : {}) });
+      await answerMutation.mutateAsync({ key, answer, expected, ...options });
       return true;
     } catch (err) {
       setDecisionErrors((prev) => ({
@@ -2046,7 +2041,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     }
   }, [answerMutation]);
 
-  const toggleStep = useCallback(async (key: string, done: boolean, expected?: string) => {
+  const toggleStep = useCallback(async (key: string, done: boolean, expected?: string, rev?: number) => {
     setBusyStepKeys((prev) => new Set(prev).add(key));
     setStepErrors((prev) => {
       if (!prev[key]) return prev;
@@ -2055,7 +2050,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       return next;
     });
     try {
-      await tickStepMutation.mutateAsync({ key, done, expected });
+      await tickStepMutation.mutateAsync({ key, done, expected, rev, dbId: planView?.dbId });
       return true;
     } catch (err) {
       setStepErrors((prev) => ({
@@ -2070,7 +2065,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         return next;
       });
     }
-  }, [tickStepMutation]);
+  }, [tickStepMutation, planView?.dbId]);
 
   const runCheck = useCallback(async (checkpointKey: string) => {
     setBusyStepKeys((prev) => new Set(prev).add(checkpointKey));
@@ -2102,6 +2097,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   // A note that was just added: the board goes to it as soon as the board data has it (no fixed delay; the data may arrive after the mutation returns)
   const boardIdsRef = useRef<Set<string>>(new Set());
+  const addRequest = useRef<{ body: string; requestId: string; dbId: string } | null>(null);
   boardIdsRef.current = new Set(board?.cards.map((card) => card.id) ?? []);
   const [addedNoteId, setAddedNoteId] = useState<string | null>(null);
   useEffect(() => {
@@ -2115,22 +2111,29 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const addNote = useCallback(async (note: { title: string; body?: string; area?: string; step?: string; pinned?: boolean }) => {
     try {
       const before = boardIdsRef.current;
-      const result = await changeBoardMutation.mutateAsync({ changes: [addNoteChange(note)] });
-      const added = result.cards.findLast((card) => !before.has(card.id));
-      if (added) setAddedNoteId(added.id);
+      const changes = [addNoteChange(note)];
+      const body = JSON.stringify(changes);
+      if (addRequest.current?.body !== body) {
+        addRequest.current = board?.dbId ? { body, requestId: crypto.randomUUID(), dbId: board.dbId } : null;
+      }
+      const request = addRequest.current;
+      const result = await changeBoardMutation.mutateAsync({ changes, ...(request ? { requestId: request.requestId, dbId: request.dbId } : {}) });
+      addRequest.current = null;
+      const id = result.addedCardId ?? result.cards.findLast((card) => !before.has(card.id))?.id;
+      if (id) setAddedNoteId(id);
       return true;
     } catch (err) {
       if (err instanceof ApiError) throw err;
       console.error('Failed to add note:', err);
       return false;
     }
-  }, [changeBoardMutation]);
+  }, [changeBoardMutation, board?.dbId]);
 
   const noteConflictSeen = useRef(false);
 
-  const updateNote = useCallback(async (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null; rev?: number }) => {
+  const updateNote = useCallback(async (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null; rev?: number }, dbId?: string) => {
     try {
-      await changeBoardMutation.mutateAsync({ changes: [updateNoteChange(id, updates)], ...(board?.dbId ? { dbId: board.dbId } : {}) });
+      await changeBoardMutation.mutateAsync({ changes: [updateNoteChange(id, updates)], dbId: dbId ?? board?.dbId });
       noteConflictSeen.current = false;
       return true;
     } catch (err) {
@@ -2144,13 +2147,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const deleteNote = useCallback(async (id: string) => {
     try {
-      await changeBoardMutation.mutateAsync({ changes: [deleteNoteChange(id)] });
+      const card = board?.cards.find((entry) => entry.id === id);
+      await changeBoardMutation.mutateAsync({ changes: [deleteNoteChange(id, card?.rev)], dbId: board?.dbId, ...(board?.dbId ? { revision: board.revision } : {}) });
       return true;
     } catch (err) {
       console.error('Failed to delete note:', err);
       return false;
     }
-  }, [changeBoardMutation]);
+  }, [changeBoardMutation, board]);
 
   const availableAreas = useMemo(() => areas
     .filter((a) => isBoardAreaId(a.id))
@@ -2162,7 +2166,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
 
   const [createNoteOpen, setCreateNoteOpen] = useState(false);
   const [createNoteDefaults, setCreateNoteDefaults] = useState<{ areaId?: string; stepKey?: string }>({});
-  const [editingNote, setEditingNote] = useState<NonNullable<NoteDialogProps['note']> | null>(null);
+  const [editingNote, setEditingNote] = useState<(NonNullable<NoteDialogProps['note']> & { dbId?: string }) | null>(null);
+  const editNote = useCallback((note: NonNullable<NoteDialogProps['note']>) => {
+    setEditingNote({ ...note, dbId: board?.dbId });
+  }, [board?.dbId]);
   useEffect(() => {
     setEditingNote(null);
     noteConflictSeen.current = false;
@@ -2280,6 +2287,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     keepFocus: () => {},
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
     answerDecision,
+    planDbId: planView?.dbId,
     decisionErrors,
     toggleStep,
     setNow,
@@ -2289,12 +2297,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     busyStepKeys,
     stepErrors,
     addNote,
-    editNote: setEditingNote,
+    editNote,
     updateNote,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, clearJump, openInReader, chooseTab, setOpenState, stageContainer, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize, recordBoardJump]);
+  }), [workspaceId, workspacePath, readOnly, stepInto, jumpToItem, clearJump, openInReader, chooseTab, setOpenState, stageContainer, answerDecision, planView?.dbId, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, editNote, updateNote, deleteNote, availableAreas, askInCLI, areas, newsView, stageSize, recordBoardJump]);
 
   // A copied code block opens the real file in the Code window, at the lines it is now; the keyboard goes back to the card.
   const openCode = useCallback<NonNullable<BoardActions['openCode']>>((target, from) => {
@@ -2317,6 +2325,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     setRowTab,
     selectThread: (id) => setThreadSelectedId((curr) => (curr === id ? null : id)),
     answerDecision,
+    planDbId: planView?.dbId,
     decisionErrors,
     toggleStep,
     setNow,
@@ -2326,12 +2335,12 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     busyStepKeys,
     stepErrors,
     addNote,
-    editNote: setEditingNote,
+    editNote,
     updateNote,
     deleteNote,
     availableAreas,
     askInCLI,
-  }), [workspaceId, workspacePath, readOnly, activeArea?.data.title, openInReader, openCode, toggleRow, setRowPage, setRowTab, answerDecision, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, updateNote, deleteNote, availableAreas, askInCLI]);
+  }), [workspaceId, workspacePath, readOnly, activeArea?.data.title, openInReader, openCode, toggleRow, setRowPage, setRowTab, answerDecision, planView?.dbId, setThreadSelectedId, decisionErrors, toggleStep, setNow, nowKeys, nowKey, runCheck, busyStepKeys, stepErrors, addNote, editNote, updateNote, deleteNote, availableAreas, askInCLI]);
 
   const backdropPress = useRef({ down: false, up: false });
 
@@ -2739,6 +2748,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                         className="nodrag nopan cursor-pointer @[44rem]:hidden"
                         data-testid="area-add-step-icon"
                         onClick={() => {
+                          changePlanMutation.beginAdd();
                           setAreaAddStepOpen(true);
                           setAreaAddStepError(null);
                         }}
@@ -2751,6 +2761,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                         aria-label="Add a step"
                         className="nodrag nopan hidden min-h-[24px] cursor-pointer gap-1.5 px-2.5 text-[12.5px] font-medium @[44rem]:inline-flex"
                         onClick={() => {
+                          changePlanMutation.beginAdd();
                           setAreaAddStepOpen(true);
                           setAreaAddStepError(null);
                         }}
@@ -2982,7 +2993,10 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       {body}
       <NoteDialog
         open={createNoteOpen}
-        onOpenChange={setCreateNoteOpen}
+        onOpenChange={(open) => {
+          if (!open) addRequest.current = null;
+          setCreateNoteOpen(open);
+        }}
         defaultAreaId={createNoteDefaults.areaId}
         defaultStepKey={createNoteDefaults.stepKey}
         areas={availableAreas}
@@ -3009,7 +3023,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
         }}
         note={editingNote}
         areas={availableAreas}
-        onSave={async (updates) => (editingNote ? updateNote(editingNote.id, updates) : false)}
+        onSave={async (updates) => (editingNote ? updateNote(editingNote.id, updates, editingNote.dbId) : false)}
       />
     </div>
   );

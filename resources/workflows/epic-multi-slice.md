@@ -6,9 +6,10 @@ Deliver large changes as independently reviewable outcomes with explicit depende
    Name usable increments where practical, rather than automatically splitting
    schema, API, and UI into separate PRs. For a required infrastructure prerequisite,
    identify its consumer and acceptance criteria.
-2. In `PLAN.md`, write each outcome as a checkpoint with its acceptance criteria, a
+2. In the plan, write each outcome as a checkpoint with its acceptance criteria, a
    `Check:` line, its steps, and the intended branch/PR and compatibility requirements
-   in the lines under it. Branch labels do not create branches or PRs automatically.
+   in the lines under it. For a moved workspace, use `ctxspace plan apply` and stable ids.
+   For a file-based workspace, edit `PLAN.md`. Branch labels do not create branches or PRs automatically.
 3. Sequence actual dependencies. Independent increments may proceed concurrently
    with clear ownership and isolation. Each mergeable increment must build and pass
    applicable gates; recheck dependent PRs when their base changes.

@@ -10,7 +10,22 @@ import type { PlanFileChange, PlanFileRead } from './plan-file-store.js';
 import type { PlanEvidence } from '../types.js';
 
 /** The Plan section of the generated AGENTS.md: the file, how to keep it true, and the one command it needs. */
-export function renderPlanFileInstructions(): string {
+export function renderPlanFileInstructions(moved = false): string {
+  if (moved) return [
+    '## Plan', '',
+    'Read the plan with `ctxspace plan` before you start. Use the stable ids it prints. Run `ctxspace plan <id>` for an item and its rev, or `ctxspace plan --all` for the full plan.',
+    '',
+    'Change the plan and Board with `ctxspace plan apply` (MCP: `change_plan`). Include the dbId with a revision or row rev. Use a unique requestId for an add and reuse it when retrying. If a change is refused, read again and keep the other person’s edits. `PLAN.md` is an export.',
+    '',
+    'Replace the example values with the revision, dbId and item id you read.',
+    '',
+    '```sh',
+    `ctxspace plan apply '{"ifRevision":12,"dbId":"a1b2c3d4e5f60718","ops":[{"op":"tick","id":"s7k2qv"}]}'`,
+    '```',
+    '',
+    '- Use `ctxspace plan now <id>` when you start a step. Run `ctxspace plan done <id>` for a checkpoint with a check.',
+    '- Put decisions under what they hold up. Give suggestions and what to do without an answer. Carry on with what you can, and only record the user’s answer.',
+  ].join('\n');
   return [
     '## Plan',
     '',
@@ -116,9 +131,11 @@ export function renderPlanChanges(changes: readonly PlanFileChange[], now: Date 
 }
 
 /** The plan as `ctxspace plan --json` prints it, for tools that read JSON. */
-export function planFileToJson(read: PlanFileRead, checks: Record<string, PlanEvidence>) {
+export function planFileToJson(read: PlanFileRead, checks: Record<string, PlanEvidence>, revs?: ReadonlyMap<string, number>) {
   const { plan } = read;
+  const identity = (item: { key: string }) => revs ? { id: item.key, rev: revs.get(item.key) } : {};
   const decision = (entry: PlanDecision) => ({
+    ...identity(entry),
     question: entry.question, answered: entry.done, ...(entry.answer ? { answer: entry.answer } : {}),
     suggested: entry.suggested, ...(entry.ifNoAnswer ? { ifNoAnswer: entry.ifNoAnswer } : {}), ...(entry.detail ? { detail: entry.detail } : {}),
   });
@@ -127,14 +144,15 @@ export function planFileToJson(read: PlanFileRead, checks: Record<string, PlanEv
     source: read.source,
     title: plan.title,
     checkpoints: plan.checkpoints.map((checkpoint) => ({
+      ...identity(checkpoint),
       title: checkpoint.title, done: checkpoint.done,
       ...(checkpoint.check !== undefined ? { check: checkpoint.check ?? 'the workspace checks' } : {}),
       ...(checks[checkpoint.key] ? { proof: checks[checkpoint.key] } : {}),
       ...(checkpoint.outcome ? { outcome: checkpoint.outcome } : {}),
-      steps: checkpoint.steps.map((step) => ({ text: step.text, done: step.done })),
+      steps: checkpoint.steps.map((step) => ({ ...identity(step), text: step.text, done: step.done })),
       decisions: checkpoint.decisions.map(decision),
     })),
-    steps: plan.steps.map((step) => ({ text: step.text, done: step.done })),
+    steps: plan.steps.map((step) => ({ ...identity(step), text: step.text, done: step.done })),
     decisions: plan.decisions.map(decision),
     waitingForTheUser: openDecisions(plan).map((entry) => entry.question),
   };

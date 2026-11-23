@@ -11,10 +11,9 @@
  * - {@link readAppDb}: every read runs in one read transaction on the separate read-only connection (`withSnapshot`),
  *   inside `readWithRetry`, so a read that meets another process's commit asks again between timers and ends, at most
  *   2 s later, in a `busy` the person sees as "Busy, try again".
- * - {@link writeAppDb}: every write holds `.contextspace/plan-file.lock`, the first lock `plan migrate` and `plan restore`
- *   take, so a restore of the move can never run in the middle of an app write; the switch is checked again under it.
- *   Writes use `applyBatch`, whose transaction waits for the lock between timers (never inside SQLite): the event loop
- *   keeps answering.
+ * - {@link writeAppDb}: every write holds `.contextspace/plan-file.lock`, which also fences `plan migrate` and
+ *   `plan restore`. The switch is checked again under the lock.
+ *   Compiled runtime writes run in a worker (see workspace-db-write), including SQLite's Windows file waits.
  * - {@link restoreBackupForApp}: a backup restore fenced across this process's connections (closed, and new ones held
  *   back until it is done) and every other opener (they check `isCurrent()` before each use and get `replaced`), under
  *   the move's workspace locks, with the live file's lock won between timers.
@@ -26,13 +25,13 @@ import * as path from 'node:path';
 
 import { acquireLock } from './locks.js';
 import {
-  WorkspaceDbError, openWorkspaceDbAsync, readDbId, readWithRetry, restoreBackupAsync, withSnapshot,
+  SERVER_BUSY_MS, WorkspaceDbError, openWorkspaceDbAsync, readDbId, readWithRetry, restoreBackupAsync, withSnapshot,
   type RestoreResult, type WorkspaceDb,
 } from './workspace-db/index.js';
 import { WorkspaceMovedError, readSwitch } from './workspace-db-switch.js';
 
 /** What a person is told when the database stays busy past the bounded wait. */
-export const BUSY_MESSAGE = 'Busy, try again in a moment: another process is using the workspace database. Nothing was changed.';
+export const BUSY_MESSAGE = 'Busy, try again in a moment: another process is using the workspace database.';
 
 /**
  * Which store the app uses for this workspace. `files`: the switch is off. `database`: the move finished (`on`). Any
@@ -55,6 +54,7 @@ interface Held {
 }
 
 const held = new Map<string, Held>();
+const writeTails = new Map<string, Promise<unknown>>();
 
 /** One entry per workspace folder, however the path was spelled (a link, a trailing part). */
 function keyOf(root: string): string {
@@ -129,8 +129,13 @@ const isReplaced = (error: unknown) => error instanceof WorkspaceDbError && erro
 export async function readAppDb<T>(root: string, read: (view: WorkspaceDb) => T): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
     try {
+      if (storeOf(root) !== 'database') throw restoredMove();
       const db = await connection(root);
-      return await readWithRetry(db, () => withSnapshot(db, read));
+      if (storeOf(root) !== 'database') throw restoredMove();
+      return await readWithRetry(db, () => {
+        if (storeOf(root) !== 'database') throw restoredMove();
+        return withSnapshot(db, read);
+      });
     } catch (error) {
       if (isReplaced(error) && attempt < 2) continue;
       throw busyWords(error);
@@ -144,19 +149,54 @@ export async function readAppDb<T>(root: string, read: (view: WorkspaceDb) => T)
  * written; a write with outside effects (a check that ran) passes false.
  */
 export async function writeAppDb<T>(root: string, write: (db: WorkspaceDb) => Promise<T>, options: { retry?: boolean } = {}): Promise<T> {
-  const release = await acquireLock(path.join(root, '.contextspace', 'plan-file.lock'), {
-    staleMs: 60_000, timeoutMs: 10_000, timeoutMessage: 'The plan is busy in another session. Retry.',
-  });
-  try {
-    if (storeOf(root) !== 'database') throw new WorkspaceDbError('replaced', 'This workspace is no longer in its database (it was restored). Read it again.');
+  return withAppDbWriteLock(root, async () => {
     for (let attempt = 0; ; attempt += 1) {
-      try {
-        return await write(await connection(root));
-      } catch (error) {
+      try { return await write(await connection(root)); }
+      catch (error) {
         if (isReplaced(error) && attempt === 0 && options.retry !== false) continue;
-        throw busyWords(error);
+        throw error;
       }
     }
+  });
+}
+
+const restoredMove = () => new WorkspaceDbError('replaced', 'This workspace is no longer in its database (it was restored). Read it again.');
+
+export async function withAppDbWriteLock<T>(root: string, write: () => Promise<T>): Promise<T> {
+  const key = keyOf(root);
+  const previous = writeTails.get(key) ?? Promise.resolve();
+  const deadline = performance.now() + SERVER_BUSY_MS;
+  let timer: ReturnType<typeof setTimeout>;
+  const queueTimeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new WorkspaceDbError('busy', BUSY_MESSAGE)), SERVER_BUSY_MS);
+  });
+  // Time out while waiting in the queue, and keep expired entries in order until they can be skipped.
+  const pending = previous.catch(() => undefined).then(() => {
+    clearTimeout(timer);
+    return lockedWrite(root, write, deadline);
+  }).finally(() => {
+    if (writeTails.get(key) === pending) writeTails.delete(key);
+  });
+  writeTails.set(key, pending);
+  return Promise.race([pending, queueTimeout]);
+}
+
+async function lockedWrite<T>(root: string, write: () => Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) throw new WorkspaceDbError('busy', BUSY_MESSAGE);
+  if (storeOf(root) !== 'database') throw restoredMove();
+  const release = await acquireLock(path.join(root, '.contextspace', 'plan-file.lock'), {
+    staleMs: 60_000, timeoutMs: remaining, timeoutMessage: BUSY_MESSAGE,
+  }).catch((error: unknown) => {
+    if (error instanceof Error && error.message === BUSY_MESSAGE) throw new WorkspaceDbError('busy', BUSY_MESSAGE);
+    throw error;
+  });
+  try {
+    if (performance.now() >= deadline) throw new WorkspaceDbError('busy', BUSY_MESSAGE);
+    if (storeOf(root) !== 'database') throw restoredMove();
+    return await write();
+  } catch (error) {
+    throw busyWords(error);
   } finally {
     await release();
   }

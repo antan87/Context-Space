@@ -5,7 +5,7 @@
  */
 
 import { askUser } from '../core/ask-user.js';
-import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
+import { assertWorkspaceWriteLocation, resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 
 export interface AskOptions {
   /** Short answers the user can pick; repeat the flag for more. */
@@ -32,6 +32,7 @@ export function askHarness(options: { harness?: string }, env: NodeJS.ProcessEnv
 export async function askCommand(question: string, options: AskOptions): Promise<void> {
   const workspacePath = await resolveWorkspaceQuiet(options.workspace);
   if (!workspacePath) throw new Error('No workspace here. Run this inside a workspace folder, or pass --workspace <path>.');
+  if (!options.workspace) await assertWorkspaceWriteLocation(workspacePath);
 
   const result = await askUser(workspacePath, {
     message: question,

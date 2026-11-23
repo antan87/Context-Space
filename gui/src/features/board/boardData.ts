@@ -304,10 +304,11 @@ export function updateNoteChange(id: string, updates: UpdateNoteChangeInput) {
   };
 }
 
-export function deleteNoteChange(id: string) {
+export function deleteNoteChange(id: string, rev?: number) {
   return {
     op: 'remove_card' as const,
     id,
+    ...(rev !== undefined ? { rev } : {}),
   };
 }
 
@@ -315,6 +316,7 @@ export interface BoardChangePayload {
   changes: unknown[];
   revision?: number;
   dbId?: string;
+  requestId?: string;
 }
 
 /**
@@ -324,7 +326,7 @@ export interface BoardChangePayload {
 export function useChangeBoard(workspace: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: BoardChangePayload | { changes: unknown[] } | unknown[]) => {
+    mutationFn: async (payload: BoardChangePayload | unknown[]) => {
       if (!workspace) throw new Error('Workspace is required to change the board.');
       const body = Array.isArray(payload) ? { changes: payload } : payload;
       const result = await apiFetch<unknown>(
@@ -334,7 +336,10 @@ export function useChangeBoard(workspace: string | null) {
           body: JSON.stringify(body),
         },
       );
-      return cleanBoard(result);
+      const added = isRecord(result) && Array.isArray(result.results)
+        ? result.results.find((entry) => isRecord(entry) && entry.op === 'add_card' && typeof entry.id === 'string')
+        : undefined;
+      return { ...cleanBoard(result), addedCardId: added?.id as string | undefined };
     },
     onSuccess: (board) => {
       if (workspace) {

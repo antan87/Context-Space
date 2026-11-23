@@ -124,7 +124,7 @@ export async function newsCommand(options: NewsOptions): Promise<void> {
     if (!workspacePath) throw new Error('No workspace here. Run this inside a workspace folder, or pass --workspace <path>.');
     const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     const now = new Date();
-    const report = await whatsNew(workspacePath, newsReader(options, process.env, interactive), { now, since: options.since, mark: !options.peek });
+    const report = await whatsNew(workspacePath, newsReader(options, process.env, interactive), { now, since: options.since, mark: !options.peek, database: true });
     console.log(options.json ? JSON.stringify(report, null, 2) : renderNews(report, now));
   } catch (error) {
     if (!options.json) throw error;

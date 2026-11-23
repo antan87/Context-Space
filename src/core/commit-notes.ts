@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { boardDbForApp, boardRequestId, changeBoardDb, replayBoardAdd } from './board-db-app.js';
 import { storeOf } from './workspace-db-app.js';
 import { execa } from 'execa';
 
@@ -11,7 +12,7 @@ import {
   changeBoard,
   parseCommitAbout,
   readBoard,
-  type BoardNote,
+  type BoardNote, type BoardCard,
 } from './board.js';
 import { assertWorkspaceActive } from './archive-guard.js';
 import { cleanRepoName, cleanScreenBlock, cleanScreenText } from './screen-clean.js';
@@ -72,12 +73,14 @@ export interface AddCommitNoteInput {
   title?: string;
   by?: string;
   cwd?: string;
+  requestId?: string;
 }
 
 export interface AddCommitNoteResult {
   note: CommitNote;
   revision: number;
   commitNodeId: string;
+  requestId?: string;
 }
 
 export interface ListCommitNotesOptions {
@@ -337,6 +340,7 @@ function sortNewestFirst(notes: CommitNote[]): CommitNote[] {
  */
 export async function addCommitNote(workspacePath: string, input: AddCommitNoteInput): Promise<AddCommitNoteResult> {
   const root = path.resolve(workspacePath);
+  const database = storeOf(root) === 'database';
   const feature = await loadFeatureConfig(root);
   if (!feature) throw new BoardWorkspaceError();
   assertWorkspaceActive(feature, 'add a commit note');
@@ -346,33 +350,45 @@ export async function addCommitNote(workspacePath: string, input: AddCommitNoteI
   }
 
   const title = deriveNoteTitle(input.text, input.title);
-  const resolved = await resolveCommitForNote(root, input.commit, input.repo, input.cwd);
   const by = normalizeNoteActor(input.by);
+  const requestId = input.requestId === undefined ? undefined : boardRequestId.parse(input.requestId);
+  const requestSource = JSON.stringify({ note: input.commit, repo: input.repo, title, body: input.text, by });
+  if (requestId) {
+    if (!database) throw new CommitNoteInputError('This workspace uses the Board file. requestId is only supported by the workspace database.');
+    const replay = await replayBoardAdd(root, requestId, requestSource);
+    if (replay) {
+      const card = replay.savedCards.find((saved) => saved.id === replay.results[0]?.id);
+      const note = card?.kind === 'note' ? noteFromCard(card) : null;
+      if (!note || !card?.about) throw new Error(`Could not read the saved note for requestId "${requestId}".`);
+      return { note, revision: replay.revision, commitNodeId: card.about, requestId: replay.requestId };
+    }
+  }
+  const resolved = await resolveCommitForNote(root, input.commit, input.repo, input.cwd);
   const cardId = randomUUID();
   const commitNodeId = `commit:${resolved.repo}:${resolved.sha}`;
 
-  const { board } = await changeBoard(
-    root,
-    [
-      { op: 'add_card', id: cardId, kind: 'note', title, body: input.text, about: commitNodeId },
-      { op: 'link', from: cardId, to: commitNodeId, label: 'note' },
-    ],
-    { by, allowCommitAbout: true },
-  );
-
-  const added = board.cards.find((card): card is BoardNote => card.id === cardId && card.kind === 'note');
+  const changes = [
+    { op: 'add_card', id: cardId, kind: 'note', title, body: input.text, about: commitNodeId },
+    { op: 'link', from: cardId, to: commitNodeId, label: 'note' },
+  ];
+  const saved = database
+    ? await changeBoardDb(root, changes, { by, allowCommitAbout: true, requestId, requestSource })
+    : null;
+  const { board, results } = saved ?? await changeBoard(root, changes, { by, allowCommitAbout: true });
+  const cards: BoardCard[] = saved?.savedCards ?? board.cards;
+  const added = cards.find((card): card is BoardNote => card.id === results[0]?.id && card.kind === 'note');
   if (!added) throw new Error('Added commit note missing from saved board.');
   const note = noteFromCard(added);
   if (!note) throw new Error('Saved commit note failed validation.');
 
-  return { note, revision: board.revision, commitNodeId };
+  return { note, revision: saved?.revision ?? board.revision, commitNodeId: added.about!, ...(saved ? { requestId: saved.requestId } : {}) };
 }
 
-function readAllStoredCommitNotes(cards: readonly { kind: string }[]): CommitNote[] {
+function readAllStoredCommitNotes(cards: readonly BoardCard[]): CommitNote[] {
   const notes: CommitNote[] = [];
   for (const card of cards) {
     if (card.kind !== 'note') continue;
-    const note = noteFromCard(card as BoardNote);
+    const note = noteFromCard(card);
     if (note) notes.push(note);
   }
   return sortNewestFirst(notes);
@@ -392,7 +408,7 @@ function matchesShaPrefix(storedSha: string, queryHexLower: string): boolean {
  */
 export async function listCommitNotes(workspacePath: string, options: ListCommitNotesOptions = {}): Promise<CommitNote[]> {
   const root = path.resolve(workspacePath);
-  const board = await readBoard(root);
+  const board = await (storeOf(root) === 'database' ? boardDbForApp(root) : readBoard(root));
   const allNotes = readAllStoredCommitNotes(board.cards);
 
   let repoFilter: string | undefined;
@@ -431,10 +447,7 @@ export async function listCommitNotes(workspacePath: string, options: ListCommit
  */
 export async function queryCommitNotes(workspacePath: string, options: { repo?: string; sha?: string } = {}): Promise<CommitNote[]> {
   const root = path.resolve(workspacePath);
-  // Only the app reads this: a workspace moved to its database is read there (the command line moves in DB3c).
-  const board = storeOf(root) === 'database'
-    ? await import('./board-db-app.js').then(({ boardDbForApp }) => boardDbForApp(root)) as unknown as { cards: Array<{ kind: string }> }
-    : await readBoard(root);
+  const board = await (storeOf(root) === 'database' ? boardDbForApp(root) : readBoard(root));
   let notes = readAllStoredCommitNotes(board.cards);
 
   if (options.repo !== undefined && options.repo !== '') {

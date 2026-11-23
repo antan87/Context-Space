@@ -3,6 +3,7 @@
  * checkpoints, steps and decisions to tick and answer. Pure apart from the queries, so the words are tested alone.
  */
 
+import { useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client.js';
 import { whenText, whoName } from './planView.js';
@@ -87,12 +88,15 @@ export interface PlanFileView {
 /** Who said which step is being worked on now, and when. */
 export interface PlanNow { key: string; by: string; at: string }
 
+export interface PlanObservation { rev?: number; dbId?: string }
+export type AnswerOptions = PlanObservation & { optimistic?: boolean };
+
 export type PlanFileChangeInput =
-  | { type: 'tick'; key: string; done: boolean; expected: string }
-  | { type: 'answer'; key: string; answer: string; expected: string }
+  | ({ type: 'tick'; key: string; done: boolean; expected: string } & PlanObservation)
+  | ({ type: 'answer'; key: string; answer: string; expected: string } & PlanObservation)
   | { type: 'add'; step: string; checkpoint?: string }
   | { type: 'check'; key: string }
-  | { type: 'reopen'; key: string; reason: string; expected: string };
+  | ({ type: 'reopen'; key: string; reason: string; expected: string } & PlanObservation);
 
 export const planFileKey = (workspace: string | null) => ['plan-file', workspace] as const;
 
@@ -115,29 +119,55 @@ export function usePlanFile(workspace: string | null) {
 /** One change as the user. Ticking a checkpoint with a check runs the check first, so that can take a while. */
 export function useChangePlanFile(workspace: string) {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (change: PlanFileChangeInput) => apiFetch<{ message: string; plan: PlanFileView }>(
-      `/api/workspace/${encodeURIComponent(workspace)}/plan`,
-      { method: 'POST', body: JSON.stringify({ change }) },
-    ),
+  const planSeen = useRef<{ workspace: string; plan: PlanFileView | undefined } | null>(null);
+  const pendingAdd = useRef<{ workspace: string; body: string; requestId: string; store: 'file' | 'database'; dbId?: string } | null>(null);
+  const readPlan = () => queryClient.getQueryData<PlanFileView>(planFileKey(workspace));
+  const mutation = useMutation({
+    mutationFn: async (change: PlanFileChangeInput) => {
+      let submission: typeof pendingAdd.current = null;
+      if (change.type === 'add') {
+        const body = JSON.stringify(change);
+        if (pendingAdd.current?.body !== body || pendingAdd.current.workspace !== workspace) {
+          const seen = planSeen.current;
+          const plan = seen?.workspace === workspace ? seen.plan : readPlan();
+          if (!plan || (plan.store === 'database' && !plan.dbId)) throw new Error('Read the plan before adding a step. Close this form and open Add step again.');
+          pendingAdd.current = { workspace, body, requestId: crypto.randomUUID(), store: plan.store ?? 'file', dbId: plan.dbId };
+        }
+        submission = pendingAdd.current;
+      }
+      const result = await apiFetch<{ message: string; plan: PlanFileView }>(
+        `/api/workspace/${encodeURIComponent(workspace)}/plan`,
+        { method: 'POST', body: JSON.stringify({ change, requestId: submission?.requestId, store: submission?.store, dbId: submission?.dbId }) },
+      );
+      if (submission && submission === pendingAdd.current) {
+        pendingAdd.current = null;
+        planSeen.current = null;
+      }
+      return result;
+    },
     onSuccess: (result) => {
-      queryClient.setQueryData(planFileKey(workspace), result.plan);
+      queryClient.setQueryData<PlanFileView>(planFileKey(workspace), (cached) => {
+        if (result.plan.dbId && cached?.dbId === result.plan.dbId && (cached.revision ?? 0) > (result.plan.revision ?? 0)) return undefined;
+        return result.plan;
+      });
       void queryClient.invalidateQueries({ queryKey: ['needs-you'] });
       void queryClient.invalidateQueries({ queryKey: ['workspace-work', workspace] });
     },
     // A line that changed meanwhile is refused; reading the plan again shows what is there now.
     onError: () => { void queryClient.invalidateQueries({ queryKey: planFileKey(workspace) }); },
   });
+  const reset = () => { pendingAdd.current = null; planSeen.current = null; mutation.reset(); };
+  return { ...mutation, reset, beginAdd: () => { reset(); planSeen.current = { workspace, plan: readPlan() }; } };
 }
 
 /** Answer a decision directly, with optimistic removal from waiting so it immediately clears from lanes and boards. */
 export function useAnswerDecision(workspace: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, answer, expected }: { key: string; answer: string; expected?: string; /** False: the decision stays on the board until the server has answered (the dialog, where the typed words must survive a failure). */ optimistic?: boolean }) =>
+    mutationFn: ({ key, answer, expected, rev, dbId }: { key: string; answer: string; expected?: string } & AnswerOptions) =>
       apiFetch<{ message: string; plan: PlanFileView }>(
         `/api/workspace/${encodeURIComponent(workspace)}/plan/decisions/${encodeURIComponent(key)}/answer`,
-        { method: 'POST', body: JSON.stringify({ answer, ...(expected ? { expected } : {}) }) },
+        { method: 'POST', body: JSON.stringify({ answer, expected, rev, dbId }) },
       ),
     onMutate: async ({ key, answer, optimistic }) => {
       if (optimistic === false) return { previous: undefined };
@@ -181,10 +211,10 @@ export function useAnswerDecision(workspace: string) {
 export function useTickPlanStep(workspace: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, done, expected }: { key: string; done: boolean; expected?: string }) =>
+    mutationFn: ({ key, done, expected, rev, dbId }: { key: string; done: boolean; expected?: string } & PlanObservation) =>
       apiFetch<{ message: string; plan: PlanFileView }>(
         `/api/workspace/${encodeURIComponent(workspace)}/plan/steps/${encodeURIComponent(key)}/tick`,
-        { method: 'POST', body: JSON.stringify({ done, ...(expected ? { expected } : {}) }) },
+        { method: 'POST', body: JSON.stringify({ done, expected, rev, dbId }) },
       ),
     onMutate: async ({ key, done }) => {
       await queryClient.cancelQueries({ queryKey: planFileKey(workspace) });
@@ -223,6 +253,7 @@ export function useTickPlanStep(workspace: string) {
 export function useSetPlanNow(workspace: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    scope: { id: `plan-now:${workspace}` },
     mutationFn: (key: string | null) => apiFetch<{ message: string; plan: PlanFileView }>(
       `/api/workspace/${encodeURIComponent(workspace)}/plan/now`,
       { method: 'POST', body: JSON.stringify(key === null ? { clear: true } : { key }) },

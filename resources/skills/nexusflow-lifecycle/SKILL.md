@@ -10,9 +10,9 @@ metadata:
 
 # Work from the current assignment
 
-Read the workspace instructions and the plan, `PLAN.md`, and the live assignment
+Read the workspace instructions, the plan with `ctxspace plan`, and the live assignment
 with `ctxspace flow --assignment --json` or MCP `get_work_context` (which also returns the
-plan's text). Check the stage, expected output, and stopping point. If the CLI is not on PATH, try the generated workspace launcher
+plan). Check the stage, expected output, and stopping point. If the CLI is not on PATH, try the generated workspace launcher
 `./.contextspace/bin/ctxspace` (PowerShell: `.\.contextspace\bin\ctxspace.cmd`).
 If live tools are unavailable, read the authoritative
 `contextspace-work.json` and relevant sources; identify anything you cannot verify.
@@ -42,9 +42,8 @@ steps it needs under it.
 - Task brief: the short reason for the workspace.
 - Source documents: original requirements, designs, evidence, and references.
 - AI assignment: what to do now, expected result, and stopping point.
-- The plan: `PLAN.md`, what the work is for, its checkpoints with their steps, and the
-  decisions only the user can make. You change it with your own file edits; the user sees
-  it in the Plan tab and can tick and answer there.
+- The plan records what the work is for, its checkpoints and steps, and decisions only
+  the user can make. The user can tick and answer in the app.
 - Knowledge: durable decisions and their reasons, not a running task log.
 
 Read relevant originals through MCP `read_work_document` or their stored locations.
@@ -56,8 +55,15 @@ applies to it. Project sources remain owned by their originating workspace.
 
 ### Work with the plan
 
-The plan is `PLAN.md`. Read it before you start, and again before you change it: any AI
-or person may have changed it. Keep it true with your own edits:
+Read the plan before you start and again before you change it. The workspace’s Plan
+section in AGENTS.md says which store it uses.
+
+For a moved workspace, read with `ctxspace plan` and change it with `ctxspace plan apply`
+(or MCP `read_plan` and `change_plan`). Use the ids and revision you read and the item
+or card rev for edits. If a change is refused, read again and keep the other person's
+edits. For a checkpoint with a check, `ctxspace plan done <id>` runs it before ticking.
+
+For a file-based workspace, edit `PLAN.md` directly. The plan looks like this:
 
 ```markdown
 ## Checkpoints
@@ -101,7 +107,7 @@ When MCP is connected, tell the screen what you did instead of describing it at 
 `annotate_document` leaves a note on a line. `suggest_next` offers the one next move with
 its reason, at the end of a turn. These tools only show things: they edit no file and press
 no key for the user, and a repeated call is ignored. Plan changes need no extra call: the Plan
-tab shows your edits to `PLAN.md` within a second. Ask what the user is looking at with `get_screen_context` only if they have
+tab updates when you change the plan. Ask what the user is looking at with `get_screen_context` only if they have
 switched sharing on; if it is off, ask in the chat. Without MCP, say it in the chat.
 
 ## Execute only the current stage

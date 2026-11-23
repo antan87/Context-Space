@@ -1,12 +1,15 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 
 import type { AIAssistant, CodexAgentItem, SkillItem } from '../types.js';
 import { acquireLock, createMutationQueue } from '../core/locks.js';
 import { parseSkillMarkdown, serializeSkillMarkdown } from '../utils/skills-catalog.js';
+import { resolveResourcePath } from '../utils/resources.js';
 import { serializeCodexAgentToml } from './codex-agent.js';
+import { LIFECYCLE_SKILL_ID } from './selection.js';
 import {
   formatValidationError,
   codexAgentNameSchema,
@@ -117,7 +120,23 @@ function normalizeManagedPath(relativePath: string): string {
   return toPosix(normalized);
 }
 
-async function walkSkillFiles(skill: SkillItem): Promise<Array<{ relativePath: string; bytes: Uint8Array; mode?: number }>> {
+// The global catalog can still hold the shipped file-mode text installed by the development-skill installer.
+// Update exact matches in workspace projections while preserving custom text and the installed frontmatter.
+const LEGACY_LIFECYCLE_HASHES = new Map([
+  ['SKILL.md', '9a8999e89cdfc3bbad7bb32020188eb1dbe0d799d92dacc608bb9a4e18327787'],
+  ['references/epic-deliverables.md', '2d3faead01b5d779332050c429f4e23508a53668650a65ad16139dda53b8d98b'],
+]);
+
+async function updatedLifecycleText(relativePath: string, content: string): Promise<string | undefined> {
+  const expected = LEGACY_LIFECYCLE_HASHES.get(relativePath);
+  if (!expected || hashBytes(Buffer.from(content.replace(/\r\n/g, '\n').trim())) !== expected) return undefined;
+  const shipped = await resolveResourcePath(path.dirname(fileURLToPath(import.meta.url)), 'skills', LIFECYCLE_SKILL_ID, relativePath);
+  if (!shipped) throw new Error(`Could not find the shipped lifecycle skill file ${relativePath}.`);
+  const text = await fs.readFile(shipped, 'utf8');
+  return relativePath === 'SKILL.md' ? parseSkillMarkdown(text).content : text;
+}
+
+async function walkSkillFiles(skill: SkillItem, local: boolean): Promise<Array<{ relativePath: string; bytes: Uint8Array; mode?: number }>> {
   if (!skill.sourcePath) {
     const metadata: Record<string, unknown> = {
       name: skill.id,
@@ -147,6 +166,7 @@ async function walkSkillFiles(skill: SkillItem): Promise<Array<{ relativePath: s
   }
 
   const files: Array<{ relativePath: string; bytes: Uint8Array; mode?: number }> = [];
+  const updateLifecycle = !local && skill.id === LIFECYCLE_SKILL_ID;
   async function walk(directory: string): Promise<void> {
     await assertNoLinkedPathComponents(sourceRoot, directory);
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
@@ -173,7 +193,11 @@ async function walkSkillFiles(skill: SkillItem): Promise<Array<{ relativePath: s
           if (validated.data.compatibility) portableMetadata.compatibility = validated.data.compatibility;
           if (validated.data.metadata) portableMetadata.metadata = validated.data.metadata;
           if (validated.data['allowed-tools']) portableMetadata['allowed-tools'] = validated.data['allowed-tools'];
-          bytes = Buffer.from(stampSkillMarkdown(serializeSkillMarkdown(portableMetadata, parsed.content)), 'utf-8');
+          const updated = updateLifecycle ? await updatedLifecycleText(relativePath, parsed.content) : undefined;
+          bytes = Buffer.from(stampSkillMarkdown(serializeSkillMarkdown(portableMetadata, updated ?? parsed.content)), 'utf-8');
+        } else if (updateLifecycle && LEGACY_LIFECYCLE_HASHES.has(relativePath)) {
+          const updated = await updatedLifecycleText(relativePath, bytes.toString('utf8'));
+          if (updated !== undefined) bytes = Buffer.from(updated, 'utf8');
         }
         files.push({ relativePath, bytes, mode: portableMode((await fs.stat(absolute)).mode) });
       }
@@ -214,8 +238,8 @@ async function buildDesiredFiles(
           : `Invalid skill identity: ${formatValidationError(skillId.error)}`,
       );
     }
-    const sourceFiles = await walkSkillFiles(skill);
     const isLocal = isWorkspaceLocalSkill(skill, workspacePath);
+    const sourceFiles = await walkSkillFiles(skill, isLocal);
     // Every skill goes to every folder a harness reads, whichever assistants the workspace chose: one can be
     // opened later, and nothing else says which. A workspace-only skill already lives in its own folder.
     const roots = new Map<string, (typeof SKILL_FOLDER_ADAPTERS)[WorkspaceSkillFolder]>();

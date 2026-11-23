@@ -124,6 +124,7 @@ import { getWorkspaceStatusReport } from './core/status.js';
 import { refreshWorkspace, upgradeWorkspaceToRunningVersion } from './core/refresh.js';
 import { checkGenerationLock } from './core/generation-lock.js';
 import { writeWorkspaceFile } from './core/storage.js';
+import { drainDbWrites } from './core/workspace-db-write.js';
 import {
   readWorkspaceKnowledge,
   addWorkspaceKnowledge,
@@ -4873,9 +4874,12 @@ export function startServer(
     }) as http.Server;
 
     injectWebSocket(server);
-    const stopTerminals = () => { terminalManager.dispose(); process.exit(0); };
-    process.once('SIGTERM', stopTerminals);
-    process.once('SIGINT', stopTerminals);
+    const stopTerminals = () => {
+      terminalManager.dispose();
+      void drainDbWrites().then(() => process.exit(0));
+    };
+    process.on('SIGTERM', stopTerminals);
+    process.on('SIGINT', stopTerminals);
     server.once('close', () => {
       process.removeListener('SIGTERM', stopTerminals);
       process.removeListener('SIGINT', stopTerminals);

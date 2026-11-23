@@ -12,6 +12,7 @@ import { getConventionalTestCommands } from '../utils/test-command.js';
 import { renderFreshnessBanner } from '../core/generation-lock.js';
 import { PRIMARY_KNOWLEDGE_FILE, PRIMARY_PLAN_FILE, CLI_NAME } from '../core/constants.js';
 import { resolveActiveDomainRules } from '../core/domain-packs.js';
+import { readSwitch } from '../core/workspace-db-switch.js';
 import { renderPlanFileInstructions } from '../core/plan-file-text.js';
 import { renderLessonsSection } from './lessons.js';
 import { getWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
@@ -139,10 +140,11 @@ function orderReposByDependency<T extends { name: string }>(
  * "build": "tsc"). Anything derivable from a manifest is better read from the
  * manifest, where it cannot go stale.
  */
-export async function buildContextContent(ctx: WorkspaceContext): Promise<string> {
+export async function buildContextContent(ctx: WorkspaceContext, workspacePath = ctx.feature.workspacePath): Promise<string> {
   const { feature, repos, analysis } = ctx;
+  const moved = readSwitch(workspacePath);
   const inPlace = isInPlace(feature);
-  const explainLine = (await explainSkillWanted(feature.workspacePath))
+  const explainLine = (await explainSkillWanted(workspacePath))
     ? `- When someone asks how something works, answer in \`explain/<topic>.md\` so it shows on the Board as cards (skill \`contextspace-explain\`); when you change code an answer points at, update the answer.\n`
     : '';
 
@@ -212,8 +214,18 @@ export async function buildContextContent(ctx: WorkspaceContext): Promise<string
     .filter((a): a is NonNullable<typeof a> => !!a && a.existingAIConfigs.length > 0)
     .map((a) => `\`${a.name}\` (${a.existingAIConfigs.map((c) => c.relativePath).join(', ')})`);
 
-  const teamwork = feature.teamworkInstructions
-    ? `\n## How to work together\n\n${feature.teamworkInstructions}\n`
+  // Older manifests store a copy of the shipped strategy, even after the template is updated.
+  let instructions = feature.teamworkInstructions;
+  if (moved && instructions?.startsWith('# Team Strategy: Plan, Implement, Review')) {
+    instructions = instructions
+      .replace('the plan (`PLAN.md`)', 'the plan (`ctxspace plan`)')
+      .replace('editing `PLAN.md` directly', 'using `ctxspace plan apply`');
+  }
+  if (moved && instructions?.startsWith('# Team Strategy: Epic & Multi-PR Slices')) {
+    instructions = instructions.replace('In `PLAN.md`, write each outcome', 'Use `ctxspace plan apply` to add each outcome');
+  }
+  const teamwork = instructions
+    ? `\n## How to work together\n\n${instructions}\n`
     : '';
 
   const ownInstructions = existing.length > 0
@@ -291,7 +303,9 @@ ${structureRule}${startHint}`
 
 ${summary}${reposSection}
 
-${renderPlanFileInstructions()}
+${moved && moved.state !== 'on'
+  ? '## Plan\n\nThe plan is unavailable during a move or restore. Run `ctxspace plan migrate --status`.'
+  : renderPlanFileInstructions(moved?.state === 'on')}
 
 ${renderLessonsSection(ctx.lessons ?? [])}## Where to look
 

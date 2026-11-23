@@ -49,6 +49,7 @@ export const OP_FIELDS: Record<string, readonly string[]> = {
   remove: ['id', 'rev', 'cascade'],
   answer: ['id', 'text', 'answer', 'rev'],
   'block.set': ['id', 'text', 'rev'],
+  'section.set': ['id', 'text', 'rev'],
   'card.add': ['kind', 'title', 'body', 'path', 'description', 'area', 'step', 'about', 'look', 'as', 'pinned'],
   'card.update': ['id', 'rev', 'title', 'body', 'path', 'description', 'area', 'step', 'about', 'look', 'pinned', 'archived'],
   'card.remove': ['id', 'rev'],
@@ -73,6 +74,8 @@ export interface OpContext {
   by: string;
   at: string;
   dbId: string;
+  observedRevision: boolean;
+  revision: number;
   refs: Map<string, string>;
   taken: Set<string>;
   log: string[];
@@ -152,6 +155,15 @@ function needRev(ctx: OpContext, op: Op, b: DocBlock, why: string): void {
     throw new OpError('rev_required', `${op.op} ${b.id} needs its "rev" (now ${b._rev0}; \`ctxspace plan ${b.id}\` shows it): ${why} The line now reads: ${reads(b)}`, { id: b.id, currentRev: b._rev0 });
   }
   checkRev(ctx, op, b.id, b._rev0, reads(b));
+}
+
+/** A saved answer is content, so a question's id or wording alone cannot authorize replacing it. */
+function checkAnswerRev(ctx: OpContext, op: Op, b: DocBlock, answer: string): void {
+  const current = `${reads(b)}. Current answer: "${clip(answer, 300)}"`;
+  if (!ctx.observedRevision && op.rev === undefined && !isNewInBatch(op, b)) {
+    throw new OpError('rev_required', `Read \`ctxspace plan ${b.id}\` again and resend with rev ${b._rev0} or the workspace ifRevision you read. ${current}`, { id: b.id, currentRev: b._rev0 });
+  }
+  checkRev(ctx, op, b.id, b._rev0, current);
 }
 
 // ─── Tree helpers ───────────────────────────────────────────────────────────
@@ -349,7 +361,9 @@ export function canonicalNode(db: DatabaseSync, doc: Doc | null, node: unknown):
 
 function tickOp(ctx: OpContext, op: Op, done: boolean): void {
   const b = block(ctx, op.id, ITEM_KINDS);
-  checkRev(ctx, op, b.id, b._rev0, reads(b));
+  const answer = b.kind === 'decision' && !done ? parseDetail('decision', b.detail).answer : undefined;
+  if (answer !== undefined) checkAnswerRev(ctx, op, b, answer);
+  else checkRev(ctx, op, b.id, b._rev0, reads(b));
   if (b.kind === 'decision' && done) throw bad(`${b.id} is a decision: answer it with {"op":"answer","id":"${b.id}","text":"..."} (that ticks it).`);
   if (b.kind === 'decision' && !done) {
     // Reopening a decision takes its answer away with the tick: an open question with an answer line would contradict itself.
@@ -507,38 +521,52 @@ export const OPS: Record<string, OpFn> = {
     if (nested.length && op.cascade !== true) {
       throw bad(`${b.id} has ${nested.length} item(s) nested under it (${nested.slice(0, 3).map((x) => x.id).join(', ')}${nested.length > 3 ? ', ...' : ''}). Remove or move them first, or pass "cascade": true to remove them all.`);
     }
-    for (const x of range) {
-      if (x.kind === 'checkpoint') {
-        for (const c of ctx.db.prepare('SELECT id FROM cards WHERE area = ?').all(`checkpoint:${x.id}`) as Array<{ id: string }>) {
-          ctx.rec.capture('cards', c.id);
-          ctx.db.prepare("UPDATE cards SET area = 'plan:own', rev = rev + 1, updated_by = ?, updated_at = ? WHERE id = ?").run(ctx.by, ctx.at, c.id);
-        }
-        const node = `checkpoint:${x.id}`;
-        for (const l of ctx.db.prepare('SELECT id FROM links WHERE from_node = ? OR to_node = ? OR from_node LIKE ? OR to_node LIKE ?').all(node, node, `${node}#%`, `${node}#%`) as Array<{ id: string }>) {
-          ctx.rec.capture('links', l.id);
-          ctx.db.prepare('DELETE FROM links WHERE id = ?').run(l.id);
-        }
-        for (const p of ctx.db.prepare('SELECT node_id FROM positions WHERE node_id = ? OR node_id LIKE ?').all(node, `${node}#%`) as Array<{ node_id: string }>) {
-          ctx.rec.capture('positions', p.node_id);
-          ctx.db.prepare('DELETE FROM positions WHERE node_id = ?').run(p.node_id);
-        }
-      }
-      if (isItemKind(x.kind)) {
-        for (const c of ctx.db.prepare('SELECT id FROM cards WHERE step_id = ?').all(x.id) as Array<{ id: string }>) {
-          ctx.rec.capture('cards', c.id);
-          ctx.db.prepare('UPDATE cards SET step_id = NULL, rev = rev + 1, updated_by = ?, updated_at = ? WHERE id = ?').run(ctx.by, ctx.at, c.id);
-        }
-      }
+    const checkpoints = range.filter((x) => x.kind === 'checkpoint').map((x) => `checkpoint:${x.id}`);
+    const cards = checkpoints.flatMap((node) => ctx.db.prepare('SELECT id FROM cards WHERE area = ?').all(node) as Array<{ id: string }>);
+    const links = checkpoints.flatMap((node) => ctx.db.prepare('SELECT id FROM links WHERE from_node = ? OR to_node = ? OR from_node LIKE ? OR to_node LIKE ?')
+      .all(node, node, `${node}#%`, `${node}#%`) as Array<{ id: string }>);
+    const positions = checkpoints.flatMap((node) => ctx.db.prepare('SELECT node_id FROM positions WHERE node_id = ? OR node_id LIKE ?')
+      .all(node, `${node}#%`) as Array<{ node_id: string }>);
+    const itemCards = range.flatMap((x) => isItemKind(x.kind)
+      ? (ctx.db.prepare('SELECT id FROM cards WHERE step_id = ?').all(x.id) as Array<{ id: string }>).map((card) => ({ card, item: x.id }))
+      : []);
+    const now = ctx.db.prepare('SELECT item_id FROM now WHERE id = 1').get()?.item_id;
+    const clearsNow = range.some((x) => x.id === now);
+    if (!ctx.observedRevision && (op.cascade === true || range.length > 1 || cards.length || links.length || positions.length || itemCards.length || clearsNow)) {
+      throw new OpError('missing_revision', `Removing "${reads(b)}" (${b.id}) can also change other plan or Board entries. Read the workspace again and resend with the ifRevision and dbId you read. The workspace is now at revision ${ctx.revision}.`, { id: b.id, currentRevision: ctx.revision });
     }
+    for (const x of range) ctx.log.push(`remove ${x.id} "${clip(x.name ?? x.text, 50)}"`);
+    for (const c of cards) {
+      ctx.rec.capture('cards', c.id);
+      ctx.db.prepare("UPDATE cards SET area = 'plan:own', rev = rev + 1, updated_by = ?, updated_at = ? WHERE id = ?").run(ctx.by, ctx.at, c.id);
+      ctx.log.push(`move card ${c.id} to plan:own`);
+    }
+    for (const id of new Set(links.map((link) => link.id))) {
+      ctx.rec.capture('links', id);
+      ctx.db.prepare('DELETE FROM links WHERE id = ?').run(id);
+      ctx.log.push(`remove link ${id}`);
+    }
+    for (const p of positions) {
+      ctx.rec.capture('positions', p.node_id);
+      ctx.db.prepare('DELETE FROM positions WHERE node_id = ?').run(p.node_id);
+      ctx.log.push(`remove position ${p.node_id}`);
+    }
+    for (const { card, item } of itemCards) {
+      ctx.rec.capture('cards', card.id);
+      ctx.db.prepare('UPDATE cards SET step_id = NULL, rev = rev + 1, updated_by = ?, updated_at = ? WHERE id = ?').run(ctx.by, ctx.at, card.id);
+      ctx.log.push(`detach card ${card.id} from ${item}`);
+    }
+    if (clearsNow) ctx.log.push(`clear Now for ${now}`);
     ctx.doc.removed.push(...range.filter((x) => !x._new));
     ctx.doc.blocks.splice(0, blocks.length, ...blocks.filter((x) => !range.includes(x)));
     touchParent(ctx, b.parent_id);
-    ctx.log.push(`remove ${b.id} "${clip(b.name ?? b.text, 50)}"${range.length > 1 ? ` (+${range.length - 1} blocks)` : ''}`);
   },
 
   answer(ctx, op) {
     const b = block(ctx, op.id, ['decision']);
-    checkRev(ctx, op, b.id, b._rev0, reads(b));
+    const answer = parseDetail('decision', b.detail).answer;
+    if (answer !== undefined) checkAnswerRev(ctx, op, b, answer);
+    else checkRev(ctx, op, b.id, b._rev0, reads(b));
     const words = oneLine(op.answer ?? op.text, 'text');
     const inner = ' '.repeat(indentOf(b.text) + 2);
     const lines = b.detail ? b.detail.split('\n') : [];
@@ -605,6 +633,12 @@ export const OPS: Record<string, OpFn> = {
   'card.update'(ctx, op) {
     const row = resolveCard(ctx, op.id);
     const id = row.id as string;
+    if (!ctx.observedRevision && op.rev === undefined && !op.__ref
+      && (op.title !== undefined || op.body !== undefined || op.description !== undefined || op.path !== undefined)) {
+      const field = op.body !== undefined ? 'body' : op.description !== undefined ? 'description' : op.path !== undefined ? 'path' : undefined;
+      const current = field ? ` Current ${field}: ${JSON.stringify(clip(String(row[field] ?? ''), 200))}.` : '';
+      throw new OpError('rev_required', `Read \`ctxspace plan ${id}\` again and resend with rev ${row.rev} or the workspace ifRevision you read. Current card: "${clip(String(row.title), 200)}".${current}`, { id, currentRev: row.rev });
+    }
     checkRev(ctx, op, id, Number(row.rev), clip(String(row.title), 200));
     const sets: Record<string, unknown> = {};
     const fields = cardFields(op);
@@ -625,6 +659,9 @@ export const OPS: Record<string, OpFn> = {
   'card.remove'(ctx, op) {
     const row = resolveCard(ctx, op.id);
     const id = row.id as string;
+    if (!ctx.observedRevision && !op.__ref) {
+      throw new OpError('missing_revision', `Removing "${clip(String(row.title), 200)}" (${id}, rev ${row.rev}) also removes its links. Read \`ctxspace plan\` again and resend with the ifRevision and dbId you read. The workspace is now at revision ${ctx.revision}.`, { id, currentRevision: ctx.revision });
+    }
     checkRev(ctx, op, id, Number(row.rev), clip(String(row.title), 200));
     ctx.rec.capture('cards', id);
     for (const l of ctx.db.prepare('SELECT id FROM links WHERE from_node = ? OR to_node = ?').all(id, id) as Array<{ id: string }>) {
@@ -737,7 +774,8 @@ function cardFields(op: Op): { body?: string | null; path?: string | null; descr
 export function runOp(ctx: OpContext, raw: unknown): void {
   if (!raw || typeof raw !== 'object' || typeof (raw as Op).op !== 'string') throw bad('Each op is an object with an "op" name, e.g. {"op":"tick","id":"s7k2q"}.');
   const op = raw as Op;
-  const fn = OPS[op.op];
+  const name = op.op === 'section.set' ? 'block.set' : op.op;
+  const fn = Object.hasOwn(OPS, name) ? OPS[name] : undefined;
   const fields = OP_FIELDS[op.op];
   if (!fn || !fields) throw bad(`Unknown op "${op.op}". Ops: ${Object.keys(OP_FIELDS).join(', ')}.`);
   for (const key of Object.keys(op)) {

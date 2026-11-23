@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { BOARD_LIMITS, BoardWorkspaceError, boardFields } from '../core/board.js';
+import { boardRequestId } from '../core/board-db-app.js';
 import { addCommitNote, listCommitNotes } from '../core/commit-notes.js';
 import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
 import type { NexusFlowTool } from './tools.js';
@@ -86,6 +87,7 @@ const noteOnCommitSchema = z.object({
   text: z.string().min(1).max(BOARD_LIMITS.body).describe('The note text. Keep it specific: what happened and what to check.'),
   repo: z.string().trim().min(1).max(200).optional().describe('Repository name when the commit reference matches more than one repository.'),
   title: boardFields.title.optional().describe('Optional title; defaults to the first non-empty line of text cut to 200 characters.'),
+  requestId: boardRequestId.optional(),
 });
 
 const notesOnCommitSchema = z.object({
@@ -96,7 +98,7 @@ const notesOnCommitSchema = z.object({
 export const commitNoteTools: NexusFlowTool[] = [
   commitNoteTool(
     'note_on_commit',
-    'Leave an AI note on a commit (full or >=7-char hash, HEAD, HEAD~1, or remote-tracking ref such as origin/...). Use this after a merge, pull, or rebase that needed decisions or went wrong, or when you notice something important in a commit. Commit notes stay attached to the commit for Review and What\'s new rather than cluttering board Areas.',
+    'Leave an AI note on a commit (full or >=7-char hash, HEAD, HEAD~1, or remote-tracking ref such as origin/...). Use this after a merge, pull, or rebase that needed decisions or went wrong, or when you notice something important in a commit. Commit notes stay attached to the commit for Review and What\'s new rather than cluttering board Areas. On a moved workspace, pass a unique requestId and resend it with the same inputs to retry safely. The result includes the requestId used.',
     noteOnCommitSchema,
     false,
     async (input, { root, cwd }, harness) =>
@@ -105,6 +107,7 @@ export const commitNoteTools: NexusFlowTool[] = [
         text: input.text,
         repo: input.repo,
         title: input.title,
+        requestId: input.requestId,
         by: harness,
         cwd,
       }),

@@ -95,9 +95,10 @@ export type LaneData = {
   group?: LaneGroup;
 };
 
-export type BoardStep = { key: string; text: string; done: boolean };
+export type BoardStep = { key: string; text: string; done: boolean; rev?: number };
 export type BoardDecision = {
   key: string;
+  rev?: number;
   question: string;
   suggested?: string[];
   detail?: string;
@@ -235,6 +236,7 @@ export type RowHeadData = {
   static?: boolean;
   /** Key of the plan step if this row represents a plan step. */
   stepKey?: string;
+  rev?: number;
   /** The heading the step is nested under, as it is written (inline Markdown), shown quietly beside "Now". */
   heading?: string;
   /** The row of cards tied to no step, when it holds both kinds: the tab that shows and what each tab holds. The summary is then empty. */
@@ -474,9 +476,10 @@ export function frame(kind: CheckpointData['kind'], id: string, x: number, title
     id, type: 'checkpoint', position: { x, y: 0 }, width: column, height, ...FIXED,
     data: {
       kind, open: true, openHeight: frameHeight(items.steps.length, items.decisions.length, false, hasCheck), title, done, stepsDone: stepsComplete, stepsTotal: total,
-      steps: steps.map(({ key, text, done: stepDone }) => ({ key, text, done: stepDone })), moreSteps,
-      waiting: shownWaiting.map(({ key, question, suggested, detail }) => ({
+      steps: steps.map(({ key, text, done: stepDone, rev }) => ({ key, text, done: stepDone, ...(rev !== undefined ? { rev } : {}) })), moreSteps,
+      waiting: shownWaiting.map(({ key, question, suggested, detail, rev }) => ({
         key,
+        ...(rev !== undefined ? { rev } : {}),
         question,
         ...(suggested?.length ? { suggested } : {}),
         ...(detail ? { detail } : {}),

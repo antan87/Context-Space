@@ -159,10 +159,14 @@ export async function evaluateProgression(
     targets.map((target) => judgeRepo(target.name, target.path, state.repos[target.name]?.lastVerification)),
   );
   const blockers = repos.filter((repo) => !repo.ready).map((repo) => repo.detail);
-  const plan = await judgePlan(workspacePath);
+  const { storeOf } = await import('./workspace-db-app.js');
+  const database = storeOf(workspacePath) === 'database';
+  const plan = await judgePlan(workspacePath, database);
   blockers.push(...plan.problems);
   for (const item of plan.blocking) {
-    blockers.push(`The checkpoint "${item.label}" is not done (${item.status}). Tick it in PLAN.md once it is, or rewrite the plan.`);
+    const guidance = database ? `Use ctxspace plan done ${item.id} when it is ready, or change it with ctxspace plan apply.`
+      : 'Tick it in PLAN.md once it is, or rewrite the plan.';
+    blockers.push(`The checkpoint "${item.label}" is not done (${item.status}). ${guidance}`);
   }
   const warnings = plan.open.map((item) => `"${item.label}" is still ${item.status}.`);
   return { ready: blockers.length === 0, repos, plan: { blocking: plan.blocking, open: plan.open }, blockers, warnings };
@@ -173,12 +177,15 @@ export async function evaluateProgression(
  * finishing; open steps and decisions outside the checkpoints only warn. A plan that cannot be read stops finishing:
  * nobody can tell what it still waits for.
  */
-async function judgePlan(workspacePath: string): Promise<{ blocking: PlanFinishItem[]; open: PlanFinishItem[]; problems: string[] }> {
+async function judgePlan(workspacePath: string, database: boolean): Promise<{ blocking: PlanFinishItem[]; open: PlanFinishItem[]; problems: string[] }> {
   // Imported here: the plan modules lead back to verification, which this module also uses.
   const { readPlanFile } = await import('./plan-file-store.js');
   let plan;
   try {
-    plan = (await readPlanFile(workspacePath)).plan;
+    if (database) {
+      const { planDbParts } = await import('./plan-db-app.js');
+      plan = (await planDbParts(workspacePath, 0)).read.plan;
+    } else plan = (await readPlanFile(workspacePath)).plan;
   } catch (error) {
     return { blocking: [], open: [], problems: [`The plan cannot be read: ${error instanceof Error ? error.message : String(error)}`] };
   }

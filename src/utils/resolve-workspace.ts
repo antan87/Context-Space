@@ -11,9 +11,23 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 
 import { loadConfig } from '../core/config.js';
-import { listWorkspaces, loadFeatureConfig } from '../core/workspace.js';
+import { findWorkspaceRoot, listWorkspaces, loadFeatureConfig } from '../core/workspace.js';
 
 import { PRIMARY_MANIFEST_FILE, LEGACY_MANIFEST_FILE } from '../core/constants.js';
+
+/** An implicit write must agree with the nearest manifest on disk, even in a copy nested inside the original. */
+export async function assertWorkspaceWriteLocation(workspacePath: string, cwd = process.cwd()): Promise<void> {
+  const real = (dir: string) => fs.realpath(dir).catch(() => path.resolve(dir));
+  const [here, workspace] = await Promise.all([real(cwd), real(workspacePath)]);
+  const localRoot = await findWorkspaceRoot(here);
+  if (localRoot ? path.relative(workspace, localRoot) === '' : isInside(workspace, here)) return;
+  throw new Error(`You are in ${localRoot ?? here}, but the workspace found from here is ${workspace} (this folder may be a copy). Nothing was changed. Say which workspace to act on with --workspace <path>.`);
+}
+
+function isInside(root: string, dir: string): boolean {
+  const relative = path.relative(root, dir);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
 
 /**
  * Resolves a workspace path without any interactive prompts.

@@ -407,14 +407,17 @@ function forgetLeft(remembered: Set<string>, window: ReadonlySet<string>): void 
 }
 
 /**
- * The poll token of a workspace moved to its database, `db_id:revision`, or null when it is not in its database. A read
- * that fails for a moment (busy) keeps the last token, so it does not read as a change.
+ * The poll token of a moved workspace is `db_id:revision` with the count of finished checks when there are any.
+ * A standalone check changes its proof without advancing the plan revision. A busy read keeps the last token.
  */
 export async function dbPollToken(workspaceRoot: string, last: string | null | undefined = null): Promise<string | null> {
   if (readSwitch(workspaceRoot)?.state !== 'on') return null;
   const { readAppDb } = await import('./workspace-db-app.js');
   const { readDbId, readRevision } = await import('./workspace-db/index.js');
-  return readAppDb(workspaceRoot, (view) => `${readDbId(view.sqlite)}:${readRevision(view.sqlite)}`).catch(() => last ?? null);
+  return readAppDb(workspaceRoot, (view) => {
+    const { complete } = view.sqlite.prepare("SELECT count(*) AS complete FROM check_runs WHERE legacy = 0 AND status != 'running'").get() as { complete: number };
+    return `${readDbId(view.sqlite)}:${readRevision(view.sqlite)}${complete ? `:${complete}` : ''}`;
+  }).catch(() => last ?? null);
 }
 
 /**
@@ -510,13 +513,12 @@ export async function* watchLiveEvents(
         }
       }
       polls += 1;
-      // A workspace moved to its database: the poll token is `db_id:revision` (one read), so any committed change, a
-      // restored or replaced database included (a new db_id at the same revision), reads the plan and the board again.
+      // A database edit, check, or restore makes the open screen read the plan and board again.
       const token = await dbPollToken(workspaceRoot, dbLast);
       if (dbLast !== undefined && token !== null && token !== dbLast) {
         const timestamp = new Date(now).toISOString();
         yield { type: 'plan', timestamp };
-        const revision = Number(token.slice(token.lastIndexOf(':') + 1));
+        const revision = Number(token.split(':', 2)[1]);
         yield { type: 'screen', event: { id: `db-${token}`, timestamp, harness: 'contextspace', event: 'board', payload: { revision, changes: 0 } } };
       }
       dbLast = token;

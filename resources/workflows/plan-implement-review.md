@@ -2,9 +2,10 @@
 
 Deliver one cohesive change through a bounded plan, implementation, and review.
 
-1. Read the current assignment, the plan (`PLAN.md`) and relevant approved
+1. Read the current assignment, the plan (`ctxspace plan`) and relevant approved
    sources. Resolve important unknowns and write observable acceptance criteria in
-   the existing plan, editing `PLAN.md` directly. Do not create a second plan.
+   the existing plan. For a moved workspace, use `ctxspace plan apply` with stable ids.
+   For a file-based workspace, edit `PLAN.md` directly.
 2. If the assignment is investigation or design, return that stage's output and
    stop. Proceed to implementation only when the current user authorization covers it.
 3. Implement the assigned outcome and test relevant behavior, including concrete

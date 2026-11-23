@@ -356,8 +356,7 @@ export function lifecycleView(
 type PlanFileView = NonNullable<Awaited<ReturnType<typeof planFileIfAny>>>;
 
 async function loadView(workspacePath: string, requested: { write: boolean }): Promise<{ plan: PlanDocument; lifecycle: WorkspaceLifecycle; file?: PlanFileView }> {
-  // A workspace moved to its database (or being moved or restored) is only read here: nothing older is moved into the
-  // plan store and nothing is recorded in state.json. A change still asked for is refused by the store and the state.
+  // Keep legacy initialization out of moved workspaces. Their lifecycle is a view over database checkpoints.
   const options = { write: requested.write && !readSwitch(workspacePath) };
   // A workspace whose plan is PLAN.md: its checkpoints are the milestones, and nothing older is moved or written.
   const file = await planFileIfAny(workspacePath);
@@ -445,7 +444,7 @@ export async function advanceLifecycleStep(
 ): Promise<WorkspaceLifecycle> {
   const { plan, lifecycle, file } = await loadView(workspacePath, { write: true });
   if (file) {
-    await advanceCheckpoint(workspacePath, file.plan, stepId, action, actor.by === 'user' ? 'user' : (actor.harness?.trim().toLowerCase() || 'ai'));
+    await advanceCheckpoint(workspacePath, file.plan, stepId, action, actor.by === 'user' ? 'user' : (actor.harness?.trim().toLowerCase() || 'ai'), file.db);
     return loadWorkspaceLifecycle(workspacePath, { includeFleet: false });
   }
   const step = lifecycle.steps.find((s) => s.id === stepId);
@@ -560,7 +559,7 @@ export async function reopenLifecycleStep(
   const { plan, lifecycle, file } = await loadView(workspacePath, { write: true });
   if (file) {
     try {
-      await reopenCheckpoint(workspacePath, file.plan, stepId, reason, by === 'user' ? 'user' : (harness?.toLowerCase() || 'ai'));
+      await reopenCheckpoint(workspacePath, file.plan, stepId, reason, by === 'user' ? 'user' : (harness?.toLowerCase() || 'ai'), file.db);
     } catch (error) {
       if (error instanceof PlanFileError) throw new LifecycleStepError(error.message, error.code === 'not_found' ? 'not_found' : error.code === 'conflict' ? 'conflict' : 'not_reopenable');
       throw error;
@@ -601,7 +600,9 @@ export async function blockLifecycleStep(
   const { reason } = blockSchema.parse(input);
   const { plan, lifecycle, file } = await loadView(workspacePath, { write: true });
   if (file) {
-    throw new LifecycleStepError('The plan is PLAN.md now: say what the checkpoint is stuck on under it, in the file.', 'not_blockable');
+    throw new LifecycleStepError(file.db
+      ? 'Use ctxspace plan apply to add what the checkpoint is stuck on.'
+      : 'The plan is PLAN.md now: say what the checkpoint is stuck on under it, in the file.', 'not_blockable');
   }
   const step = lifecycle.steps.find((candidate) => candidate.id === stepId);
   const item = plan.items.find((candidate) => candidate.id === stepId);
@@ -651,7 +652,8 @@ export async function updateLifecyclePlan(
   actor: PlanActor = { by: 'user' },
 ): Promise<WorkspaceLifecycle> {
   const update = lifecyclePlanSchema.parse(input);
-  if (await planFileIfAny(workspacePath)) throw new Error('The plan is PLAN.md now: edit its Checkpoints list instead.');
+  const file = await planFileIfAny(workspacePath);
+  if (file) throw new Error(file.db ? 'Use ctxspace plan apply to change the database checkpoints.' : 'The plan is PLAN.md now: edit its Checkpoints list instead.');
   await ensurePlanStore(workspacePath);
   const release = await lockWorkGuidance(workspacePath);
   try {

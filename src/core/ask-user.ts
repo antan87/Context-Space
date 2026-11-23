@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 
 import { findWorkspaceRoot, loadFeatureConfig } from './workspace.js';
+import { storeOf } from './workspace-db-app.js';
+import { WorkspaceMovedError, withSwitchLock } from './workspace-db-switch.js';
 import { addChatQuestionToPlan } from './plan-questions.js';
 import {
   INPUT_REQUEST_DISPLAY_LIMIT,
@@ -70,8 +72,8 @@ function serializeInputRequests<T>(task: () => Promise<T>): Promise<T> {
 /**
  * Alerts the user that the AI waits for their answer.
  *
- * Asking the same thing again within a short while is one alert. The question is also added to PLAN.md; a plan that
- * cannot be changed must not stop the alert.
+ * Asking the same thing again within a short while is one alert. The decision is recorded before the alert; a workspace
+ * that is being moved refuses both, and a plan that cannot be changed for another reason does not stop the alert.
  *
  * @throws {AskUserError} When the question is empty or too long, or the options are not a list.
  */
@@ -93,7 +95,8 @@ export async function askUser(workspacePath: string, input: AskUserInput): Promi
   // This can be called from below the workspace root; the ledger lives at the root.
   const root = (await findWorkspaceRoot(workspacePath)) ?? workspacePath;
 
-  return serializeInputRequests<AskUserResult>(async () => {
+  return serializeInputRequests<AskUserResult>(() => withSwitchLock(root, async () => {
+    const database = storeOf(root) === 'database';
     const now = Date.now();
     // Reads the end of the ledger only, so a long-lived workspace does not pay for its history.
     const latest = await latestInputRequest(root, now);
@@ -108,8 +111,6 @@ export async function askUser(workspacePath: string, input: AskUserInput): Promi
       return { status: 'already_requested', workspaceId: feature.id, harness, timestamp: repeat.timestamp, message: WAIT_NOTE };
     }
 
-    const ledger = await resolveWorkspaceChatLedger(root);
-    await fs.mkdir(ledger.chatDir, { recursive: true });
     const entry = {
       id: randomUUID(),
       timestamp: new Date(now).toISOString(),
@@ -119,19 +120,26 @@ export async function askUser(workspacePath: string, input: AskUserInput): Promi
       message,
       ...(options ? { options } : {}),
     };
+    // The decision first. A workspace that is being moved or undone refuses both (no alert whose decision was dropped);
+    // a plan that cannot be changed for another reason must not stop the alert, as before DB3c.
+    const inPlan = await addChatQuestionToPlan(root, { message, options, harness }).catch((error: unknown) => {
+      if (error instanceof WorkspaceMovedError) throw error;
+      return undefined;
+    });
+    const ledger = await resolveWorkspaceChatLedger(root);
+    await fs.mkdir(ledger.chatDir, { recursive: true });
     await fs.appendFile(ledger.chatPath, JSON.stringify(entry) + '\n', 'utf8');
-    // The same question in the plan, so the user answers it once and the plan says what it holds up.
-    // A plan that cannot be changed must not stop the alert.
-    const inPlan = await addChatQuestionToPlan(root, { message, options, harness }).catch(() => undefined);
     return {
       status: 'requested',
       workspaceId: feature.id,
       harness,
       timestamp: entry.timestamp,
       ...(inPlan ? { planQuestion: inPlan.question } : {}),
-      message: inPlan
-        ? `${WAIT_NOTE} It is a decision in PLAN.md too; when the user answers, tick it and add their words on an "Answer:" line under it.`
-        : WAIT_NOTE,
+      message: !inPlan
+        ? WAIT_NOTE
+        : database
+          ? `${WAIT_NOTE} It is a decision in the plan too. When the user answers, read the decision with ctxspace plan. Use ctxspace plan apply with the observed rev and dbId to record their words.`
+          : `${WAIT_NOTE} It is a decision in PLAN.md too; when the user answers, tick it and add their words on an "Answer:" line under it.`,
     };
-  });
+  }));
 }

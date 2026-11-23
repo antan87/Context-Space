@@ -109,12 +109,14 @@ async function aiApplies(ops: unknown[]): Promise<void> {
   expect(result.ok, JSON.stringify(result)).toBe(true);
 }
 
-const idOf = (plan: any, words: string): string => {
+const itemOf = (plan: any, words: string) => {
   const all = [...plan.checkpoints, ...plan.checkpoints.flatMap((cp: any) => [...cp.steps, ...cp.decisions]), ...plan.steps, ...plan.decisions];
   const found = all.find((item: any) => (item.title ?? item.text ?? item.question) === words);
   if (!found) throw new Error(`no item "${words}"`);
-  return found.key;
+  return found;
 };
+const idOf = (plan: any, words: string): string => itemOf(plan, words).key;
+const observed = (plan: any, words: string) => ({ rev: itemOf(plan, words).rev, dbId: plan.dbId });
 
 beforeEach(async () => {
   setActiveStorageProvider(getStorageProvider('local'));
@@ -152,21 +154,32 @@ describe('a change made since the person read it is refused, never written over'
     expect(note).toMatchObject({ id: expect.stringMatching(/^k[0-9a-z]{5}$/), rev: 1, body: 'The person wrote this.' });
     // the person opens the dialog (rev 1); meanwhile an AI changes the same note
     await aiApplies([{ op: 'card.update', id: note.id, body: 'The AI added a finding.' }]);
-    const save = await changeBoard([{ op: 'update_card', id: note.id, rev: note.rev, title: 'Export notes', body: 'What the person typed.' }]);
+    const save = await changeBoard([{ op: 'update_card', id: note.id, rev: note.rev, title: 'Export notes', body: 'What the person typed.' }], { dbId: board.dbId });
     expect(save.status).toBe(409);
     expect(save.body).toMatchObject({ code: 'rev_conflict', current: { id: note.id, rev: 2, body: 'The AI added a finding.', updatedBy: 'claude' } });
     expect(save.body.error).toMatch(/changed by someone else while you were editing/);
     expect((await getBoard()).cards.find((c: any) => c.id === note.id).body).toBe('The AI added a finding.');
     // overwriting on purpose: the person sends the rev they were shown in the conflict
-    const again = await changeBoard([{ op: 'update_card', id: note.id, rev: save.body.current.rev, body: 'What the person typed.' }]);
+    const again = await changeBoard([{ op: 'update_card', id: note.id, rev: save.body.current.rev, body: 'What the person typed.' }], { dbId: board.dbId });
     expect(again.status).toBe(200);
     expect(again.body.cards.find((c: any) => c.id === note.id)).toMatchObject({ body: 'What the person typed.', rev: 3, updatedBy: 'user' });
   });
 
+  it.each([true, false])('refuses an unversioned legacy note draft (with dbId: %s)', async (sendDbId) => {
+    const board = await getBoard();
+    const note = board.cards.find((card: any) => card.title === 'Export notes');
+    await aiApplies([{ op: 'card.update', id: note.id, body: 'Newer answer from the AI.' }]);
+    const result = await changeBoard([{ op: 'update_card', id: U(1), body: 'Old draft' }], sendDbId ? { dbId: board.dbId } : {});
+    expect(result).toMatchObject({ status: 409, body: { current: { id: note.id, rev: 2, body: 'Newer answer from the AI.' } } });
+    expect(result.body.error).toMatch(/read.*again/i);
+    expect((await getBoard()).cards.find((card: any) => card.id === note.id).body).toBe('Newer answer from the AI.');
+  });
+
   it('removing a note that an AI changed meanwhile is refused too', async () => {
-    const note = (await getBoard()).cards.find((c: any) => c.title === 'Loose');
+    const board = await getBoard();
+    const note = board.cards.find((c: any) => c.title === 'Loose');
     await aiApplies([{ op: 'card.update', id: note.id, title: 'Loose, renamed by the AI' }]);
-    const gone = await changeBoard([{ op: 'remove_card', id: note.id, rev: note.rev }]);
+    const gone = await changeBoard([{ op: 'remove_card', id: note.id, rev: note.rev }], { dbId: board.dbId, revision: board.revision });
     expect(gone.status).toBe(409);
     expect((await getBoard()).cards.some((c: any) => c.id === note.id)).toBe(true);
   });
@@ -175,7 +188,7 @@ describe('a change made since the person read it is refused, never written over'
     const plan = await getPlan();
     const id = idOf(plan, 'Add the Export button');
     await aiApplies([{ op: 'edit', id, find: 'Export button', replace: 'Export menu' }]);
-    const tick = await changePlan({ type: 'tick', key: id, done: true, expected: 'Add the Export button' });
+    const tick = await changePlan({ type: 'tick', key: id, done: true, expected: 'Add the Export button', ...observed(plan, 'Add the Export button') });
     expect(tick.status).toBe(409);
     expect(tick.body.error).toMatch(/now reads "Add the Export menu"/);
     const after = await getPlan();
@@ -187,7 +200,7 @@ describe('a change made since the person read it is refused, never written over'
     const id = idOf(plan, 'Add the Export button');
     const rev = plan.checkpoints[1].steps.find((s: any) => s.key === id).rev;
     await aiApplies([{ op: 'detail', id, text: 'A note under it', rev }]);
-    const tick = await changePlan({ type: 'tick', key: id, done: true, expected: 'Add the Export button', rev });
+    const tick = await changePlan({ type: 'tick', key: id, done: true, expected: 'Add the Export button', ...observed(plan, 'Add the Export button'), rev });
     expect(tick.status).toBe(409);
   });
 
@@ -196,8 +209,25 @@ describe('a change made since the person read it is refused, never written over'
     const id = plan.waiting[0];
     const rev = plan.checkpoints[1].decisions[0].rev;
     await aiApplies([{ op: 'answer', id, text: 'Only the last year' }]);
-    const answer = await call('POST', `/api/workspace/csv/plan/decisions/${id}/answer`, { answer: 'Yes, all of them', rev });
+    const answer = await call('POST', `/api/workspace/csv/plan/decisions/${id}/answer`, { answer: 'Yes, all of them', rev, dbId: plan.dbId });
     expect(answer.status).toBe(409);
+    expect((await getPlan()).checkpoints[1].decisions[0]).toMatchObject({ answer: 'Only the last year' });
+  });
+
+  it('an unversioned untick shows the current decision answer without clearing it', async () => {
+    const decision = (await getPlan()).waiting[0];
+    await aiApplies([{ op: 'answer', id: decision, text: 'Only the last year' }]);
+    const untick = await changePlan({ type: 'tick', key: decision, done: false, expected: 'Should archived reports be exported?' });
+    expect(untick).toMatchObject({ status: 409, body: { current: { answer: 'Only the last year', rev: 2 } } });
+    expect(untick.body.error).toContain(`ctxspace plan ${decision}`);
+    expect((await getPlan()).checkpoints[1].decisions[0]).toMatchObject({ answer: 'Only the last year' });
+  });
+
+  it('an unversioned first answer cannot overwrite an answer saved during submission', async () => {
+    const decision = (await getPlan()).waiting[0];
+    planDbSeams.afterRead = async () => { planDbSeams.afterRead = undefined; await aiApplies([{ op: 'answer', id: decision, text: 'Only the last year' }]); };
+    const answer = await changePlan({ type: 'answer', key: decision, answer: 'Yes, all of them', expected: 'Should archived reports be exported?' });
+    expect(answer).toMatchObject({ status: 409, body: { current: { answer: 'Only the last year', rev: 2 } } });
     expect((await getPlan()).checkpoints[1].decisions[0]).toMatchObject({ answer: 'Only the last year' });
   });
 
@@ -205,12 +235,12 @@ describe('a change made since the person read it is refused, never written over'
     const plan = await getPlan();
     const decision = plan.waiting[0];
     planDbSeams.afterRead = async () => { planDbSeams.afterRead = undefined; await aiApplies([{ op: 'answer', id: decision, text: 'Only the last year' }]); };
-    const answer = await changePlan({ type: 'answer', key: decision, answer: 'Yes, all of them', expected: 'Should archived reports be exported?' });
+    const answer = await changePlan({ type: 'answer', key: decision, answer: 'Yes, all of them', expected: 'Should archived reports be exported?', ...observed(plan, 'Should archived reports be exported?') });
     expect(answer.status).toBe(409);
     expect((await getPlan()).checkpoints[1].decisions[0]).toMatchObject({ answer: 'Only the last year' });
     const step = idOf(plan, 'Add the Export button');
     planDbSeams.afterRead = async () => { planDbSeams.afterRead = undefined; await aiApplies([{ op: 'edit', id: step, find: 'button', replace: 'menu' }]); };
-    const tick = await changePlan({ type: 'tick', key: step, done: true, expected: 'Add the Export button' });
+    const tick = await changePlan({ type: 'tick', key: step, done: true, expected: 'Add the Export button', ...observed(plan, 'Add the Export button') });
     expect(tick.status).toBe(409);
     expect((await getPlan()).checkpoints[1].steps.find((s: any) => s.key === step)).toMatchObject({ text: 'Add the Export menu', done: false });
   });
@@ -227,7 +257,7 @@ describe('the exports: written after each change, fenced, never over a hand edit
   it('PLAN.md and contextspace-data.json follow a tick; the header names the new revision', async () => {
     const plan = await getPlan();
     const id = idOf(plan, 'Tidy the old export script');
-    const tick = await changePlan({ type: 'tick', key: id, done: true, expected: 'Tidy the old export script' });
+    const tick = await changePlan({ type: 'tick', key: id, done: true, expected: 'Tidy the old export script', ...observed(plan, 'Tidy the old export script') });
     expect(tick.status).toBe(200);
     const text = await read('PLAN.md');
     expect(text).toMatch(new RegExp(`- \\[x\\] Tidy the old export script <!-- ${id} -->`));
@@ -251,7 +281,7 @@ describe('the exports: written after each change, fenced, never over a hand edit
     const handEdited = `${await read('PLAN.md')}\n- [ ] A line someone typed by hand\n`;
     await write('PLAN.md', handEdited);
     const plan = await getPlan();
-    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs' });
+    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
     expect(tick.status).toBe(200);
     expect(await read('PLAN.md')).toBe(handEdited);
     expect(JSON.parse(await read('contextspace-data.json')).blocks.find((b: any) => b.id === idOf(plan, 'Docs')).done).toBe(true);
@@ -265,7 +295,7 @@ describe('the exports: written after each change, fenced, never over a hand edit
     const newer = lines[0]!.replace(/revision=\d+/, `revision=${plan.revision + 50}`);
     await write('PLAN.md', [newer, ...lines.slice(1)].join('\n'));
     const kept = await read('PLAN.md');
-    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs' });
+    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
     expect(tick.status).toBe(200);
     expect(await read('PLAN.md')).toBe(kept);
   });
@@ -274,7 +304,7 @@ describe('the exports: written after each change, fenced, never over a hand edit
     const plan = await getPlan();
     const save = '# Someone saved this in an editor\n';
     exportSeams.beforeSwap = async (file) => { if (file === 'PLAN.md') await write('PLAN.md', save); };
-    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs' });
+    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
     expect(tick.status).toBe(200);
     expect(await read('PLAN.md')).toBe(save);
   });
@@ -315,7 +345,7 @@ describe('reads and writes go through the database', () => {
   it('ticks, answers, adds a step and a decision, reopens, and runs a checkpoint check before ticking it', async () => {
     let plan = await getPlan();
     const cp = plan.checkpoints[1];
-    expect((await changePlan({ type: 'answer', key: cp.decisions[0].key, answer: 'Only the last year', expected: cp.decisions[0].question })).status).toBe(200);
+    expect((await changePlan({ type: 'answer', key: cp.decisions[0].key, answer: 'Only the last year', expected: cp.decisions[0].question, rev: cp.decisions[0].rev, dbId: plan.dbId })).status).toBe(200);
     expect((await changePlan({ type: 'add', step: 'Write the docs page', checkpoint: plan.checkpoints[2].key })).status).toBe(200);
     expect((await changePlan({ type: 'add', step: 'A loose one' })).status).toBe(200);
     expect((await changePlan({ type: 'decide', checkpoint: cp.key, decision: { question: 'Zip large files?', suggested: ['Yes', 'No'] } })).status).toBe(200);
@@ -325,15 +355,16 @@ describe('reads and writes go through the database', () => {
     expect(plan.steps.map((s: any) => s.text)).toEqual(['Tidy the old export script', 'A loose one']);
     expect(plan.checkpoints[1].decisions[1]).toMatchObject({ question: 'Zip large files?', suggested: ['Yes', 'No'] });
     // the checkpoint has a check: a failing one keeps it open
+    const checkpointRev = plan.checkpoints[1].rev;
     check.result = { overallStatus: 'fail', canProgress: false, repos: [] };
-    const failed = await changePlan({ type: 'tick', key: cp.key, done: true, expected: cp.title });
+    const failed = await changePlan({ type: 'tick', key: cp.key, done: true, expected: cp.title, rev: checkpointRev, dbId: plan.dbId });
     expect(failed.status).toBe(400);
     expect(failed.body.error).toMatch(/stays open: its check failed/);
     check.result = { overallStatus: 'pass', canProgress: true, repos: [] };
-    const passed = await changePlan({ type: 'tick', key: cp.key, done: true, expected: cp.title });
+    const passed = await changePlan({ type: 'tick', key: cp.key, done: true, expected: cp.title, rev: checkpointRev, dbId: plan.dbId });
     expect(passed.status).toBe(200);
     expect(passed.body.plan.checkpoints[1]).toMatchObject({ done: true, proof: { canProgress: true, lastVerificationStatus: 'pass' } });
-    const reopened = await changePlan({ type: 'reopen', key: cp.key, reason: 'The button is missing', expected: cp.title });
+    const reopened = await changePlan({ type: 'reopen', key: cp.key, reason: 'The button is missing', expected: cp.title, rev: passed.body.plan.checkpoints[1].rev, dbId: plan.dbId });
     expect(reopened.status).toBe(200);
     expect(reopened.body.plan.checkpoints[1]).toMatchObject({ done: false });
     expect(reopened.body.plan.checkpoints[1].steps.at(-1).text).toBe('Reopened: The button is missing');
@@ -363,13 +394,13 @@ describe('reads and writes go through the database', () => {
     const id = added.body.results[0].id;
     expect(added.body.cards.find((c: any) => c.id === id)).toMatchObject({ title: 'New note', area, rev: 1, by: 'user' });
     expect(added.body.positions[id]).toEqual({ x: 1, y: 2 });
-    const edited = await changeBoard([{ op: 'update_card', id, rev: 1, body: 'edited', step: idOf(plan, 'Add the Export button') }]);
+    const edited = await changeBoard([{ op: 'update_card', id, rev: 1, body: 'edited', step: idOf(plan, 'Add the Export button') }], { dbId: plan.dbId });
     // a step puts the card in its checkpoint's area
     expect(edited.body.cards.find((c: any) => c.id === id)).toMatchObject({ body: 'edited', area: `checkpoint:${plan.checkpoints[1].key}`, rev: 2 });
     const linked = await changeBoard([{ op: 'link', from: id, to: area }, { op: 'move', nodes: [{ id, x: null, y: null }] }]);
     expect(linked.body.links.some((l: any) => l.from === id && l.to === area)).toBe(true);
     expect(linked.body.positions[id]).toBeUndefined();
-    const removed = await changeBoard([{ op: 'remove_card', id, rev: 2 }]);
+    const removed = await changeBoard([{ op: 'remove_card', id, rev: 2 }], { dbId: plan.dbId, revision: linked.body.revision });
     expect(removed.status).toBe(200);
     expect(removed.body.cards.some((c: any) => c.id === id)).toBe(false);
     expect(removed.body.links.some((l: any) => l.from === id)).toBe(false);
@@ -424,7 +455,7 @@ describe('reads and writes go through the database', () => {
 describe('the move can still be undone after the app changed things', () => {
   it('status does not call the app’s PLAN.md a hand edit, and the restore keeps the app’s exports and puts every old file back', async () => {
     const plan = await getPlan();
-    expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs' })).status).toBe(200);
+    expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') })).status).toBe(200);
     expect((await changeBoard([{ op: 'add_card', kind: 'note', title: 'After the move', body: 'x' }])).status).toBe(200);
     const status = await migrateStatus(root);
     expect(status.cameBack.map((c) => c.path)).not.toContain('PLAN.md');
@@ -547,7 +578,10 @@ describe('the poll token, busy, and a backup restore with connections open', () 
     await maybeBackup(root);
     const { restoreBackup } = await import('../core/workspace-db/index.js');
     restoreBackup(root, listBackups(root)[0]!); // as another process would
-    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs' });
+    const stale = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    expect(stale.body.code).toBe('db_changed');
+    const restored = await getPlan();
+    const tick = await changePlan({ type: 'tick', key: idOf(restored, 'Docs'), done: true, expected: 'Docs', ...observed(restored, 'Docs') });
     expect(tick.status).toBe(200);
     const db = other();
     expect(getCard(db, (await getBoard()).cards[0].id)).not.toBeNull();
@@ -562,7 +596,7 @@ describe('the poll token, busy, and a backup restore with connections open', () 
     const lines = (await read('PLAN.md')).split('\n');
     const foreign = [lines[0]!.replace(/db=[0-9a-f]+/, 'db=0123456789abcdef'), ...lines.slice(1)].join('\n');
     await write('PLAN.md', foreign);
-    expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs' })).status).toBe(200);
+    expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') })).status).toBe(200);
     expect(await read('PLAN.md')).toBe(foreign);
   });
 });
@@ -572,7 +606,8 @@ describe('DB3b fix round 1: data-safety regressions', () => {
   it('applyForApp retries getRevision through brief locks on plan and board writes, and answers 503 Busy when held past the bound', async () => {
     const plan = await getPlan();
     const stepId = idOf(plan, 'Add the Export button');
-    const noteId = (await getBoard()).cards[0].id;
+    const board = await getBoard();
+    const note = board.cards[0];
     const holder = other();
     holder.sqlite.exec('PRAGMA busy_timeout = 0');
 
@@ -589,7 +624,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
       holder.sqlite.exec('BEGIN EXCLUSIVE');
       setTimeout(() => { try { holder.sqlite.exec('ROLLBACK'); } catch { /* released */ } }, 120);
     };
-    const tickRes = await call('POST', `/api/workspace/csv/plan/steps/${stepId}/tick`, { done: true, expected: 'Add the Export button' });
+    const tickRes = await call('POST', `/api/workspace/csv/plan/steps/${stepId}/tick`, { done: true, expected: 'Add the Export button', ...observed(plan, 'Add the Export button') });
     expect(tickRes.status).toBe(200);
 
     // Brief bursts on POST /board/changes must retry cleanly and never return HTTP 500 "database is locked"
@@ -606,7 +641,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     })();
     try {
       for (let i = 0; i < 15; i += 1) {
-        const res = await changeBoard([{ op: 'update_card', id: noteId, title: `Burst ${i}` }]);
+        const res = await changeBoard([{ op: 'update_card', id: note.id, rev: note.rev + i, title: `Burst ${i}` }], { dbId: board.dbId });
         expect(res.status, JSON.stringify(res.body)).toBe(200);
       }
     } finally {
@@ -623,7 +658,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
       expect(busyPlan.body).toMatchObject({ code: 'busy' });
       expect(busyPlan.body.error).toMatch(/^Busy, try again/);
 
-      const busyBoard = await changeBoard([{ op: 'update_card', id: noteId, title: 'Blocked' }]);
+      const busyBoard = await changeBoard([{ op: 'update_card', id: note.id, pinned: true }]);
       expect(busyBoard.status).toBe(503);
       expect(busyBoard.body).toMatchObject({ code: 'busy' });
       expect(busyBoard.body.error).toMatch(/^Busy, try again/);
@@ -637,14 +672,14 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     await maybeBackup(root);
     const backup = listBackups(root)[0]!;
     const release = await acquireLock(path.join(root, '.contextspace', 'plan-file.lock'), { staleMs: 60_000, timeoutMs: 5_000, timeoutMessage: 'busy' });
-    const reqP = changeBoard([{ op: 'update_card', id: note.id, title: 'Computed before restore' }]);
+    const reqP = changeBoard([{ op: 'update_card', id: note.id, pinned: !note.pinned }]);
     await new Promise((r) => setTimeout(r, 80)); // known snapshot read completes; writeAppDb now waits on plan-file.lock
     restoreBackup(root, backup);
     await release();
     const res = await reqP;
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ code: 'db_changed' });
-    expect((await getBoard()).cards[0].title).toBe(note.title);
+    expect((await getBoard()).cards[0].pinned).toBe(note.pinned);
   });
 
   // Finding 2
@@ -714,7 +749,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
       // Ticking the second "Foo" ticks ONLY the second "Foo", leaving "Foo-2" unticked
       const [foo1, foo2, fooDash2] = cp1Steps;
       expect(new Set([foo1.key, foo2.key, fooDash2.key]).size).toBe(3);
-      const tickRes = await req('POST', `/api/workspace/dup/plan/steps/${foo2.key}/tick`, { done: true, expected: 'Foo' });
+      const tickRes = await req('POST', `/api/workspace/dup/plan/steps/${foo2.key}/tick`, { done: true, expected: 'Foo', rev: foo2.rev, dbId: plan.dbId });
       expect(tickRes.status).toBe(200);
       const afterRows = db.sqlite.prepare("SELECT id, name, done FROM blocks WHERE id IN (?, ?, ?) ORDER BY ord").all(foo1.key, foo2.key, fooDash2.key) as Array<{ id: string; name: string; done: number }>;
       expect(afterRows).toEqual([
@@ -723,7 +758,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
         { id: fooDash2.key, name: 'Foo-2', done: 0 },
       ]);
       // And Foo-2 can still be ticked cleanly
-      const tickDash2 = await req('POST', `/api/workspace/dup/plan/steps/${fooDash2.key}/tick`, { done: true, expected: 'Foo-2' });
+      const tickDash2 = await req('POST', `/api/workspace/dup/plan/steps/${fooDash2.key}/tick`, { done: true, expected: 'Foo-2', rev: fooDash2.rev, dbId: plan.dbId });
       expect(tickDash2.status).toBe(200);
       expect(realSteps.length).toBeGreaterThan(0);
     } finally {
@@ -847,7 +882,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
         { op: 'edit', id: cp.key, in: 'detail', find: '`npm test`', replace: '`false`' },
       ]);
     };
-    const tick = await changePlan({ type: 'tick', key: cp.key, done: true, expected: cp.title, rev: cp.rev });
+    const tick = await changePlan({ type: 'tick', key: cp.key, done: true, expected: cp.title, rev: cp.rev, dbId: plan.dbId });
     expect(tick.status).toBe(409);
     expect(tick.body.code).toBe('rev_conflict');
     expect(check.commands).toEqual([]);
@@ -984,7 +1019,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
         await fs.symlink(outsideTarget, path.join(root, 'PLAN.md'));
       }
     };
-    const r1 = await changePlan({ type: 'tick', key: s1, done: true, expected: 'Docs' });
+    const r1 = await changePlan({ type: 'tick', key: s1, done: true, expected: 'Docs', ...observed(plan, 'Docs') });
     exportSeams.beforeSwap = undefined;
     expect(r1.status).toBe(200);
     expect((await fs.lstat(path.join(root, 'PLAN.md'))).isSymbolicLink()).toBe(true);
@@ -1001,7 +1036,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
         await fs.writeFile(path.join(root, 'PLAN.md', 'important.txt'), 'keep me');
       }
     };
-    const r2 = await changePlan({ type: 'tick', key: s2, done: true, expected: 'Tidy the old export script' });
+    const r2 = await changePlan({ type: 'tick', key: s2, done: true, expected: 'Tidy the old export script', ...observed(plan, 'Tidy the old export script') });
     exportSeams.beforeSwap = undefined;
     expect(r2.status).toBe(200);
     const stat = await fs.lstat(path.join(root, 'PLAN.md'));
@@ -1018,7 +1053,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
 
     // Non-NTFS Windows volume returns EINVAL on fs.link -> exclusive copy fallback succeeds
     exportSeams.link = async () => { throw Object.assign(new Error('EINVAL: invalid argument, link'), { code: 'EINVAL' }); };
-    const r1 = await changePlan({ type: 'tick', key: s1, done: true, expected: 'Docs' });
+    const r1 = await changePlan({ type: 'tick', key: s1, done: true, expected: 'Docs', ...observed(plan, 'Docs') });
     exportSeams.link = undefined;
     expect(r1.status).toBe(200);
     const afterEinval = await read('PLAN.md');
@@ -1027,7 +1062,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
 
     // Unexpected failure after fs.rename(target, aside) -> original PLAN.md is put back, never left missing
     exportSeams.link = async () => { throw Object.assign(new Error('EIO: disk failure'), { code: 'EIO' }); };
-    const r2 = await changePlan({ type: 'tick', key: s2, done: true, expected: 'Tidy the old export script' });
+    const r2 = await changePlan({ type: 'tick', key: s2, done: true, expected: 'Tidy the old export script', ...observed(plan, 'Tidy the old export script') });
     exportSeams.link = undefined;
     expect(r2.status).toBe(200);
     expect(await read('PLAN.md')).toBe(afterEinval);

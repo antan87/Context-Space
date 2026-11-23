@@ -89,7 +89,7 @@ export interface Card {
   by: string; at: string; updatedBy: string; updatedAt: string; rev: number;
 }
 
-const toCard = (r: Raw): Card => ({
+export const cardFromRow = (r: Raw): Card => ({
   id: r.id as string, legacyId: (r.legacy_id as string | null) ?? null, kind: r.kind as 'note' | 'file', title: r.title as string,
   body: (r.body as string | null) ?? null, path: (r.path as string | null) ?? null, description: (r.description as string | null) ?? null,
   area: (r.area as string | null) ?? null, stepId: (r.step_id as string | null) ?? null, about: (r.about as string | null) ?? null,
@@ -99,12 +99,12 @@ const toCard = (r: Raw): Card => ({
 
 export function listCards(db: WorkspaceDb, options: { includeArchived?: boolean } = {}): Card[] {
   const where = options.includeArchived ? '' : 'WHERE archived = 0';
-  return (conn(db).prepare(`SELECT * FROM cards ${where} ORDER BY at, id`).all() as Raw[]).map(toCard);
+  return (conn(db).prepare(`SELECT * FROM cards ${where} ORDER BY at, id`).all() as Raw[]).map(cardFromRow);
 }
 
 export function getCard(db: WorkspaceDb, id: string): Card | null {
   const row = (conn(db).prepare('SELECT * FROM cards WHERE id = ?').get(id) ?? conn(db).prepare('SELECT * FROM cards WHERE legacy_id = ?').get(id)) as Raw | undefined;
-  return row ? toCard(row) : null;
+  return row ? cardFromRow(row) : null;
 }
 
 export interface Link { id: string; from: string; to: string; label: string | null; by: string; at: string }

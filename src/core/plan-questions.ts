@@ -6,6 +6,8 @@
  */
 
 import { addToPlan, answerDecision, parsePlanFile, setDone } from './plan-file.js';
+import { applyForApp, changePlanDbForApp, planDbParts } from './plan-db-app.js';
+import { storeOf } from './workspace-db-app.js';
 import { changePlanFile, readPlanFile } from './plan-file-store.js';
 
 /** The longest a chat question's words may be on its line in the plan. */
@@ -13,7 +15,8 @@ const QUESTION_MAX = 300;
 
 /**
  * What the app writes as the answer when the developer replies in the chat. The app sees that they replied, not what
- * they said, so the AI then writes their words over it with `ctxspace plan answer`.
+ * they said. The AI records their words with `ctxspace plan apply` and the observed revision in a moved workspace,
+ * or with `ctxspace plan answer` in a file-based workspace.
  */
 export const ANSWERED_IN_CHAT = 'Answered in the chat.';
 
@@ -37,6 +40,24 @@ export async function addChatQuestionToPlan(
 ): Promise<{ question: string }> {
   const question = questionTitle(input.message);
   const by = input.harness && input.harness !== 'agent' ? input.harness : 'ai';
+  if (storeOf(workspacePath) === 'database') {
+    const { read } = await planDbParts(workspacePath, 0);
+    const { plan } = read;
+    const decisions = [...plan.checkpoints.flatMap((cp) => cp.decisions), ...plan.decisions].filter((d) => d.question === question);
+    if (decisions.some((decision) => !decision.done)) return { question };
+    const replied = decisions.find((decision) => decision.answer === ANSWERED_IN_CHAT);
+    if (replied) {
+      await changePlanDbForApp(workspacePath, { type: 'tick', key: replied.key, done: false, expected: replied.question }, { by, read });
+    } else {
+      const current = plan.checkpoints.find((cp) => !cp.done);
+      await changePlanDbForApp(workspacePath, { type: 'decide', checkpoint: current?.key, decision: {
+        question,
+        ...(question !== input.message.trim() ? { detail: input.message.trim() } : {}),
+        ...(input.options?.length ? { suggested: input.options } : {}),
+      } }, { by, read, strictRevision: true });
+    }
+    return { question };
+  }
   await changePlanFile(workspacePath, (text, plan) => {
     const decisions = [...plan.checkpoints.flatMap((checkpoint) => checkpoint.decisions), ...plan.decisions].filter((decision) => decision.question === question);
     if (decisions.some((decision) => !decision.done)) return text;
@@ -62,6 +83,16 @@ export async function addChatQuestionToPlan(
 export async function answerChatQuestionsInPlan(workspacePath: string, messages: readonly string[]): Promise<string[]> {
   if (!messages.length) return [];
   const questions = new Set(messages.map(questionTitle));
+  if (storeOf(workspacePath) === 'database') {
+    const { read } = await planDbParts(workspacePath, 0);
+    const open = [...read.plan.checkpoints.flatMap((cp) => cp.decisions), ...read.plan.decisions]
+      .filter((decision) => !decision.done && questions.has(decision.question));
+    if (open.length) {
+      await applyForApp(workspacePath, open.map((d) => ({ op: 'answer', id: d.key, rev: read.revs.get(d.key), text: ANSWERED_IN_CHAT })),
+        { by: 'user', dbId: read.dbId, ifRevision: read.revision });
+    }
+    return open.map((d) => d.question);
+  }
   const { plan, source } = await readPlanFile(workspacePath);
   if (source === 'none') return [];
   const open = [...plan.checkpoints.flatMap((checkpoint) => checkpoint.decisions), ...plan.decisions].filter((decision) => !decision.done && questions.has(decision.question));

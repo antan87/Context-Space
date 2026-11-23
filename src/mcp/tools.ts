@@ -1,4 +1,4 @@
-import { planningTools } from './planning-tools.js';
+import { planTools, planningTools } from './planning-tools.js';
 import { screenTools } from './screen-tools.js';
 import { boardTools } from './board-tools.js';
 import { commitNoteTools } from './commit-note-tools.js';
@@ -165,13 +165,14 @@ async function requireWorkspace(ctx: ToolContext): Promise<void> {
 // ─── Tools ──────────────────────────────────────────────────────────────────
 
 export const tools: NexusFlowTool[] = [
+  ...planTools,
   ...planningTools,
   ...screenTools,
   ...boardTools,
   ...commitNoteTools,
   {
     name: 'get_work_context',
-    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is where PLAN.md stands (as `ctxspace plan` prints it) followed by its text. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Change the plan by editing PLAN.md.',
+    description: 'Read the current assignment, work type, size, stage, source documents and IDs, shared sources, and the plan: `plan` is what `ctxspace plan` shows, with stable ids when moved. Returns guidance.revision for update_work_assignment/add_work_document/update_work_document. Read before starting work; reread after conflicts. Use change_plan for a moved workspace. Change the plan by editing PLAN.md on a file-based workspace.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: { ...workspaceIdProp } },
     handler: async (_args, ctx) => {
@@ -1383,6 +1384,7 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'verify_workspace',
     'list_skills',
     'get_work_context',
+    'read_plan',
     'read_work_document',
     'board_read',
     'notes_on_commit',
@@ -1402,6 +1404,7 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'verify_workspace',
     'list_skills',
     'get_work_context',
+    'read_plan',
     'read_work_document',
     'board_read',
     'notes_on_commit',
@@ -1420,6 +1423,7 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, string[]> = {
     'verify_workspace',
     'list_skills',
     'get_work_context',
+    'read_plan',
     'read_work_document',
   ],
   developer: ['*'],

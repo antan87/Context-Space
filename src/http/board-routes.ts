@@ -10,7 +10,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { ArchivedWorkspaceError } from '../core/archive-guard.js';
 import { BoardChangeError, BoardConflictError, BoardInputError, BoardWorkspaceError, changeBoard, readBoard } from '../core/board.js';
-import { boardDbForApp, changeBoardDb } from '../core/board-db-app.js';
+import { boardDbForApp, boardRequestId, changeBoardDb } from '../core/board-db-app.js';
 import { PlanDbChangeError } from '../core/plan-db-app.js';
 import { storeOf } from '../core/workspace-db-app.js';
 import { planErrorAnswer } from './plan-file-routes.js';
@@ -24,6 +24,7 @@ const request = z.object({
   revision: z.number().int().nonnegative().optional(),
   /** The database the board was read from (a workspace moved to its database): a replaced one refuses the change. */
   dbId: z.string().min(1).max(64).optional(),
+  requestId: boardRequestId.optional(),
   // Each change is checked by the board, which says which change and field is wrong.
   changes: z.array(z.unknown()).min(1, 'Give at least one change.'),
 }).strict();
@@ -67,8 +68,11 @@ export function registerBoardRoutes(app: Hono, resolveWorkspace: (id: string) =>
       try { body = await c.req.json(); } catch { throw new BoardInputError('The request must be JSON.'); }
       const input = request.parse(body);
       if (storeOf(root) === 'database') {
-        const { board, results } = await changeBoardDb(root, input.changes, { by: 'user', ...(input.revision !== undefined ? { revision: input.revision } : {}), ...(input.dbId !== undefined ? { dbId: input.dbId } : {}) });
-        return { ...board, results };
+        const { board, results, requestId } = await changeBoardDb(root, input.changes, { by: 'user', revision: input.revision, dbId: input.dbId, requestId: input.requestId });
+        return { ...board, results, ...(results.some((result) => result.op === 'add_card') ? { requestId } : {}) };
+      }
+      if (input.dbId !== undefined || input.requestId !== undefined) {
+        throw new PlanDbChangeError('This workspace uses the Board file. Read the board again before changing it.', 409, 'db_changed');
       }
       const { board, results } = await changeBoard(root, input.changes, { by: 'user', revision: input.revision });
       return { ...board, results };

@@ -24,7 +24,7 @@ export interface WorkspaceNeeds {
    * `detail` carries why it is asked and its suggested answers; `waiting` says the AI asked it in the chat and waits
    * there for the answer.
    */
-  questions: Array<{ id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string; waiting?: true }>;
+  questions: Array<{ id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string; waiting?: true; rev?: number; dbId?: string }>;
   /** Kept for the app: nothing is proposed for the user's OK any more. */
   proposals: Array<{ id: string; title: string; action: string; by: string; at: string }>;
   /** Open checkpoints whose last check failed. */
@@ -87,6 +87,12 @@ export async function workspaceNeeds(workspaceId: string, workspacePath: string,
     workspaceId,
     ...(read && read.source !== 'none' ? fromPlan(read.plan, checks, changes, now) : { questions: [], proposals: [], failedChecks: [], closedByAi: [] }),
   };
+  if (fromDb) {
+    for (const question of needs.questions) {
+      question.rev = fromDb.read.revs.get(question.id);
+      question.dbId = fromDb.read.dbId;
+    }
+  }
   // The AI puts its chat question in the plan too; then it is listed once, as the plan's decision it waits on.
   const asked = request ? needs.questions.find((question) => question.title === questionTitle(request.message)) : undefined;
   if (asked) asked.waiting = true;

@@ -160,7 +160,7 @@ export interface LooseTabs { media: LaneCard[]; notes: LaneCard[]; /** The tab t
 
 export type AreaRowKind = 'step' | 'loose' | 'documents' | 'pages' | 'pictures' | 'commits' | 'more-steps' | 'done' | 'answer';
 
-export interface StepGroup { key: string; text: string; items: LaneCard[] }
+export interface StepGroup { key: string; text: string; rev?: number; items: LaneCard[] }
 
 export interface AreaRow {
   id: string;
@@ -170,6 +170,7 @@ export interface AreaRow {
   title: string;
   /** The text of a step. */
   text?: string;
+  rev?: number;
   caption?: string;
   state: RowHeadData['state'];
   /** What the row holds. For the rows that stand for steps (`groups`), the cards of all of them. */
@@ -401,13 +402,13 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   if (head) {
     const items = stepItems(head.key);
     const above = head.parent ? steps.find((entry) => entry.key === head!.parent)?.text : undefined;
-    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.nowSet ? 'Now' : area.data.current ? 'Next up' : 'Next', text: head.text, ...(above ? { heading: above } : {}), state: area.data.nowSet ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : '' });
+    rows.push({ id: `row:step:${head.key}`, kind: 'step', title: area.data.nowSet ? 'Now' : area.data.current ? 'Next up' : 'Next', text: head.text, ...(head.rev !== undefined ? { rev: head.rev } : {}), ...(above ? { heading: above } : {}), state: area.data.nowSet ? 'current' : 'next', items, summary: items.length ? cardsText(items.length) : '' });
   }
   const others = open.filter((entry) => entry !== head);
   let withCards = others.filter((entry) => (byStep.get(entry.key)?.length ?? 0) > 0 || (area.stepFiles?.[entry.key]?.length ?? 0) > 0);
   const stepRow = (entry: PlanStep): AreaRow => {
     const items = stepItems(entry.key);
-    return { id: `row:step:${entry.key}`, kind: 'step', title: 'Step', text: entry.text, state: 'open', items, summary: cardsText(items.length) };
+    return { id: `row:step:${entry.key}`, kind: 'step', title: 'Step', text: entry.text, ...(entry.rev !== undefined ? { rev: entry.rev } : {}), state: 'open', items, summary: cardsText(items.length) };
   };
 
   const rest: AreaRow[] = [];
@@ -485,8 +486,9 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
     waiting = {
       areaId: area.id, kind: area.kind, title: area.data.title, done: area.data.done, stepsDone: area.data.stepsDone, stepsTotal: area.data.stepsTotal,
       check: area.check, proof: area.proof, checkpointKey: area.checkpointKey,
-      decisions: (area.planItems?.decisions ?? []).filter((decision) => waitingKeys.has(decision.key)).map(({ key, question, suggested, detail }) => ({
+      decisions: (area.planItems?.decisions ?? []).filter((decision) => waitingKeys.has(decision.key)).map(({ key, question, suggested, detail, rev }) => ({
         key,
+        ...(rev !== undefined ? { rev } : {}),
         question,
         ...(suggested && suggested.length > 0 ? { suggested } : {}),
         ...(detail ? { detail } : {}),
@@ -512,11 +514,11 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
 
   const aggregated = [...others.filter((entry) => noCards.includes(entry) || demoted.includes(entry))];
   if (aggregated.length > 0) {
-    const groups = aggregated.map((entry): StepGroup => ({ key: entry.key, text: entry.text, items: stepItems(entry.key) }));
+    const groups = aggregated.map((entry): StepGroup => ({ key: entry.key, text: entry.text, ...(entry.rev !== undefined ? { rev: entry.rev } : {}), items: stepItems(entry.key) }));
     rows.push(groupsRow('row:more-steps', 'more-steps', `${aggregated.length} more open ${aggregated.length === 1 ? 'step' : 'steps'}`, groups, 'open'));
   }
   if (finished.length > 0) {
-    const groups = finished.map((entry): StepGroup => ({ key: entry.key, text: entry.text, items: stepItems(entry.key) }));
+    const groups = finished.map((entry): StepGroup => ({ key: entry.key, text: entry.text, ...(entry.rev !== undefined ? { rev: entry.rev } : {}), items: stepItems(entry.key) }));
     rows.push(groupsRow('row:done', 'done', `✓ ${finished.length} done ${finished.length === 1 ? 'step' : 'steps'}`, groups, 'done'));
   }
   return { waiting, rows };
@@ -663,6 +665,7 @@ function headNode(row: AreaRow, y: number, width: number, expanded: boolean, emp
       ...(row.elsewhere?.length ? { holds: row.elsewhere } : {}),
       ...(row.tabs && row.activeTab ? { tabs: { active: row.activeTab, media: row.tabs.media.length, notes: row.tabs.notes.length } } : {}),
       ...(stepKey ? { stepKey } : {}),
+      ...(row.rev !== undefined ? { rev: row.rev } : {}),
     },
     ...FIXED,
   };
@@ -753,7 +756,7 @@ function linesOf(row: AreaRow, columns: number): Cell[][] {
   if (!row.groups) return chunk<Cell>(row.items, columns);
   const tile = (group: StepGroup, lead: boolean): Cell => ({
     id: `${row.id}:step:${group.key}`, type: 'step' as never, height: ITEM_HEIGHT.step, lead,
-    data: { rowId: row.id, title: row.kind === 'done' ? 'Done' : 'Step', text: group.text, summary: '', state: row.kind === 'done' ? 'done' : 'open', expanded: true, prominent: false, empty: false, static: true, stepKey: group.key } as never,
+    data: { rowId: row.id, title: row.kind === 'done' ? 'Done' : 'Step', text: group.text, summary: '', state: row.kind === 'done' ? 'done' : 'open', expanded: true, prominent: false, empty: false, static: true, stepKey: group.key, ...(group.rev !== undefined ? { rev: group.rev } : {}) } as never,
   });
   const lines: Cell[][] = [];
   let listed: Cell[] = [];

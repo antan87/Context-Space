@@ -14,7 +14,7 @@ export type { WorkspaceDbErrorCode } from './errors.js';
 export { TABLES, schemaText, createStatements } from './definitions.js';
 export type { TableDef, ColumnDef } from './definitions.js';
 export { newId, KIND_LETTER, ID_PATTERN } from './ids.js';
-export { applyBatch, actorName, pruneHistory } from './batch.js';
+export { applyBatch, actorName, pruneHistory, readRequestReplay } from './batch.js';
 export type { BatchInput, BatchResult, Issue } from './batch.js';
 export type { Op, IssueCode } from './ops.js';
 export { OP_FIELDS, LIMITS } from './ops.js';
@@ -23,7 +23,7 @@ export type { UndoResult } from './undo.js';
 export { startCheckRun, finishCheckRun, listCheckRuns } from './check-runs.js';
 export type { CheckRun } from './check-runs.js';
 export {
-  getRevision, listBlocks, getBlock, getItem, listCards, getCard, listLinks, listPositions, getNow, listChanges,
+  getRevision, listBlocks, getBlock, getItem, listCards, getCard, cardFromRow, listLinks, listPositions, getNow, listChanges,
 } from './reads.js';
 export type { PlanBlock, ItemView, Card, Link, ChangeEntry, Position } from './reads.js';
 export { planView } from './view.js';

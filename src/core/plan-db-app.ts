@@ -13,13 +13,16 @@
  * silently overwritten.
  */
 
+import { randomUUID } from 'node:crypto';
 import { PLAN_FILE, PlanFileError, parsePlanFile, planItems, workableSteps, type PlanFile, type PlanStep } from './plan-file.js';
 import { planViewOf, type PlanFileAppChange } from './plan-file-app.js';
 import type { PlanFileChange, PlanItemKind, PlanNow } from './plan-file-store.js';
 import { readAppDb, writeAppDb } from './workspace-db-app.js';
 import { publishExports } from './workspace-db-exports.js';
+import { WorkspaceMovedError } from './workspace-db-switch.js';
+import { runDbWrite, type DbBatchOptions } from './workspace-db-write.js';
 import {
-  WorkspaceDbError, applyBatch, exportPlan, finishCheckRun, getRevision, parseDetail, readWithRetry, startCheckRun,
+  WorkspaceDbError, exportPlan, getRevision, parseDetail, readDbId, readRequestReplay,
   type BatchResult, type Issue, type Op, type WorkspaceDb,
 } from './workspace-db/index.js';
 import type { PlanEvidence, VerificationStatus } from '../types.js';
@@ -115,6 +118,7 @@ type Row = Record<string, unknown> | null;
  */
 export function planChangesOf(view: WorkspaceDb, limit: number): PlanFileChange[] {
   const out: PlanFileChange[] = [];
+  if (limit === 0) return out;
   const rows = view.sqlite.prepare('SELECT at, by, rows FROM changes WHERE rows IS NOT NULL ORDER BY seq DESC LIMIT 1000').all() as Array<{ at: string; by: string; rows: string }>;
   for (const change of rows) {
     let parsed: Array<{ table: string; id: string; before: Row; after: Row }>;
@@ -155,25 +159,25 @@ function withRevs<T extends { key: string }>(item: T, revs: Map<string, number>)
 }
 
 /** Everything the Plan tab shows, from the database: the shape of `planFileForApp`, plus ids, revs and the poll token. */
-export async function planDbForApp(root: string) {
-  return readAppDb(root, (view) => {
-    const read = readPlanDb(view);
-    const base = planViewOf({ text: read.text, plan: read.plan, source: 'file' }, checksOf(view, read.plan), planChangesOf(view, 15), nowOf(view, read.plan));
-    return {
-      ...base,
-      store: 'database' as const,
-      revision: read.revision,
-      dbId: read.dbId,
-      checkpoints: base.checkpoints.map((cp) => ({
-        ...withRevs(cp, read.revs),
-        steps: cp.steps.map((s) => withRevs(s, read.revs)),
-        decisions: cp.decisions.map((d) => withRevs(d, read.revs)),
-      })),
-      steps: base.steps.map((s) => withRevs(s, read.revs)),
-      decisions: base.decisions.map((d) => withRevs(d, read.revs)),
-    };
-  });
+export function readPlanView(view: WorkspaceDb) {
+  const read = readPlanDb(view);
+  const base = planViewOf({ text: read.text, plan: read.plan, source: 'file' }, checksOf(view, read.plan), planChangesOf(view, 15), nowOf(view, read.plan));
+  return {
+    ...base,
+    store: 'database' as const,
+    revision: read.revision,
+    dbId: read.dbId,
+    checkpoints: base.checkpoints.map((cp) => ({
+      ...withRevs(cp, read.revs),
+      steps: cp.steps.map((s) => withRevs(s, read.revs)),
+      decisions: cp.decisions.map((d) => withRevs(d, read.revs)),
+    })),
+    steps: base.steps.map((s) => withRevs(s, read.revs)),
+    decisions: base.decisions.map((d) => withRevs(d, read.revs)),
+  };
 }
+
+export const planDbForApp = (root: string) => readAppDb(root, readPlanView);
 
 /** The plan with ids as keys, its checks, Now and changes: for readers that build their own view (Needs you, News). */
 export async function planDbParts(root: string, changesLimit = 300) {
@@ -202,59 +206,56 @@ export function refusalOf(result: Extract<BatchResult, { ok: false }>, words: (i
   return new PlanDbChangeError(words(issue), status, issue.code, issue.message);
 }
 
-interface Item { id: string; kind: PlanItemKind; words: string; rev: number; done: boolean; check?: string | null }
+interface Item { id: string; kind: PlanItemKind; words: string; rev: number; done: boolean; answer?: string; check?: string | null; dbId: string; revision: number }
 
 /** For tests: runs after an item was read for a change and before the change is applied, where another writer could land. */
 export const planDbSeams: { afterRead?: () => Promise<void> | void } = {};
 
-async function itemOf(root: string, key: string): Promise<Item> {
-  const found = await readAppDb(root, (view) => {
-    const read = readPlanDb(view);
-    const item = planItems(read.plan).find((candidate) => candidate.key === key);
-    if (!item) return null;
-    const kind: PlanItemKind = 'question' in item ? 'decision' : 'title' in item ? 'checkpoint' : 'step';
-    return {
-      id: item.key, kind, done: item.done, rev: read.revs.get(item.key) ?? 0,
-      words: 'question' in item ? item.question : 'title' in item ? item.title : item.text,
-      ...('title' in item && item.check !== undefined ? { check: item.check } : {}),
-    };
-  });
-  if (!found) throw new PlanFileError(`Nothing in ${PLAN_FILE} matches "${key}" any more. Read the plan again.`, 'not_found');
+async function itemOf(root: string, key: string, read?: PlanDbRead): Promise<Item> {
+  const state = read ?? await readAppDb(root, readPlanDb);
+  const item = planItems(state.plan).find((candidate) => candidate.key === key);
+  if (!item) throw new PlanFileError(`Nothing in ${PLAN_FILE} matches "${key}" any more. Read the plan again.`, 'not_found');
+  const kind: PlanItemKind = 'question' in item ? 'decision' : 'title' in item ? 'checkpoint' : 'step';
   await planDbSeams.afterRead?.();
-  return found;
+  return {
+    id: item.key, kind, done: item.done, rev: state.revs.get(item.key) ?? 0, dbId: state.dbId, revision: state.revision,
+    words: 'question' in item ? item.question : 'title' in item ? item.title : item.text,
+    ...('question' in item && item.answer !== undefined ? { answer: item.answer } : {}),
+    ...('title' in item && item.check !== undefined ? { check: item.check } : {}),
+  };
 }
 
 /** The words or rev the app sent must still be the item's: otherwise someone changed it since it was read. */
-function sameAsRead(item: Item, sent: { expected?: string; rev?: number }): void {
+function sameAsRead(item: Item, sent: { expected?: string; rev?: number; dbId?: string }): void {
+  if (sent.dbId !== undefined && sent.dbId !== item.dbId) {
+    throw new PlanDbChangeError('The workspace database was replaced since you read the plan. Read it again before saving.', 409, 'db_changed');
+  }
   const changed = (sent.rev !== undefined && sent.rev !== item.rev) || (sent.expected !== undefined && sent.expected.trim() !== item.words.trim());
   if (changed) {
-    throw new PlanDbChangeError(`This changed since you read it: it now reads "${item.words}". Nothing was changed; look at it again.`, 409, 'rev_conflict');
+    throw itemConflict(item);
   }
 }
 
-/** Applies ops as the person (`user`), then writes the exports. Refusals become {@link PlanDbChangeError}. */
-export async function applyForApp(root: string, ops: Op[], options: { by?: string; words?: (issue: Issue) => string; ifRevision?: number; dbId?: string } = {}): Promise<Extract<BatchResult, { ok: true }>> {
-  return writeAppDb(root, async (db) => {
-    // Without a revision the caller read, the batch is made against the database as it is now; each op then carries the
-    // rev it needs (a card's, an item's), which is what refuses a change someone made since.
-    const live = options.ifRevision === undefined || options.dbId === undefined
-      ? await readWithRetry(db, () => getRevision(db))
-      : null;
-    const at = { revision: options.ifRevision ?? live!.revision, dbId: options.dbId ?? live!.dbId };
-    const result = await applyBatch(db, { ops, ifRevision: at.revision, dbId: at.dbId }, { by: options.by ?? 'user' });
-    if (!result.ok) throw refusalOf(result, options.words ?? personWords);
-    await publishExports(root, db).catch((error: unknown) => {
-      // the change is made; a file that could not be written is written by the next change
-      process.stderr.write(`PLAN.md and contextspace-data.json were not written: ${error instanceof Error ? error.message : String(error)}\n`);
-    });
-    return result;
-  });
+function itemConflict(item: Item): PlanDbChangeError {
+  const answer = item.answer === undefined ? '' : ` The current answer is "${item.answer}".`;
+  return Object.assign(
+    new PlanDbChangeError(`This changed since you read it: it now reads "${item.words}" (rev ${item.rev}).${answer} Read \`ctxspace plan ${item.id}\` again and send its rev and dbId to retry.`, 409, 'rev_conflict'),
+    { current: { id: item.id, rev: item.rev, done: item.done, answer: item.answer ?? null } },
+  );
+}
+
+/** Applies ops as the person (or the named assistant), then writes the exports. */
+export async function applyForApp(root: string, ops: Op[], options: Omit<DbBatchOptions, 'by'> & { by?: string; words?: (issue: Issue) => string } = {}): Promise<Extract<BatchResult, { ok: true }>> {
+  const { words, by = 'user', ...batch } = options;
+  const result = await runDbWrite(root, { type: 'batch', ops, options: { ...batch, by } });
+  if (!result.ok) throw refusalOf(result, words ?? personWords);
+  return result;
 }
 
 function personWords(issue: Issue): string {
   switch (issue.code) {
     case 'rev_conflict': case 'stale_revision':
-      return 'This changed since you read it (someone else changed it meanwhile). Nothing was changed; look at it again.';
+      return issue.message.replace(/^op \d+ \([^)]*\): /, '');
     case 'db_changed':
       return 'The workspace database was replaced since you read it (a backup was restored). Nothing was changed; look again.';
     case 'check_required':
@@ -265,41 +266,72 @@ function personWords(issue: Issue): string {
 }
 
 /** Where a loose step or decision goes: the `## Steps` or `## Decisions` section, made at the end when there is none. */
-async function looseSpot(root: string, heading: 'Steps' | 'Decisions'): Promise<{ where: Record<string, unknown>; before: Op[] }> {
+export async function looseSpot(root: string, heading: 'Steps' | 'Decisions'): Promise<{ where: Record<string, unknown>; before: Op[]; dbId: string; ifRevision: number }> {
   return readAppDb(root, (view) => {
     const blocks = view.sqlite.prepare('SELECT id, kind, text, parent_id FROM blocks ORDER BY ord, id').all() as Array<{ id: string; kind: string; text: string; parent_id: string | null }>;
+    const { dbId, revision: ifRevision } = getRevision(view);
     const section = blocks.find((b) => b.kind === 'heading' && new RegExp(`^##\\s+${heading}\\s*$`, 'i').test(b.text));
-    if (section) return { where: { in: section.id }, before: [] };
+    if (section) return { where: { in: section.id }, before: [], dbId, ifRevision };
     const last = [...blocks].reverse().find((b) => b.parent_id === null);
     if (!last) throw new PlanFileError(`${PLAN_FILE} is empty: add a checkpoint first.`, 'invalid');
-    return { where: { in: '$section' }, before: [{ op: 'add', kind: 'heading', level: 2, text: heading, after: last.id, as: 'section' }] };
+    return { where: { in: '$section' }, before: [{ op: 'add', kind: 'heading', level: 2, text: heading, after: last.id, as: 'section' }], dbId, ifRevision };
   });
 }
 
 /** Runs a checkpoint's check and records the run in the database. Returns the run and whether it passed. */
-async function runCheckDb(root: string, item: Item, options: { expectedRev?: number } = {}): Promise<{ passed: boolean; status: VerificationStatus; itemRev: number }> {
-  const run = await writeAppDb(root, (db) => startCheckRun(db, item.id, {
-    by: 'user',
-    ...(options.expectedRev !== undefined ? { expectedRev: options.expectedRev } : {}),
-  }), { retry: false }).catch((error: unknown) => {
-    if (error instanceof WorkspaceDbError && error.code === 'invalid') {
-      throw new PlanFileError(error.message, 'invalid');
-    }
+async function runCheckDb(root: string, item: Item, by: string, expectedRev?: number, defaultCheck?: boolean): Promise<PlanEvidence> {
+  const run = await runDbWrite(root, { type: 'check-start', id: item.id, options: { by, expectedRev, defaultCheck, dbId: item.dbId } }).catch((error: unknown) => {
+    if (error instanceof WorkspaceDbError && error.code === 'invalid') throw new PlanFileError(error.message, 'invalid');
     throw error;
   });
   const { verifyWorkspace } = await import('./verify.js');
   let status: VerificationStatus = 'fail';
   let passed = false;
   let failedToRun = false;
+  let sha: string | undefined;
   try {
     const report = await verifyWorkspace(root, { command: run.command ?? undefined, timeoutMs: 30 * 60_000 });
     status = report.overallStatus;
     passed = report.canProgress;
+    sha = report.repos?.[0]?.headSha;
   } catch {
     failedToRun = true;
   }
-  await writeAppDb(root, (db) => finishCheckRun(db, run.id, { exitCode: passed ? 0 : 1, error: failedToRun || status === 'timeout', dbId: run.dbId }), { retry: false });
-  return { passed, status, itemRev: run.itemRev };
+  const finished = await runDbWrite(root, { type: 'check-finish', id: run.id,
+    outcome: { exitCode: passed ? 0 : 1, error: failedToRun || status === 'timeout', dbId: run.dbId, sha },
+  });
+  return {
+    ...(sha ? { lastVerificationSha: sha } : {}),
+    lastVerificationStatus: status, canProgress: passed, at: finished.finishedAt ?? finished.startedAt,
+  };
+}
+
+/** Looks up an add before resolving its destination, which may have changed since it was committed. */
+export async function replayPlanAdd(root: string, requestId: string, requestSource: string, dbId?: string) {
+  const checkGeneration = (view: WorkspaceDb) => {
+    if (dbId !== undefined && readDbId(view.sqlite) !== dbId) {
+      throw new PlanDbChangeError('The workspace database was restored since you opened Add step. Close this form and open Add step again.', 409, 'db_changed');
+    }
+  };
+  const replay = await readAppDb(root, (view) => {
+    checkGeneration(view);
+    const result = readRequestReplay(view, requestId, requestSource);
+    if (!result) return undefined;
+    if (!result.ok) throw refusalOf(result, personWords);
+    return { key: result.newIds.at(-1), plan: readPlanView(view), requestId };
+  });
+  if (replay) {
+    // A worker may have committed and exited before publishing the exports.
+    await writeAppDb(root, (db) => {
+      checkGeneration(db);
+      return publishExports(root, db);
+    }).catch((error: unknown) => {
+      if (dbId !== undefined && (error instanceof PlanDbChangeError || error instanceof WorkspaceMovedError ||
+        (error instanceof WorkspaceDbError && error.code === 'replaced'))) throw error;
+      process.stderr.write(`Plan request ${requestId} was saved. Could not publish its exports: ${error instanceof Error ? error.message : String(error)}\n`);
+    });
+  }
+  return replay;
 }
 
 /**
@@ -307,77 +339,110 @@ async function runCheckDb(root: string, item: Item, options: { expectedRev?: num
  * `changePlanFileForApp`. Ticking a checkpoint with a check runs the check first, records the run, and ticks only when it
  * passed and the checkpoint is still what was checked.
  */
-export async function changePlanDbForApp(root: string, change: PlanFileAppChange & { rev?: number }): Promise<{ message: string }> {
-  const rev = (change as { rev?: number }).rev;
+export async function changePlanDbForApp(root: string, change: PlanFileAppChange & { rev?: number; dbId?: string }, options: { by?: string; read?: PlanDbRead; rerunCheck?: boolean; strictRevision?: boolean; defaultCheck?: boolean; requestId?: string; requestSource?: string } = {}): Promise<{ message: string; key?: string; evidence?: PlanEvidence; plan?: ReturnType<typeof readPlanView>; requestId?: string }> {
+  const { by = 'user', read } = options;
+  const { rev, dbId } = change;
+  const itemFor = (key: string) => itemOf(root, key, read);
+  const apply = (ops: Op[], item?: Item) => applyForApp(root, ops, {
+    by, dbId: item?.dbId ?? read?.dbId, ifRevision: item?.revision ?? read?.revision, strictRevision: options.strictRevision,
+    implicitRevision: read === undefined,
+  });
+  const requiredRev = (item: Item) => {
+    const observed = rev ?? read?.revs.get(item.id);
+    if (observed !== undefined) return observed;
+    if (item.answer !== undefined) throw itemConflict(item);
+    throw new PlanDbChangeError('Send the rev and dbId from the plan you read. Read it again before saving.', 409, 'db_changed');
+  };
   switch (change.type) {
     case 'tick': {
-      const item = await itemOf(root, change.key);
-      sameAsRead(item, { expected: change.expected, rev });
-      if (change.done && item.kind === 'checkpoint' && item.check !== undefined && !item.done) {
-        const run = await runCheckDb(root, item, { expectedRev: item.rev });
-        if (!run.passed) {
-          throw new PlanFileError(`"${item.words}" stays open: its check ${run.status === 'timeout' ? 'took too long' : 'failed'}. Fix what fails, then tick it again.`, 'invalid');
+      const item = await itemFor(change.key);
+      sameAsRead(item, { expected: change.expected, rev, dbId });
+      const observed = requiredRev(item);
+      if (change.done && item.kind === 'checkpoint' && item.check !== undefined && (!item.done || options.rerunCheck)) {
+        const run = await runCheckDb(root, item, by, item.rev);
+        if (!run.canProgress) {
+          throw new PlanFileError(`"${item.words}" stays open: its check ${run.lastVerificationStatus === 'timeout' ? 'took too long' : 'failed'}. Fix what fails, then tick it again.`, 'invalid');
         }
       }
-      await applyForApp(root, [{ op: change.done ? 'tick' : 'untick', id: item.id, rev: item.rev }]);
+      await apply([{ op: change.done ? 'tick' : 'untick', id: item.id, rev: observed }], item);
       return { message: `${change.done ? 'Ticked' : 'Unticked'} "${item.words}".` };
     }
     case 'answer': {
-      const item = await itemOf(root, change.key);
-      sameAsRead(item, { expected: change.expected, rev });
-      await applyForApp(root, [{ op: 'answer', id: item.id, text: change.answer, rev: item.rev }]);
+      const item = await itemFor(change.key);
+      sameAsRead(item, { expected: change.expected, rev, dbId });
+      const observed = rev ?? read?.revs.get(item.id);
+      if (item.answer !== undefined && observed === undefined) throw itemConflict(item);
+      try {
+        await apply([{ op: 'answer', id: item.id, text: change.answer, rev: observed }], item);
+      } catch (error) {
+        if (error instanceof PlanDbChangeError && ['rev_conflict', 'rev_required', 'stale_revision'].includes(error.code)) {
+          const current = await itemOf(root, change.key).catch(() => null);
+          if (current?.dbId === item.dbId) throw itemConflict(current);
+        }
+        throw error;
+      }
       return { message: `Answered "${item.words}".` };
     }
-    case 'add': {
-      if (change.checkpoint) {
-        const cp = await itemOf(root, change.checkpoint);
-        if (cp.kind !== 'checkpoint') throw new PlanFileError(`There is no checkpoint "${change.checkpoint}" in ${PLAN_FILE}.`, 'not_found');
-        await applyForApp(root, [{ op: 'add', kind: 'step', text: change.step, under: cp.id }]);
-      } else {
-        const spot = await looseSpot(root, 'Steps');
-        await applyForApp(root, [...spot.before, { op: 'add', kind: 'step', text: change.step, ...spot.where }]);
-      }
-      return { message: `Added "${change.step.trim()}".` };
-    }
+    case 'add':
     case 'decide': {
-      const d = change.decision;
-      const fields = { kind: 'decision', text: d.question, ...(d.suggested?.length ? { suggested: d.suggested } : {}), ...(d.ifNoAnswer?.trim() ? { ifNoAnswer: d.ifNoAnswer } : {}), ...(d.detail?.trim() ? { detail: d.detail } : {}) };
-      if (change.checkpoint) {
-        const cp = await itemOf(root, change.checkpoint);
-        if (cp.kind !== 'checkpoint') throw new PlanFileError(`There is no checkpoint "${change.checkpoint}" in ${PLAN_FILE}.`, 'not_found');
-        await applyForApp(root, [{ op: 'add', ...fields, under: cp.id }]);
-      } else {
-        const spot = await looseSpot(root, 'Decisions');
-        await applyForApp(root, [...spot.before, { op: 'add', ...fields, ...spot.where }]);
+      const decision = change.type === 'decide' ? change.decision : undefined;
+      const text = change.type === 'add' ? change.step : change.decision.question;
+      const fields = {
+        op: 'add', kind: decision ? 'decision' : 'step', text,
+        ...(decision?.suggested?.length ? { suggested: decision.suggested } : {}),
+        ...(decision?.ifNoAnswer?.trim() ? { ifNoAnswer: decision.ifNoAnswer } : {}),
+        ...(decision?.detail?.trim() ? { detail: decision.detail } : {}),
+      };
+      const requestId = options.requestId ?? randomUUID();
+      const requestSource = options.requestSource ?? JSON.stringify({ plan: change, by });
+      const message = decision ? `Added the decision "${text.trim()}".` : `Added "${text.trim()}".`;
+      if (dbId !== undefined || (options.requestId && options.requestSource === undefined)) {
+        const replay = await replayPlanAdd(root, requestId, requestSource, dbId);
+        if (replay) return { message, ...replay };
       }
-      return { message: `Added the decision "${d.question.trim()}".` };
+      const write = async (ops: Op[], guards: { dbId: string; ifRevision: number; strictRevision?: boolean }) => {
+        const { result, plan } = await runDbWrite(root, {
+          type: 'plan-batch', ops, options: { ...guards, by, requestId, requestSource },
+        });
+        if (!result.ok) throw refusalOf(result, personWords);
+        return { message, key: result.newIds.at(-1), plan, requestId };
+      };
+      if (change.checkpoint) {
+        const cp = await itemFor(change.checkpoint);
+        if (cp.kind !== 'checkpoint') throw new PlanFileError(`There is no checkpoint "${change.checkpoint}" in ${PLAN_FILE}.`, 'not_found');
+        return write([{ ...fields, under: cp.id }], { dbId: dbId ?? cp.dbId, ifRevision: cp.revision, strictRevision: options.strictRevision });
+      }
+      const { where, before, dbId: currentDbId, ifRevision } = await looseSpot(root, decision ? 'Decisions' : 'Steps');
+      return write([...before, { ...fields, ...where }], {
+        dbId: dbId ?? read?.dbId ?? currentDbId, ifRevision: options.strictRevision ? read?.revision ?? ifRevision : ifRevision, strictRevision: true,
+      });
     }
     case 'reopen': {
-      const item = await itemOf(root, change.key);
-      sameAsRead(item, { expected: change.expected, rev });
-      await applyForApp(root, [{ op: 'untick', id: item.id, rev: item.rev }, { op: 'add', kind: 'step', text: `Reopened: ${change.reason}`, under: item.id }]);
+      const item = await itemFor(change.key);
+      sameAsRead(item, { expected: change.expected, rev, dbId });
+      await apply([{ op: 'untick', id: item.id, rev: requiredRev(item) }, { op: 'add', kind: 'step', text: `Reopened: ${change.reason}`, under: item.id }], item);
       return { message: `Reopened "${item.words}".` };
     }
     case 'now': {
       let item: Item | null;
       try {
-        item = await itemOf(root, change.key);
+        item = await itemFor(change.key);
       } catch (error) {
         if (error instanceof PlanFileError && error.code === 'not_found') item = null;
         else throw error;
       }
       if (!item || item.kind !== 'step') throw new PlanFileError(`Only an open step can be worked on now. Nothing in ${PLAN_FILE} is a step called "${change.key}".`, item ? 'invalid' : 'not_found');
-      await applyForApp(root, [{ op: 'now', id: item.id }], { words: (issue) => issue.message.replace(/^op \d+ \([^)]*\): /, '') });
+      await apply([{ op: 'now', id: item.id }], item);
       return { message: `Working on "${item.words}" now.` };
     }
     case 'now-clear':
-      await applyForApp(root, [{ op: 'now', id: null }]);
+      await apply([{ op: 'now', id: null }]);
       return { message: 'No step is marked as being worked on.' };
     case 'check': {
-      const item = await itemOf(root, change.key);
+      const item = await itemFor(change.key);
       if (item.kind !== 'checkpoint') throw new PlanFileError(`There is no checkpoint "${change.key}" in ${PLAN_FILE}.`, 'not_found');
-      const run = await runCheckDb(root, item);
-      return { message: run.passed ? 'The check passed.' : `The check ${run.status === 'timeout' ? 'took too long' : 'failed'}.` };
+      const evidence = await runCheckDb(root, item, by, read ? item.rev : rev, options.defaultCheck);
+      return { evidence, message: evidence.canProgress ? 'The check passed.' : `The check ${evidence.lastVerificationStatus === 'timeout' ? 'took too long' : 'failed'}.` };
     }
   }
 }
