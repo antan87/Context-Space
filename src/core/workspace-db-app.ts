@@ -250,7 +250,7 @@ export async function restoreBackupForApp(root: string, backup: string, options:
         entry.db = null;
         if (before) {
           if (oldDbId === null) {
-            try { oldDbId = await readWithRetry(before, () => withSnapshot(before, (v) => readDbId(v.sqlite))); } catch { /* damaged or gone */ }
+            try { oldDbId = withSnapshot(before, (v) => readDbId(v.sqlite)); } catch { /* busy, damaged or gone */ }
           }
           await retireIn(entry, before);
         }

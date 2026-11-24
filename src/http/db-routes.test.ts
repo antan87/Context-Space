@@ -717,6 +717,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
   // Finding 2
   it('readPlanDb keys every item by its own database id, never colliding on duplicate slugs (steps, checkpoints, decisions, nested parents)', async () => {
     const dupRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'db-routes-dup-')));
+    let db: WorkspaceDb | undefined;
     try {
       await fs.writeFile(path.join(dupRoot, 'contextspace.json'), JSON.stringify({ id: 'dup', name: 'Dup', branchName: 'feat/dup', description: 'dup', repos: [], assistants: [] }));
       await fs.writeFile(path.join(dupRoot, 'PLAN.md'), [
@@ -755,8 +756,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
       };
 
       const plan = (await req('GET', '/api/workspace/dup/plan')).body;
-      const db = openWorkspaceDb(dupRoot, { busy: 'cli', backups: false });
-      opened.push(db);
+      db = openWorkspaceDb(dupRoot, { busy: 'cli', backups: false });
       const realCps = db.sqlite.prepare("SELECT id, name FROM blocks WHERE kind = 'checkpoint' ORDER BY ord").all() as Array<{ id: string; name: string }>;
       const realSteps = db.sqlite.prepare("SELECT id, name, parent_id FROM blocks WHERE kind = 'step' ORDER BY ord").all() as Array<{ id: string; name: string; parent_id: string | null }>;
 
@@ -794,6 +794,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
       expect(tickDash2.status).toBe(200);
       expect(realSteps.length).toBeGreaterThan(0);
     } finally {
+      try { db?.close(); } catch { /* closed */ }
       await closeAppDb(dupRoot);
       await fs.rm(dupRoot, { recursive: true, force: true });
     }
@@ -826,31 +827,98 @@ describe('DB3b fix round 1: data-safety regressions', () => {
   });
 
   it('in-flight GET /plan and GET /board sleeping in readWithRetry survive restoreBackupForApp and succeed on the restored database', async () => {
-    await getPlan();
+    const beforePlan = await getPlan();
     await getBoard();
     await maybeBackup(root);
     const backup = listBackups(root)[0]!;
+    let appDbCurrent!: () => boolean;
+    await readAppDb(root, (v) => { appDbCurrent = () => v.isCurrent(); });
 
     const holder = other();
-    holder.sqlite.exec('PRAGMA busy_timeout = 0');
-    holder.sqlite.exec('BEGIN EXCLUSIVE');
-    const planPromise = call('GET', '/api/workspace/csv/plan');
-    const boardPromise = call('GET', '/api/workspace/csv/board');
-    // After 100 ms both reads are sleeping inside readWithRetry
-    await new Promise((r) => setTimeout(r, 100));
-    holder.sqlite.exec('ROLLBACK');
-    holder.sqlite.exec('BEGIN IMMEDIATE');
-    const restorePromise = restoreBackupForApp(root, backup);
-    const releaseTimer = setTimeout(() => holder.close(), 400);
-    const [planRes, boardRes, restored] = await Promise.all([planPromise, boardPromise, restorePromise]).finally(() => {
-      clearTimeout(releaseTimer);
+    let planPromise: ReturnType<typeof call> | undefined;
+    let boardPromise: ReturnType<typeof call> | undefined;
+    let restorePromise: ReturnType<typeof restoreBackupForApp> | undefined;
+    try {
+      holder.sqlite.exec('PRAGMA busy_timeout = 0');
+      holder.sqlite.exec('BEGIN EXCLUSIVE');
+      planPromise = call('GET', '/api/workspace/csv/plan');
+      boardPromise = call('GET', '/api/workspace/csv/board');
+      // Let both reads enter readWithRetry before restoreBackupForApp sets entry.gate.
+      await new Promise((r) => setTimeout(r, 80));
+      restorePromise = restoreBackupForApp(root, backup);
+      await expect.poll(() => appDbCurrent(), { timeout: 3000 }).toBe(false);
+      // Exceed readWithRetry's 200 ms max backoff so both sleeping reads hit `replaced` and wait at entry.gate.
+      await new Promise((r) => setTimeout(r, 250));
       holder.close();
-    });
+      const [planRes, boardRes, restored] = await Promise.all([planPromise, boardPromise, restorePromise]);
 
-    expect(planRes.status, JSON.stringify(planRes.body)).toBe(200);
-    expect(planRes.body.dbId).toBe(restored.dbId);
-    expect(boardRes.status, JSON.stringify(boardRes.body)).toBe(200);
-    expect(boardRes.body.dbId).toBe(restored.dbId);
+      expect(restored.dbId).not.toBe(beforePlan.dbId);
+      expect(planRes.status, JSON.stringify(planRes.body)).toBe(200);
+      expect(planRes.body.dbId).toBe(restored.dbId);
+      expect(boardRes.status, JSON.stringify(boardRes.body)).toBe(200);
+      expect(boardRes.body.dbId).toBe(restored.dbId);
+      expect((await read('PLAN.md')).split('\n')[0]).toContain(`db=${restored.dbId}`);
+    } finally {
+      holder.close();
+      await Promise.allSettled([planPromise, boardPromise, restorePromise]);
+    }
+  });
+
+  it('restoreBackupForApp does not stall in readWithRetry under BEGIN EXCLUSIVE, honors waitMs, and still replaces PLAN.md on recovery', async () => {
+    const plan = await getPlan();
+    await maybeBackup(root);
+    const backup = listBackups(root)[0]!;
+    // Advance the live generation past the backup so PLAN.md differs from the restored export.
+    const tick = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    expect(tick.status).toBe(200);
+    expect(await read('PLAN.md')).toContain('- [x] Docs');
+
+    let appDbCurrent!: () => boolean;
+    await readAppDb(root, (v) => { appDbCurrent = () => v.isCurrent(); });
+
+    // 1. Held past waitMs: retires the cached handle immediately and rejects with `busy` well under SERVER_BUSY_MS (2000 ms).
+    const busyHolder = other();
+    try {
+      busyHolder.sqlite.exec('PRAGMA busy_timeout = 0');
+      busyHolder.sqlite.exec('BEGIN EXCLUSIVE');
+      const started = Date.now();
+      await expect(restoreBackupForApp(root, backup, { waitMs: 300 })).rejects.toMatchObject({
+        code: 'busy',
+        message: expect.stringMatching(/^Busy, try again/),
+      });
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(250);
+      expect(elapsed).toBeLessThan(1500);
+      expect(appDbCurrent()).toBe(false);
+      expect(await read('PLAN.md')).toContain('- [x] Docs');
+    } finally {
+      busyHolder.close();
+    }
+
+    // Reopen the cached app connection so the second phase also starts with a live `before` handle.
+    expect((await getPlan()).dbId).toBe(plan.dbId);
+    await readAppDb(root, (v) => { appDbCurrent = () => v.isCurrent(); });
+
+    // 2. Released within waitMs: `before` retires immediately while BEGIN EXCLUSIVE is held, and `restoreCore`
+    // carries `former_db_ids` so publishExports still replaces the previous generation's PLAN.md export.
+    const recoveryHolder = other();
+    let restorePromise: ReturnType<typeof restoreBackupForApp> | undefined;
+    try {
+      recoveryHolder.sqlite.exec('PRAGMA busy_timeout = 0');
+      recoveryHolder.sqlite.exec('BEGIN EXCLUSIVE');
+      restorePromise = restoreBackupForApp(root, backup, { waitMs: 3000 });
+      await expect.poll(() => appDbCurrent(), { timeout: 1500 }).toBe(false);
+      recoveryHolder.close();
+      const restored = await restorePromise;
+      expect(restored.dbId).not.toBe(plan.dbId);
+      const planMd = await read('PLAN.md');
+      expect(planMd.split('\n')[0]).toContain(`db=${restored.dbId}`);
+      expect(planMd).toContain('- [ ] Docs');
+      expect((await getPlan()).dbId).toBe(restored.dbId);
+    } finally {
+      recoveryHolder.close();
+      await Promise.allSettled([restorePromise]);
+    }
   });
 
   // Windows refuses the external replacement needed to put the app's cached handle out of date.
