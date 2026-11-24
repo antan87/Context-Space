@@ -542,6 +542,14 @@ describe('moved CLI and MCP entry points', () => {
     },
   );
 
+  it('reports a detected draft through MCP without applying its text', async () => {
+    const source = await fs.readFile(path.join(root, 'PLAN.md'), 'utf8');
+    await write('PLAN.md', source.replace('Add the Export button', 'Add the draft text'));
+    await dbPollToken(root);
+    expect(await json('read_plan')).toMatchObject({ pendingDrafts: 1, notice: expect.stringContaining('Plan drafts are pending') });
+    expect((await planDbParts(root)).read.plan.checkpoints[0]!.steps.some((step) => step.text === 'Add the Export button')).toBe(true);
+  });
+
   it('bounds three queued MCP adds from submission while the plan lock is held', async () => {
     const release = await locks.acquireLock(path.join(root, '.contextspace', 'plan-file.lock'), {
       staleMs: 60_000, timeoutMs: 100, timeoutMessage: 'Lock already held',

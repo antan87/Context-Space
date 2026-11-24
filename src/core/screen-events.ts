@@ -406,18 +406,38 @@ function forgetLeft(remembered: Set<string>, window: ReadonlySet<string>): void 
   }
 }
 
-/**
- * The poll token of a moved workspace is `db_id:revision` with the count of finished checks when there are any.
- * A standalone check changes its proof without advancing the plan revision. A busy read keeps the last token.
- */
+const lastExportScan = new Map<string, string>();
+
+/** A moved workspace's revision, finished checks and pending drafts. A busy poll keeps the last token. */
 export async function dbPollToken(workspaceRoot: string, last: string | null | undefined = null): Promise<string | null> {
-  if (readSwitch(workspaceRoot)?.state !== 'on') return null;
+  if (readSwitch(workspaceRoot)?.state !== 'on') {
+    lastExportScan.delete(workspaceRoot);
+    return null;
+  }
   const { readAppDb } = await import('./workspace-db-app.js');
   const { readDbId, readRevision } = await import('./workspace-db/index.js');
-  return readAppDb(workspaceRoot, (view) => {
+  const { exportDiskSignature, pendingDraftInfo } = await import('./workspace-db-drafts.js');
+  const { runDbWrite } = await import('./workspace-db-write.js');
+  const read = () => readAppDb(workspaceRoot, (view) => {
     const { complete } = view.sqlite.prepare("SELECT count(*) AS complete FROM check_runs WHERE legacy = 0 AND status != 'running'").get() as { complete: number };
-    return `${readDbId(view.sqlite)}:${readRevision(view.sqlite)}${complete ? `:${complete}` : ''}`;
-  }).catch(() => last ?? null);
+    const revision = `${readDbId(view.sqlite)}:${readRevision(view.sqlite)}`;
+    const { pendingDrafts, pendingDraftDigest } = pendingDraftInfo(view);
+    const token = `${revision}${complete ? `:${complete}` : ''}${pendingDrafts ? `:drafts=${pendingDrafts}:${pendingDraftDigest}` : ''}`;
+    return { revision, token };
+  });
+  const state = await read().catch(() => null);
+  if (!state) return last ?? null;
+  try {
+    const signature = `${state.revision}/${await exportDiskSignature(workspaceRoot)}`;
+    if (lastExportScan.get(workspaceRoot) === signature) return state.token;
+    if (!await runDbWrite(workspaceRoot, { type: 'draft-refresh' })) return state.token;
+    // Cache the pre-scan inputs. A save that races the scan still changes the next signature.
+    if (lastExportScan.size >= 256) lastExportScan.delete(lastExportScan.keys().next().value!);
+    lastExportScan.set(workspaceRoot, signature);
+    return (await read()).token;
+  } catch {
+    return state.token;
+  }
 }
 
 /**

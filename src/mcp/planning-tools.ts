@@ -50,7 +50,7 @@ const updateDocumentSchema = documentMetadataSchema.extend({ revision, documentI
 
 export const planTools: NexusFlowTool[] = [
   planningTool('read_plan',
-    'Read the plan. In a moved workspace it returns revision, dbId and stable item ids and revs. Use those with change_plan.',
+    'Read the plan. In a moved workspace it returns revision, dbId and stable item ids and revs, and reports pending plan drafts. Use ids and revisions with change_plan.',
     z.object({}), async (_input, root) => {
       return storeOf(root) === 'database' ? planDbJson(root) : readPlanTextReadOnly(root);
     }, { readOnly: true }),

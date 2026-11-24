@@ -7,7 +7,7 @@
  * core/workspace-db-app, plan-db-app and board-db-app (DB3b); the command line and MCP follow in DB3c.
  */
 
-export { openWorkspaceDb, openWorkspaceDbAsync, createWorkspaceDb, dbFilePath, getMeta, readRevision, readDbId, beginImmediate, commitTransaction, withSnapshot, readWithRetry, validateWorkspaceSchema, WORKSPACE_MARKER, SCHEMA_VERSION, SERVER_BUSY_MS, CLI_BUSY_MS } from './connection.js';
+export { openWorkspaceDb, openWorkspaceDbAsync, createWorkspaceDb, dbFilePath, getMeta, setMeta, readRevision, readDbId, beginImmediate, commitTransaction, withSnapshot, readWithRetry, validateWorkspaceSchema, WORKSPACE_MARKER, SCHEMA_VERSION, SERVER_BUSY_MS, CLI_BUSY_MS } from './connection.js';
 export type { WorkspaceDb, OpenOptions, BusyMode } from './connection.js';
 export { WorkspaceDbError, isBusyError } from './errors.js';
 export type { WorkspaceDbErrorCode } from './errors.js';

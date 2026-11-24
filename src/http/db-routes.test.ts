@@ -22,7 +22,9 @@ import { exportSeams } from '../core/workspace-db-exports.js';
 import { planDbSeams } from '../core/plan-db-app.js';
 import { dbPollToken, watchLiveEvents } from '../core/screen-events.js';
 import { workspaceNeeds } from '../core/needs-you.js';
-import { applyBatch, beginImmediate, dbFilePath, maybeBackup, openWorkspaceDb, openWorkspaceDbAsync, readDbId, readRevision, restoreBackup, getCard, listBackups, type WorkspaceDb } from '../core/workspace-db/index.js';
+import { applyBatch, beginImmediate, createWorkspaceDb, dbFilePath, exportPlanMarkdown, importPlanText, maybeBackup, openWorkspaceDb, openWorkspaceDbAsync, readDbId, readRevision, restoreBackup, getCard, listBackups, type WorkspaceDb } from '../core/workspace-db/index.js';
+import { applyDraftMerge, buildDraftMerge } from '../core/workspace-db/draft-merge.js';
+import { PLAN_EXPORT, recordExport } from '../core/workspace-db/export-records.js';
 import { SWITCH_FILE, readSwitch } from '../core/workspace-db-switch.js';
 import { readBoard } from '../core/board.js';
 import { acquireLock } from '../core/locks.js';
@@ -1043,7 +1045,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     expect(stat.isDirectory()).toBe(true);
     expect(await fs.readFile(path.join(root, 'PLAN.md', 'important.txt'), 'utf8')).toBe('keep me');
     const drafts = await fs.readdir(path.join(root, '.contextspace', 'drafts')).catch(() => []);
-    expect(drafts).toEqual([]);
+    expect(drafts.filter((name) => !name.startsWith('.former-'))).toEqual([]);
   });
 
   it('publishOne falls back on EINVAL from fs.link and restores PLAN.md if placement fails after rename', async () => {
@@ -1058,7 +1060,7 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     expect(r1.status).toBe(200);
     const afterEinval = await read('PLAN.md');
     expect(afterEinval).toContain('- [x] Docs');
-    expect(await fs.readdir(path.join(root, '.contextspace', 'drafts')).catch(() => [])).toEqual([]);
+    expect((await fs.readdir(path.join(root, '.contextspace', 'drafts')).catch(() => [])).filter((name) => !name.startsWith('.former-'))).toEqual([]);
 
     // Unexpected failure after fs.rename(target, aside) -> original PLAN.md is put back, never left missing
     exportSeams.link = async () => { throw Object.assign(new Error('EIO: disk failure'), { code: 'EIO' }); };
@@ -1066,6 +1068,429 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     exportSeams.link = undefined;
     expect(r2.status).toBe(200);
     expect(await read('PLAN.md')).toBe(afterEinval);
-    expect(await fs.readdir(path.join(root, '.contextspace', 'drafts')).catch(() => [])).toEqual([]);
+    expect((await fs.readdir(path.join(root, '.contextspace', 'drafts')).catch(() => [])).filter((name) => !name.startsWith('.former-'))).toEqual([]);
+  });
+});
+
+describe('hand edits on a moved workspace', () => {
+  const draftsUrl = '/api/workspace/csv/plan/drafts';
+  const pending = async () => {
+    const result = await call('GET', draftsUrl);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return result.body.drafts;
+  };
+  const draftUrl = (digest: string) => `${draftsUrl}/${digest}`;
+
+  it('copies a save that lands during publication and notices a second save at the next poll', async () => {
+    const plan = await getPlan();
+    const first = (await read('PLAN.md')).replace('Add the Export button', 'First edit');
+    exportSeams.beforeSwap = async (file) => { if (file === 'PLAN.md') await write(file, first); };
+    await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    exportSeams.beforeSwap = undefined;
+    const [one] = await pending();
+    expect(await read(one.path)).toBe(first);
+    const token = await dbPollToken(root);
+    const second = first.replace('First edit', 'Second edit');
+    await write('PLAN.md', second);
+    expect(await dbPollToken(root)).not.toBe(token);
+    const drafts = await pending();
+    expect(drafts).toHaveLength(2);
+    expect(await read(one.path)).toBe(first);
+    expect(await read(drafts.find((draft: any) => draft.digest !== one.digest).path)).toBe(second);
+  });
+
+  it('keeps the bytes written through an open editor handle during the exclusive create', async () => {
+    const plan = await getPlan();
+    const file = path.join(root, 'PLAN.md');
+    const edit = (await read('PLAN.md')).replace('Add the Export button', 'Save from an open editor');
+    const editor = await fs.open(file, 'r+');
+    try {
+      exportSeams.link = async (from, to) => {
+        if (to === file) {
+          await editor.truncate(0);
+          await editor.writeFile(edit);
+        }
+        await fs.link(from, to);
+      };
+      expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') })).status).toBe(200);
+    } finally {
+      await editor.close();
+      exportSeams.link = undefined;
+    }
+    const drafts = await pending();
+    expect(drafts).toHaveLength(1);
+    expect(await read(drafts[0].path)).toBe(edit);
+  });
+
+  it('notices a late save through an editor still holding the old export after publication', async () => {
+    const plan = await getPlan();
+    const edit = (await read('PLAN.md')).replace('Add the Export button', 'Late open editor save');
+    const editor = await fs.open(path.join(root, 'PLAN.md'), 'r+');
+    try {
+      expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') })).status).toBe(200);
+      await dbPollToken(root);
+      const token = await dbPollToken(root);
+      expect(await pending()).toEqual([]);
+      await editor.truncate(0);
+      await editor.writeFile(edit);
+      expect(await dbPollToken(root)).not.toBe(token);
+      const [draft] = await pending();
+      expect(await read(draft.path)).toBe(edit);
+      expect(await read('PLAN.md')).toContain('- [x] Docs');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  it('requires a fresh preview after the database moves, then merges and republishes', async () => {
+    const plan = await getPlan();
+    const text = await read('PLAN.md');
+    await write('PLAN.md', text.replace('Add the Export button', 'Reword the export').replace('- [ ] Docs ', '- [x] Docs ') + '- [ ] Inventory the files\n');
+    const [draft] = await pending();
+    const preview = (await call('GET', draftUrl(draft.digest))).body;
+    expect(preview.changes.map((change: any) => change.kind)).toEqual(expect.arrayContaining(['reword', 'edit', 'add']));
+    await aiApplies([{ op: 'tick', id: idOf(plan, 'Tidy the old export script') }]);
+    const stale = await call('POST', `${draftUrl(draft.digest)}/import`, { token: preview.token });
+    expect(stale.status).toBe(409);
+    expect(stale.body.preview.token).not.toBe(preview.token);
+    expect(await read('PLAN.md')).not.toContain('- [x] Tidy the old export script');
+    const applied = await call('POST', `${draftUrl(draft.digest)}/import`, { token: stale.body.preview.token, by: 'tester' });
+    expect(applied.status).toBe(200);
+    expect((await getPlan()).steps).toEqual(expect.arrayContaining([expect.objectContaining({ text: 'Tidy the old export script', done: true }), expect.objectContaining({ text: 'Inventory the files' })]));
+    expect(await pending()).toEqual([]);
+    expect(await read('PLAN.md')).toContain('- [x] Tidy the old export script');
+    expect(await read(draft.path)).toContain('Reword the export');
+  });
+
+  it('refuses duplicate ids and lists each change as a conflict without a base header', async () => {
+    const text = await read('PLAN.md');
+    const line = text.split('\n').find((entry) => entry.includes('Add the Export button'))!;
+    await write('PLAN.md', text.replace(line, `${line}\n${line}`));
+    const [duplicate] = await pending();
+    expect(await call('GET', draftUrl(duplicate.digest))).toMatchObject({ status: 400, body: { error: expect.stringMatching(/same id more than once/) } });
+    await write('PLAN.md', text.split('\n').slice(1).join('\n').replace('Add the Export button', 'Reword the export').replace('- [ ] Docs ', '- [x] Docs '));
+    const withoutHeader = (await pending()).find((draft: any) => draft.digest !== duplicate.digest);
+    const preview = (await call('GET', draftUrl(withoutHeader.digest))).body;
+    expect(preview.changes).toHaveLength(2);
+    expect(preview.changes.every((change: any) => change.conflict)).toBe(true);
+  });
+
+  it('discards only the named draft and keeps its immutable file', async () => {
+    const text = await read('PLAN.md');
+    const edit = text.replace('Add the Export button', 'A draft to discard');
+    await write('PLAN.md', edit);
+    const [draft] = await pending();
+    expect((await call('POST', `${draftUrl(draft.digest)}/discard`)).status).toBe(200);
+    expect(await read(draft.path)).toBe(edit);
+    expect(await pending()).toEqual([]);
+    expect(await read('PLAN.md')).toBe(text);
+  });
+
+  it('reopens identical bytes when someone saves them after the export returned', async () => {
+    const text = await read('PLAN.md');
+    const edit = text.replace('Add the Export button', 'Save the exact text again');
+    await write('PLAN.md', edit);
+    const [first] = await pending();
+    expect((await call('POST', `${draftUrl(first.digest)}/discard`)).status).toBe(200);
+    expect(await read('PLAN.md')).toBe(text);
+    await write('PLAN.md', edit);
+    const [second] = await pending();
+    expect(second).toMatchObject({ digest: first.digest, path: first.path });
+    expect(await read(first.path)).toBe(edit);
+    expect(await read('PLAN.md')).toBe(edit);
+  });
+
+  it('places a draft addition under its parent after the live plan moves its old anchor', async () => {
+    const plan = await getPlan();
+    const text = await read('PLAN.md');
+    const anchor = idOf(plan, 'Add the Export button');
+    await aiApplies([{ op: 'move', id: anchor, under: idOf(plan, 'Docs') }]);
+    await write('PLAN.md', text.replace(/(  - \[ \] Add the Export button[^\n]*\n)/, '$1  - [ ] Keep this with CSV export\n'));
+    const [draft] = await pending();
+    const url = draftUrl(draft.digest);
+    const preview = await call('GET', url);
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.changes).toEqual([expect.objectContaining({ kind: 'add', conflict: false })]);
+    const applied = await call('POST', `${url}/import`, { token: preview.body.token });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    const after = await getPlan();
+    expect(itemOf(after, 'Docs').steps).toContainEqual(expect.objectContaining({ key: anchor }));
+    expect(itemOf(after, 'Reports export to CSV').steps).toContainEqual(expect.objectContaining({ text: 'Keep this with CSV export' }));
+  });
+
+  it('preserves the flat position of prose between children and decisions in a Markdown draft', async () => {
+    const db = createWorkspaceDb(path.join(root, 'interleaved'), { busy: 'cli', backups: false });
+    opened.push(db);
+    await importPlanText(db, '# Plan\n\n## Steps\n\n- [ ] Parent\n  - [ ] First child\n\nKeep this paragraph between the children.\n\n  - [ ] Decide: Keep this decision?\n  - [ ] Second child\n\n## Notes\n\nKeep this section.\n', { by: 'user' });
+    const original = exportPlanMarkdown(db);
+    await recordExport(db, PLAN_EXPORT, original);
+    const edit = original.replace('- [ ] First child', '- [x] First child').replace('  - [ ] Second child', '  - [ ] A new child\n  - [ ] Second child');
+    const merged = buildDraftMerge(db, PLAN_EXPORT, sha(edit), edit);
+    expect(merged.preview.changes.map((change) => change.kind)).toEqual(['edit', 'add']);
+    expect(await applyDraftMerge(db, merged, 'tester', () => {})).toMatchObject({ ok: true });
+    expect(exportPlanMarkdown(db).split('\n').slice(1).join('\n').replace(/ <!-- [a-z0-9]{6} -->/g, '')).toBe(edit.split('\n').slice(1).join('\n').replace(/ <!-- [a-z0-9]{6} -->/g, ''));
+  });
+
+  it('refuses a stale row revision after a conflicting draft brings a removed step back', async () => {
+    const plan = await getPlan();
+    const text = await read('PLAN.md');
+    const old = observed(plan, 'Tidy the old export script');
+    const key = idOf(plan, 'Tidy the old export script');
+    await aiApplies([{ op: 'remove', id: key, rev: old.rev }]);
+    await write('PLAN.md', text.replace('Tidy the old export script', 'Recover my draft text'));
+    const [draft] = await pending();
+    const url = draftUrl(draft.digest);
+    const preview = await call('GET', url);
+    expect(preview.body.changes).toEqual([expect.objectContaining({ kind: 'add', conflict: true })]);
+    const applied = await call('POST', `${url}/import`, { token: preview.body.token });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    const after = await getPlan();
+    expect(idOf(after, 'Recover my draft text')).toBe(key);
+    expect(itemOf(after, 'Recover my draft text').rev).toBeGreaterThan(Number(old.rev));
+    const stale = await changePlan({ type: 'tick', key, done: true, expected: 'Recover my draft text', ...old });
+    expect(stale.status).toBe(409);
+    expect(itemOf(await getPlan(), 'Recover my draft text').done).toBe(false);
+  });
+
+  async function pullPair(planText: string, dataText: string) {
+    const { format, version, db_id, revision, digest, base: _base, ...data } = JSON.parse(dataText);
+    const pulledPlan = planText.replace('Add the Export button', 'Button from Git');
+    const step = data.blocks.find((block: any) => block.name === 'Add the Export button');
+    step.name = 'Button from Git';
+    step.text = step.text.replace('Add the Export button', step.name);
+    await write('PLAN.md', pulledPlan.replace(/revision=\d+ digest=\w+/, `revision=${revision + 1} digest=${sha(pulledPlan.split('\n').slice(1).join('\n')).slice(0, 16)}`));
+    await write('contextspace-data.json', JSON.stringify({
+      format, version, db_id, revision: revision + 1, digest: sha(JSON.stringify(data)).slice(0, 16), base: { db_id, revision, digest }, ...data,
+    }, null, 2) + '\n');
+  }
+
+  it('takes a pulled pair as one change when the local content still matches its base', async () => {
+    const plan = await getPlan();
+    await pullPair(await read('PLAN.md'), await read('contextspace-data.json'));
+    await dbPollToken(root);
+    const after = await getPlan();
+    expect(after.revision).toBe(plan.revision + 1);
+    expect(itemOf(after, 'Button from Git').key).toBe(idOf(plan, 'Add the Export button'));
+    expect(await pending()).toEqual([]);
+  });
+
+  it('keeps archived workspaces readable without reconciling a pulled snapshot', async () => {
+    const plan = await getPlan();
+    const saved = await read('contextspace.json');
+    await write('contextspace.json', JSON.stringify({ ...JSON.parse(saved), archivedAt: AT }));
+    await pullPair(await read('PLAN.md'), await read('contextspace-data.json'));
+    const beforePoll = await read('contextspace-data.json');
+    await dbPollToken(root);
+    expect(await pending()).toEqual([]);
+    expect((await getPlan()).revision).toBe(plan.revision);
+    expect(await read('contextspace-data.json')).toBe(beforePoll);
+    await write('contextspace.json', saved);
+    await dbPollToken(root);
+    expect((await getPlan()).revision).toBe(plan.revision + 1);
+  });
+
+  it('takes a pulled snapshot with a new step and a card referring to it', async () => {
+    const plan = await getPlan();
+    const { format, version, db_id, revision, digest, ...data } = JSON.parse(await read('contextspace-data.json'));
+    data.blocks.push({ id: 's00001', kind: 'step', parent_id: null, text: '- [ ] New Git step', name: 'New Git step', detail: '', done: false });
+    data.cards[0].step_id = 's00001';
+    await write('contextspace-data.json', JSON.stringify({
+      format, version, db_id, revision: revision + 1, digest: sha(JSON.stringify(data)).slice(0, 16), base: { db_id, revision, digest }, ...data,
+    }, null, 2) + '\n');
+    await dbPollToken(root);
+    const after = await getPlan();
+    expect(after.revision).toBe(plan.revision + 1);
+    expect(idOf(after, 'New Git step')).toBe('s00001');
+    expect(other().sqlite.prepare('SELECT step_id FROM cards WHERE step_id = ?').get('s00001')).toMatchObject({ step_id: 's00001' });
+    expect(await pending()).toEqual([]);
+  });
+
+  it('keeps a divergent pulled pair as one draft and merges its changes with local changes', async () => {
+    const plan = await getPlan();
+    const firstPlan = await read('PLAN.md');
+    const firstData = await read('contextspace-data.json');
+    await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    await pullPair(firstPlan, firstData);
+    await dbPollToken(root);
+    const drafts = await pending();
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].file).toBe('contextspace-data.json');
+    const url = draftUrl(drafts[0].digest);
+    const preview = (await call('GET', url)).body;
+    expect(preview.changes).toEqual([expect.objectContaining({ kind: 'reword', conflict: false })]);
+    expect((await call('POST', `${url}/import`, { token: preview.token })).status).toBe(200);
+    const after = await getPlan();
+    expect(itemOf(after, 'Docs').done).toBe(true);
+    expect(itemOf(after, 'Button from Git').key).toBe(idOf(plan, 'Add the Export button'));
+    expect(await pending()).toEqual([]);
+    expect(await read('PLAN.md')).toContain('Button from Git');
+  });
+
+  it('leaves an existing divergent Git draft pending after restoring its base revision', async () => {
+    const plan = await getPlan();
+    const firstPlan = await read('PLAN.md');
+    const firstData = await read('contextspace-data.json');
+    const backup = path.join(root, 'backup.db');
+    other().sqlite.prepare('VACUUM INTO ?').run(backup);
+    await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    await pullPair(firstPlan, firstData);
+    const [draft] = await pending();
+    expect(draft.file).toBe('contextspace-data.json');
+    for (const db of opened.splice(0)) db.close();
+    await closeAppDb(root);
+    const restored = await restoreBackupForApp(root, backup);
+    expect((await getPlan()).revision).toBe(restored.revision);
+    expect(idOf(await getPlan(), 'Add the Export button')).toBe(idOf(plan, 'Add the Export button'));
+    expect(await pending()).toEqual([expect.objectContaining({ file: 'contextspace-data.json', digest: draft.digest })]);
+  });
+
+  it.each([false, true])('imports a divergent Git completion only with the sender’s check definition (local check changed: %s)', async (differentCheck) => {
+    const plan = await getPlan();
+    const { format, version, db_id, revision, digest, ...data } = JSON.parse(await read('contextspace-data.json'));
+    await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    const id = idOf(plan, 'Reports export to CSV');
+    if (differentCheck) {
+      await aiApplies([{ op: 'detail', id, rev: itemOf(plan, 'Reports export to CSV').rev, text: 'Check: `npm run test:other`' }]);
+    }
+    const checkpoint = data.blocks.find((row: any) => row.id === id);
+    checkpoint.done = true;
+    checkpoint.text = checkpoint.text.replace('[ ]', '[x]');
+    await write('contextspace-data.json', JSON.stringify({
+      format, version, db_id, revision: revision + 1, digest: sha(JSON.stringify(data)).slice(0, 16), base: { db_id, revision, digest }, ...data,
+    }, null, 2) + '\n');
+    const [draft] = await pending();
+    const url = draftUrl(draft.digest);
+    const preview = await call('GET', url);
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    const applied = await call('POST', `${url}/import`, { token: preview.body.token });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(differentCheck ? 400 : 200);
+    expect(itemOf(await getPlan(), 'Reports export to CSV').done).toBe(!differentCheck);
+    expect(other().sqlite.prepare('SELECT id FROM check_runs WHERE item_id = ?').all(id)).toEqual([]);
+  });
+
+  it('refuses a stale card revision after a divergent draft brings a removed card back', async () => {
+    const board = await getBoard();
+    const old = board.cards.find((card: any) => card.title === 'Export notes');
+    const { format, version, db_id, revision, digest, ...data } = JSON.parse(await read('contextspace-data.json'));
+    await aiApplies([{ op: 'card.remove', id: old.id, rev: old.rev }]);
+    const card = data.cards.find((row: any) => row.id === old.id);
+    card.body = 'Recover the note from Git';
+    await write('contextspace-data.json', JSON.stringify({
+      format, version, db_id, revision: revision + 1, digest: sha(JSON.stringify(data)).slice(0, 16), base: { db_id, revision, digest }, ...data,
+    }, null, 2) + '\n');
+    const [draft] = await pending();
+    const url = draftUrl(draft.digest);
+    const preview = await call('GET', url);
+    expect(preview.body.changes).toEqual([expect.objectContaining({ kind: 'add', conflict: true })]);
+    const applied = await call('POST', `${url}/import`, { token: preview.body.token });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    const current = await getBoard();
+    expect(current.cards.find((row: any) => row.id === old.id)).toMatchObject({ body: card.body, rev: old.rev + 1 });
+    const stale = await changeBoard([{ op: 'update_card', id: old.id, rev: old.rev, body: 'Stale edit' }], { dbId: board.dbId });
+    expect(stale.status).toBe(409);
+    expect((await getBoard()).cards.find((row: any) => row.id === old.id).body).toBe(card.body);
+  });
+
+  it('keeps one pending draft when a poll sees PLAN.md before Git finishes writing the pair', async () => {
+    const plan = await getPlan();
+    const firstPlan = await read('PLAN.md');
+    const firstData = await read('contextspace-data.json');
+    await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    const localData = await read('contextspace-data.json');
+    await pullPair(firstPlan, firstData);
+    const pulledData = await read('contextspace-data.json');
+    const pulledPlan = await read('PLAN.md');
+
+    await write('contextspace-data.json', localData);
+    const [planDraft] = await pending();
+    expect(planDraft.file).toBe('PLAN.md');
+    await write('contextspace-data.json', pulledData);
+    expect(await pending()).toEqual([expect.objectContaining({ file: 'contextspace-data.json' })]);
+    expect(await read(planDraft.path)).toBe(pulledPlan);
+  });
+
+  it('finishes a publication interrupted between the two exports on a poll', async () => {
+    const plan = await getPlan();
+    const oldData = await read('contextspace-data.json');
+    exportSeams.beforeSwap = (file) => { if (file === 'contextspace-data.json') throw new Error('interrupted'); };
+    await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+    exportSeams.beforeSwap = undefined;
+    expect(await read('PLAN.md')).toContain('- [x] Docs');
+    expect(await read('contextspace-data.json')).toBe(oldData);
+    await dbPollToken(root);
+    expect(JSON.parse(await read('contextspace-data.json')).revision).toBe(plan.revision + 1);
+    expect(await pending()).toEqual([]);
+  });
+
+  it('records both exports when a reader briefly holds SQLite open during the swap', async () => {
+    const plan = await getPlan();
+    const reader = other();
+    let released: Promise<void> | undefined;
+    exportSeams.link = async (from, to) => {
+      await fs.link(from, to);
+      if (to !== path.join(root, 'PLAN.md')) return;
+      reader.sqlite.exec('BEGIN');
+      reader.sqlite.prepare('SELECT count(*) FROM blocks').get();
+      released = new Promise((resolve) => setTimeout(() => { reader.sqlite.exec('ROLLBACK'); resolve(); }, 100));
+    };
+    try {
+      const result = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(reader.sqlite.prepare('SELECT file FROM exports WHERE revision = ? ORDER BY file').all(plan.revision + 1)).toEqual([
+        { file: 'PLAN.md' }, { file: 'contextspace-data.json' },
+      ]);
+    } finally {
+      await released;
+    }
+  });
+
+  it('records the last five publications for each file and treats an older export as a draft', async () => {
+    const plan = await getPlan();
+    const first = await read('PLAN.md');
+    expect(other().sqlite.prepare('SELECT file FROM exports ORDER BY file').all()).toEqual([{ file: 'PLAN.md' }, { file: 'contextspace-data.json' }]);
+    for (let index = 0; index < 6; index++) {
+      const live = await getPlan();
+      const result = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: index % 2 === 0, expected: 'Docs', ...observed(live, 'Docs') });
+      expect(result.status, `Publication ${index + 1}: ${JSON.stringify(result.body)}`).toBe(200);
+    }
+    expect(other().sqlite.prepare('SELECT file, count(*) AS n FROM exports GROUP BY file ORDER BY file').all()).toEqual([
+      { file: 'PLAN.md', n: 5 }, { file: 'contextspace-data.json', n: 5 },
+    ]);
+    await write('PLAN.md', first);
+    expect(await pending()).toHaveLength(1);
+  });
+
+  it('recognizes only the last published bytes of the previous generation after a backup restore', async () => {
+    const plan = await getPlan();
+    const oldPlan = await read('PLAN.md');
+    const backup = path.join(root, 'backup.db');
+    other().sqlite.prepare('VACUUM INTO ?').run(backup);
+    expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') })).status).toBe(200);
+    await write('PLAN.md', oldPlan);
+    await closeAppDb(root);
+    await restoreBackupForApp(root, backup);
+    const drafts = await pending();
+    expect(drafts).toHaveLength(1);
+    expect(await read(drafts[0].path)).toBe(oldPlan);
+    expect(await read('PLAN.md')).toBe(oldPlan);
+    const restored = await getPlan();
+    expect(restored.dbId).not.toBe(plan.dbId);
+    expect(JSON.parse(await read('contextspace-data.json')).db_id).toBe(restored.dbId);
+  });
+
+  it('keeps a discarded draft resolved across a backup restore until someone saves it again', async () => {
+    const original = await read('PLAN.md');
+    const backup = path.join(root, 'before-draft.db');
+    other().sqlite.prepare('VACUUM INTO ?').run(backup);
+    const edit = original.replace('Add the Export button', 'Discarded after the backup');
+    await write('PLAN.md', edit);
+    const [draft] = await pending();
+    expect((await call('POST', `${draftUrl(draft.digest)}/discard`)).status).toBe(200);
+    await closeAppDb(root);
+    await restoreBackupForApp(root, backup);
+    expect(await pending()).toEqual([]);
+    expect(await read(draft.path)).toBe(edit);
+    await write('PLAN.md', edit);
+    expect(await pending()).toEqual([expect.objectContaining({ digest: draft.digest })]);
   });
 });

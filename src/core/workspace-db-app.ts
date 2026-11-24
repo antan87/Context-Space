@@ -264,7 +264,7 @@ export async function restoreBackupForApp(root: string, backup: string, options:
     }
     const { publishExports } = await import('./workspace-db-exports.js');
     await Promise.resolve()
-      .then(async () => publishExports(root, await connection(root), { replaceDbIds: oldDbId ? [oldDbId] : [] }))
+      .then(async () => publishExports(root, await connection(root), { replaceDbIds: oldDbId ? [oldDbId] : [], restore: true }))
       .catch((error: unknown) => {
         process.stderr.write(`exports after the restore were not written: ${error instanceof Error ? error.message : String(error)}\n`);
       });

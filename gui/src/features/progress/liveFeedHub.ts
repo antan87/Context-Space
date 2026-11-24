@@ -16,6 +16,7 @@ import { API_BASE } from '../../lib/apiBase.js';
 import { progressFactsKey } from '../../lib/api/queries.js';
 import type { LiveEvent, ScreenEvent } from '../../types.js';
 import { boardKey, workspaceFilesKey, type BoardView } from '../board/boardData.js';
+import { planDraftsKey } from '../plan/planDrafts.js';
 import { planFileKey, type PlanFileView } from '../plan/planFile.js';
 import { newsKey, recentCommitsKey, type RecentCommits } from '../plan/whatsNew.js';
 import { addScreenEvent, connectScreenFeed, type ScreenFeedOptions } from './screenFeed.js';
@@ -97,6 +98,7 @@ export function createLiveFeedHub(connect: (options: ScreenFeedOptions) => { clo
         }
         // PLAN.md changed by an AI's own edit or the CLI shows at once everywhere it is read, not at the next poll.
         if (live.type === 'plan') {
+          if (queryClient.getQueryData<PlanFileView>(planFileKey(workspace))?.store === 'database') invalidate(planDraftsKey(workspace));
           for (const queryKey of [planFileKey(workspace), newsKey(workspace), recentCommitsKey(workspace), ['workspace-work', workspace], ['workspace-lifecycle', workspace], ['needs-you']]) invalidate(queryKey);
         }
         if (live.type === 'screen') {
@@ -114,7 +116,10 @@ export function createLiveFeedHub(connect: (options: ScreenFeedOptions) => { clo
           invalidate(boardKey(workspace));
           const plan = queryClient.getQueryData<PlanFileView>(planFileKey(workspace));
           const board = queryClient.getQueryData<BoardView>(boardKey(workspace));
-          if (plan?.store === 'database' || board?.dbId !== undefined) invalidate(planFileKey(workspace));
+          if (plan?.store === 'database' || board?.dbId !== undefined) {
+            invalidate(planFileKey(workspace));
+            invalidate(planDraftsKey(workspace));
+          }
         }
       },
     }).close;

@@ -14,7 +14,7 @@ import { structureProblems } from './plan-text.js';
 import { WorkspaceDbError, isBusyError } from './errors.js';
 import { actorName, afterCommit, pruneHistory, type Issue } from './batch.js';
 import { ID_PATTERN } from './ids.js';
-import { Recorder, loadDoc, recomputeDerived, selectRow, type ChangedRow, type Row } from './store.js';
+import { Recorder, deletedRowRevision, loadDoc, recomputeDerived, selectRow, type ChangedRow, type Row } from './store.js';
 
 export type UndoResult =
   | { ok: true; revision: number; seq: number; undid: number; summary: string }
@@ -160,7 +160,7 @@ function applyInverse(sqlite: WorkspaceDb['sqlite'], row: ChangedRow, by: string
   const values: Row = { ...row.before };
   if ('rev' in values) {
     // never take a rev back: a holder of an old one must still be refused
-    const bumped = Math.max(Number(values.rev), Number(row.after?.rev ?? 0)) + 1;
+    const bumped = Math.max(Number(values.rev), Number(row.after?.rev ?? 0), deletedRowRevision(sqlite, row.id)) + 1;
     values.rev = bumped;
     if ('updated_at' in values) { values.updated_at = at; values.updated_by = by; }
   }

@@ -23,7 +23,7 @@ import { ROOT_KEY, destinationConflicts, footprintOf, reconstructBase, rowRefers
 import { contentHash, hasPassingRun } from './check-runs.js';
 import { OpError, effectiveCheck, runOp, LIMITS, type Op, type OpContext, type IssueCode } from './ops.js';
 import { structureProblems } from './plan-text.js';
-import { Recorder, flushDoc, loadDoc, type ChangedRow } from './store.js';
+import { Recorder, flushDoc, loadDoc, type ChangedRow, type DocBlock } from './store.js';
 import { maybeBackup } from './backup.js';
 
 export interface BatchInput {
@@ -130,6 +130,8 @@ interface BatchOptions {
   implicitRevision?: boolean;
   /** The Board translates defaults and aliases after receiving a request. Hash the caller's inputs for retries. */
   requestSource?: string;
+  /** Internal draft imports contribute to the same transaction, validation, history and revision as ordinary ops. */
+  draft?: { edit: (ctx: OpContext) => void; finish: (ctx: OpContext) => void; acceptsCompletedCheck?: (block: DocBlock) => boolean };
   /** Captures a Board response from the transaction, before a successful commit is acknowledged. */
   capture?: (result: Extract<BatchResult, { ok: true }>) => void;
 }
@@ -140,7 +142,7 @@ export function applyBatch(db: WorkspaceDb, batch: BatchInput, options: BatchOpt
 
 async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: BatchOptions): Promise<BatchResult> {
   const sqlite = db.sqlite;
-  const shape = checkShape(batch);
+  const shape = checkShape(batch, options.draft !== undefined);
   if (shape) return { ok: false, revision: readRevisionSafe(db), errors: [shape] };
   const by = actorName(options.by);
   const at = new Date().toISOString();
@@ -235,19 +237,27 @@ async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: BatchOpt
       }
     });
 
+    if (options.draft) {
+      try { options.draft.edit(ctx); }
+      catch (error) {
+        if (!(error instanceof OpError)) throw error;
+        errors.push({ op: null, code: error.code, message: error.message });
+      }
+    }
     if (!errors.length) {
       const problems = structureProblems(doc.blocks);
       if (problems.length) {
         errors.push({ op: null, code: 'bad_structure', message: `That arrangement would not read back as meant: ${problems.join('; ')}. The file grammar decides: items at the top indent under the Checkpoints list are checkpoints, so put steps "under" a checkpoint or step. Nothing was applied.` });
       }
     }
-    if (!errors.length) errors.push(...checkGuard(db, ctx));
+    if (!errors.length) errors.push(...checkGuard(db, ctx, options.draft?.acceptsCompletedCheck));
     if (errors.length) {
       sqlite.exec('ROLLBACK');
       return { ok: false, revision: current, errors, note: 'All or none: no op of this batch was applied.' };
     }
 
     flushDoc(sqlite, doc, rec, by, at);
+    options.draft?.finish(ctx);
     const rows = rec.finish();
     const next = current + 1;
     setMeta(sqlite, 'revision', next);
@@ -287,11 +297,11 @@ function readRevisionSafe(db: WorkspaceDb): number {
   try { return readRevision(db.sqlite); } catch { return 0; }
 }
 
-function checkShape(batch: BatchInput): Issue | null {
+function checkShape(batch: BatchInput, allowEmpty: boolean): Issue | null {
   if (!batch || typeof batch !== 'object' || Array.isArray(batch)) {
     return { op: null, code: 'invalid', message: 'Send {"ifRevision": <revision>, "ops": [...]}, for example {"ifRevision":12,"ops":[{"op":"tick","id":"s7k2q"}]}.' };
   }
-  if (!Array.isArray(batch.ops) || batch.ops.length === 0) {
+  if (!Array.isArray(batch.ops) || (!allowEmpty && batch.ops.length === 0)) {
     return { op: null, code: 'invalid', message: '"ops" must be a non-empty list. Example: {"ifRevision":12,"ops":[{"op":"tick","id":"s7k2q"}]}' };
   }
   if (batch.ops.length > LIMITS.ops) return { op: null, code: 'limit', message: `A batch has at most ${LIMITS.ops} ops (this one has ${batch.ops.length}). Split it.` };
@@ -321,12 +331,12 @@ function checkShape(batch: BatchInput): Issue | null {
  *   imported completion nobody ran, stays as it is. Undo is outside the guard: it only restores a row to a state it was
  *   recorded in, and refuses when the row moved on.
  */
-function checkGuard(db: WorkspaceDb, ctx: OpContext): Issue[] {
+function checkGuard(db: WorkspaceDb, ctx: OpContext, acceptsCompletedCheck?: (block: DocBlock) => boolean): Issue[] {
   const issues: Issue[] = [];
   for (const b of ctx.doc.blocks) {
     if (b.kind !== 'checkpoint' || !b.done) continue;
     const final = effectiveCheck(b.detail);
-    if (final.kind === 'none') continue;
+    if (final.kind === 'none' || acceptsCompletedCheck?.(b)) continue;
     const describe = final.kind === 'workspace' ? 'the workspace checks' : `\`${final.command}\``;
     const beforeRow = b._new ? null : (b._before as Record<string, unknown>);
     const beforeCheck = beforeRow ? effectiveCheck(String(beforeRow.detail)) : null;

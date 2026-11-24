@@ -3,11 +3,13 @@ import { isMainThread, parentPort, Worker, workerData } from 'node:worker_thread
 import type { readPlanView } from './plan-db-app.js';
 import type { BoardBatchView } from './board-db-app.js';
 import { withAppDbWriteLock, writeAppDb } from './workspace-db-app.js';
+import { PlanFileError } from './plan-file.js';
 import { publishExports } from './workspace-db-exports.js';
 import {
   applyBatch, finishCheckRun, getRevision, openWorkspaceDbAsync, readWithRetry, startCheckRun, WorkspaceDbError,
   type BatchResult, type CheckRun, type Op, type WorkspaceDb, type WorkspaceDbErrorCode,
 } from './workspace-db/index.js';
+import { doDraftAction, type DraftAction, type DraftResults } from './workspace-db-drafts.js';
 import type { SeenDbChange } from './whats-new.js';
 
 export interface DbBatchOptions {
@@ -22,7 +24,7 @@ export interface DbBatchOptions {
 }
 
 type BatchWrite = { ops: Op[]; options: DbBatchOptions };
-type Write =
+type Write = DraftAction
   | ({ type: 'batch' } & BatchWrite)
   | ({ type: 'board-batch' } & BatchWrite)
   | ({ type: 'plan-batch' } & BatchWrite)
@@ -30,7 +32,7 @@ type Write =
   | { type: 'check-finish'; id: number; outcome: Parameters<typeof finishCheckRun>[2] }
   | { type: 'seen'; change: SeenDbChange };
 
-type Results = {
+type Results = DraftResults & {
   batch: BatchResult;
   'board-batch': { result: BatchResult; view?: BoardBatchView };
   'plan-batch': { result: BatchResult; plan?: ReturnType<typeof readPlanView> };
@@ -38,10 +40,17 @@ type Results = {
   'check-finish': CheckRun;
   seen: void;
 };
-type Reply = { result: Results[Write['type']] } | { error: string; name?: string; code?: WorkspaceDbErrorCode };
+type Reply = { result: Results[Write['type']] } | { error: string; name?: string; code?: WorkspaceDbErrorCode; planCode?: PlanFileError['code'] };
 
 async function performWrite(root: string, db: WorkspaceDb, write: Write): Promise<Results[Write['type']]> {
   switch (write.type) {
+    case 'draft-refresh':
+    case 'draft-capture-git':
+    case 'draft-list':
+    case 'draft-preview':
+    case 'draft-import':
+    case 'draft-discard':
+      return doDraftAction(root, db, write);
     case 'check-start': return startCheckRun(db, write.id, write.options);
     case 'check-finish': return finishCheckRun(db, write.id, write.outcome);
     case 'seen': {
@@ -126,6 +135,16 @@ async function dispatch(root: string, write: Write): Promise<Results[Write['type
   });
 }
 
+/** Reconcile fetched Git data while the caller still owns the normal plan write fence. */
+export async function runGitDraftWithWriteLockHeld<W extends Extract<DraftAction, { type: 'draft-refresh' | 'draft-capture-git' }>>(root: string, write: W): Promise<Results[W['type']]> {
+  if (!import.meta.url.endsWith('.ts')) {
+    return await workerWrite(root, write) as Results[W['type']];
+  }
+  const db = await openWorkspaceDbAsync(root, { busy: 'server' });
+  try { return await performWrite(root, db, write) as Results[W['type']]; }
+  finally { db.close(); await db.idle(); }
+}
+
 function workerWrite(root: string, write: Write): Promise<Results[Write['type']]> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL(import.meta.url), { workerData: { root, write }, execArgv: [] });
@@ -138,6 +157,7 @@ function workerWrite(root: string, write: Write): Promise<Results[Write['type']]
       if (failure) return;
       clearTimeout(deadline);
       if ('result' in reply) resolve(reply.result);
+      else if (reply.planCode) reject(new PlanFileError(reply.error, reply.planCode));
       else if (reply.code) reject(new WorkspaceDbError(reply.code, reply.error));
       else reject(Object.assign(new Error(reply.error), { name: reply.name ?? 'Error' }));
     });
@@ -166,6 +186,7 @@ if (!isMainThread && parentPort && workerData?.write) {
         error: error instanceof Error ? error.message : String(error),
         name: error instanceof Error ? error.name : undefined,
         ...(error instanceof WorkspaceDbError ? { code: error.code } : {}),
+        ...(error instanceof PlanFileError ? { planCode: error.code } : {}),
       } satisfies Reply);
     } finally {
       await db?.idle();

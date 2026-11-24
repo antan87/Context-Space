@@ -185,8 +185,15 @@ describe('a saved document keeps its permission bits (fix round 2, N7)', () => {
 });
 
 describe('the workspace\'s own Git (ctxspace remote pull)', () => {
-  it('does not pull into a moved workspace: a pull would rewrite PLAN.md and bring archived files back', async () => {
+  it.each(['moving', 'restoring'] as const)('does not pull while the switch is %s', async (state) => {
+    await turnOn(state);
+    await refusedAndUnchanged(() => pullWorkspaceArtifacts(root), WorkspaceMovedError);
+  });
+
+  it('checks the database before pulling into a moved workspace', async () => {
     await turnOn('on');
-    await refusedAndUnchanged(() => pullWorkspaceArtifacts(root), WorkspaceMovedError); // not even a git init
+    const before = await treeHash();
+    await expect(pullWorkspaceArtifacts(root)).rejects.toMatchObject({ code: 'missing' });
+    expect(await treeHash()).toEqual(before); // not even a git init
   });
 });

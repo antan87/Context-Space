@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { PLAN_FILE, PLAN_LINE_MAX, PlanFileError } from '../core/plan-file.js';
 import { changePlanFileForApp, planFileForApp, type PlanFileAppChange } from '../core/plan-file-app.js';
 import { PlanDbChangeError, changePlanDbForApp, planDbForApp } from '../core/plan-db-app.js';
+import { DRAFT_DIGEST, requireDraftDatabase } from '../core/workspace-db-drafts.js';
+import { runDbWrite } from '../core/workspace-db-write.js';
 import { storeOf } from '../core/workspace-db-app.js';
 import { WorkspaceMovedError } from '../core/workspace-db-switch.js';
 import { WorkspaceDbError } from '../core/workspace-db/index.js';
@@ -97,7 +99,8 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
     try {
       const root = await resolveWorkspace(z.string().min(1).parse(c.req.param('id')));
       if (!root) return c.json({ error: 'Workspace not found.' }, 404);
-      return c.json(await action(root, c));
+      const result = await action(root, c);
+      return result instanceof Response ? result : c.json(result);
     } catch (error) {
       if (error instanceof z.ZodError) return c.json({ error: validationMessage(error) }, 400);
       const answer = planErrorAnswer(error);
@@ -106,6 +109,27 @@ export function registerPlanFileRoutes(app: Hono, resolveWorkspace: (id: string)
   };
 
   app.get('/api/workspace/:id/plan', handle((root) => planForApp(root)));
+
+  const drafts = '/api/workspace/:id/plan/drafts';
+  const digest = (c: Context) => z.string().regex(DRAFT_DIGEST).parse(c.req.param('digest'));
+  app.get(drafts, handle((root) => {
+    requireDraftDatabase(root);
+    return runDbWrite(root, { type: 'draft-list' });
+  }));
+  app.get(`${drafts}/:digest`, handle((root, c) => {
+    requireDraftDatabase(root);
+    return runDbWrite(root, { type: 'draft-preview', digest: digest(c) });
+  }));
+  app.post(`${drafts}/:digest/import`, bodyLimit({ maxSize: 2048 }), handle(async (root, c) => {
+    requireDraftDatabase(root);
+    const { token, by } = z.object({ token: z.string().regex(DRAFT_DIGEST), by: z.string().max(40).default('user') }).strict().parse(await c.req.json());
+    const result = await runDbWrite(root, { type: 'draft-import', digest: digest(c), token, by });
+    return result.ok ? result : c.json(result, result.preview ? 409 : 400);
+  }));
+  app.post(`${drafts}/:digest/discard`, handle((root, c) => {
+    requireDraftDatabase(root);
+    return runDbWrite(root, { type: 'draft-discard', digest: digest(c) });
+  }));
 
   app.post('/api/workspace/:id/plan', bodyLimit({ maxSize: 64_000 }), handle(async (root, c) => {
     const { change, requestId, store, dbId } = z.object({

@@ -22,6 +22,8 @@ import {
 } from '../core/plan-migrate.js';
 import { changePlanDbForApp, PlanDbChangeError, planDbParts, replayPlanAdd } from '../core/plan-db-app.js';
 import { applyPlanBatch, planDbJson, planDbText, requirePlanDatabase } from '../core/plan-db-command.js';
+import { requireDraftDatabase, type DraftPreview } from '../core/workspace-db-drafts.js';
+import { runDbWrite } from '../core/workspace-db-write.js';
 import { storeOf } from '../core/workspace-db-app.js';
 import { readSwitch } from '../core/workspace-db-switch.js';
 import { dbFilePath, runQuery, schemaText } from '../core/workspace-db/index.js';
@@ -68,6 +70,9 @@ export const PLAN_EXAMPLES = [
   '  ctxspace plan restore .contextspace/archive/pre-db-…   undo the move: the old files come back byte for byte',
   '',
   '  ctxspace plan apply --file ops.json                   apply an atomic JSON batch on a moved workspace',
+  '  ctxspace plan drafts                                  list pending edits to the exported plan',
+  '  ctxspace plan import [digest]                         preview an edit before importing it',
+  '  ctxspace plan discard <digest>                        discard an edit and keep its original bytes',
   '',
   `A moved workspace uses ids and ctxspace plan apply. A file-based workspace uses ${PLAN_FILE}.`,
 ].join('\n');
@@ -296,6 +301,45 @@ async function planApply(context: PlanCommandContext, arg?: string, file?: strin
   if (!result.ok) process.exitCode = 1;
 }
 
+async function withDrafts(context: PlanCommandContext): Promise<string> {
+  await assertActsHere(context);
+  requireDraftDatabase(context.workspacePath);
+  return context.workspacePath;
+}
+
+function draftPreviewWords(preview: DraftPreview): string {
+  const lines = [`Draft ${preview.digest} against database revision ${preview.revision}`];
+  if (!preview.baseKnown) lines.push('The original export could not be found. Every change needs confirmation.');
+  for (const match of preview.matched) lines.push(`Matched by words: ${match}`);
+  for (const change of preview.changes) {
+    const before = change.before?.split('\n').map((line) => `  - ${line}`) ?? [];
+    const after = change.after?.split('\n').map((line) => `  + ${line}`) ?? [];
+    lines.push(`${change.conflict ? 'Conflict · ' : ''}${change.kind}${change.confirm ? ' (confirm)' : ''}`, ...before, ...after);
+  }
+  if (!preview.changes.length) lines.push('The draft has no changes to apply.');
+  lines.push(`To confirm, run: ctxspace plan import ${preview.digest} --yes --preview ${preview.token}`);
+  return lines.join('\n');
+}
+
+async function planImport(context: PlanCommandContext, digest: string | undefined, options: { yes?: boolean; preview?: string; by?: string }) {
+  const root = await withDrafts(context);
+  if (!digest) {
+    const { drafts } = await runDbWrite(root, { type: 'draft-list' });
+    if (drafts.length !== 1) throw new PlanFileError(drafts.length ? 'More than one draft is pending. Use its digest from ctxspace plan drafts.' : 'There are no pending drafts.', 'invalid');
+    digest = drafts[0]!.digest;
+  }
+  if (!options.yes || !options.preview) {
+    const preview = await runDbWrite(root, { type: 'draft-preview', digest });
+    context.print(context.json ? JSON.stringify(preview, null, 2) : draftPreviewWords(preview));
+    if (options.yes) process.exitCode = 1;
+    return;
+  }
+  const result = await runDbWrite(root, { type: 'draft-import', digest, token: options.preview, by: options.by ?? 'user' });
+  context.print(context.json ? JSON.stringify(result, null, 2) : result.ok ? `Draft imported at revision ${result.revision}.`
+    : [result.error, ...(result.preview ? [draftPreviewWords(result.preview)] : [])].join('\n'));
+  if (!result.ok) process.exitCode = 1;
+}
+
 /** The older verbs, kept so an AI with older instructions learns what to do instead. */
 const RETIRED = ['start', 'drop', 'later', 'block', 'reopen', 'edit', 'accept', 'reject'] as const;
 
@@ -425,6 +469,26 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
   common(plan.command('apply').description('Apply a JSON batch on a moved workspace. Pass a requestId and resend it with the same batch to retry safely.').argument('[json]')
     .option('--file <path>', 'Read the batch from a file or use - for stdin'))
     .action(action<PlanCommonOptions & { file?: string }, [string | undefined]>((context, options, arg) => planApply(context, arg, options.file)));
+
+  common(plan.command('drafts').description('List pending plan drafts'))
+    .action(action<PlanCommonOptions, []>(async (context) => {
+      const { drafts } = await runDbWrite(await withDrafts(context), { type: 'draft-list' });
+      context.print(context.json ? JSON.stringify({ drafts }, null, 2) : drafts.length
+        ? drafts.map((draft) => `${draft.digest}  ${draft.at}  ${draft.file}  +${draft.added} −${draft.removed} lines (${draft.bytes} bytes)`).join('\n')
+        : 'There are no pending drafts.');
+    }));
+
+  common(plan.command('import').description('Preview a pending plan draft and apply a confirmed preview').argument('[digest]')
+    .option('--yes', 'Confirm the changes in the preview')
+    .option('--preview <token>', 'Bind confirmation to the token printed by the preview')
+    .option('--by <who>', 'Name the person or assistant importing the draft', 'user'))
+    .action(action<PlanCommonOptions & { yes?: boolean; preview?: string; by?: string }, [string | undefined]>((context, options, digest) => planImport(context, digest, options)));
+
+  common(plan.command('discard').description('Discard a pending draft and keep its saved file').argument('<digest>'))
+    .action(action<PlanCommonOptions, [string]>(async (context, _options, digest) => {
+      const result = await runDbWrite(await withDrafts(context), { type: 'draft-discard', digest });
+      context.print(context.json ? JSON.stringify(result, null, 2) : 'Draft discarded. Its saved file is kept.');
+    }));
 
   common(plan.command('schema').description('Show the workspace database schema'))
     .action(action<PlanCommonOptions, []>(async (context) => { requirePlanDatabase(context.workspacePath); context.print(schemaText()); }));

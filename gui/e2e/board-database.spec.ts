@@ -67,7 +67,7 @@ const env = () => ({
   HOME: path.join(scratch, 'home'),
   CONTEXTSPACE_HOME: path.join(scratch, 'cshome'),
   NEXUSFLOW_HOME: '',
-  PM2_HOME: '/tmp/db3b-pm',
+  PM2_HOME: '/tmp/db3d-pm',
   NODE_NO_WARNINGS: '1',
 });
 
@@ -107,6 +107,11 @@ async function forward(page: Page, id: string) {
 }
 
 test.use({ viewport: { width: 1280, height: 800 }, screenshot: 'only-on-failure' });
+
+test.afterEach(async ({ page }) => {
+  // Complete the forwarded refreshes while the test still owns its browser context.
+  await page.unrouteAll({ behavior: 'wait' });
+});
 
 test.beforeAll(async () => {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'db3b-e2e-'));
@@ -199,6 +204,105 @@ async function watchBoardSaves(page: Page, id: string) {
 }
 
 test.describe('the Board on a workspace moved to its database (real backend)', () => {
+  test('imports a hand edit on the Board at 1100 × 700', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const file = path.join(root, 'PLAN.md');
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page.routeWebSocket(/\/ws\/terminal(?:\?|$)/, (socket) => socket.close());
+    await openBoard(page, id, root);
+    await stepInto(page, /Reports export to CSV/);
+    const notice = page.getByTestId('plan-draft-notice');
+    await expect(notice).toHaveCount(0);
+
+    const original = fs.readFileSync(file, 'utf8');
+    const edit = original.replace('Background job queue for large exports', 'Queue the CSV export in the background');
+    fs.writeFileSync(file, edit);
+    await expect(notice).toContainText('PLAN.md was edited by hand', { timeout: 15_000 });
+    const importDraft = notice.getByRole('button', { name: 'Import' });
+    await importDraft.click();
+    const dialog = page.getByRole('dialog', { name: 'Import plan draft' });
+    await expect(dialog).toContainText('Reword · Confirm');
+    await expect(dialog).toContainText('Queue the CSV export in the background');
+    await expect(dialog.getByRole('button', { name: 'Apply' })).toBeInViewport();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(importDraft).toBeFocused();
+
+    await importDraft.click();
+    await dialog.getByRole('button', { name: 'Apply' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(notice).toHaveCount(0);
+    await expect(page.locator('#board-area').getByText('Queue the CSV export in the background', { exact: true }).first()).toBeVisible();
+    expect(fs.readFileSync(file, 'utf8')).toContain('Queue the CSV export in the background');
+  });
+
+  test('discards a hand edit after one confirmation and keeps its saved copy', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const file = path.join(root, 'PLAN.md');
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page.routeWebSocket(/\/ws\/terminal(?:\?|$)/, (socket) => socket.close());
+    await openBoard(page, id, root);
+    await stepInto(page, /Reports export to CSV/);
+    const original = fs.readFileSync(file, 'utf8');
+    const edit = original.replace('Background job queue for large exports', 'Discard this rewording');
+    fs.writeFileSync(file, edit);
+
+    const notice = page.getByTestId('plan-draft-notice');
+    await expect(notice).toContainText('PLAN.md was edited by hand', { timeout: 15_000 });
+    await notice.getByRole('button', { name: 'Discard', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Discard plan draft?' });
+    await expect(dialog).toContainText('The saved draft file will be kept');
+    expect(fs.readFileSync(file, 'utf8')).toBe(edit);
+    await dialog.getByRole('button', { name: 'Discard draft' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(notice).toHaveCount(0);
+    await expect(page.locator('#board-area').getByText('Background job queue for large exports', { exact: true }).first()).toBeVisible();
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    const kept = fs.readdirSync(path.join(root, '.contextspace', 'drafts')).filter((name) => name.endsWith('-PLAN.md'));
+    expect(kept).toHaveLength(1);
+    expect(fs.readFileSync(path.join(root, '.contextspace', 'drafts', kept[0]!), 'utf8')).toBe(edit);
+  });
+
+  test('chooses which of two hand edits to discard', async ({ page }) => {
+    const { id, root } = movedWorkspace();
+    const file = path.join(root, 'PLAN.md');
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page.routeWebSocket(/\/ws\/terminal(?:\?|$)/, (socket) => socket.close());
+    await openBoard(page, id, root);
+    const original = fs.readFileSync(file, 'utf8');
+    const first = original.replace('Background job queue for large exports', 'First saved draft');
+    const second = original.replace('Background job queue for large exports', 'Second saved draft');
+    const listPath = `/api/workspace/${id}/plan/drafts`;
+    const list = async () => (await (await fetch(`${SERVER}${listPath}`)).json()).drafts as Array<{ digest: string; path: string }>;
+    const notice = page.getByTestId('plan-draft-notice');
+
+    fs.writeFileSync(file, first);
+    await expect(notice).toBeVisible({ timeout: 15_000 });
+    fs.writeFileSync(file, second);
+    const picker = notice.getByRole('combobox', { name: 'Pending draft' });
+    await expect(picker).toBeVisible({ timeout: 15_000 });
+    const entries = await list();
+    const firstDraft = entries.find((entry) => fs.readFileSync(path.join(root, entry.path), 'utf8') === first)!;
+    const secondDraft = entries.find((entry) => fs.readFileSync(path.join(root, entry.path), 'utf8') === second)!;
+    await picker.click();
+    await page.getByRole('option', { name: 'PLAN.md · ' + secondDraft.digest.slice(0, 10) }).click();
+
+    await notice.getByRole('button', { name: 'Discard', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Discard plan draft?' });
+    await expect(dialog.getByTitle(secondDraft.digest)).toBeVisible();
+    const refreshed = page.waitForResponse(async (response) => {
+      if (response.request().method() !== 'GET' || new URL(response.url()).pathname !== listPath || !response.ok()) return false;
+      const { drafts } = await response.json();
+      return drafts.length === 1 && drafts[0].digest === firstDraft.digest;
+    });
+    await dialog.getByRole('button', { name: 'Discard draft' }).click();
+    await expect(dialog).toHaveCount(0);
+    await refreshed;
+    await expect(notice.getByTitle(firstDraft.digest)).toBeVisible();
+    expect(await list()).toEqual([firstDraft]);
+    expect(fs.readFileSync(path.join(root, secondDraft.path), 'utf8')).toBe(second);
+  });
+
   test('ticks a step and answers a question: both land in the database and in PLAN.md', async ({ page }) => {
     const { id, root } = movedWorkspace();
     const before = await api(id, 'plan');

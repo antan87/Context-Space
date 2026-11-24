@@ -7,6 +7,7 @@ import { PlanFileError } from './plan-file.js';
 import { planFileToJson } from './plan-file-text.js';
 import { loadFeatureConfig } from './workspace.js';
 import { readAppDb, storeOf } from './workspace-db-app.js';
+import { pendingDraftInfo } from './workspace-db-drafts.js';
 import { runDbWrite } from './workspace-db-write.js';
 import { OP_FIELDS, planView, type Op, type PlanViewOptions } from './workspace-db/index.js';
 
@@ -40,8 +41,10 @@ export function planDbText(root: string, options?: PlanViewOptions): Promise<str
 
 export async function planDbJson(root: string) {
   const { read, checks, now } = await planDbParts(root, 0);
+  const { pendingDrafts } = await readAppDb(root, pendingDraftInfo);
   return {
     ...planFileToJson({ ...read, source: 'file' }, checks, read.revs),
-    store: 'database' as const, revision: read.revision, dbId: read.dbId, now,
+    store: 'database' as const, revision: read.revision, dbId: read.dbId, now, pendingDrafts,
+    ...(pendingDrafts ? { notice: 'Plan drafts are pending. Run ctxspace plan drafts to see them.' } : {}),
   };
 }

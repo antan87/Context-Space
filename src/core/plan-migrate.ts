@@ -25,6 +25,7 @@
  * the archive too, takes the record out of state.json, and clears the switch last.
  */
 
+import { DATA_EXPORT, exportHeaderOf, PLAN_EXPORT, recordExport } from './workspace-db/export-records.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
@@ -44,7 +45,6 @@ import {
   dbFilePath, exportPlanMarkdown, exportPortableSnapshot, listBackups, maybeBackup, openWorkspaceDb, readDbId, readImportRecord, readRevision,
   restoreBackup, stripExport, writeImportRecord, type DbImportRecord, type Unmapped, type WorkspaceDb,
 } from './workspace-db/index.js';
-import { exportHeaderOf } from './workspace-db-exports.js';
 import { SWITCH_FILE, readSwitch, switchLockPath, switchPath, type SwitchRecord } from './workspace-db-switch.js';
 
 export const ARCHIVE_ROOT = '.contextspace/archive';
@@ -54,7 +54,7 @@ const MANIFEST = 'manifest.json';
 const STAGING_PREFIX = '.db-staging-';
 /** The database and its backups never go into Git (design §5). A workspace's root .gitignore is only written when it is made, so the move adds them to `.contextspace/.gitignore`, as line notes do. */
 const IGNORE_REL = '.contextspace/.gitignore';
-const IGNORE_LINES = ['workspace.db*', 'backups/', `${STAGING_PREFIX}*`];
+const IGNORE_LINES = ['workspace.db*', 'workspace-db-switch.json', 'backups/', '/archive/pre-db-*/', '/drafts/', '/.export-*', `${STAGING_PREFIX}*`];
 
 /** Every file the rehearsal reads that the move archives, workspace-relative with `/`. The state file is kept (copied), since it holds more than the plan. */
 const MOVED_SOURCES = [
@@ -906,7 +906,11 @@ async function continueMove(root: string, manifest: Manifest, options: MigrateOp
   const finishedAt = new Date().toISOString();
   {
     const db = openQuiet(root, false);
-    try { await writeImportRecord(db, { ...dbRecordOf(manifest, 'done'), finishedAt }); } finally { db.close(); }
+    try {
+      await recordExport(db, PLAN_EXPORT, planText);
+      await recordExport(db, DATA_EXPORT, dataText);
+      await writeImportRecord(db, { ...dbRecordOf(manifest, 'done'), finishedAt });
+    } finally { db.close(); }
   }
   await writeStateRecord(root, manifest.state.path, stateRecordOf(manifest, 'done', finishedAt));
   await writeSwitch(root, { state: 'on', archive: manifest.archive, id: manifest.id, at: manifest.at, by: manifest.by });
@@ -1459,7 +1463,7 @@ export async function migrateStatus(workspacePath: string): Promise<MigrateStatu
       const planHash = await hashFile(toFs(root, 'PLAN.md'));
       // the app writes PLAN.md again after each change (DB3b): an untouched export is not an edit
       const planUntouched = planHash !== null && exportHeaderOf('PLAN.md', await fs.readFile(toFs(root, 'PLAN.md'), 'utf8').catch(() => '')) !== null;
-      if (planHash !== manifest.exports.plan && !planUntouched) status.cameBack.push({ path: 'PLAN.md', note: planHash === null ? 'is gone; the database still holds the plan' : 'was edited after the move; the edit is not in the database (importing hand edits comes later)' });
+      if (planHash !== manifest.exports.plan && !planUntouched) status.cameBack.push({ path: 'PLAN.md', note: planHash === null ? 'is gone; the database still holds the plan' : 'was edited after the move. Run `ctxspace plan drafts` to review the saved edit' });
     }
   }
   if (record.state === 'on' && !liveDb && !dbLinkProblem) {
@@ -1478,7 +1482,7 @@ function missingOffers(root: string, record: SwitchRecord, backups: string[]): s
   const safeArchive = checkedRel(record.archive, 'archive');
   const offers = [`The workspace database is missing. This workspace was moved${record.at ? ` on ${record.at}` : ''}, so it is not a new workspace, and ContextSpace will not start an empty one.`];
   if (backups[0]) offers.push(`Bring back the newest backup (${backups[0]}): \`ctxspace plan migrate --from-backup ${backups[0]}\`.`);
-  if (existsSync(toFs(root, DATA_FILE))) offers.push(`${DATA_FILE} holds the plan, the cards and the links as the database last wrote them; rebuilding a database from it comes with the next part (DB3d).`);
+  if (existsSync(toFs(root, DATA_FILE))) offers.push(`${DATA_FILE} holds the plan, the cards and the links as the database last wrote them; keep that file with the workspace.`);
   offers.push(`Or undo the move: \`ctxspace plan restore ${safeArchive ?? '<archive>'}\` puts the old files back.`);
   return offers;
 }

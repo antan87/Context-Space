@@ -76,6 +76,7 @@ import { commitOpenFor } from './commitSequence.js';
 import { CommitNotesContext, commitNotesOf, requestNotesView } from './commitNotes.js';
 import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
+import { PlanDraftNotice } from './PlanDraftNotice.js';
 import { BoardNowLine } from './BoardNowLine.js';
 import { AssignmentCard } from './AssignmentCard.js';
 import { specTarget } from './assignmentCardView.js';
@@ -2975,6 +2976,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       }}
     >
       {notices}
+      {active && planView?.store === 'database' && <PlanDraftNotice key={workspaceId} workspace={workspaceId} connected={connected || !visible} readOnly={readOnly} />}
       {areas.length > 0 && (
         <BoardNowLine
           parts={nowParts}
