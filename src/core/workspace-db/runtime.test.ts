@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { dbFilePath, exportPlanMarkdown, getRevision, listBlocks, openWorkspaceDb, planView, restoreBackup, maybeBackup, SCHEMA_VERSION, schemaText, WorkspaceDbError } from './index.js';
+import { dbFilePath, exportPlanMarkdown, getRevision, listBlocks, planView, restoreBackup, maybeBackup, SCHEMA_VERSION, schemaText, WorkspaceDbError } from './index.js';
 import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace, applyBatch, track } from './testing.js';
 
 afterEach(cleanTemp);
