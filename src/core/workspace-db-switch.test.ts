@@ -343,7 +343,11 @@ describe('moved CLI and MCP entry points', () => {
     };
     expect((await post('/plan', add)).status).toBe(200);
     if (store === 'file') await migrateWorkspace(root, { backup: false, by: 'user', findOlderWriters: async () => [] });
-    else await restoreWorkspace(root, archive, { by: 'user' });
+    else {
+      // This simulates stopping the app before running the separate restore command.
+      await closeAppDb(root);
+      await restoreWorkspace(root, archive, { by: 'user' });
+    }
     const before = await treeHash();
     const retry = await post('/plan', add);
     expect(retry.status).toBe(409);

@@ -107,8 +107,18 @@ function other(): WorkspaceDb {
 }
 async function aiApplies(ops: unknown[]): Promise<void> {
   const db = other();
-  const result = await applyBatch(db, { ops: ops as any, ifRevision: readRevision(db.sqlite), dbId: readDbId(db.sqlite) }, { by: 'claude' });
-  expect(result.ok, JSON.stringify(result)).toBe(true);
+  try {
+    const result = await applyBatch(db, { ops: ops as any, ifRevision: readRevision(db.sqlite), dbId: readDbId(db.sqlite) }, { by: 'claude' });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+  } finally {
+    db.close();
+  }
+}
+
+function snapshotBackup(backup: string): void {
+  const db = other();
+  try { db.sqlite.prepare('VACUUM INTO ?').run(backup); }
+  finally { db.close(); }
 }
 
 const itemOf = (plan: any, words: string) => {
@@ -488,18 +498,21 @@ describe('the poll token, busy, and a backup restore with connections open', () 
         seen.push(live.type === 'screen' ? `screen:${live.event.event}` : live.type);
       }
     })();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(seen.filter((t) => t === 'plan' || t === 'screen:board')).toEqual([]);
-    await aiApplies([{ op: 'tick', id: idOf(plan, 'Docs') }]);
-    await expect.poll(() => seen.filter((t) => t === 'screen:board').length, { timeout: 3000 }).toBeGreaterThanOrEqual(1);
-    expect(seen).toContain('plan');
-    // a backup restored over it: a new db_id, which the token notices whatever the revision
-    await maybeBackup(root);
-    const before = seen.length;
-    await restoreBackupForApp(root, listBackups(root)[0]!);
-    await expect.poll(() => seen.slice(before).includes('screen:board'), { timeout: 3000 }).toBe(true);
-    controller.abort();
-    await feed;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(seen.filter((t) => t === 'plan' || t === 'screen:board')).toEqual([]);
+      await aiApplies([{ op: 'tick', id: idOf(plan, 'Docs') }]);
+      await expect.poll(() => seen.filter((t) => t === 'screen:board').length, { timeout: 3000 }).toBeGreaterThanOrEqual(1);
+      expect(seen).toContain('plan');
+      // a backup restored over it: a new db_id, which the token notices whatever the revision
+      await maybeBackup(root);
+      const before = seen.length;
+      await restoreBackupForApp(root, listBackups(root)[0]!);
+      await expect.poll(() => seen.slice(before).includes('screen:board'), { timeout: 3000 }).toBe(true);
+    } finally {
+      controller.abort();
+      await feed;
+    }
   });
 
   it('a read that keeps meeting another process’s write lock ends in a bounded "Busy, try again", and the server answers meanwhile', async () => {
@@ -524,7 +537,7 @@ describe('the poll token, busy, and a backup restore with connections open', () 
     expect((await call('GET', '/api/workspace/csv/plan')).status).toBe(200);
   });
 
-  it('a backup restore is fenced: this process reopens, another connection gets "replaced", the token changes, and the replaced file is kept in the archive', async () => {
+  it('a backup restore reopens the app, respects external connections, and keeps the replaced file in the archive', async () => {
     const plan = await getPlan();
     await maybeBackup(root);
     const backup = listBackups(root)[0]!;
@@ -532,10 +545,16 @@ describe('the poll token, busy, and a backup restore with connections open', () 
     await aiApplies([{ op: 'tick', id: idOf(plan, 'Docs') }]);
     const elsewhere = other();
     const tokenBefore = await dbPollToken(root);
+    if (process.platform === 'win32') {
+      await expect(restoreBackupForApp(root, backup)).rejects.toMatchObject({ code: 'file_in_use' });
+      expect(await dbPollToken(root)).toBe(tokenBefore);
+      expect(elsewhere.isCurrent()).toBe(true);
+      elsewhere.close();
+    }
     const restored = await restoreBackupForApp(root, backup);
     expect(restored.keptIn).toMatch(/archive[\\/]replaced[\\/]workspace\.db\.replaced-/);
     expect((await fs.readdir(path.join(root, '.contextspace'))).filter((n) => n.includes('.replaced-'))).toEqual([]);
-    await expect(beginImmediate(elsewhere)).rejects.toMatchObject({ code: 'replaced' });
+    if (process.platform !== 'win32') await expect(beginImmediate(elsewhere)).rejects.toMatchObject({ code: 'replaced' });
     const after = await getPlan();
     expect(after.dbId).not.toBe(plan.dbId);
     expect(after.checkpoints[2].done).toBe(false); // the tick after the backup is gone with the restore
@@ -555,9 +574,12 @@ describe('the poll token, busy, and a backup restore with connections open', () 
     holder.sqlite.exec('BEGIN IMMEDIATE');
     let ticks = 0;
     const timer = setInterval(() => { ticks += 1; }, 10);
-    setTimeout(() => holder.sqlite.exec('ROLLBACK'), 300);
-    const restored = await restoreBackupForApp(root, backup);
-    clearInterval(timer);
+    const releaseTimer = setTimeout(() => holder.close(), 300);
+    const restored = await restoreBackupForApp(root, backup).finally(() => {
+      clearInterval(timer);
+      clearTimeout(releaseTimer);
+      holder.close();
+    });
     expect(ticks).toBeGreaterThan(10);
     expect(restored.dbId).toBe((await getPlan()).dbId);
     // held all along: busy, and the database is the one it was
@@ -578,7 +600,10 @@ describe('the poll token, busy, and a backup restore with connections open', () 
     const plan = await getPlan();
     await getBoard(); // the app's connection is open
     await maybeBackup(root);
-    const { restoreBackup } = await import('../core/workspace-db/index.js');
+    if (process.platform === 'win32') {
+      expect(() => restoreBackup(root, listBackups(root)[0]!)).toThrow(expect.objectContaining({ code: 'file_in_use' }));
+      await closeAppDb(root); // the outside process can replace the file only after the app closes it
+    }
     restoreBackup(root, listBackups(root)[0]!); // as another process would
     const stale = await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
     expect(stale.body.code).toBe('db_changed');
@@ -675,9 +700,14 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     const backup = listBackups(root)[0]!;
     const release = await acquireLock(path.join(root, '.contextspace', 'plan-file.lock'), { staleMs: 60_000, timeoutMs: 5_000, timeoutMessage: 'busy' });
     const reqP = changeBoard([{ op: 'update_card', id: note.id, pinned: !note.pinned }]);
-    await new Promise((r) => setTimeout(r, 80)); // known snapshot read completes; writeAppDb now waits on plan-file.lock
-    restoreBackup(root, backup);
-    await release();
+    try {
+      await new Promise((r) => setTimeout(r, 80)); // known snapshot read completes; writeAppDb now waits on plan-file.lock
+      if (process.platform === 'win32') await closeAppDb(root);
+      restoreBackup(root, backup);
+    } finally {
+      await release();
+      await Promise.allSettled([reqP]);
+    }
     const res = await reqP;
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ code: 'db_changed' });
@@ -811,10 +841,11 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     holder.sqlite.exec('ROLLBACK');
     holder.sqlite.exec('BEGIN IMMEDIATE');
     const restorePromise = restoreBackupForApp(root, backup);
-    const releaseTimer = setTimeout(() => { try { holder.sqlite.exec('ROLLBACK'); } catch { /* ignore */ } }, 400);
-    const [planRes, boardRes, restored] = await Promise.all([planPromise, boardPromise, restorePromise]);
-    clearTimeout(releaseTimer);
-    try { holder.sqlite.exec('ROLLBACK'); } catch { /* ignore */ }
+    const releaseTimer = setTimeout(() => holder.close(), 400);
+    const [planRes, boardRes, restored] = await Promise.all([planPromise, boardPromise, restorePromise]).finally(() => {
+      clearTimeout(releaseTimer);
+      holder.close();
+    });
 
     expect(planRes.status, JSON.stringify(planRes.body)).toBe(200);
     expect(planRes.body.dbId).toBe(restored.dbId);
@@ -822,8 +853,8 @@ describe('DB3b fix round 1: data-safety regressions', () => {
     expect(boardRes.body.dbId).toBe(restored.dbId);
   });
 
-  it('connection() retiring an old handle waits for entry.gate, and closeAppDb never detaches a newly opened live handle', async () => {
-    // Part A: connection() must not bypass entry.gate after await retire(old)
+  // Windows refuses the external replacement needed to put the app's cached handle out of date.
+  it.skipIf(process.platform === 'win32')('a read retiring an externally replaced handle waits for a concurrent app restore', async () => {
     await getPlan();
     await maybeBackup(root);
     const backup = listBackups(root)[0]!;
@@ -834,26 +865,34 @@ describe('DB3b fix round 1: data-safety regressions', () => {
       const tracked = pendingJob.finally(() => { v.pending.delete(tracked); });
       v.pending.add(tracked);
     });
-    // Replace workspace.db externally so entry.db.isCurrent() becomes false
-    const midRestore = restoreBackup(root, backup);
-    // Start a read -> enters connection(), sees !isCurrent(), awaits retire(old) (blocked on pendingJob)
-    const readP = call('GET', '/api/workspace/csv/plan');
-    await new Promise((r) => setTimeout(r, 20));
-    // Start restoreBackupForApp while a holder delays restoreBackupAsync so entry.gate stays closed after pendingJob resolves
-    const holder = other();
-    holder.sqlite.exec('PRAGMA busy_timeout = 0');
-    holder.sqlite.exec('BEGIN IMMEDIATE');
-    const restoreP = restoreBackupForApp(root, backup);
-    await new Promise((r) => setTimeout(r, 30));
-    releasePending(); // retire(old) completes while restoreP still holds entry.gate!
-    await new Promise((r) => setTimeout(r, 100));
-    holder.sqlite.exec('ROLLBACK');
-    const [readRes, finalRestored] = await Promise.all([readP, restoreP]);
-    expect(readRes.status).toBe(200);
-    expect(finalRestored.dbId).not.toBe(midRestore.dbId);
-    expect(readRes.body.dbId).toBe(finalRestored.dbId);
+    let holder: WorkspaceDb | undefined;
+    let readP: ReturnType<typeof call> | undefined;
+    let restoreP: ReturnType<typeof restoreBackupForApp> | undefined;
+    try {
+      const midRestore = restoreBackup(root, backup);
+      // The read sees the stale connection and waits for its pending job before retiring it.
+      readP = call('GET', '/api/workspace/csv/plan');
+      await new Promise((r) => setTimeout(r, 20));
+      holder = other();
+      holder.sqlite.exec('PRAGMA busy_timeout = 0');
+      holder.sqlite.exec('BEGIN IMMEDIATE');
+      restoreP = restoreBackupForApp(root, backup);
+      await new Promise((r) => setTimeout(r, 30));
+      releasePending(); // retire(old) completes while restoreP still holds entry.gate
+      await new Promise((r) => setTimeout(r, 100));
+      holder.close();
+      const [readRes, finalRestored] = await Promise.all([readP, restoreP]);
+      expect(readRes.status).toBe(200);
+      expect(finalRestored.dbId).not.toBe(midRestore.dbId);
+      expect(readRes.body.dbId).toBe(finalRestored.dbId);
+    } finally {
+      releasePending();
+      holder?.close();
+      await Promise.allSettled([readP, restoreP]);
+    }
+  });
 
-    // Part B: closeAppDb must not detach a freshly opened db2 from held
+  it('closeAppDb never detaches a newly opened live handle while retiring a previous handle', async () => {
     let releaseClose!: () => void;
     const holdClose = new Promise<void>((resolve) => { releaseClose = resolve; });
     await readAppDb(root, (v) => {
@@ -861,13 +900,16 @@ describe('DB3b fix round 1: data-safety regressions', () => {
       v.pending.add(tracked);
     });
     const closeP = closeAppDb(root); // nulls entry.db, awaits retire(db1)
-    await new Promise((r) => setTimeout(r, 20));
-    // Concurrent read opens db2 into entry.db while closeP is still retiring db1
     let db2Current!: () => boolean;
-    await readAppDb(root, (v) => { db2Current = () => v.isCurrent(); });
-    expect(db2Current()).toBe(true);
-    releaseClose();
-    await closeP;
+    try {
+      await new Promise((r) => setTimeout(r, 20));
+      // Concurrent read opens db2 into entry.db while closeP is still retiring db1.
+      await readAppDb(root, (v) => { db2Current = () => v.isCurrent(); });
+      expect(db2Current()).toBe(true);
+    } finally {
+      releaseClose();
+      await closeP;
+    }
     // A second closeAppDb MUST still find and close db2 (it must not have been detached!)
     await closeAppDb(root);
     expect(db2Current()).toBe(false);
@@ -1331,7 +1373,7 @@ describe('hand edits on a moved workspace', () => {
     const firstPlan = await read('PLAN.md');
     const firstData = await read('contextspace-data.json');
     const backup = path.join(root, 'backup.db');
-    other().sqlite.prepare('VACUUM INTO ?').run(backup);
+    snapshotBackup(backup);
     await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') });
     await pullPair(firstPlan, firstData);
     const [draft] = await pending();
@@ -1464,7 +1506,7 @@ describe('hand edits on a moved workspace', () => {
     const plan = await getPlan();
     const oldPlan = await read('PLAN.md');
     const backup = path.join(root, 'backup.db');
-    other().sqlite.prepare('VACUUM INTO ?').run(backup);
+    snapshotBackup(backup);
     expect((await changePlan({ type: 'tick', key: idOf(plan, 'Docs'), done: true, expected: 'Docs', ...observed(plan, 'Docs') })).status).toBe(200);
     await write('PLAN.md', oldPlan);
     await closeAppDb(root);
@@ -1481,7 +1523,7 @@ describe('hand edits on a moved workspace', () => {
   it('keeps a discarded draft resolved across a backup restore until someone saves it again', async () => {
     const original = await read('PLAN.md');
     const backup = path.join(root, 'before-draft.db');
-    other().sqlite.prepare('VACUUM INTO ?').run(backup);
+    snapshotBackup(backup);
     const edit = original.replace('Add the Export button', 'Discarded after the backup');
     await write('PLAN.md', edit);
     const [draft] = await pending();

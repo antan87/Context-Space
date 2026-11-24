@@ -133,8 +133,12 @@ describe('workspace artifact git', () => {
     };
     const committed = async (cwd: string, file: string) => git(cwd, 'show', `HEAD:${file}`);
     try {
-      await git(recipient, 'clone', '-b', 'main', remotePath, '.');
-      await fs.cp(path.join(root, dot), path.join(recipient, dot), { recursive: true });
+      await git(recipient, 'clone', '-c', 'core.autocrlf=true', '-b', 'main', remotePath, '.');
+      // Keep the clone's tracked ignore file and its chosen checkout line endings.
+      await fs.cp(path.join(root, dot), path.join(recipient, dot), {
+        recursive: true, filter: (file) => path.basename(file) !== '.gitignore',
+      });
+      expect(await git(recipient, 'status', '--porcelain')).toBe('');
       const base = JSON.parse(await committed(root, data));
       const initial = await current(recipient);
       await tick(root, 0, true);
