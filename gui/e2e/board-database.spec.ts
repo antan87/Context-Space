@@ -16,7 +16,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { test, expect } from './fixtures.js';
 
@@ -86,31 +86,70 @@ function movedWorkspace(): { id: string; root: string } {
 
 /** What an AI does from another process: one batch through the database, as `claude`. */
 function aiApplies(root: string, ops: unknown[]): void {
+  const moduleUrl = pathToFileURL(path.join(REPO, 'dist', 'core', 'workspace-db', 'index.js')).href;
   const script = `
-    const { openWorkspaceDb, applyBatch, readRevision, readDbId } = await import(${JSON.stringify(path.join(REPO, 'dist', 'core', 'workspace-db', 'index.js'))});
+    const { openWorkspaceDb, applyBatch, readRevision, readDbId } = await import(${JSON.stringify(moduleUrl)});
     const db = openWorkspaceDb(${JSON.stringify(root)}, { busy: 'cli', backups: false });
-    const result = await applyBatch(db, { ops: ${JSON.stringify(ops)}, ifRevision: readRevision(db.sqlite), dbId: readDbId(db.sqlite) }, { by: 'claude' });
-    db.close();
+    let result;
+    try {
+      result = await applyBatch(db, { ops: ${JSON.stringify(ops)}, ifRevision: readRevision(db.sqlite), dbId: readDbId(db.sqlite) }, { by: 'claude' });
+    } finally {
+      db.close();
+    }
     if (!result.ok) { console.error(JSON.stringify(result)); process.exit(1); }`;
   execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: env(), stdio: 'pipe' });
 }
 
 const api = async (id: string, what: 'plan' | 'board') => (await fetch(`${SERVER}/api/workspace/${id}/${what}`)).json() as Promise<any>;
 
+const pageForwards = new WeakMap<Page, { closing: boolean; inFlight: Set<Promise<void>> }>();
+
 /** The page talks to the mocked API, except for this workspace's plan, board and news, which go to the real server. */
 async function forward(page: Page, id: string) {
+  const state = pageForwards.get(page) ?? { closing: false, inFlight: new Set<Promise<void>>() };
+  pageForwards.set(page, state);
   await page.route(new RegExp(`/api/workspace/${id}/(plan|board|news|recent-commits)(/|\\?|$)`), async (route) => {
-    const url = new URL(route.request().url());
-    const response = await route.fetch({ url: `${SERVER}${url.pathname}${url.search}` });
-    await route.fulfill({ response });
+    const pending = (async () => {
+      try {
+        if (state.closing) {
+          await route.abort().catch(() => {});
+          return;
+        }
+        const url = new URL(route.request().url());
+        const response = await route.fetch({ url: `${SERVER}${url.pathname}${url.search}` });
+        await route.fulfill({ response });
+      } catch (error) {
+        if (!state.closing && !page.isClosed()) throw error;
+      }
+    })();
+    state.inFlight.add(pending);
+    try {
+      await pending;
+    } finally {
+      state.inFlight.delete(pending);
+    }
   });
 }
 
 test.use({ viewport: { width: 1280, height: 800 }, screenshot: 'only-on-failure' });
 
 test.afterEach(async ({ page }) => {
-  // Complete the forwarded refreshes while the test still owns its browser context.
-  await page.unrouteAll({ behavior: 'wait' });
+  // Drain forwarded refreshes while routes stay registered: Playwright's unrouteAll({ behavior: 'wait' })
+  // clears _routes up front, so the first in-flight handler to finish drops interception and triggers
+  // "Route is already handled!" in concurrent handlers.
+  const state = pageForwards.get(page);
+  if (state) {
+    state.closing = true;
+    const deadline = Date.now() + 10_000;
+    while (state.inFlight.size > 0 && Date.now() < deadline) {
+      let timer: ReturnType<typeof setTimeout>;
+      await Promise.race([
+        Promise.allSettled([...state.inFlight]),
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+      ]).finally(() => clearTimeout(timer));
+    }
+  }
+  if (!page.isClosed()) await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 test.beforeAll(async () => {
@@ -132,9 +171,12 @@ test.afterAll(async () => {
     const exited = new Promise((resolve) => server!.once('exit', resolve));
     server.kill('SIGTERM');
     await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
-    if (server.exitCode === null) server.kill('SIGKILL');
+    if (server.exitCode === null) {
+      server.kill('SIGKILL');
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 1000))]);
+    }
   }
-  if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+  if (scratch) fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 async function openBoard(page: Page, id: string, root: string) {
