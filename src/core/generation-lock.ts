@@ -207,6 +207,7 @@ export async function writeGenerationLock(
   workspacePath: string,
   snapshot: GenerationSnapshot,
   outputs: Array<{ path: string; source: string; location?: 'workspace' | 'local' }>,
+  options: { preserveOutput?: (output: GenerationOutputState) => boolean } = {},
 ): Promise<GenerationLock> {
   const feature = await loadFeatureConfig(workspacePath);
   const featureId = feature?.id ?? path.basename(workspacePath);
@@ -216,8 +217,9 @@ export async function writeGenerationLock(
     const content = await readOutput(workspacePath, featureId, relativePath, location);
     return [relativePath, { hash: hashGeneratedContent(content), source: output.source, location }] as const;
   }));
-  const outputState = Object.fromEntries(outputEntries);
   const previous = await readGenerationLock(workspacePath);
+  const retained = Object.entries(previous?.outputs ?? {}).filter(([, output]) => options.preserveOutput?.(output));
+  const outputState = Object.fromEntries([...retained, ...outputEntries]);
   const unchanged = previous?.toolVersion === snapshot.toolVersion &&
     JSON.stringify(previous.repos) === JSON.stringify(snapshot.repos) &&
     JSON.stringify(previous.outputs) === JSON.stringify(outputState);

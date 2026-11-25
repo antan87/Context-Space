@@ -52,7 +52,7 @@ describe('design import rules', () => {
     expect(await errors('src/features/changes/NewThing.tsx', code('monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css'))).toEqual([]);
     expect(await errors('src/features/board/NewThing.tsx', code('../../design/index.js'))).toEqual([]);
     // an existing importer is allowed to keep its import
-    expect(await errors('src/features/board/BoardNodes.tsx', code('../../components/ui/button.js'))).toEqual([]);
+    expect(await errors('src/features/board/BoardNowLine.tsx', code('../../components/ui/button.js'))).toEqual([]);
   });
 
   it('keeps LEGACY_UI_IMPORTERS equal to the files that really import components/ui', () => {

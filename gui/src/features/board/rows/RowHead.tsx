@@ -208,7 +208,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
             className="nodrag nopan"
             onToggle={() => {
               if (data.stepKey && !actions?.readOnly) {
-                void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
+                void actions?.toggleStep?.(data.stepKey, !isDone, data.text, data.rev);
               }
             }}
           />
@@ -222,7 +222,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
           isBusy={isBusy}
           onToggle={
             !actions?.readOnly && data.stepKey && actions?.toggleStep
-              ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text)
+              ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text, data.rev)
               : undefined
           }
         >
@@ -257,7 +257,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
       className="nodrag nopan"
       onToggle={() => {
         if (data.stepKey && !actions?.readOnly) {
-          void actions?.toggleStep?.(data.stepKey, !isDone, data.text);
+          void actions?.toggleStep?.(data.stepKey, !isDone, data.text, data.rev);
         }
       }}
     />
@@ -310,7 +310,7 @@ export function BoardRowHead({ data }: NodeProps<RowHeadNode>) {
             stepError={stepError}
             isDone={isDone}
             isBusy={isBusy}
-            onToggle={!actions?.readOnly && data.stepKey && actions?.toggleStep ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text) : undefined}
+            onToggle={!actions?.readOnly && data.stepKey && actions?.toggleStep ? () => actions?.toggleStep?.(data.stepKey!, !isDone, data.text, data.rev) : undefined}
           >
             <span className={cn('nodrag select-text line-clamp-2 text-[14px] font-semibold leading-[18px]', isDone ? 'text-muted-foreground line-through' : 'text-foreground')} title={stepPlain}><InlinePlanMarkdown content={stripHeadingColon(data.text ?? '')} /></span>
           </StepDetailDialog>

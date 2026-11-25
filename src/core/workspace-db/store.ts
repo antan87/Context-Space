@@ -11,6 +11,7 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 
+import { getMeta, setMeta } from './connection.js';
 import { snapshotColumns, tableDef } from './definitions.js';
 import { markUsed } from './ids.js';
 import { isItemKind, parseDetail, type BlockKind, type ItemKind } from './plan-text.js';
@@ -78,6 +79,13 @@ function blockSnapshot(b: DocBlock): Row {
 
 const sameRow = (a: Row | null, b: Row | null): boolean => JSON.stringify(a) === JSON.stringify(b);
 
+const deletedRevKey = (id: string | number) => `deleted_row_rev_${id}`;
+
+/** A known ID may return through Undo or a draft after its history rows have expired. */
+export function deletedRowRevision(db: DatabaseSync, id: string | number): number {
+  return Number(getMeta(db, deletedRevKey(id)) ?? 0);
+}
+
 export function selectRow(db: DatabaseSync, table: string, id: string | number): Row | null {
   const def = tableDef(table);
   const columns = snapshotColumns(table).join(', ');
@@ -108,6 +116,9 @@ export class Recorder {
     for (const entry of this.before.values()) {
       const after = selectRow(this.db, entry.table, entry.id);
       if (sameRow(entry.before, after)) continue;
+      if (!after && typeof entry.before?.rev === 'number' && (entry.table === 'blocks' || entry.table === 'cards')) {
+        setMeta(this.db, deletedRevKey(entry.id), String(Math.max(entry.before.rev, deletedRowRevision(this.db, entry.id))));
+      }
       rows.push({ table: entry.table, id: entry.id, before: entry.before, after });
     }
     return rows;
@@ -231,9 +242,9 @@ export function flushDoc(db: DatabaseSync, doc: Doc, rec: Recorder, by: string, 
   for (const b of blocks) {
     if (b._new) {
       rec.captureWith('blocks', b.id, null);
-      b.rev = 1;
+      b.rev = Math.max(1, deletedRowRevision(db, b.id) + 1);
       b.created_at = at; b.created_by = by; b.updated_at = at; b.updated_by = by;
-      ins.run(b.id, b.kind, b.parent_id, b.ord, b.text, b.name, b.detail, b.done ? 1 : 0, b.section_id, b.checkpoint_id, 1, at, by, at, by);
+      ins.run(b.id, b.kind, b.parent_id, b.ord, b.text, b.name, b.detail, b.done ? 1 : 0, b.section_id, b.checkpoint_id, b.rev, at, by, at, by);
       markUsed(db, b.id);
       continue;
     }

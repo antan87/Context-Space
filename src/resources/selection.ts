@@ -15,6 +15,7 @@ export type SkillSelection = Pick<WorkspaceSkillsConfig, 'enabledSkills' | 'disa
  */
 export const EXPLAIN_SKILL_ID = 'contextspace-explain';
 export const ALWAYS_ON_SKILL_IDS: readonly string[] = [EXPLAIN_SKILL_ID];
+export const LIFECYCLE_SKILL_ID = 'nexusflow-lifecycle';
 
 export interface SkillExtras {
   /**

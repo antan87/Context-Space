@@ -22,7 +22,7 @@ export async function generateCodexConfig(
   ctx: WorkspaceContext,
   workspacePath: string,
 ): Promise<void> {
-  const baseContent = await buildContextContent(ctx);
+  const baseContent = await buildContextContent(ctx, workspacePath);
 
   const codexExtra = `
 ---

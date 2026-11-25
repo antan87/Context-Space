@@ -7,7 +7,7 @@
 import type { AIAssistant, WorkspaceContext, ProjectAnalysis, SkillItem } from '../types.js';
 import { getAllSkills, getWorkspaceSkillsConfig } from '../utils/skills-catalog.js';
 import { getAllAgents } from '../resources/agents-catalog.js';
-import { reconcileWorkspaceResources } from '../resources/materializer.js';
+import { reconcileWorkspaceResources, type ResourceReconcileResult } from '../resources/materializer.js';
 import { isDefaultSkillsConfig, resolveWorkspaceSkills, workspaceOnlySkillIds } from '../resources/selection.js';
 import { resolveActiveDomainRules } from '../core/domain-packs.js';
 
@@ -196,7 +196,7 @@ export async function generateSkills(
   ctx: WorkspaceContext,
   assistants: AIAssistant[],
   workspacePath: string,
-): Promise<void> {
+): Promise<ResourceReconcileResult> {
   const { analysis } = ctx;
 
   // 1. Get enabled skills config and catalog
@@ -280,5 +280,5 @@ export async function generateSkills(
   }
   const agentsToDeploy = [...enabledAgentIds].map((id) => agentMap.get(id)!);
 
-  await reconcileWorkspaceResources(workspacePath, assistants, skillsToDeploy, agentsToDeploy);
+  return reconcileWorkspaceResources(workspacePath, assistants, skillsToDeploy, agentsToDeploy);
 }

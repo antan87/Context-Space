@@ -9,6 +9,7 @@ import { latestInputRequest } from './attention.js';
 import { questionTitle } from './plan-questions.js';
 import { openDecisions, type PlanFile } from './plan-file.js';
 import { readPlanChanges, readPlanChecks, readPlanFile, type PlanFileChange } from './plan-file-store.js';
+import { readSwitch } from './workspace-db-switch.js';
 import type { PlanEvidence } from '../types.js';
 
 /** How far back what an AI finished is listed. */
@@ -23,7 +24,7 @@ export interface WorkspaceNeeds {
    * `detail` carries why it is asked and its suggested answers; `waiting` says the AI asked it in the chat and waits
    * there for the answer.
    */
-  questions: Array<{ id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string; waiting?: true }>;
+  questions: Array<{ id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string; waiting?: true; rev?: number; dbId?: string }>;
   /** Kept for the app: nothing is proposed for the user's OK any more. */
   proposals: Array<{ id: string; title: string; action: string; by: string; at: string }>;
   /** Open checkpoints whose last check failed. */
@@ -73,16 +74,25 @@ function fromPlan(plan: PlanFile, checks: Record<string, PlanEvidence>, changes:
 
 /** Everything that needs the user in one workspace. A source that cannot be read adds nothing. */
 export async function workspaceNeeds(workspaceId: string, workspacePath: string, now = Date.now()): Promise<WorkspaceNeeds> {
+  // Only the app reads this. A workspace moved to its database is read there, with its items keyed by id as the Board has them.
+  const moved = readSwitch(workspacePath)?.state === 'on';
+  const fromDb = moved ? await import('./plan-db-app.js').then(({ planDbParts }) => planDbParts(workspacePath)).catch(() => null) : null;
   const [read, checks, changes, request] = await Promise.all([
-    readPlanFile(workspacePath).catch(() => null),
-    readPlanChecks(workspacePath).catch(() => ({})),
-    readPlanChanges(workspacePath, 300).catch(() => []),
+    moved ? (fromDb ? { text: fromDb.read.text, plan: fromDb.read.plan, source: 'file' as const } : null) : readPlanFile(workspacePath).catch(() => null),
+    moved ? (fromDb?.checks ?? {}) : readPlanChecks(workspacePath).catch(() => ({})),
+    moved ? (fromDb?.changes ?? []) : readPlanChanges(workspacePath, 300).catch(() => []),
     latestInputRequest(workspacePath, now).catch(() => null),
   ]);
   const needs: WorkspaceNeeds = {
     workspaceId,
     ...(read && read.source !== 'none' ? fromPlan(read.plan, checks, changes, now) : { questions: [], proposals: [], failedChecks: [], closedByAi: [] }),
   };
+  if (fromDb) {
+    for (const question of needs.questions) {
+      question.rev = fromDb.read.revs.get(question.id);
+      question.dbId = fromDb.read.dbId;
+    }
+  }
   // The AI puts its chat question in the plan too; then it is listed once, as the plan's decision it waits on.
   const asked = request ? needs.questions.find((question) => question.title === questionTitle(request.message)) : undefined;
   if (asked) asked.waiting = true;

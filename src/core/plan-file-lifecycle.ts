@@ -5,6 +5,8 @@
  * and ticks it, reopening unticks it with what is wrong as a step under it.
  */
 
+import { changePlanDbForApp, planDbParts, type PlanDbRead } from './plan-db-app.js';
+import { storeOf } from './workspace-db-app.js';
 import { PlanFileError, addToPlan, setDone, type PlanFile } from './plan-file.js';
 import { changePlanFile, readPlanChecks, readPlanFile, runPlanCheck } from './plan-file-store.js';
 import type { LifecycleStep, PlanEvidence, WorkspaceLifecycle } from '../types.js';
@@ -40,7 +42,11 @@ export function lifecycleFromPlanFile(
 }
 
 /** The plan file, when the workspace has one; null while it still has an older plan or none. */
-export async function planFileIfAny(workspacePath: string): Promise<{ plan: PlanFile; checks: Record<string, PlanEvidence> } | null> {
+export async function planFileIfAny(workspacePath: string): Promise<{ plan: PlanFile; checks: Record<string, PlanEvidence>; db?: PlanDbRead } | null> {
+  if (storeOf(workspacePath) === 'database') {
+    const { read, checks } = await planDbParts(workspacePath, 0);
+    return { plan: read.plan, checks, db: read };
+  }
   const read = await readPlanFile(workspacePath);
   return read.source === 'file' ? { plan: read.plan, checks: await readPlanChecks(workspacePath) } : null;
 }
@@ -55,9 +61,15 @@ function checkpointOf(plan: PlanFile, key: string) {
  * Starts, checks or finishes a checkpoint. Starting changes nothing in the file: anyone works on any step. Finishing
  * runs the checkpoint's check first, and ticks it only when it passes.
  */
-export async function advanceCheckpoint(workspacePath: string, plan: PlanFile, key: string, action: 'start' | 'verify' | 'complete', by: string): Promise<void> {
+export async function advanceCheckpoint(workspacePath: string, plan: PlanFile, key: string, action: 'start' | 'verify' | 'complete', by: string, db?: PlanDbRead): Promise<void> {
   const checkpoint = checkpointOf(plan, key);
   if (action === 'start') return;
+  if (db) {
+    const change = action === 'verify' ? { type: 'check' as const, key }
+      : { type: 'tick' as const, key, done: true, expected: checkpoint.title };
+    await changePlanDbForApp(workspacePath, change, { by, read: db, rerunCheck: true, defaultCheck: true });
+    return;
+  }
   if (action === 'verify' || checkpoint.check !== undefined) {
     const evidence = await runPlanCheck(workspacePath, key);
     if (action === 'verify') return;
@@ -67,8 +79,12 @@ export async function advanceCheckpoint(workspacePath: string, plan: PlanFile, k
 }
 
 /** Unticks a finished checkpoint, with what is wrong as a step under it, where the AI reads it. */
-export async function reopenCheckpoint(workspacePath: string, plan: PlanFile, key: string, reason: string, by: string): Promise<void> {
+export async function reopenCheckpoint(workspacePath: string, plan: PlanFile, key: string, reason: string, by: string, db?: PlanDbRead): Promise<void> {
   const checkpoint = checkpointOf(plan, key);
   if (!checkpoint.done) throw new PlanFileError(`"${checkpoint.title}" is not finished, so there is nothing to reopen.`, 'invalid');
+  if (db) {
+    await changePlanDbForApp(workspacePath, { type: 'reopen', key, reason, expected: checkpoint.title }, { by, read: db });
+    return;
+  }
   await changePlanFile(workspacePath, (text) => addToPlan(setDone(text, key, false, checkpoint.title), { step: `Reopened: ${reason}` }, { checkpoint: key }).text, { by });
 }

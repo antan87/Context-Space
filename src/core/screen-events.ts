@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { readSwitch } from './workspace-db-switch.js';
 
 import {
   INPUT_REQUEST_HARNESS_LIMIT,
@@ -405,6 +406,40 @@ function forgetLeft(remembered: Set<string>, window: ReadonlySet<string>): void 
   }
 }
 
+const lastExportScan = new Map<string, string>();
+
+/** A moved workspace's revision, finished checks and pending drafts. A busy poll keeps the last token. */
+export async function dbPollToken(workspaceRoot: string, last: string | null | undefined = null): Promise<string | null> {
+  if (readSwitch(workspaceRoot)?.state !== 'on') {
+    lastExportScan.delete(workspaceRoot);
+    return null;
+  }
+  const { readAppDb } = await import('./workspace-db-app.js');
+  const { readDbId, readRevision } = await import('./workspace-db/index.js');
+  const { exportDiskSignature, pendingDraftInfo } = await import('./workspace-db-drafts.js');
+  const { runDbWrite } = await import('./workspace-db-write.js');
+  const read = () => readAppDb(workspaceRoot, (view) => {
+    const { complete } = view.sqlite.prepare("SELECT count(*) AS complete FROM check_runs WHERE legacy = 0 AND status != 'running'").get() as { complete: number };
+    const revision = `${readDbId(view.sqlite)}:${readRevision(view.sqlite)}`;
+    const { pendingDrafts, pendingDraftDigest } = pendingDraftInfo(view);
+    const token = `${revision}${complete ? `:${complete}` : ''}${pendingDrafts ? `:drafts=${pendingDrafts}:${pendingDraftDigest}` : ''}`;
+    return { revision, token };
+  });
+  const state = await read().catch(() => null);
+  if (!state) return last ?? null;
+  try {
+    const signature = `${state.revision}/${await exportDiskSignature(workspaceRoot)}`;
+    if (lastExportScan.get(workspaceRoot) === signature) return state.token;
+    if (!await runDbWrite(workspaceRoot, { type: 'draft-refresh' })) return state.token;
+    // Cache the pre-scan inputs. A save that races the scan still changes the next signature.
+    if (lastExportScan.size >= 256) lastExportScan.delete(lastExportScan.keys().next().value!);
+    lastExportScan.set(workspaceRoot, signature);
+    return (await read()).token;
+  } catch {
+    return state.token;
+  }
+}
+
 /**
  * The live feed for one workspace: what the AI told the screen, the questions it
  * asked and when they were answered, oldest first. It first replays what is
@@ -437,6 +472,7 @@ export async function* watchLiveEvents(
   // Saying which step is being worked on reads the plan again too.
   const nowFile = path.join(workspaceRoot, PLAN_NOW_FILE);
   let planLast: string | undefined;
+  let dbLast: string | null | undefined;
   const pendingPrRepos = new Set<string>();
   // Commits and documents are noticed from `stat`s alone: no `git`, no file read. Which repositories and folders to
   // look at comes from the manifest, which is read again only when it changes.
@@ -497,6 +533,15 @@ export async function* watchLiveEvents(
         }
       }
       polls += 1;
+      // A database edit, check, or restore makes the open screen read the plan and board again.
+      const token = await dbPollToken(workspaceRoot, dbLast);
+      if (dbLast !== undefined && token !== null && token !== dbLast) {
+        const timestamp = new Date(now).toISOString();
+        yield { type: 'plan', timestamp };
+        const revision = Number(token.split(':', 2)[1]);
+        yield { type: 'screen', event: { id: `db-${token}`, timestamp, harness: 'contextspace', event: 'board', payload: { revision, changes: 0 } } };
+      }
+      dbLast = token;
       // Re-read which files exist every time: a ledger that appears after the feed started must still be seen.
       const files = await liveFiles(workspaceRoot);
       const current = await signature([files.screen, files.board, ...files.chat]);

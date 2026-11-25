@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { dbFilePath, exportPlanMarkdown, getRevision, listBlocks, openWorkspaceDb, planView, restoreBackup, maybeBackup, schemaText, WorkspaceDbError } from './index.js';
+import { dbFilePath, exportPlanMarkdown, getRevision, listBlocks, planView, restoreBackup, maybeBackup, SCHEMA_VERSION, schemaText, WorkspaceDbError } from './index.js';
 import { SAMPLE_PLAN, apply, cleanTemp, idOf, openTest, rev, runChild, seeded, tempWorkspace, applyBatch, track } from './testing.js';
 
 afterEach(cleanTemp);
@@ -18,7 +18,7 @@ describe('opening', () => {
     expect(pragma(cli.sqlite, 'synchronous')).toBe(2); // FULL
     expect(pragma(cli.sqlite, 'foreign_keys')).toBe(1);
     expect(pragma(cli.sqlite, 'busy_timeout')).toBe(5000);
-    expect(pragma(cli.sqlite, 'user_version')).toBe(1);
+    expect(pragma(cli.sqlite, 'user_version')).toBe(SCHEMA_VERSION);
     const server = openTest(ws, 'server');
     expect(pragma(server.sqlite, 'busy_timeout')).toBe(0);
     expect(pragma(server.sqlite, 'journal_mode')).toBe('delete');
@@ -103,7 +103,7 @@ describe('opening', () => {
     peek.close();
     const db = openTest(ws);
     expect(getRevision(db).dbId).not.toBe('half');
-    expect(pragma(db.sqlite, 'user_version')).toBe(1);
+    expect(pragma(db.sqlite, 'user_version')).toBe(SCHEMA_VERSION);
     expect(db.sqlite.prepare('SELECT count(*) AS n FROM blocks').get()).toEqual({ n: 0 });
   });
 

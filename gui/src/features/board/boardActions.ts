@@ -46,6 +46,7 @@ export function bylineText(data: { by: string; at: string; updatedBy: string; up
 
 /** What the nodes on the canvas need from the page around it: which workspace they are in, how to open a file, and how to open or fold a group. */
 export interface BoardActions {
+  planDbId?: string;
   workspaceId: string;
   /** The workspace folder, so a link to a file can name it by its full path. */
   workspacePath?: string;
@@ -72,11 +73,11 @@ export interface BoardActions {
   /** Selects a card to follow its thread (lights up connected chain and dims the rest), or null to clear. */
   selectThread?: (nodeId: string | null) => void;
   /** Submits an answer to a plan decision directly from a board card. */
-  answerDecision?: (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => Promise<boolean>;
+  answerDecision?: (key: string, answer: string, expected?: string, options?: import('../plan/planFile.js').AnswerOptions) => Promise<boolean>;
   /** Errors encountered when answering decisions, keyed by decision key. */
   decisionErrors?: Record<string, string>;
   /** Toggles a plan step (or checkpoint) done state directly from the board. */
-  toggleStep?: (key: string, done: boolean, expected?: string) => Promise<boolean>;
+  toggleStep?: (key: string, done: boolean, expected?: string, rev?: number) => Promise<boolean>;
   /** Says which step is worked on now (its key), or that none is (null). Local to the workspace: PLAN.md is not changed. Returns true if it worked. */
   setNow?: (key: string | null) => Promise<boolean>;
   /** The keys of the open steps that can be worked on now (not headings). */
@@ -91,8 +92,20 @@ export interface BoardActions {
   stepErrors?: Record<string, string>;
   /** Adds a new note card to the board. Returns true if successful. */
   addNote?: (note: { title: string; body?: string; area?: string; step?: string; pinned?: boolean }) => Promise<boolean>;
+  /** Opens the board-level edit dialog for a note card so live board/plan refreshes cannot unmount it mid-edit. */
+  editNote?: (note: {
+    id: string;
+    title: string;
+    body: string;
+    pinned: boolean;
+    archived?: boolean;
+    area?: string;
+    step?: string;
+    rev?: number;
+  }) => void;
   /** Updates an existing note card on the board. Returns true if successful. */
-  updateNote?: (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null }) => Promise<boolean>;
+  /** Rejects with the server's error when the note changed since the edit started (`rev`), so the dialog can keep what was typed. */
+  updateNote?: (id: string, updates: { title?: string; body?: string; pinned?: boolean; archived?: boolean; area?: string | null; step?: string | null; rev?: number }) => Promise<boolean>;
   /** Removes a card from the board. Returns true if successful. */
   deleteNote?: (id: string) => Promise<boolean>;
   /** Whether the board is in read-only mode (e.g. for archived workspaces). */

@@ -4,8 +4,8 @@
  *
  * It is one small file, `.contextspace/workspace-db-switch.json`, absent by default. While it is there, every writer of
  * the old files (PLAN.md through the plan store, the Board file, Now, the seen files, the plan checks in state.json)
- * refuses and says why, because until the app reads the database (DB3b) a write to an old file would be lost or would
- * split the workspace in two. Its states:
+ * refuses and says why: a write to an old file would be lost or would split the workspace in two. With the switch `on`,
+ * the app, CLI and MCP read and write the database instead (core/workspace-db-app `storeOf`). Its states:
  * - `moving`: a move started and has not finished (or was interrupted). `ctxspace plan migrate` finishes or undoes it.
  * - `on`: the move finished.
  * - `restoring`: `ctxspace plan restore` started and has not finished. Running it again finishes it.
@@ -19,6 +19,7 @@
 
 import { lstatSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { acquireLock } from './locks.js';
 
 /** Where the switch lives, relative to the workspace root (always with `/`). */
 export const SWITCH_FILE = '.contextspace/workspace-db-switch.json';
@@ -39,6 +40,17 @@ export interface SwitchRecord {
 
 export const switchPath = (root: string): string => path.join(root, ...SWITCH_FILE.split('/'));
 
+/** A chat request spans the plan and the ledger. Cutovers take this lock before either writer's own lock. */
+export const switchLockPath = (root: string): string => path.join(root, '.contextspace', 'workspace-db-switch.lock');
+
+export async function withSwitchLock<T>(root: string, run: () => Promise<T>): Promise<T> {
+  const release = await acquireLock(switchLockPath(root), {
+    staleMs: 60_000, timeoutMs: 10_000, timeoutMessage: 'The workspace is busy moving or recording a question. Try again in a moment.',
+  });
+  try { return await run(); }
+  finally { await release(); }
+}
+
 /** The switch, or null when it is off (no file). A file that is there but cannot be read is `unreadable`, which counts as on. */
 export function readSwitch(root: string): SwitchRecord | null {
   const file = switchPath(root);
@@ -46,12 +58,15 @@ export function readSwitch(root: string): SwitchRecord | null {
   try {
     text = readFileSync(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { state: 'unreadable' };
-    // Read first, then look: a dangling link (or anything else standing there) still counts as on.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') return { state: 'unreadable' };
+    // Read first, then look: a dangling link (or anything else standing there) still counts as on;
+    // ENOTDIR on lstat means `.contextspace` itself is a file, so there is no switch.
     try {
       lstatSync(file);
     } catch (statError) {
-      if ((statError as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      const statCode = (statError as NodeJS.ErrnoException).code;
+      if (statCode === 'ENOENT' || statCode === 'ENOTDIR') return null;
     }
     return { state: 'unreadable' };
   }

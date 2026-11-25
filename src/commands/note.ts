@@ -6,7 +6,7 @@
 import chalk from 'chalk';
 import { Command, CommanderError } from 'commander';
 
-import { resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
+import { assertWorkspaceWriteLocation, resolveWorkspaceQuiet } from '../utils/resolve-workspace.js';
 import { addCommitNote, listCommitNotes, type CommitNote } from '../core/commit-notes.js';
 
 export interface NoteAddOptions {
@@ -15,6 +15,7 @@ export interface NoteAddOptions {
   text?: string;
   workspace?: string;
   harness?: string;
+  requestId?: string;
   json?: boolean;
   stdin?: NodeJS.ReadableStream;
 }
@@ -55,6 +56,7 @@ function addNoteOptions(cmd: Command): Command {
     .option('--title <title>', 'Explicit note title')
     .option('--text <text>', 'Note text (use when text starts with -, or pass - for stdin)')
     .option('--harness <name>', 'AI tool name (defaults to CTXSPACE_HARNESS or ai)')
+    .option('--request-id <id>', 'For a moved workspace, reuse this id when retrying the same note')
     .option('-w, --workspace <name>', 'Workspace name, id, or path')
     .option('--json', 'Output JSON');
 }
@@ -124,6 +126,7 @@ export async function noteAddCommand(
   }
 
   try {
+    if (!options.workspace) await assertWorkspaceWriteLocation(workspacePath);
     const resolvedText = text === '-' ? await readTextFromStdin(options.stdin) : text;
     const result = await addCommitNote(workspacePath, {
       commit,
@@ -131,6 +134,7 @@ export async function noteAddCommand(
       repo: options.repo,
       title: options.title,
       by: resolveHarnessActor(options.harness),
+      requestId: options.requestId,
       cwd: process.cwd(),
     });
 
@@ -138,7 +142,7 @@ export async function noteAddCommand(
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(
-        `${chalk.green('✓')} Noted ${chalk.bold(result.note.shortSha)} (${result.note.repo}) [${result.note.by}]: ${result.note.title}`,
+        `${chalk.green('✓')} Noted ${chalk.bold(result.note.shortSha)} (${result.note.repo}) [${result.note.by}]: ${result.note.title}${result.requestId ? `\nRequest ID: ${result.requestId}` : ''}`,
       );
     }
     return true;

@@ -12,7 +12,9 @@ import { z } from 'zod';
 import { isArchived } from '../core/archive-guard.js';
 import { NewsChangedError, markSeen, recentCommits, whatsNew } from '../core/whats-new.js';
 import { WorkspaceMovedError } from '../core/workspace-db-switch.js';
+import { WorkspaceDbError } from '../core/workspace-db/index.js';
 import { loadFeatureConfig } from '../core/workspace.js';
+import { planErrorAnswer } from './plan-file-routes.js';
 
 const reader = z.string().trim().min(1).max(40);
 const time = z.string().max(40).refine((value) => !Number.isNaN(Date.parse(value)), 'Use a date and time such as 2026-10-17T09:00:00Z.');
@@ -30,13 +32,17 @@ export function registerNewsRoutes(app: Hono, resolveWorkspace: (id: string) => 
       return c.json(await action(root, c));
     } catch (error) {
       if (error instanceof z.ZodError) return c.json({ error: error.issues[0]?.message ?? 'Invalid request.' }, 400);
+      if (error instanceof WorkspaceDbError || error instanceof WorkspaceMovedError) {
+        const answer = planErrorAnswer(error);
+        return c.json(answer.body, answer.status as 400);
+      }
       const message = error instanceof Error ? error.message : String(error);
-      return c.json({ error: message }, error instanceof NewsChangedError || error instanceof WorkspaceMovedError || message === ARCHIVED_MESSAGE || /saving what it has seen/.test(message) ? 409 : 400);
+      return c.json({ error: message }, error instanceof NewsChangedError || message === ARCHIVED_MESSAGE || /saving what it has seen/.test(message) ? 409 : 400);
     }
   };
 
   app.get('/api/workspace/:id/news', handle(async (root, c) =>
-    whatsNew(root, reader.default('user').parse(c.req.query('reader')), { since: time.optional().parse(c.req.query('since')), pending: c.req.query('since') === undefined && !(await isArchivedWorkspace(root)) })));
+    whatsNew(root, reader.default('user').parse(c.req.query('reader')), { since: time.optional().parse(c.req.query('since')), pending: c.req.query('since') === undefined && !(await isArchivedWorkspace(root)), database: true })));
 
   // The commits of the last few days, whatever the reader has seen: the Board draws these, and the news only says which are new.
   app.get('/api/workspace/:id/recent-commits', handle(async (root, c) => {
@@ -48,7 +54,7 @@ export function registerNewsRoutes(app: Hono, resolveWorkspace: (id: string) => 
   app.post('/api/workspace/:id/news/seen', bodyLimit({ maxSize: 4_000 }), handle(async (root, c) => {
     const body = z.object({ reader, at: time }).strict().parse(await c.req.json());
     if (await isArchivedWorkspace(root)) throw new Error(ARCHIVED_MESSAGE);
-    await markSeen(root, body.reader, body.at);
+    await markSeen(root, body.reader, body.at, { database: true });
     return { ok: true };
   }));
 }

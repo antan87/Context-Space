@@ -133,7 +133,7 @@ export function footprintOf(db: DatabaseSync, doc: Doc, ops: readonly Op[]): Foo
       case 'remove':
         if (target) { subtree(target); parentOrRoot(target); }
         break;
-      case 'reword': case 'edit': case 'detail': case 'block.set': case 'tick': case 'untick': case 'answer':
+      case 'reword': case 'edit': case 'detail': case 'block.set': case 'section.set': case 'tick': case 'untick': case 'answer':
         if (target) keys.add(`blocks:${target.id}`);
         break;
       case 'card.update': case 'card.remove': {
@@ -142,12 +142,17 @@ export function footprintOf(db: DatabaseSync, doc: Doc, ops: readonly Op[]): Foo
           const cardId = card.row.id as string;
           keys.add(`cards:${cardId}`);
           if (op.op === 'card.remove') {
+            refs.add(cardId);
             for (const l of db.prepare('SELECT id FROM links WHERE from_node = ? OR to_node = ?').all(cardId, cardId) as Array<{ id: string }>) keys.add(`links:${l.id}`);
             keys.add(`positions:${cardId}`);
           }
         }
         break;
       }
+      case 'now':
+        // Now is one row: last write wins, but a batch that names a step still sees a change to it
+        if (target) keys.add(`blocks:${target.id}`);
+        break;
       default:
         break;
     }

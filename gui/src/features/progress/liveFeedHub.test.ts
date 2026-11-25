@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { progressFactsKey } from '../../lib/api/queries.js';
 import type { LiveEvent, ScreenEvent } from '../../types.js';
 import { boardKey, workspaceFilesKey } from '../board/boardData.js';
+import { planDraftsKey } from '../plan/planDrafts.js';
 import { planFileKey } from '../plan/planFile.js';
 import { newsKey, recentCommitsKey } from '../plan/whatsNew.js';
 import { EMPTY_FEED, REFRESH_DELAY_MS, createLiveFeedHub, type FeedState } from './liveFeedHub.js';
@@ -102,6 +103,13 @@ describe('liveFeedHub', () => {
     expect(feed).toEqual([EMPTY_FEED]);
   });
 
+  it('refreshes drafts when a moved workspace reports a plan change', () => {
+    listen();
+    queryClient.setQueryData(planFileKey('demo'), { store: 'database' });
+    fake.live({ type: 'plan', timestamp: '2026-10-23T10:00:00.000Z' });
+    expect(invalidated).toContainEqual(planDraftsKey('demo'));
+  });
+
   it('reads the board again after a board event, a burst of them once, and nothing else', () => {
     listen();
     for (const revision of [2, 3, 4]) fake.live({ type: 'board', timestamp: '2026-10-23T10:00:00.000Z', revision });
@@ -114,7 +122,7 @@ describe('liveFeedHub', () => {
     expect(invalidated).toEqual([boardKey('demo')]);
   });
 
-  it('reads the board again whenever the connection opens, because the stream does not replay board events', () => {
+  it('reads the board again whenever the connection opens, without invalidating the plan when the workspace is not in its database', () => {
     listen();
     fake.status(true);
     expect(invalidated).toEqual([boardKey('demo')]);
@@ -123,6 +131,24 @@ describe('liveFeedHub', () => {
     fake.status(true);
     expect(invalidated).toEqual([boardKey('demo'), boardKey('demo')]);
     expect(feed.map((state) => state.connected)).toEqual([false, true, false, true]);
+  });
+
+  it('also reads the plan again on (re)connect when the workspace is moved to its database', () => {
+    queryClient.setQueryData(planFileKey('demo'), { store: 'database' });
+    listen();
+    fake.status(true);
+    expect(invalidated).toEqual([boardKey('demo'), planFileKey('demo'), planDraftsKey('demo')]);
+    fake.status(false);
+    expect(invalidated).toHaveLength(3);
+    fake.status(true);
+    expect(invalidated).toEqual([boardKey('demo'), planFileKey('demo'), planDraftsKey('demo'), boardKey('demo'), planFileKey('demo'), planDraftsKey('demo')]);
+  });
+
+  it('also reads the plan again on (re)connect when only the cached board carries a database id', () => {
+    queryClient.setQueryData(boardKey('demo'), { revision: 1, dbId: '0123456789abcdef', cards: [], links: [], positions: {} });
+    listen();
+    fake.status(true);
+    expect(invalidated).toEqual([boardKey('demo'), planFileKey('demo'), planDraftsKey('demo')]);
   });
 
   it('reads the plan and what hangs on it when the plan changes, and the facts after any event', () => {

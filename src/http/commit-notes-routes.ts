@@ -1,7 +1,10 @@
 import type { Hono } from 'hono';
 
-import { BoardFileError, BoardWorkspaceError } from '../core/board.js';
+import { BoardConflictError, BoardFileError, BoardWorkspaceError } from '../core/board.js';
 import { CommitNoteInputError, queryCommitNotes } from '../core/commit-notes.js';
+import { WorkspaceMovedError } from '../core/workspace-db-switch.js';
+import { WorkspaceDbError } from '../core/workspace-db/index.js';
+import { planErrorAnswer } from './plan-file-routes.js';
 
 type WorkspaceResolver = (id: string) => Promise<string | null>;
 
@@ -23,6 +26,13 @@ export function registerCommitNotesRoutes(app: Hono, resolveWorkspace: Workspace
       const notes = await queryCommitNotes(workspacePath, { repo, sha });
       return c.json({ notes });
     } catch (error) {
+      if (error instanceof WorkspaceDbError || error instanceof WorkspaceMovedError) {
+        const answer = planErrorAnswer(error);
+        return c.json(answer.body, answer.status as 400);
+      }
+      if (error instanceof BoardConflictError) {
+        return c.json({ error: error.message }, 409);
+      }
       if (error instanceof CommitNoteInputError) {
         return c.json({ error: error.message }, 400);
       }

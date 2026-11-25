@@ -192,7 +192,10 @@ describe('the move, all the way and back', () => {
     await write('.contextspace/.gitignore', 'line-notes.json*\nbackups/');
     const before = await treeHash();
     const result = await migrateWorkspace(root, opts());
-    expect(await read('.contextspace/.gitignore')).toBe('line-notes.json*\nbackups/\nworkspace.db*\n.db-staging-*\n');
+    expect(await read('.contextspace/.gitignore')).toBe([
+      'line-notes.json*', 'backups/', 'workspace.db*', 'workspace-db-switch.json',
+      '/archive/pre-db-*/', '/drafts/', '/.export-*', '.db-staging-*', '',
+    ].join('\n'));
     await restoreWorkspace(root, result.archive, { by: 'user' });
     expect(withoutMoveLeftovers(await treeHash())).toEqual(before);
     // edited in between: only the move's lines come out

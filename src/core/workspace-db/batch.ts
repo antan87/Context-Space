@@ -17,13 +17,13 @@
 
 import { createHash } from 'node:crypto';
 
-import { readDbId, readRevision, setMeta, beginImmediate, commitTransaction, type WorkspaceDb } from './connection.js';
+import { getMeta, readDbId, readRevision, setMeta, beginImmediate, commitTransaction, type WorkspaceDb } from './connection.js';
 import { WorkspaceDbError, isBusyError } from './errors.js';
 import { ROOT_KEY, destinationConflicts, footprintOf, reconstructBase, rowRefers, touchedKeys } from './footprint.js';
 import { contentHash, hasPassingRun } from './check-runs.js';
 import { OpError, effectiveCheck, runOp, LIMITS, type Op, type OpContext, type IssueCode } from './ops.js';
 import { structureProblems } from './plan-text.js';
-import { Recorder, flushDoc, loadDoc, type ChangedRow } from './store.js';
+import { Recorder, flushDoc, loadDoc, type ChangedRow, type DocBlock } from './store.js';
 import { maybeBackup } from './backup.js';
 
 export interface BatchInput {
@@ -54,6 +54,7 @@ export type BatchResult =
     /** `as` names to the ids they became. */
     ids: Record<string, string>;
     newIds: string[];
+    requestId?: string;
     rebased?: { from: number; to: number; changes: string[] };
     replayed?: boolean;
   }
@@ -69,10 +70,37 @@ const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n 
 
 const refuse = (revision: number, issue: Issue, note?: string): BatchResult => ({ ok: false, revision, errors: [issue], ...(note ? { note } : {}) });
 
-function payloadHash(input: BatchInput): string {
-  return createHash('sha256').update(JSON.stringify({ ops: input.ops, ifRevision: input.ifRevision, dbId: input.dbId })).digest('hex').slice(0, 32);
+function payloadHash(input: BatchInput, options: BatchOptions): string {
+  const payload = options.requestSource === undefined
+    ? { ops: input.ops, ifRevision: options.implicitRevision ? null : input.ifRevision, dbId: input.dbId }
+    : { source: options.requestSource, dbId: input.dbId };
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 32);
 }
 
+const requestCutoff = () => new Date(Date.now() - 7 * 86_400_000).toISOString();
+
+/** Looks up a replay in the caller's snapshot or transaction, using the same identity as applyBatch. */
+function readBatchReplay(
+  db: WorkspaceDb, requestId: string, hashFor: (dbId: string) => string, revision: number, cutoff = requestCutoff(),
+): BatchResult | undefined {
+  const prior = db.sqlite.prepare('SELECT payload_hash, result FROM requests WHERE request_id = ? AND at >= ?')
+    .get(requestId, cutoff) as { payload_hash: string; result: string } | undefined;
+  if (!prior) return undefined;
+  const dbId = readDbId(db.sqlite);
+  if (prior.payload_hash !== hashFor(dbId)) {
+    const former: unknown = JSON.parse(getMeta(db.sqlite, 'former_db_ids') ?? '[]');
+    if (Array.isArray(former) && former.some((id) => typeof id === 'string' && prior.payload_hash === hashFor(id))) {
+      return refuse(revision, { op: null, code: 'db_changed', dbId, message: `The workspace database was restored since requestId "${requestId}" was used. Read the workspace again before making a new request.` });
+    }
+    return refuse(revision, { op: null, code: 'request_reused', message: `requestId "${requestId}" was already used with a different batch. Use a new requestId for a new batch; resend the same batch to retry.` });
+  }
+  return { ...(JSON.parse(prior.result) as Extract<BatchResult, { ok: true }>), requestId, replayed: true };
+}
+
+export function readRequestReplay(db: WorkspaceDb, requestId: string, requestSource: string): BatchResult | undefined {
+  const revision = readRevision(db.sqlite);
+  return readBatchReplay(db, requestId, (dbId) => payloadHash({ ops: [], ifRevision: revision, dbId }, { by: '', requestSource }), revision);
+}
 /** Describes what an id reads as now, for a refusal. */
 function currentOf(db: WorkspaceDb, id: string): string {
   const b = db.sqlite.prepare('SELECT name, text, kind, rev, done FROM blocks WHERE id = ?').get(id) as { name: string | null; text: string; kind: string; rev: number; done: number } | undefined;
@@ -94,17 +122,31 @@ export function pruneHistory(db: WorkspaceDb, options: { keepRows?: number; keep
  * Applies a batch. Returns `{ ok: false, errors }` for every refusal (each issue names its op and says what to do),
  * and throws a {@link WorkspaceDbError} only when the database itself fails (`busy`, `read_only`, `replaced`, ...).
  */
-export function applyBatch(db: WorkspaceDb, batch: BatchInput, options: { by: string }): Promise<BatchResult> {
+interface BatchOptions {
+  by: string;
+  /** A caller supplied an exact revision precondition. */
+  strictRevision?: boolean;
+  /** Retries of a public batch without a revision hash the input, independent of the revision found for each attempt. */
+  implicitRevision?: boolean;
+  /** The Board translates defaults and aliases after receiving a request. Hash the caller's inputs for retries. */
+  requestSource?: string;
+  /** Internal draft imports contribute to the same transaction, validation, history and revision as ordinary ops. */
+  draft?: { edit: (ctx: OpContext) => void; finish: (ctx: OpContext) => void; acceptsCompletedCheck?: (block: DocBlock) => boolean };
+  /** Captures a Board response from the transaction, before a successful commit is acknowledged. */
+  capture?: (result: Extract<BatchResult, { ok: true }>) => void;
+}
+
+export function applyBatch(db: WorkspaceDb, batch: BatchInput, options: BatchOptions): Promise<BatchResult> {
   return db.serialize(() => applyLocked(db, batch, options));
 }
 
-async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: { by: string }): Promise<BatchResult> {
+async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: BatchOptions): Promise<BatchResult> {
   const sqlite = db.sqlite;
-  const shape = checkShape(batch);
+  const shape = checkShape(batch, options.draft !== undefined);
   if (shape) return { ok: false, revision: readRevisionSafe(db), errors: [shape] };
   const by = actorName(options.by);
   const at = new Date().toISOString();
-  const hash = payloadHash(batch);
+  const hash = payloadHash(batch, options);
 
   await beginImmediate(db);
   let result: BatchResult;
@@ -119,20 +161,25 @@ async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: { by: st
     }
     if (batch.requestId) {
       // a request older than 7 days is gone, whether or not a later write has pruned its row yet
-      sqlite.prepare('DELETE FROM requests WHERE request_id = ? AND at < ?').run(batch.requestId, new Date(Date.now() - 7 * 86_400_000).toISOString());
-      const prior = sqlite.prepare('SELECT payload_hash, result FROM requests WHERE request_id = ?').get(batch.requestId) as { payload_hash: string; result: string } | undefined;
+      const cutoff = requestCutoff();
+      sqlite.prepare('DELETE FROM requests WHERE request_id = ? AND at < ?').run(batch.requestId, cutoff);
+      const prior = readBatchReplay(db, batch.requestId, (generation) => generation === dbId ? hash : payloadHash({ ...batch, dbId: generation }, options), current, cutoff);
       if (prior) {
+        if (prior.ok) options.capture?.(prior);
         sqlite.exec('ROLLBACK');
-        if (prior.payload_hash !== hash) {
-          return refuse(current, { op: null, code: 'request_reused', message: `requestId "${batch.requestId}" was already used with a different batch. Use a new requestId for a new batch; resend the same batch to retry.` });
-        }
-        return { ...(JSON.parse(prior.result) as BatchResult), replayed: true } as BatchResult;
+        return prior;
       }
     }
 
     if (!Number.isInteger(batch.ifRevision) || batch.ifRevision < 0 || batch.ifRevision > current) {
       sqlite.exec('ROLLBACK');
       return refuse(current, { op: null, code: 'bad_revision', message: `ifRevision ${String(batch.ifRevision)} is not a revision of this workspace (it is at ${current}). Use the revision \`ctxspace plan\` printed.` });
+    }
+
+    if (options.strictRevision && batch.ifRevision < current) {
+      sqlite.exec('ROLLBACK');
+      return refuse(current, { op: null, code: 'stale_revision', currentRevision: current,
+        message: `ifRevision ${batch.ifRevision} is stale (the workspace is at revision ${current}). Read the plan again and resend with the current revision. Nothing was applied.` });
     }
 
     const doc = loadDoc(sqlite);
@@ -178,7 +225,7 @@ async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: { by: st
       rebased = { from: batch.ifRevision, to: current, changes: range.map((c) => `r${c.revision} by ${c.by}: ${clip(c.summary, 140)}`) };
     }
 
-    const ctx: OpContext = { db: sqlite, doc, rec, by, at, dbId, refs: new Map(), taken: new Set(), log: [], newIds: [] };
+    const ctx: OpContext = { db: sqlite, doc, rec, by, at, dbId, observedRevision: !options.implicitRevision, revision: current, refs: new Map(), taken: new Set(), log: [], newIds: [] };
     const errors: Issue[] = [];
     batch.ops.forEach((raw, index) => {
       try {
@@ -190,19 +237,27 @@ async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: { by: st
       }
     });
 
+    if (options.draft) {
+      try { options.draft.edit(ctx); }
+      catch (error) {
+        if (!(error instanceof OpError)) throw error;
+        errors.push({ op: null, code: error.code, message: error.message });
+      }
+    }
     if (!errors.length) {
       const problems = structureProblems(doc.blocks);
       if (problems.length) {
         errors.push({ op: null, code: 'bad_structure', message: `That arrangement would not read back as meant: ${problems.join('; ')}. The file grammar decides: items at the top indent under the Checkpoints list are checkpoints, so put steps "under" a checkpoint or step. Nothing was applied.` });
       }
     }
-    if (!errors.length) errors.push(...checkGuard(db, ctx));
+    if (!errors.length) errors.push(...checkGuard(db, ctx, options.draft?.acceptsCompletedCheck));
     if (errors.length) {
       sqlite.exec('ROLLBACK');
       return { ok: false, revision: current, errors, note: 'All or none: no op of this batch was applied.' };
     }
 
     flushDoc(sqlite, doc, rec, by, at);
+    options.draft?.finish(ctx);
     const rows = rec.finish();
     const next = current + 1;
     setMeta(sqlite, 'revision', next);
@@ -211,13 +266,14 @@ async function applyLocked(db: WorkspaceDb, batch: BatchInput, options: { by: st
       .run(next, batch.requestId ?? null, at, by, summary, JSON.stringify(rows));
     result = {
       ok: true, revision: next, seq: Number(inserted.lastInsertRowid), changed: ctx.log,
-      ids: Object.fromEntries(ctx.refs), newIds: ctx.newIds, ...(rebased ? { rebased } : {}),
+      ids: Object.fromEntries(ctx.refs), newIds: ctx.newIds, ...(batch.requestId ? { requestId: batch.requestId } : {}), ...(rebased ? { rebased } : {}),
     };
     if (batch.requestId) {
       sqlite.prepare('INSERT INTO requests(request_id, payload_hash, result, revision, at) VALUES (?, ?, ?, ?, ?)').run(batch.requestId, hash, JSON.stringify(result), next, at);
     }
-    sqlite.prepare('DELETE FROM requests WHERE at < ?').run(new Date(Date.now() - 7 * 86_400_000).toISOString());
+    sqlite.prepare('DELETE FROM requests WHERE at < ?').run(requestCutoff());
     pruneHistory(db);
+    options.capture?.(result);
     await commitTransaction(db);
   } catch (error) {
     try { sqlite.exec('ROLLBACK'); } catch { /* already ended */ }
@@ -241,11 +297,11 @@ function readRevisionSafe(db: WorkspaceDb): number {
   try { return readRevision(db.sqlite); } catch { return 0; }
 }
 
-function checkShape(batch: BatchInput): Issue | null {
+function checkShape(batch: BatchInput, allowEmpty: boolean): Issue | null {
   if (!batch || typeof batch !== 'object' || Array.isArray(batch)) {
     return { op: null, code: 'invalid', message: 'Send {"ifRevision": <revision>, "ops": [...]}, for example {"ifRevision":12,"ops":[{"op":"tick","id":"s7k2q"}]}.' };
   }
-  if (!Array.isArray(batch.ops) || batch.ops.length === 0) {
+  if (!Array.isArray(batch.ops) || (!allowEmpty && batch.ops.length === 0)) {
     return { op: null, code: 'invalid', message: '"ops" must be a non-empty list. Example: {"ifRevision":12,"ops":[{"op":"tick","id":"s7k2q"}]}' };
   }
   if (batch.ops.length > LIMITS.ops) return { op: null, code: 'limit', message: `A batch has at most ${LIMITS.ops} ops (this one has ${batch.ops.length}). Split it.` };
@@ -275,12 +331,12 @@ function checkShape(batch: BatchInput): Issue | null {
  *   imported completion nobody ran, stays as it is. Undo is outside the guard: it only restores a row to a state it was
  *   recorded in, and refuses when the row moved on.
  */
-function checkGuard(db: WorkspaceDb, ctx: OpContext): Issue[] {
+function checkGuard(db: WorkspaceDb, ctx: OpContext, acceptsCompletedCheck?: (block: DocBlock) => boolean): Issue[] {
   const issues: Issue[] = [];
   for (const b of ctx.doc.blocks) {
     if (b.kind !== 'checkpoint' || !b.done) continue;
     const final = effectiveCheck(b.detail);
-    if (final.kind === 'none') continue;
+    if (final.kind === 'none' || acceptsCompletedCheck?.(b)) continue;
     const describe = final.kind === 'workspace' ? 'the workspace checks' : `\`${final.command}\``;
     const beforeRow = b._new ? null : (b._before as Record<string, unknown>);
     const beforeCheck = beforeRow ? effectiveCheck(String(beforeRow.detail)) : null;

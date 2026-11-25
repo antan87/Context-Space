@@ -1,9 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Check, CircleHelp, ListChecks, RotateCcw } from 'lucide-react';
 
 import { cn } from '../../lib/utils.js';
-import { needsSurface } from '../../design/index.js';
-import { IconButton } from '../../components/ui/icon-button.js';
+import { IconButton, needsSurface } from '../../design/index.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { AnswerBox } from '../plan/AnswerBox.js';
 import { questionWhy, whenText, whoName } from '../plan/planView.js';
@@ -66,6 +65,7 @@ export interface AiClosedBarProps {
  */
 export function AiClosedBar({ workspace, entry, title, more, onReopen, onSeen, onOpenPlan }: AiClosedBarProps) {
   const [reopening, setReopening] = useState(false);
+  const reopenFromRead = useRef(onReopen);
   const [reason, setReason] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
@@ -82,7 +82,7 @@ export function AiClosedBar({ workspace, entry, title, more, onReopen, onSeen, o
           {more > 0 && <span className="text-muted-foreground"> · {more} more</span>}
         </p>
         <div className="flex shrink-0 items-center">
-          {canReopen && !reopening && <IconButton label={`Reopen "${title}"`} icon={<RotateCcw />} onClick={() => { setReopening(true); setError(undefined); }} />}
+          {canReopen && !reopening && <IconButton label={`Reopen "${title}"`} icon={<RotateCcw />} onClick={() => { reopenFromRead.current = onReopen; setReopening(true); setError(undefined); }} />}
           <IconButton label="Open the plan" icon={<ListChecks />} onClick={onOpenPlan} />
           <IconButton label="Got it" icon={<Check />} onClick={onSeen} />
         </div>
@@ -93,7 +93,7 @@ export function AiClosedBar({ workspace, entry, title, more, onReopen, onSeen, o
           onChange={setReason}
           onSubmit={() => {
             setPending(true);
-            void onReopen(reason.trim()).then((failure) => {
+            void reopenFromRead.current(reason.trim()).then((failure) => {
               setPending(false);
               if (failure) { setError(failure); return; }
               setReopening(false); setReason('');

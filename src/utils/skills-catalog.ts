@@ -14,7 +14,7 @@ import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 
 import { slugify } from './slug.js';
 import { resolveResourcePath } from './resources.js';
-import { ALWAYS_ON_SKILL_IDS } from '../resources/selection.js';
+import { ALWAYS_ON_SKILL_IDS, LIFECYCLE_SKILL_ID } from '../resources/selection.js';
 import { findHarnessSkillDirs } from './harness-skill-sources.js';
 import { LOCAL_SKILLS_FOLDER, SKILL_FOLDER_ADAPTERS, workspaceSkillFolders } from '../harnesses/registry.js';
 import { acquireLock, createMutationQueue } from '../core/locks.js';
@@ -503,6 +503,17 @@ export interface SkillDiagnostic {
   source?: string;
 }
 
+async function loadShippedSkill(id: string): Promise<SkillItem | null> {
+  try {
+    const base = await resolveResourcePath(path.dirname(fileURLToPath(import.meta.url)), 'skills');
+    const skill = base && await loadSkillFromDir(path.join(base, id), false, base);
+    return skill ? { ...skill, scope: 'global' } : null;
+  } catch (error) {
+    console.warn(`Skipping the shipped skill "${id}": ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
 /** A skill that names no category loads fine but lands in 'general', where it looks missing. */
 function categoryNotice(id: string, scope: SkillDiagnostic['scope']): SkillDiagnostic {
   return {
@@ -575,16 +586,10 @@ export async function getAllSkills(
     skillMap.set(s.id, { ...s, scope: 'global' });
   }
 
-  // 1b. Skills the product ships for every workspace (resources/skills/<id>); a copy in the user's library with the same id wins below.
+  // Shipped skills for every workspace. A copy in the user's library with the same id wins below.
   for (const id of ALWAYS_ON_SKILL_IDS) {
-    try {
-      const base = await resolveResourcePath(path.dirname(fileURLToPath(import.meta.url)), 'skills');
-      if (!base) continue;
-      const loaded = await loadSkillFromDir(path.join(base, id), false, base);
-      if (loaded) skillMap.set(loaded.id, { ...loaded, scope: 'global' });
-    } catch (error) {
-      console.warn(`Skipping the shipped skill "${id}": ${error instanceof Error ? error.message : String(error)}`);
-    }
+    const skill = await loadShippedSkill(id);
+    if (skill) skillMap.set(skill.id, skill);
   }
 
   // 2. Skills the harnesses load from their own global folders (~/.claude/skills, ~/.codex/skills, ...).
@@ -678,6 +683,13 @@ export async function getAllSkills(
           } catch {
             // Ignore unreadable or corrupt lock file
           }
+        }
+
+        // The development-skill installer is optional. A managed lifecycle copy can use its bundled
+        // source when its original catalog entry is unavailable on this machine.
+        if (materializedGlobalSkillIds.has(LIFECYCLE_SKILL_ID) && !skillMap.has(LIFECYCLE_SKILL_ID)) {
+          const skill = await loadShippedSkill(LIFECYCLE_SKILL_ID);
+          if (skill) skillMap.set(skill.id, skill);
         }
 
         const entries = await fs.readdir(workspaceSkillsDir, { withFileTypes: true });

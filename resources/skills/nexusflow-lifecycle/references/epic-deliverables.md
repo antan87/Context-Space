@@ -6,7 +6,10 @@ measuring representative latency, improving one supported lookup path, and rolli
 the change out with monitoring. A necessary infrastructure-only prerequisite is valid,
 but name its consumer and acceptance criteria instead of claiming it is user-visible.
 
-For each checkpoint in `PLAN.md`, write its outcome, acceptance criteria and a `Check:`
+Use `ctxspace plan apply` with stable ids for a moved workspace. For a file-based
+workspace, edit `PLAN.md`.
+
+For each checkpoint, write its outcome, acceptance criteria and a `Check:`
 line, with the steps it needs under it; note dependencies, the intended branch/PR and
 compatibility constraints in the lines under it. Include rollout and recovery details when
 the change affects persistent data or deployed consumers. Branch labels in the plan are
@@ -22,7 +25,7 @@ outcome is canceled, take it out of the plan and say why under the goal, or in t
 rather than ticking unimplemented behavior as delivered.
 
 Before replanning, inventory existing work with repo, branch/PR/commit, status (merged, on
-branch, or no change needed), and evidence, as a list in `PLAN.md` outside the checkpoints.
+branch, or no change needed), and evidence, as a list in the plan outside the checkpoints.
 Write the remaining work as checkpoints and steps, and each open question as a
 `- [ ] Decide:` line under the checkpoint it holds up. Mark a flag-only finding as such;
 distinguish it from authorized implementation. Use applicable enabled skill templates for

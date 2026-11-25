@@ -2,7 +2,6 @@ import { movePlanToFile } from '../core/plan-file-store.js';
 import { generateWorkspaceTools } from '../core/workspace-tools.js';
 import chalk from 'chalk';
 import path from 'node:path';
-import fse from 'fs-extra';
 import type { WorkspaceContext } from '../types.js';
 import { HARNESSES, isHarnessId, type InstructionHarnessId } from '../harnesses/registry.js';
 import { generateClaudeConfig } from './claude.js';
@@ -144,7 +143,9 @@ export async function generateContextFiles(
   ctx: WorkspaceContext,
   assistants: string[],
   workspacePath: string,
+  options: { commitArtifacts?: boolean; quiet?: boolean; instructionsOnly?: boolean } = {},
 ): Promise<void> {
+  const log = options.quiet ? () => undefined : console.log;
   const generation = await captureGenerationSnapshot(ctx.repos);
   const lessons = ctx.lessons ?? await readLessonsQuietly(workspacePath);
   const renderCtx: WorkspaceContext = { ...ctx, generation, lessons };
@@ -155,30 +156,32 @@ export async function generateContextFiles(
   }> = [];
 
   const resourceAssistants = assistants.filter(isHarnessId);
-  for (const output of await generateWorkspaceTools(workspacePath, resourceAssistants)) {
-    generatedOutputs.push({ path: output, source: 'workspace tool access', location: 'local' });
+  if (!options.instructionsOnly) {
+    for (const output of await generateWorkspaceTools(workspacePath, resourceAssistants)) {
+      generatedOutputs.push({ path: output, source: 'workspace tool access', location: 'local' });
+    }
   }
 
-  const canonical = `${GENERATED_SNAPSHOT_HEADER}\n\n${await buildContextContent(renderCtx)}`;
+  const canonical = `${GENERATED_SNAPSHOT_HEADER}\n\n${await buildContextContent(renderCtx, workspacePath)}`;
   await writeWorkspaceFile(workspacePath, ctx.feature.id, 'AGENTS.md', canonical);
   generatedOutputs.push({ path: 'AGENTS.md', source: 'workspace snapshot', location: 'workspace' });
 
-  {
+  if (!options.instructionsOnly) {
     try {
       // Generate contextspace-knowledge.md if it does not exist
       const knowledgeExists = await workspaceFileExists(workspacePath, ctx.feature.id, PRIMARY_KNOWLEDGE_FILE);
       if (!knowledgeExists) {
         const knowledgeContent = buildKnowledgeContent(renderCtx);
         await writeWorkspaceFile(workspacePath, ctx.feature.id, PRIMARY_KNOWLEDGE_FILE, knowledgeContent);
-        console.log(chalk.green('  ✔'), `Generated ${chalk.bold(PRIMARY_KNOWLEDGE_FILE)} (persistent AI memory)`);
+        log(chalk.green('  ✔'), `Generated ${chalk.bold(PRIMARY_KNOWLEDGE_FILE)} (persistent AI memory)`);
       } else {
         const existing = await readWorkspaceFile(workspacePath, ctx.feature.id, PRIMARY_KNOWLEDGE_FILE);
         const migrated = removeGeneratedProgressChecklist(existing, ctx.repos.map((repo) => repo.name));
         if (migrated !== existing) {
           await writeWorkspaceFile(workspacePath, ctx.feature.id, PRIMARY_KNOWLEDGE_FILE, migrated);
-          console.log(chalk.green('  ✔'), 'Removed obsolete generated progress checklist');
+          log(chalk.green('  ✔'), 'Removed obsolete generated progress checklist');
         } else {
-          console.log(chalk.gray('  ○'), `${PRIMARY_KNOWLEDGE_FILE} already exists — preserving existing content`);
+          log(chalk.gray('  ○'), `${PRIMARY_KNOWLEDGE_FILE} already exists — preserving existing content`);
         }
       }
     } catch (error) {
@@ -199,7 +202,7 @@ export async function generateContextFiles(
     try {
       await GENERATORS[assistant as InstructionHarnessId](renderCtx, workspacePath);
       generatedOutputs.push({ path: outputFile, source: 'AGENTS.md', location: 'workspace' });
-      console.log(
+      log(
         chalk.green('  ✔'),
         `Generated ${chalk.bold(outputFile)} for ${assistant}`,
       );
@@ -213,35 +216,39 @@ export async function generateContextFiles(
     }
   }
 
-  // An older plan (the plan store, a lifecycle, the notes file) moves to PLAN.md once; the generated summary goes with it.
-  await movePlanToFile(workspacePath);
-  await ensureWorkGuidance(workspacePath);
+  if (!options.instructionsOnly) {
+    // An older plan moves to PLAN.md once. A cutover must leave the archived or restored files alone.
+    await movePlanToFile(workspacePath);
+    await ensureWorkGuidance(workspacePath);
 
-  // Retired: \`ctxspace flow --assignment\` prints the brief in full.
-  await deleteWorkspaceFile(workspacePath, ctx.feature.id, WORK_ASSIGNMENT_FILE);
-  // Retired: the app's Docs panel says what each file is for, and AGENTS.md is what the assistants read.
-  for (const retired of RETIRED_OUTPUTS) await deleteWorkspaceFile(workspacePath, ctx.feature.id, retired);
-
-  // Resource materialization
-  await generateSkills(renderCtx, resourceAssistants, workspacePath);
-
-  try {
-    const resourceLockPath = await resolveResourceLockPath(workspacePath);
-    if (await fse.pathExists(resourceLockPath)) {
-      const resourceLock = (await fse.readJson(resourceLockPath)) as {
-        outputs?: Array<{ path: string }>;
-      };
-      generatedOutputs.push({ path: path.relative(workspacePath, resourceLockPath).replace(/\\/g, '/'), source: 'workspace resource selection', location: 'local' });
-      for (const output of resourceLock.outputs ?? []) {
-        generatedOutputs.push({ path: output.path, source: 'skill or agent catalog', location: 'local' });
-      }
-    }
-  } catch {
-    // Resource materialization lock check
+    // Retired: \`ctxspace flow --assignment\` prints the brief in full.
+    await deleteWorkspaceFile(workspacePath, ctx.feature.id, WORK_ASSIGNMENT_FILE);
+    // Retired: the app's Docs panel says what each file is for, and AGENTS.md is what the assistants read.
+    for (const retired of RETIRED_OUTPUTS) await deleteWorkspaceFile(workspacePath, ctx.feature.id, retired);
   }
 
+  const resourceSelection = 'workspace resource selection';
+  const resourceCatalog = 'skill or agent catalog';
+  let resourcesRefreshed = false;
+  try {
+    const { managedFiles } = await generateSkills(renderCtx, resourceAssistants, workspacePath);
+    const resourceLockPath = await resolveResourceLockPath(workspacePath);
+    generatedOutputs.push({ path: path.relative(workspacePath, resourceLockPath).replace(/\\/g, '/'), source: resourceSelection, location: 'local' });
+    for (const output of managedFiles ?? []) {
+      generatedOutputs.push({ path: output.path, source: resourceCatalog, location: 'local' });
+    }
+    resourcesRefreshed = true;
+  } finally {
+    if (options.instructionsOnly) {
+      await writeGenerationLock(workspacePath, generation, generatedOutputs, {
+        preserveOutput: (output) => !resourcesRefreshed || (output.source !== resourceSelection && output.source !== resourceCatalog),
+      });
+    }
+  }
+  if (options.instructionsOnly) return;
+
   await writeGenerationLock(workspacePath, generation, generatedOutputs);
-  if (getActiveStorageProvider().meta.name === 'local') {
+  if (options.commitArtifacts !== false && getActiveStorageProvider().meta.name === 'local') {
     await commitWorkspaceArtifacts(workspacePath, `chore(${CLI_NAME}): refresh workspace artifacts`);
   }
 }

@@ -4,8 +4,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execa } from 'execa';
 
+import { migrateWorkspace } from '../core/plan-migrate.js';
+import { closeAppDb } from '../core/workspace-db-app.js';
+import { boardDbForApp } from '../core/board-db-app.js';
 import { LocalStorageAdapter } from '../core/adapters/local-storage.js';
-import { setActiveStorageProvider } from '../core/adapters/registry.js';
+import { getStorageProvider, setActiveStorageProvider } from '../core/adapters/registry.js';
 import { enabledTools, findTool, type ToolContext } from './tools.js';
 import type { NexusFlowConfig } from '../types.js';
 
@@ -72,10 +75,25 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await closeAppDb();
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
 describe('commit note MCP tools', () => {
+  it('adds and lists a moved commit note as one database card and link', async () => {
+    setActiveStorageProvider(getStorageProvider('local'));
+    await fs.writeFile(path.join(root, 'PLAN.md'), '# Plan\n\n## Checkpoints\n\n- [ ] Ship it\n');
+    await migrateWorkspace(root, { by: 'user', backup: false, findOlderWriters: async () => [] });
+    const added = await call('note_on_commit', { commit: 'HEAD', text: 'Keep both changes', harness: 'codex' });
+    expect(added.isError, added.text).toBe(false);
+    const { note, commitNodeId } = added.body;
+    expect(note).toMatchObject({ id: /^k/, sha: c1, by: 'codex' });
+    const listed = await call('notes_on_commit', { commit: c1.slice(0, 7) });
+    expect(listed.body.notes).toEqual([note]);
+    expect((await boardDbForApp(root)).links).toContainEqual(expect.objectContaining({ from: note.id, to: commitNodeId }));
+    await expect(fs.access(path.join(root, 'contextspace-board.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('registers note_on_commit and notes_on_commit with right schemas, hints, and role scoping', () => {
     const writeTool = findTool('note_on_commit')!;
     const readTool = findTool('notes_on_commit')!;

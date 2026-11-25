@@ -118,8 +118,9 @@ export function useWhereAreWe({ workspace, active, fillPrompt, replyRef, openFil
   const answerInPlan = async (id: string, answer: string) => {
     const question = planQuestions.find((item) => item.id === id);
     if (!question) return false;
+    const decision = [...(plan?.decisions ?? []), ...(plan?.checkpoints.flatMap((cp) => cp.decisions) ?? [])].find((item) => item.key === id);
     try {
-      await changePlan.mutateAsync({ type: 'answer', key: id, answer, expected: question.title });
+      await changePlan.mutateAsync({ type: 'answer', key: id, answer, expected: question.title, rev: decision?.rev, dbId: plan?.dbId });
       setNotice('Your answer is in the plan.');
       return true;
     } catch {
@@ -129,8 +130,9 @@ export function useWhereAreWe({ workspace, active, fillPrompt, replyRef, openFil
   const reopenInPlan = async (id: string, reason: string): Promise<string | null> => {
     const closed = closes.find((entry) => entry.itemId === id);
     if (!closed) return 'It is no longer in the plan.';
+    const checkpoint = plan?.checkpoints.find((item) => item.key === id);
     try {
-      await changePlan.mutateAsync({ type: 'reopen', key: id, reason, expected: closed.label });
+      await changePlan.mutateAsync({ type: 'reopen', key: id, reason, expected: closed.label, rev: checkpoint?.rev, dbId: plan?.dbId });
       setNotice('Reopened. Tell the AI what is wrong in the chat.');
       return null;
     } catch (error) {

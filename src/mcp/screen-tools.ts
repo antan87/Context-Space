@@ -3,7 +3,7 @@
  * Tools that let the AI drive the screen: open a document or diff beside the
  * chat, leave a note on a line, suggest the next move, and ask what the user is
  * looking at. They only show things: none edits a file, and none presses a key
- * for the user. Where the plan stands is PLAN.md, which the AI edits itself.
+ * for the user. Now is stored alongside the plan.
  */
 
 import * as fs from 'node:fs/promises';
@@ -16,6 +16,8 @@ import {
   appendScreenEvent,
 } from '../core/screen-events.js';
 import { PLAN_LINE_MAX, findPlanItem } from '../core/plan-file.js';
+import { changePlanDbForApp, planDbParts } from '../core/plan-db-app.js';
+import { storeOf } from '../core/workspace-db-app.js';
 import { clearPlanNow, readPlanFile, setPlanNow } from '../core/plan-file-store.js';
 import { resolveScreenRepo, resolveScreenTarget, SCREEN_PATH_MAX_LENGTH } from '../core/screen-paths.js';
 import { findWorkspaceRoot, loadFeatureConfig } from '../core/workspace.js';
@@ -217,17 +219,24 @@ export const screenTools: NexusFlowTool[] = [
 
   screenTool(
     'set_current_step',
-    `Say which plan step you are working on now, when you start it. The board and the header then show that step as Now, with your name and when; without it they show only the plan's order as "Next up". Give the step (its key, or the start of its words); clear: true says none. It only shows where you are: PLAN.md is not changed, and ticking or removing the step clears it.`,
+    `Say which plan step you are working on now, when you start it. The board and the header then show that step as Now, with your name and when; without it they show only the plan's order as "Next up". Give the step (its key, or the start of its words); clear: true says none. It shows where you are. In a file-based workspace PLAN.md is not changed. Ticking or removing the step clears Now.`,
     currentStepSchema,
-    async (input, { workspacePath }) => {
+    async (input, { root, workspacePath }) => {
+      const database = storeOf(root) === 'database';
+      const by = (input.harness ?? 'ai').trim().toLowerCase() || 'ai';
       if (input.clear) {
-        await clearPlanNow(workspacePath);
+        if (database) await changePlanDbForApp(root, { type: 'now-clear' }, { by });
+        else await clearPlanNow(workspacePath);
         return { cleared: true, message: 'No step is marked as being worked on.' };
       }
       if (!input.step) throw new Error('Give the step you are working on, or clear: true.');
-      const { plan } = await readPlanFile(workspacePath);
-      const item = findPlanItem(plan, input.step, 'step');
-      const { text } = await setPlanNow(workspacePath, item.key, (input.harness ?? 'ai').trim().toLowerCase() || 'ai');
+      const read = database ? (await planDbParts(root, 0)).read : undefined;
+      const item = findPlanItem(read?.plan ?? (await readPlanFile(workspacePath)).plan, input.step, 'step');
+      let text: string;
+      if (read && 'text' in item) {
+        await changePlanDbForApp(root, { type: 'now', key: item.key }, { by, read });
+        text = item.text;
+      } else text = (await setPlanNow(workspacePath, item.key, by)).text;
       return { step: text, message: `The board shows "${text}" as Now.` };
     },
   ),

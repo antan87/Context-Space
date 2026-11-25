@@ -215,21 +215,21 @@ export const TABLES: readonly TableDef[] = [
   },
   {
     name: 'exports',
-    meaning: 'Every PLAN.md and snapshot export written (the last 50 per file): the base a hand edit is merged against.',
+    meaning: 'Every PLAN.md and snapshot export written (the last 5 per file): the base a hand edit is merged against.',
     columns: [
       { name: 'file', sql: 'TEXT NOT NULL', meaning: 'File name, such as PLAN.md.' },
       { name: 'revision', sql: 'INTEGER NOT NULL', meaning: 'The workspace revision that was exported.' },
       { name: 'db_id', sql: 'TEXT NOT NULL', meaning: 'The database identity, as in the file header.' },
       { name: 'digest', sql: 'TEXT NOT NULL', meaning: 'Hash of the export text without its header line.' },
-      { name: 'text', sql: 'TEXT NOT NULL', meaning: 'The export text without its header line.' },
+      { name: 'text', sql: 'TEXT NOT NULL', meaning: 'The published text including its header.' },
     ],
-    indexes: ['CREATE UNIQUE INDEX exports_key ON exports(file, revision)', 'CREATE INDEX exports_digest ON exports(file, digest)'],
+    indexes: ['CREATE UNIQUE INDEX exports_key ON exports(file, db_id, revision, digest)', 'CREATE INDEX exports_digest ON exports(file, digest)'],
   },
   {
     name: 'drafts',
     meaning: 'File content that was not a known export (a hand edit, a stale save): kept until imported or discarded.',
     columns: [
-      { name: 'digest', sql: 'TEXT PRIMARY KEY', meaning: 'Hash of the draft text without its header line.' },
+      { name: 'digest', sql: 'TEXT PRIMARY KEY', meaning: 'SHA-256 of all the original draft bytes.' },
       { name: 'file', sql: 'TEXT NOT NULL', meaning: 'The file it came from.' },
       { name: 'path', sql: 'TEXT NOT NULL', meaning: 'Where the copy is kept.' },
       { name: 'at', sql: 'TEXT NOT NULL', meaning: 'When it was noticed.' },

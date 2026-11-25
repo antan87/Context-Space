@@ -5,13 +5,9 @@ import { Check, ChevronDown, ChevronRight, ChevronUp, CircleCheck, Circle, Circl
 
 import { ChatMarkdown } from '../../components/ChatMarkdown.js';
 import { classifyMarkdownLink } from '../../components/markdownLinks.js';
-import { Badge } from '../../components/ui/badge.js';
-import { Button } from '../../components/ui/button.js';
-import { Input } from '../../components/ui/input.js';
-import { Dialog, DialogClose, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger } from '../../components/ui/dialog.js';
 import { InlinePlanMarkdown } from '../../components/InlinePlanMarkdown.js';
 import { cn } from '../../lib/utils.js';
-import { useAnswerDecision, useChangePlanFile } from '../plan/planFile.js';
+import { useAnswerDecision, useChangePlanFile, type AnswerOptions } from '../plan/planFile.js';
 import { suggestedAnswers } from '../plan/planView.js';
 import { plainText } from '../../lib/plainText.js';
 import { agoText } from '../plan/whatsNew.js';
@@ -25,7 +21,10 @@ import { answerCountWords, codeHeadParts, codeStatus, codeOpenLine, differingLin
 import { answersThatFit, ROW_SIZE, READABLE_ZOOM, type AnswersFit } from './boardRows.js';
 import { BOARD_SIZE, moreText, type AnswerNode, type BoardDecision, type CheckpointData, type CheckpointNode, type CommitNode, type DocumentNode, type LaneNode, type PlaceholderNode, type UncommittedNode } from './boardLayout.js';
 import { openCodeWindow } from '../workspace-shell/openRequests.js';
-import { CARD_BRICK as BRICK, CARD_FOCUS, chipClass, FreshDot, needsSurface, StepCheck } from '../../design/index.js';
+import {
+  Badge, Button, CARD_BRICK as BRICK, CARD_FOCUS, chipClass, Dialog, DialogClose, DialogDescription,
+  DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle, DialogTrigger, FreshDot, Input, needsSurface, StepCheck,
+} from '../../design/index.js';
 import { askCard } from './askText.js';
 import { Anchors, AskCompact, brickPress, hasDragSelection, TITLE_BUTTON } from './cards/cardParts.js';
 import { summaryLabel } from './summaryLabel.js';
@@ -129,7 +128,7 @@ const planSubtitle = (data: CheckpointData, open: boolean) =>
 
 interface WaitingDecisionCardProps {
   decision: BoardDecision;
-  onAnswer: (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => Promise<boolean>;
+  onAnswer: (key: string, answer: string, expected?: string, options?: AnswerOptions) => Promise<boolean>;
   /** The width of the node the card is on, when it is the compact card of the Area's waiting frame: one line of answers, the rest in a dialog. */
   width?: number;
   /** Said when the card leaves the board with its dialog open and no answer sent: the question changed in the plan (or was answered elsewhere). */
@@ -245,6 +244,8 @@ function useDecisionAnswer({ decision, onAnswer }: WaitingDecisionCardProps) {
    */
   const refocus = useRef<HTMLElement | null>(null);
   const sent = useRef(false);
+  const dialogDecision = useRef<{ question: string; rev?: number; dbId?: string } | null>(null);
+  const captureDialog = () => { dialogDecision.current = { question: decision.question, rev: decision.rev, dbId: actions?.planDbId }; };
   const submitAnswer = async (answer: string, fromDialog = false, card?: HTMLElement | null) => {
     const text = answer.trim();
     if (!text || saving) return;
@@ -258,7 +259,14 @@ function useDecisionAnswer({ decision, onAnswer }: WaitingDecisionCardProps) {
     setError(null);
     setDismissed(null);
     try {
-      const ok = await onAnswer(decision.key, text, decision.question, fromDialog ? { optimistic: false } : undefined);
+      const observed = fromDialog && dialogDecision.current
+        ? dialogDecision.current
+        : { question: decision.question, rev: decision.rev, dbId: actions?.planDbId };
+      const options: AnswerOptions = {
+        ...(observed.rev !== undefined ? { rev: observed.rev, dbId: observed.dbId } : {}),
+        ...(fromDialog ? { optimistic: false } : {}),
+      };
+      const ok = await onAnswer(decision.key, text, observed.question, fromDialog || observed.rev !== undefined ? options : undefined);
       if (!ok) { setError('Could not save answer.'); sent.current = false; }
       if (ok && hadFocus) focusAfterAnswer(card!, next, null);
     } catch (err) {
@@ -277,7 +285,7 @@ function useDecisionAnswer({ decision, onAnswer }: WaitingDecisionCardProps) {
     if (element.isConnected) element.focus({ preventScroll: true });
   }, [saving]);
 
-  return { actions, options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError: () => { setDismissed(failure); setError(null); }, submitAnswer };
+  return { actions, options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError: () => { setDismissed(failure); setError(null); }, submitAnswer, captureDialog };
 }
 
 // Hairline (R1d): the suggested answers are chips (28 px, `--r-md`, a 1 px border, no fill). 13.5 px text is 12 px at the least zoom of the overview (0.9).
@@ -312,7 +320,7 @@ function AskInCliButton({ question, checkpoint }: { question: string; checkpoint
  */
 function CompactDecisionCard(props: WaitingDecisionCardProps) {
   const { decision, width = ROW_SIZE.decisionWidth } = props;
-  const { options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError, submitAnswer } = useDecisionAnswer(props);
+  const { options, sent, customAnswer, setCustomAnswer, saving, displayError, dismissError, submitAnswer, captureDialog } = useDecisionAnswer(props);
   const estimate = useMemo(() => answersThatFit(options, width), [options, width]);
   const answerLine = useRef<HTMLDivElement>(null);
   const answerMeasure = useRef<HTMLDivElement>(null);
@@ -412,7 +420,7 @@ function CompactDecisionCard(props: WaitingDecisionCardProps) {
             </div>
           </div>
         )}
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={(next) => { if (next) captureDialog(); setOpen(next); }}>
           <DialogTrigger render={<button type="button" data-testid="decision-more-answers" className={cn(GHOST_BUTTON, 'ml-auto')} aria-haspopup="dialog" />}>{fit.ghost}</DialogTrigger>
           <DialogPopup
             className="max-w-lg max-h-[min(85dvh,calc(100dvh-2rem))] overflow-y-auto [--decision-room:calc(min(85dvh,_100dvh_-_2rem)_-_11rem)]"
@@ -617,7 +625,7 @@ function CheckpointCheckFooter({ data, cpKey }: { data: CheckpointData; cpKey: s
 function WaitingFrame({ id, data, border, titleId, width }: { id?: string; data: CheckpointData; border: string; titleId: string; width?: number }) {
   const actions = useContext(BoardActionsContext);
   const fallbackMutation = useAnswerDecision(actions?.workspaceId ?? '');
-  const handleAnswer = async (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => {
+  const handleAnswer = async (key: string, answer: string, expected?: string, options?: AnswerOptions) => {
     if (actions?.answerDecision) {
       return actions.answerDecision(key, answer, expected, options);
     }
@@ -720,6 +728,7 @@ export function AddStepInline({
           aria-label="Add a step"
           onClick={(e) => {
             e.stopPropagation();
+            changePlan.beginAdd();
             setOpen(true);
             setError(null);
           }}
@@ -782,6 +791,7 @@ export function AddStepInline({
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.preventDefault();
+              changePlan.reset();
               setOpen(false);
               setText('');
               setError(null);
@@ -804,6 +814,7 @@ export function AddStepInline({
           variant="ghost"
           data-testid="checkpoint-add-step-cancel"
           onClick={() => {
+            changePlan.reset();
             setOpen(false);
             setText('');
             setError(null);
@@ -826,7 +837,7 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
   const titleId = useId();
   const actions = useContext(BoardActionsContext);
   const fallbackMutation = useAnswerDecision(actions?.workspaceId ?? '');
-  const handleAnswer = async (key: string, answer: string, expected?: string, options?: { optimistic?: boolean }) => {
+  const handleAnswer = async (key: string, answer: string, expected?: string, options?: AnswerOptions) => {
     if (actions?.answerDecision) {
       return actions.answerDecision(key, answer, expected, options);
     }
@@ -893,7 +904,7 @@ export function BoardCheckpoint({ id, data, width }: NodeProps<CheckpointNode>) 
                 busy={isBusy}
                 pressable={Boolean(actions?.toggleStep)}
                 className="nodrag nopan"
-                onToggle={() => { void actions?.toggleStep?.(step.key, !step.done, step.text); }}
+                onToggle={() => { void actions?.toggleStep?.(step.key, !step.done, step.text, step.rev); }}
               />
               <span className={cn('min-w-0 flex-1 truncate', step.done ? 'text-muted-foreground line-through' : 'text-foreground')} title={plainText(step.text)}>
                 <span className="sr-only">{step.done ? 'Done: ' : 'Not done: '}</span><InlinePlanMarkdown content={step.text} />

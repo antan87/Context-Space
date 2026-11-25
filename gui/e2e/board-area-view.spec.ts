@@ -391,10 +391,13 @@ test.describe('a decision answered from the dialog', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test('stays open with "Saving…" until the server confirms; on failure it keeps the words and the keyboard, then closes on success and puts the keyboard on the next decision', async ({ page }) => {
-    const tracker = await routeBoard(page, TWO(), { answerDelay: 150 });
+    const tracker = await routeBoard(page, TWO());
+    let confirmAnswer!: () => void;
+    const confirmation = new Promise<void>((resolve) => { confirmAnswer = resolve; });
     let failures = 1;
-    await page.route('**/api/workspace/demo/plan/decisions/*/answer', (route) => {
+    await page.route('**/api/workspace/demo/plan/decisions/*/answer', async (route) => {
       if (failures > 0) { failures -= 1; return route.fulfill({ status: 409, json: { error: 'Conflict: the plan was changed in another session by somebody else a moment ago, so this answer was not saved.' } }); }
+      await confirmation;
       return route.fallback();
     });
     await stepIn(page, true);
@@ -411,9 +414,13 @@ test.describe('a decision answered from the dialog', () => {
     await expect(input).toBeFocused();
     expect(tracker.answers).toHaveLength(0);
     // the second try shows that it is saving, and the dialog closes only when the server has said yes
-    await input.press('Enter');
-    await expect(dialog.getByRole('status')).toHaveText('Saving…');
-    await expect(dialog).toBeVisible();
+    try {
+      await input.press('Enter');
+      await expect(dialog.getByRole('status')).toHaveText('Saving…');
+      await expect(dialog).toBeVisible();
+    } finally {
+      confirmAnswer();
+    }
     await expect(dialog).toHaveCount(0);
     expect(tracker.answers).toEqual([expect.objectContaining({ answer: 'Bring back Code only, please' })]);
     await expect(frame).not.toContainText('Code, Docs and Services');

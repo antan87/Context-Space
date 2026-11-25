@@ -21,7 +21,7 @@ export async function generateAntigravityConfig(
   ctx: WorkspaceContext,
   workspacePath: string,
 ): Promise<void> {
-  const content = `${GENERATED_SNAPSHOT_HEADER}\n\n${await buildContextContent(ctx)}`;
+  const content = `${GENERATED_SNAPSHOT_HEADER}\n\n${await buildContextContent(ctx, workspacePath)}`;
   const filePath = path.join(workspacePath, 'AGENTS.md');
 
   try {

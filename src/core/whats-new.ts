@@ -22,6 +22,9 @@ import * as path from 'node:path';
 import { execa } from 'execa';
 import { acquireLock } from './locks.js';
 import { WorkspaceMovedError, movedMessage, readSwitch } from './workspace-db-switch.js';
+import { readAppDb, storeOf } from './workspace-db-app.js';
+import { runDbWrite } from './workspace-db-write.js';
+import { beginImmediate, commitTransaction, readDbId, WorkspaceDbError, type WorkspaceDb } from './workspace-db/index.js';
 import { PLAN_FILE } from './plan-file.js';
 import { CHANGES_KEPT, readPlanChanges, readPlanFile, type PlanFileChange } from './plan-file-store.js';
 import { describeKnowledgeEntry, knowledgeEntryId, parseKnowledgeEntries, readWorkspaceKnowledge, type KnowledgeEntryType } from './knowledge.js';
@@ -37,7 +40,7 @@ import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from
 import { listBranchPullRequestsState, type BranchPullRequest, type PullRequestState } from './merge-detection.js';
 import { BoardWorkspaceError } from './board.js';
 import { readLineNotes, type LineNote } from './line-notes.js';
-import { listCommitNotes } from './commit-notes.js';
+import { listCommitNotes, queryCommitNotes } from './commit-notes.js';
 import { readQuestions, type QuestionAnswer } from './questions.js';
 import { loadFeatureConfig } from './workspace.js';
 
@@ -228,6 +231,12 @@ export interface WhatsNewOptions {
   mark?: boolean;
   /** Keep what this report saw as the reader's pending record, for {@link markSeen} to make theirs. */
   pending?: boolean;
+  /**
+   * The app reads a workspace that was moved to its database (the switch is on) through the database: what each reader
+   * saw is kept in its `seen` table and the plan's changes come from its history. Without it (the command line until
+   * DB3c), a moved workspace's report is still made but records nothing.
+   */
+  database?: boolean;
 }
 
 /** The reader's name as the record keeps it: lower case, no spaces. */
@@ -283,6 +292,75 @@ async function readSeenFile(root: string): Promise<SeenFile> {
   }
   return isObject(parsed) ? { version: 1, readers: recordsFrom(parsed.readers), pending: recordsFrom(parsed.pending) } : EMPTY_SEEN;
 }
+
+/** The seen records kept in a moved workspace's database (`seen` table; the plan's own `#plan-file` row is not a reader). */
+function seenFromRows(rows: Array<{ reader: string; seen: string; pending: string }>): SeenFile {
+  const parse = (text: string): unknown => { try { return JSON.parse(text); } catch { return null; } };
+  const readers: Record<string, unknown> = {};
+  const pending: Record<string, unknown> = {};
+  for (const row of rows) {
+    if (!READER.test(row.reader)) continue;
+    readers[row.reader] = parse(row.seen);
+    pending[row.reader] = parse(row.pending);
+  }
+  return { version: 1, readers: recordsFrom(readers), pending: recordsFrom(pending) };
+}
+
+const readSeenDb = (root: string) => readAppDb(root, (view) => ({
+  seen: seenFromRows(view.sqlite.prepare('SELECT reader, seen, pending FROM seen').all() as Array<{ reader: string; seen: string; pending: string }>),
+  dbId: readDbId(view.sqlite),
+}));
+
+export type SeenDbChange = { reader: string; dbId?: string } & (
+  | { type: 'mark'; record: SeenRecord }
+  | { type: 'pending'; record: SeenRecord; expected: SeenRecord | null; repaired: SeenRecord | null }
+  | { type: 'promote'; at: number }
+);
+
+/** Updates one reader in a transaction. Seen state does not advance the plan revision. */
+export function writeSeenInDb(db: WorkspaceDb, change: SeenDbChange): Promise<void> {
+  return db.serialize(async () => {
+    await beginImmediate(db);
+    try {
+      if (change.dbId !== undefined && change.dbId !== readDbId(db.sqlite)) {
+        throw new WorkspaceDbError('replaced', 'The workspace database changed while this report was made. Read the news again.');
+      }
+      const { reader } = change;
+      const row = db.sqlite.prepare('SELECT reader, seen, pending FROM seen WHERE reader = ?').all(reader) as Array<{ reader: string; seen: string; pending: string }>;
+      const seen = seenFromRows(row);
+      let own = entryOf(seen.readers, reader);
+      let held = entryOf(seen.pending, reader);
+      switch (change.type) {
+        case 'mark':
+          if (own && Date.parse(own.at) > Date.parse(change.record.at)) throw new NewsChangedError();
+          own = change.record;
+          held = null;
+          break;
+        case 'pending':
+          if (held && Date.parse(held.at) > Date.parse(change.record.at)) throw new NewsChangedError();
+          if (JSON.stringify(own) === JSON.stringify(change.expected)) own = change.repaired;
+          held = change.record;
+          break;
+        case 'promote':
+          if (!held || Date.parse(held.at) !== change.at || (own && Date.parse(own.at) > change.at)) throw new NewsChangedError();
+          own = held;
+          held = null;
+          break;
+      }
+      db.sqlite.prepare('INSERT INTO seen(reader, at, seen, pending) VALUES (?, ?, ?, ?) ON CONFLICT(reader) DO UPDATE SET at = excluded.at, seen = excluded.seen, pending = excluded.pending')
+        .run(reader, own?.at ?? held?.at ?? new Date().toISOString(), JSON.stringify(own ?? {}), held ? JSON.stringify(held) : '[]');
+      await commitTransaction(db);
+    } catch (error) {
+      try { db.sqlite.exec('ROLLBACK'); } catch { /* already ended */ }
+      throw error;
+    }
+  });
+}
+
+const updateSeenDb = (root: string, change: SeenDbChange) => runDbWrite(root, { type: 'seen', change }).catch((error: unknown) => {
+  if (error instanceof Error && error.name === 'NewsChangedError') throw new NewsChangedError();
+  throw error;
+});
 
 /** The newest records, and always `keep`'s. */
 function newest(records: Record<string, SeenRecord>, keep: string): Record<string, SeenRecord> {
@@ -402,7 +480,7 @@ async function readKnowledge(workspacePath: string): Promise<NewsKnowledge[]> {
   }).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
 }
 
-async function takeSnapshot(root: string): Promise<Snapshot> {
+async function takeSnapshot(root: string, database = false): Promise<Snapshot> {
   const problems: string[] = [];
   const unreadable = <T>(what: string, fallback: T) => (error: unknown): T => {
     problems.push(`${what} could not be read: ${reasonOf(error)}`);
@@ -414,9 +492,12 @@ async function takeSnapshot(root: string): Promise<Snapshot> {
     Promise.all(repos.map(repoHead)),
     readDocuments(root, repos).catch(unreadable('The documents', [])),
     readKnowledge(root).catch(unreadable('The knowledge', [])),
-    listCommitNotes(root).then((items): NewsCommitNote[] =>
+    (database ? queryCommitNotes(root) : listCommitNotes(root)).then((items): NewsCommitNote[] =>
       items.map(({ id, repo, sha, shortSha, title, body, by, at }) => ({ id, repo, sha, shortSha, title, body, by, at })),
-    ).catch((error) => (error instanceof BoardWorkspaceError ? [] : readNotes(error))),
+    ).catch((error) => {
+      if (database) throw error;
+      return error instanceof BoardWorkspaceError ? [] : readNotes(error);
+    }),
     readQuestions(root).catch(unreadable('Answers', [] as QuestionAnswer[])),
     readLineNotes(root).catch(unreadable('Line notes', [] as LineNote[])),
   ]);
@@ -455,8 +536,11 @@ async function noticePlanEdits(root: string): Promise<void> {
  * The plan's changes from `from` up to `until`, oldest first. A reader's own changes are left out; `ai` names no one,
  * so changes by `ai` stay.
  */
-async function planNews(root: string, reader: string, from: number, until: number, limit: number): Promise<NewsSection<NewsPlanChange>> {
-  const changes = (await readPlanChanges(root, CHANGES_KEPT))
+async function planNews(root: string, reader: string, from: number, until: number, limit: number, database = false): Promise<NewsSection<NewsPlanChange>> {
+  const all = database
+    ? (await import('./plan-db-app.js').then(({ planDbParts }) => planDbParts(root, CHANGES_KEPT))).changes
+    : await readPlanChanges(root, CHANGES_KEPT);
+  const changes = all
     .filter((change) => afterTime(change.at, from) && Date.parse(change.at) <= until && (reader === 'ai' || change.by !== reader));
   const section = capped(changes, limit);
   return { items: section.items.reverse(), more: section.more };
@@ -957,20 +1041,23 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
   const root = await fs.realpath(workspacePath);
   const name = newsReaderName(reader);
   const problems: string[] = [];
+  const database = options.database === true && storeOf(root) === 'database';
   // Before the time is taken, so an edit noticed now is in this report and not in the next one as well.
-  await noticePlanEdits(root).catch((error) => { problems.push(`The plan could not be read: ${reasonOf(error)}`); });
+  if (!database) await noticePlanEdits(root).catch((error) => { problems.push(`The plan could not be read: ${reasonOf(error)}`); });
   const now = options.now ?? new Date();
   const limit = options.limit ?? NEWS_LIMIT;
-  const record = entryOf((await readSeenFile(root)).readers, name);
+  const dbSeen = database ? await readSeenDb(root) : null;
+  const record = entryOf((dbSeen?.seen ?? await readSeenFile(root)).readers, name);
   const { from, basis } = fromTime(options, record, now);
   const fromMs = Date.parse(from);
   // A time asked for stands on its own: the record says what was seen then, not at that time.
   const kept = basis === 'last-look' ? record : null;
 
-  const snapshot = await takeSnapshot(root);
+  const snapshot = await takeSnapshot(root, database);
   problems.push(...snapshot.problems);
   const [plan, commits, localIncoming] = await Promise.all([
-    planNews(root, name, fromMs, now.getTime(), limit).catch((error): NewsSection<NewsPlanChange> => {
+    planNews(root, name, fromMs, now.getTime(), limit, database).catch((error): NewsSection<NewsPlanChange> => {
+      if (database) throw error;
       problems.push(`The plan could not be read: ${reasonOf(error)}`);
       return { items: [], more: 0 };
     }),
@@ -1010,28 +1097,33 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unavailable.add(candidate); }
   }
   const nextRecord = recordOf(snapshot, now.toISOString(), incomingRefs, record, unavailable);
-  const moved = readSwitch(root);
+  const moved = database ? null : readSwitch(root);
   if (moved && (options.mark || options.pending)) {
     // The report is still made (an AI reads it when it starts), but nothing is recorded in the old seen file.
     problems.push(`${movedMessage(moved)} What this report showed is not recorded as seen.`);
-  } else if (options.mark) await saveRecord(root, name, nextRecord);
-  else if (options.pending) {
-    // Only remove repaired identities, under the lock and only if the reader has not changed since our snapshot.
-    await updateSeenFile(root, (seen) => {
-      const current = entryOf(seen.readers, name);
-      if (current && record && JSON.stringify(current) === JSON.stringify(record)) {
-        if (current.answers === undefined) {
-          current.answers = nextRecord.answers?.filter((entry) => {
-            const answer = snapshot.answers.find((item) => item.path === entry.path);
-            return !answer || !afterTime(answer.modifiedAt, Date.parse(current.at));
-          });
-        }
-        const observed = new Map(snapshot.answers.map((answer) => [answer.path, answer]));
-        current.answers = current.answers?.map((entry) => {
-          const answer = observed.get(entry.path);
-          return answer ? { ...entry, broken: entry.broken.filter((id) => brokenCopies(answer, entry.broken).includes(id)) } : entry;
+  } else if (options.mark) {
+    if (dbSeen) await updateSeenDb(root, { type: 'mark', reader: name, record: nextRecord, dbId: dbSeen.dbId });
+    else await saveRecord(root, name, nextRecord);
+  } else if (options.pending) {
+    // Only remove repaired identities if the reader has not changed since our snapshot.
+    const repaired = record ? { ...record } : null;
+    if (repaired) {
+      if (repaired.answers === undefined) {
+        repaired.answers = nextRecord.answers?.filter((entry) => {
+          const answer = snapshot.answers.find((item) => item.path === entry.path);
+          return !answer || !afterTime(answer.modifiedAt, Date.parse(repaired.at));
         });
       }
+      const observed = new Map(snapshot.answers.map((answer) => [answer.path, answer]));
+      repaired.answers = repaired.answers?.map((entry) => {
+        const answer = observed.get(entry.path);
+        return answer ? { ...entry, broken: entry.broken.filter((id) => brokenCopies(answer, entry.broken).includes(id)) } : entry;
+      });
+    }
+    if (dbSeen) await updateSeenDb(root, { type: 'pending', reader: name, record: nextRecord, expected: record, repaired, dbId: dbSeen.dbId });
+    else await updateSeenFile(root, (seen) => {
+      const current = entryOf(seen.readers, name);
+      if (repaired && JSON.stringify(current) === JSON.stringify(record)) seen.readers[name] = repaired;
       seen.pending[name] = nextRecord;
       return name;
     });
@@ -1049,11 +1141,13 @@ export async function whatsNew(workspacePath: string, reader: string, options: W
  * @throws {NewsChangedError} When no pending report was made at `at`: a newer one was made since, or it was marked
  *   already, or the reader has looked another way meanwhile. The reader should read the list again.
  */
-export async function markSeen(workspacePath: string, reader: string, at: string | Date): Promise<void> {
+export async function markSeen(workspacePath: string, reader: string, at: string | Date, options: { database?: boolean } = {}): Promise<void> {
   const root = await fs.realpath(workspacePath);
   const when = at instanceof Date ? at : new Date(at);
   if (Number.isNaN(when.getTime())) throw new Error('"at" is not a date and time.');
-  await promotePending(root, newsReaderName(reader), when.getTime());
+  const name = newsReaderName(reader);
+  if (options.database && storeOf(root) === 'database') await updateSeenDb(root, { type: 'promote', reader: name, at: when.getTime() });
+  else await promotePending(root, name, when.getTime());
 }
 
 /**

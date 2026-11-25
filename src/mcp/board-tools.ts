@@ -8,9 +8,12 @@
 import { z } from 'zod';
 
 import { planKey, type PlanFile } from '../core/plan-file.js';
+import { boardDbForApp, boardRequestId, changeBoardDb, DB_CARD_ID, replayBoardAdd } from '../core/board-db-app.js';
+import { PlanDbChangeError, planDbParts } from '../core/plan-db-app.js';
+import { storeOf } from '../core/workspace-db-app.js';
 import { readPlanFile } from '../core/plan-file-store.js';
 import {
-  BOARD_LIMITS, BOARD_NODE_ID_FORMATS, boardActorName, boardFields, changeBoard, isBoardStepKey, readBoard,
+  BOARD_LIMITS, BOARD_NODE_ID_FORMATS, boardActorName, boardFields, changeBoard, isBoardId, isBoardNodeId, isBoardStepKey, readBoard,
   type Board, type BoardCard, type BoardChange,
 } from '../core/board.js';
 import { readQuestions, summarizeAnswers } from '../core/questions.js';
@@ -22,14 +25,16 @@ const harness = z.string().max(40).optional().describe('Optional name of the ass
 const revision = z.number().int().nonnegative().optional().describe('Optional. The board revision you read. If the board has changed since, nothing is changed and you are told to read it again. Leave it out to apply the change to the board as it is now.');
 const x = z.number().min(-BOARD_LIMITS.coordinate).max(BOARD_LIMITS.coordinate);
 const y = x;
-const cardId = boardFields.uuid.describe('The id of a card, as board_read shows it.');
-const nodeId = boardFields.nodeId.describe(`A card id, or checkpoint:<plan key>, document:<document id> or commit:<repository>:<hash>, as board_read shows them.`);
+const cardId = z.string().refine((id) => isBoardId(id) || DB_CARD_ID.test(id), 'Use a uuid or a database card id, as board_read shows it.').describe('The id of a card, as board_read shows it.');
+const nodeId = z.string().refine((id) => isBoardNodeId(id) || DB_CARD_ID.test(id), 'That is not a board node id. Use a node id as board_read shows it.').describe(`A card id, or checkpoint:<plan key>, document:<document id> or commit:<repository>:<hash>, as board_read shows them.`);
 const area = boardFields.area.describe('Which area on the board this card belongs to: checkpoint:<plan key> or plan:own, from areas in board_read. Leave it out when unsure and the board places it in a linked area or the current checkpoint.');
 
+const rev = z.number().int().positive().optional().describe('Card rev from board_read. Refuses an edit of a changed card.');
+const dbId = z.string().min(1).optional().describe('Database id from board_read. Required with a database revision or card rev.');
 const step = z.string().trim().min(1).max(400);
 const look = boardFields.look;
 
-interface BoardToolContext { root: string; by: string }
+interface BoardToolContext { root: string; by: string; database: boolean; dbId?: string }
 
 function friendly(error: unknown): string {
   if (error instanceof z.ZodError) {
@@ -73,19 +78,28 @@ function boardTool<T extends z.ZodObject>(
         if (!(await loadFeatureConfig(ctx.workspacePath))) throw new Error('Workspace not found.');
         // This server can be started below the workspace root; the board lives at the root.
         const root = (await findWorkspaceRoot(ctx.workspacePath)) ?? ctx.workspacePath;
-        const result = await action(validated, { root, by: actorOf((validated as { harness?: string }).harness) });
+        const result = await action(validated, { root, by: actorOf((validated as { harness?: string }).harness), database: storeOf(root) === 'database' });
         // Compact: a board read can be large, and the one reading it is a model.
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       } catch (error) {
-        return { isError: true, content: [{ type: 'text', text: friendly(error) }] };
+        const message = error instanceof PlanDbChangeError && error.detail ? error.detail : friendly(error);
+        return { isError: true, content: [{ type: 'text', text: message }] };
       }
     },
   };
 }
 
+async function boardPlan(ctx: BoardToolContext): Promise<PlanFile> {
+  if (!ctx.database) return (await readPlanFile(ctx.root)).plan;
+  const { read } = await planDbParts(ctx.root, 0);
+  ctx.dbId = read.dbId;
+  return read.plan;
+}
+
 /** The key of the plan step that `given` names: a step's key, or its text in key form (markdown and case do not matter), whole or (12 characters or more) the start of it. */
-async function resolveStep(root: string, given: string): Promise<string> {
-  const { plan } = await readPlanFile(root).catch((error) => { throw new Error(`The plan could not be read: ${friendly(error)}`); });
+async function resolveStep(ctx: BoardToolContext, given: string): Promise<string> {
+  const plan = ctx.database ? await boardPlan(ctx)
+    : await boardPlan(ctx).catch((error: unknown) => { throw new Error(`The plan could not be read: ${friendly(error)}`); });
   const steps = [...plan.steps, ...plan.checkpoints.flatMap((checkpoint) => checkpoint.steps)];
   const byKey = steps.find((candidate) => candidate.key === given.trim().toLowerCase());
   if (byKey) return byKey.key;
@@ -102,8 +116,8 @@ async function resolveStep(root: string, given: string): Promise<string> {
 }
 
 /** The first step that is not done in `areaId` (or in the current area), when that area is a checkpoint or the plan's own. Never throws: no step is a fine answer. */
-async function defaultStep(root: string, areaId: string | undefined): Promise<string | undefined> {
-  const { plan } = await readPlanFile(root).catch(() => ({ plan: undefined }));
+async function defaultStep(ctx: BoardToolContext, areaId: string | undefined): Promise<string | undefined> {
+  const plan = ctx.database ? await boardPlan(ctx) : await boardPlan(ctx).catch(() => undefined);
   if (!plan) return undefined;
   const target = areaId ?? areasOf(plan).current;
   const steps = target === 'plan:own' ? plan.steps : plan.checkpoints.find((checkpoint) => `checkpoint:${checkpoint.key}` === target)?.steps;
@@ -112,8 +126,22 @@ async function defaultStep(root: string, areaId: string | undefined): Promise<st
 }
 
 /** Makes one change and says what the board is now. */
-async function change(ctx: BoardToolContext, input: { revision?: number; stepIsHint?: boolean }, make: BoardChange) {
-  return changeBoard(ctx.root, [make], { by: ctx.by, revision: input.revision, stepIsHint: input.stepIsHint });
+async function change(ctx: BoardToolContext, input: { revision?: number; dbId?: string; stepIsHint?: boolean; rev?: number; requestId?: string; requestSource?: string }, make: BoardChange) {
+  if (ctx.database) {
+    const { rev, revision } = input;
+    if (input.dbId === undefined && (rev !== undefined || revision !== undefined)) {
+      throw new Error('Send the dbId from the same Board read as the revision or rev. Read the board again.');
+    }
+    return changeBoardDb(ctx.root, [{ ...make, ...(rev !== undefined ? { rev } : {}) }], {
+      by: ctx.by, revision, dbId: input.dbId ?? ctx.dbId, strictRevision: revision !== undefined,
+      requestId: input.requestId, requestSource: input.requestSource,
+    });
+  }
+  if (input.dbId !== undefined || input.rev !== undefined || input.requestId !== undefined) {
+    throw new Error('This workspace uses the Board file. Read the board again before changing it.');
+  }
+  const result = await changeBoard(ctx.root, [make], { by: ctx.by, revision: input.revision, stepIsHint: input.stepIsHint });
+  return { ...result, revision: result.board.revision, savedCards: [] };
 }
 
 const cardOf = (board: Board, id: string | undefined): BoardCard | undefined => board.cards.find((card) => card.id === id);
@@ -130,12 +158,14 @@ const addCardSchema = z.object({
   look: look.optional().describe(`One line on why a person should look at this card, up to ${BOARD_LIMITS.look} characters.`),
   x: x.optional().describe('Where to put it on the canvas, with y. Leave both out and the board places it.'),
   y: y.optional(),
-  revision,
+  revision, dbId,
+  requestId: boardRequestId.optional().describe('For a moved workspace, give a unique requestId for each new card and reuse it with the same inputs when retrying.'),
   harness,
 });
 
 const updateCardSchema = z.object({
   id: cardId,
+  rev,
   title: boardFields.title.optional(),
   body: boardFields.body.optional().describe('Notes only. Replaces the text of the note.'),
   description: boardFields.description.optional().describe('File cards only. Replaces the description.'),
@@ -144,16 +174,16 @@ const updateCardSchema = z.object({
   area: area.nullable().optional().describe('Move the card to another area (checkpoint:<plan key> or plan:own, from board_read; this drops a step not in it), or null to clear its assigned area so it follows its links or the current checkpoint.'),
   step: step.nullable().optional().describe('The plan step this card is about (its key or text), or null to clear.'),
   look: look.nullable().optional().describe('Why a person should look at this card, or null to clear.'),
-  revision,
+  revision, dbId,
   harness,
 });
 
-const removeCardSchema = z.object({ id: cardId, revision, harness });
+const removeCardSchema = z.object({ id: cardId, revision, dbId, rev, harness });
 
 const moveSchema = z.object({
   nodes: z.array(z.object({ id: nodeId, x: x.nullable(), y: y.nullable() }).strict()).min(1).max(BOARD_LIMITS.nodes)
     .describe(`What to place, up to ${BOARD_LIMITS.nodes} at a time: each one's id and its x and y on the canvas. Give x and y as null to forget a node's place. The app uses only the places of cards.`),
-  revision,
+  revision, dbId,
   harness,
 });
 
@@ -161,7 +191,7 @@ const linkSchema = z.object({
   from: nodeId.describe('Where the line starts.'),
   to: nodeId.describe('Where the line ends.'),
   label: boardFields.label.optional().describe(`A few words on how they relate, such as "explains" or "blocked by", up to ${BOARD_LIMITS.label} characters.`),
-  revision,
+  revision, dbId,
   harness,
 });
 
@@ -169,12 +199,12 @@ const unlinkSchema = z.object({
   id: boardFields.uuid.optional().describe('The id of the link, from board_read. Or give from and to instead.'),
   from: nodeId.optional(),
   to: nodeId.optional(),
-  revision,
+  revision, dbId,
   harness,
 });
 
 const readSchema = z.object({
-  cardId: boardFields.uuid.optional().describe('Optional. The id of one card, to read it in full with its lines and place instead of the whole board.'),
+  cardId: cardId.optional().describe('Optional. The id of one card, to read it in full with its lines and place instead of the whole board.'),
   harness,
 });
 
@@ -218,16 +248,18 @@ export function areasOf(plan: PlanFile): BoardAreas {
 }
 
 /** What a link or a position can name that is not a card: the plan's checkpoints and the source documents. */
-async function linkTargets(root: string) {
+async function linkTargets(ctx: BoardToolContext) {
+  const { root } = ctx;
   const problems: string[] = [];
   let checkpoints: Array<{ id: string; title: string }> = [];
   let areas: BoardAreas = { current: null, items: [] };
 
   try {
-    const { plan } = await readPlanFile(root);
+    const plan = await boardPlan(ctx);
     checkpoints = plan.checkpoints.map((checkpoint) => ({ id: `checkpoint:${checkpoint.key}`, title: checkpoint.title }));
     areas = areasOf(plan);
   } catch (error) {
+    if (ctx.database) throw error;
     problems.push(`The plan could not be read: ${friendly(error)}`);
   }
 
@@ -243,18 +275,19 @@ export const boardTools: NexusFlowTool[] = [
     'board_read',
     `Read the workspace board: the cards people and AIs put on it, the lines between things, where things were moved to, the board's revision, and the areas cards can belong to (checkpoint:<plan key> or plan:own, with areas.current showing the checkpoint under way). Also lists the existing answers in explain/ as questions (path, question, area, parts, code blocks, and the copies that no longer match: read before you answer a question about how something works, fix what does not match, and see the skill contextspace-explain for the format). Also lists what a card or line can point at: the plan's checkpoints and the source documents, each with the node id to use, and the node id formats. Call it before you change the board, so you do not add what is already there. The board tab also draws the plan's checkpoints, the source documents and the new commits by itself; this lists only what was added or arranged by hand. To keep the answer small, a note's body and a file card's description longer than ${PREVIEW_CHARS} characters are cut and the card says "truncated": true; pass cardId to read that one card in full, with its lines and place.`,
     readSchema,
-    async ({ cardId }, { root }) => {
-      const board = await readBoard(root);
+    async ({ cardId }, ctx) => {
+      const { root } = ctx;
+      const board = await (ctx.database ? boardDbForApp(root) : readBoard(root));
       if (cardId !== undefined) {
         const card = cardOf(board, cardId);
         if (!card) throw new Error(`There is no card with id ${cardId} on the board. Read the board again.`);
         return {
-          revision: board.revision, card,
+          revision: board.revision, ...("dbId" in board ? { dbId: board.dbId } : {}), card,
           links: board.links.filter((link) => link.from === cardId || link.to === cardId),
           ...(board.positions[cardId] ? { position: board.positions[cardId] } : {}),
         };
       }
-      const { problems, areas, ...canLinkTo } = await linkTargets(root);
+      const { problems, areas, ...canLinkTo } = await linkTargets(ctx);
       return {
         board: { ...board, cards: board.cards.map(previewOf) },
         areas,
@@ -270,19 +303,27 @@ export const boardTools: NexusFlowTool[] = [
 
   boardTool(
     'board_add_card',
-    `Put a card on the board where the user sees it. Use kind "note" for something worth keeping in view: a finding, a question, a summary, a risk. Use kind "file" to SHOW something you made instead of describing it: a picture (png, jpg, gif or webp), an HTML page, a PDF, a Markdown document, a deck or a spreadsheet (an SVG opens as its source text, not as a picture). Write the file inside the workspace first, then give its path relative to the workspace folder; the card opens that file for the user. The file must exist, and only files the app can open are accepted (not links, hidden folders other than .claude, .agents and .github, or anything outside the workspace). Add a short description saying what to look at. Pass area (checkpoint:<plan key> or plan:own, from areas in board_read) to place it in that area, or leave it out when unsure so the board places it in a linked area or the current checkpoint. To tie the card to the plan or a document, call board_link next with the id this returns.`,
+    `Put a card on the board where the user sees it. Use kind "note" for something worth keeping in view: a finding, a question, a summary, a risk. Use kind "file" to SHOW something you made instead of describing it: a picture (png, jpg, gif or webp), an HTML page, a PDF, a Markdown document, a deck or a spreadsheet (an SVG opens as its source text, not as a picture). Write the file inside the workspace first, then give its path relative to the workspace folder; the card opens that file for the user. The file must exist, and only files the app can open are accepted (not links, hidden folders other than .claude, .agents and .github, or anything outside the workspace). Add a short description saying what to look at. Pass area (checkpoint:<plan key> or plan:own, from areas in board_read) to place it in that area, or leave it out when unsure so the board places it in a linked area or the current checkpoint. To tie the card to the plan or a document, call board_link next with the id this returns. On a moved workspace, pass a unique requestId and resend it with the same inputs to retry safely. The result includes the requestId used.`,
     addCardSchema,
-    async ({ kind, title, body, path, description, pinned, area, step, look, x, y, revision }, ctx) => {
+    async ({ requestId, ...input }, ctx) => {
+      const { kind, title, body, path, description, pinned, area, step, look, x, y, revision, dbId } = input;
       if ((x === undefined) !== (y === undefined)) throw new Error('Give both x and y to place the card, or neither.');
-      const stepKey = step !== undefined ? await resolveStep(ctx.root, step) : await defaultStep(ctx.root, area);
-      const { board, results } = await change(ctx, { revision, stepIsHint: step === undefined }, {
+      const requestSource = JSON.stringify({ tool: 'board_add_card', by: ctx.by, ...input });
+      if (ctx.database && requestId) {
+        if (revision !== undefined && !dbId) throw new Error('Send the dbId from the same Board read as the revision.');
+        const replay = await replayBoardAdd(ctx.root, requestId, requestSource, dbId);
+        if (replay) return { revision: replay.revision, dbId: replay.board.dbId, requestId: replay.requestId, card: replay.savedCards.find((card) => card.id === replay.results[0]?.id) };
+      }
+      const stepKey = step !== undefined ? await resolveStep(ctx, step) : await defaultStep(ctx, area);
+      const added = await change(ctx, { revision, dbId, requestId, requestSource, stepIsHint: step === undefined }, {
         op: 'add_card', kind, title, body, path, description, pinned,
         ...(area !== undefined ? { area } : {}),
         ...(stepKey ? { step: stepKey } : {}),
         ...(look !== undefined ? { look } : {}),
         ...(x !== undefined && y !== undefined ? { position: { x, y } } : {}),
       });
-      return { revision: board.revision, card: cardOf(board, results[0]?.id) };
+      const id = added.results[0]?.id;
+      return { revision: added.revision, ...('dbId' in added.board ? { dbId: added.board.dbId } : {}), ...('requestId' in added ? { requestId: added.requestId } : {}), card: added.savedCards.find((card) => card.id === id) ?? cardOf(added.board, id) };
     },
   ),
 
@@ -290,25 +331,25 @@ export const boardTools: NexusFlowTool[] = [
     'board_update_card',
     `Change a card you or someone else put on the board: its title, the text of a note (body), the description of a file card, whether it is pinned, whether it is archived, or which area it belongs to (pass an area id from board_read, or null to clear it; moving it drops a step not in that area). Only what you give changes. Archive a card that is done but worth keeping; use board_remove_card only for a card that was a mistake.`,
     updateCardSchema,
-    async ({ id, title, body, description, pinned, archived, area, step, look, revision }, ctx) => {
-      const stepKey = typeof step === 'string' ? await resolveStep(ctx.root, step) : step;
-      const { board } = await change(ctx, { revision }, {
+    async ({ id, title, body, description, pinned, archived, area, step, look, revision, dbId, rev }, ctx) => {
+      const stepKey = typeof step === 'string' ? await resolveStep(ctx, step) : step;
+      const { board, results } = await change(ctx, { revision, dbId, rev }, {
         op: 'update_card', id, title, body, description, pinned, archived,
         ...(area !== undefined ? { area } : {}),
         ...(stepKey !== undefined ? { step: stepKey } : {}),
         ...(look !== undefined ? { look } : {}),
       });
-      return { revision: board.revision, card: cardOf(board, id) };
+      return { revision: board.revision, ...('dbId' in board ? { dbId: board.dbId } : {}), card: cardOf(board, results[0]?.id ?? id) };
     },
     { idempotent: true },
   ),
 
   boardTool(
     'board_remove_card',
-    `Delete a card for good, together with its lines and its place on the canvas. Use it for a card that was a mistake or a duplicate. To put a finished card away without losing it, use board_update_card with archived true instead. The file a file card shows is not touched.`,
+    `Delete a card for good, together with its lines and its place on the canvas. Use it for a card that was a mistake or a duplicate. To put a finished card away without losing it, use board_update_card with archived true instead. The file a file card shows is not touched. On a moved workspace, send the revision and dbId from board_read so the removal covers the card and its links.`,
     removeCardSchema,
-    async ({ id, revision }, ctx) => {
-      const { board } = await change(ctx, { revision }, { op: 'remove_card', id });
+    async ({ id, revision, dbId, rev }, ctx) => {
+      const { board } = await change(ctx, { revision, dbId, rev }, { op: 'remove_card', id });
       return { revision: board.revision, removed: id };
     },
     { destructive: true },
@@ -318,8 +359,8 @@ export const boardTools: NexusFlowTool[] = [
     'board_move',
     `Place cards on the canvas, by card id with x and y (pixels; y grows downward). The board remembers the places and keeps them. Move several in one call to lay cards out together, for example the cards about one checkpoint in a row beneath it. The app places the board's own checkpoints, documents and commits itself and ignores a place saved for them for now, so place only cards. Give x and y as null to make the board forget a node's place (the board remembers at most ${BOARD_LIMITS.positions} places).`,
     moveSchema,
-    async ({ nodes, revision }, ctx) => {
-      const { board } = await change(ctx, { revision }, { op: 'move', nodes });
+    async ({ nodes, revision, dbId }, ctx) => {
+      const { board } = await change(ctx, { revision, dbId }, { op: 'move', nodes });
       const forgotten = nodes.filter((node) => node.x === null).length;
       return { revision: board.revision, moved: nodes.length - forgotten, forgotten };
     },
@@ -330,8 +371,8 @@ export const boardTools: NexusFlowTool[] = [
     'board_link',
     `Draw a line between two things on the board, with an optional short label saying how they relate. Use it to tie a card to the checkpoint or document it is about, or one card to another. The ends are node ids from board_read: a card id, checkpoint:<plan key>, document:<document id> or commit:<repository>:<hash>. A card must be on the board; the other kinds are only checked for their shape, because the board's own checkpoints, documents and commits come and go. The same two ends can be linked once in each direction.`,
     linkSchema,
-    async ({ from, to, label, revision }, ctx) => {
-      const { board, results } = await change(ctx, { revision }, { op: 'link', from, to, label });
+    async ({ from, to, label, revision, dbId }, ctx) => {
+      const { board, results } = await change(ctx, { revision, dbId }, { op: 'link', from, to, label });
       return { revision: board.revision, link: board.links.find((link) => link.id === results[0]?.id) };
     },
   ),
@@ -340,8 +381,8 @@ export const boardTools: NexusFlowTool[] = [
     'board_unlink',
     `Remove a line from the board, by the link's id (from board_read) or by both of its ends. The things it joined stay.`,
     unlinkSchema,
-    async ({ id, from, to, revision }, ctx) => {
-      const { board, results } = await change(ctx, { revision }, { op: 'unlink', id, from, to });
+    async ({ id, from, to, revision, dbId }, ctx) => {
+      const { board, results } = await change(ctx, { revision, dbId }, { op: 'unlink', id, from, to });
       return { revision: board.revision, unlinked: results[0]?.id };
     },
     { destructive: true },

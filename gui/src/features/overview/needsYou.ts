@@ -5,12 +5,13 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client.js';
+import type { PlanObservation } from '../plan/planFile.js';
 
 export interface WorkspaceNeeds {
   workspaceId: string;
   chatQuestion?: { message: string; timestamp: string; harness: string; options?: string[] };
   /** `holdsUp` is the open work only; `detail` says why it is asked, with its suggested answers; `waiting`: the AI waits in the chat. */
-  questions: Array<{ id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string; waiting?: true }>;
+  questions: Array<PlanObservation & { id: string; title: string; holdsUp: string[]; detail?: string; askedBy?: string; at: string; waiting?: true }>;
   proposals: Array<{ id: string; title: string; action: string; by: string; at: string }>;
   failedChecks: Array<{ id: string; title: string; at?: string }>;
   closedByAi: Array<{ id: string; title: string; action: string; by: string; at: string; note?: string }>;
@@ -25,7 +26,7 @@ export type NeedItem =
   | { kind: 'proposal'; workspaceId: string; id: string; text: string; action: string; by: string; at: string }
   | { kind: 'check'; workspaceId: string; id: string; text: string };
 
-export interface QuestionNeed { kind: 'question'; workspaceId: string; id: string; text: string; holdsUp: string[]; detail?: string; by?: string; at: string; waiting?: boolean }
+export interface QuestionNeed extends PlanObservation { kind: 'question'; workspaceId: string; id: string; text: string; holdsUp: string[]; detail?: string; by?: string; at: string; waiting?: boolean }
 
 /** A question needs the developer when work waits for its answer, or the AI that asked it waits in the chat. */
 export const isUrgent = (question: Pick<QuestionNeed, 'holdsUp' | 'waiting'>) => question.holdsUp.length > 0 || Boolean(question.waiting);
@@ -38,6 +39,7 @@ export const isUrgent = (question: Pick<QuestionNeed, 'holdsUp' | 'waiting'>) =>
 export function needItems(needs: readonly WorkspaceNeeds[]): { groups: Array<{ workspaceId: string; items: NeedItem[] }>; aside: QuestionNeed[] } {
   const question = (workspaceId: string, entry: WorkspaceNeeds['questions'][number]): QuestionNeed => ({
     kind: 'question', workspaceId, id: entry.id, text: entry.title, holdsUp: entry.holdsUp, detail: entry.detail, by: entry.askedBy, at: entry.at, waiting: entry.waiting,
+    ...(entry.dbId ? { dbId: entry.dbId, rev: entry.rev } : {}),
   });
   const groups = needs.map((workspace) => {
     const items: NeedItem[] = [

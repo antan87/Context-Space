@@ -26,6 +26,8 @@ import { BRAND_NAME, BRAND_CONFIG, resolveWorkspaceConfigDir, resolveWorkspaceFi
 
 /** Options for a headless refresh run. */
 export interface RefreshOptions {
+  /** A plan cutover refreshes assistant instructions and managed resources without moving restored files. */
+  planCutover?: boolean;
   /** Ignore the analysis cache and re-analyze every repo. */
   force?: boolean;
   /** Check provenance/output hashes without regenerating; stale docs receive a bounded warning banner. */
@@ -126,11 +128,15 @@ async function refreshWorkspaceUnlocked(
   const { analysis, analyzed, reused } = await analyzeAllReposCached(
     allRepos,
     workspacePath,
-    { force: options.force },
+    { force: options.force, ...(options.planCutover ? { saveCache: false } : {}) },
   );
 
   const ctx: WorkspaceContext = { feature, repos: allRepos, analysis };
 
+  if (options.planCutover) {
+    await generateContextFiles(ctx, feature.assistants, workspacePath, { instructionsOnly: true, quiet: true });
+    return { workspacePath, analyzedRepos: analyzed, reusedRepos: reused, refreshedHandoff: false };
+  }
   await generateContextFiles(ctx, feature.assistants, workspacePath);
 
   // Ensure .code-workspace and .vscode/settings.json exist and stay updated

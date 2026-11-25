@@ -16,13 +16,14 @@
  */
 
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, constants, existsSync, linkSync, mkdirSync, openSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { dbFilePath, getMeta, setMeta, readRevision, SCHEMA_VERSION, validateWorkspaceSchema } from './connection.js';
 import { WorkspaceDbError, isBusyError } from './errors.js';
+import { DATA_EXPORT, fetchedDraftBaseKey, PLAN_EXPORT, visibleDraftKey } from './export-paths.js';
 
 export const BACKUPS_KEPT = 7;
 const BACKUP_NAME = /^workspace-\d{4}-\d{2}-\d{2}\.db$/;
@@ -177,6 +178,62 @@ export interface RestoreResult {
 }
 
 /** Collects every id a database ever issued, table by table, tolerating a damaged file. Returns what it could read and whether it all was. */
+/** The live file's db_id and the ones it replaced, as far as they can be read. */
+function formerOf(db: DatabaseSync): string[] {
+  try {
+    const own = getMeta(db, 'db_id');
+    const parsed: unknown = JSON.parse(getMeta(db, 'former_db_ids') ?? '[]');
+    return [...(own ? [own] : []), ...(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [])];
+  } catch {
+    return [];
+  }
+}
+
+/** Publication provenance belongs to the files beside the live database, even when restoring an older backup. */
+function latestExportHashes(db: DatabaseSync): Record<string, string> {
+  try {
+    const rows = db.prepare('SELECT file, text FROM exports WHERE rowid IN (SELECT max(rowid) FROM exports GROUP BY file)').all() as Array<{ file: string; text: string }>;
+    return Object.fromEntries(rows.map(({ file, text }) => [file, createHash('sha256').update(text).digest('hex')]));
+  } catch {
+    return {};
+  }
+}
+
+interface LiveDraftState {
+  drafts: Array<{
+    digest: string; file: string; path: string; at: string; by: string | null;
+    base_revision: number | null; status: string;
+  }>;
+  metadata: Array<{ key: string; value: string }>;
+}
+
+/** Draft copies stay beside the database, so keep their latest disposition and verified base with them. */
+function readLiveDraftState(db: DatabaseSync): LiveDraftState | undefined {
+  let drafts: LiveDraftState['drafts'];
+  try {
+    drafts = db.prepare('SELECT digest, file, path, at, by, base_revision, status FROM drafts ORDER BY rowid').all() as typeof drafts;
+  } catch {
+    return undefined;
+  }
+  const keys = [visibleDraftKey(PLAN_EXPORT), visibleDraftKey(DATA_EXPORT), ...drafts.map(({ digest }) => fetchedDraftBaseKey(digest))];
+  const metadata: LiveDraftState['metadata'] = [];
+  for (const key of keys) {
+    try {
+      const value = getMeta(db, key);
+      if (value !== null) metadata.push({ key, value });
+    } catch { /* The live table may only be partially readable. */ }
+  }
+  return { drafts, metadata };
+}
+
+function preserveLiveDraftState(db: DatabaseSync, state: LiveDraftState): void {
+  const store = db.prepare(`INSERT INTO drafts(digest, file, path, at, by, base_revision, status) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(digest) DO UPDATE SET file = excluded.file, path = excluded.path, at = excluded.at, by = excluded.by,
+      base_revision = excluded.base_revision, status = excluded.status`);
+  for (const draft of state.drafts) store.run(draft.digest, draft.file, draft.path, draft.at, draft.by, draft.base_revision, draft.status);
+  for (const { key, value } of state.metadata) setMeta(db, key, value);
+}
+
 function scanIds(db: DatabaseSync): { ids: Set<string>; complete: boolean } {
   const ids = new Set<string>();
   let complete = true;
@@ -257,24 +314,77 @@ function isFileInUse(error: unknown): boolean {
  * never deleted. Close other connections afterwards: they now point at the old file and get `replaced`.
  */
 export function restoreBackup(workspacePath: string, backup: string): RestoreResult {
-  // NOT YET SAFE while other connections are open. It holds the live file's write lock only for its own scan and
-  // promotion; a writer or opener in another process or connection is not fenced against the replacement, the Windows
-  // rename of an open file is refused with `file_in_use` (nothing changed) but not otherwise fenced, and the whole thing is synchronous. DB3 must fence it (close or refuse all
-  // other openers and writers first, then restore) before anything calls it from a running app.
+  return restoreCore(workspacePath, backup, null, 5000);
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * {@link restoreBackup} for a running server: the live file's write lock, which another process may hold for a while, is
+ * won between timers (for up to `waitMs`, 5 s by default), so the event loop keeps answering while the restore waits.
+ * Only the short work after that (copying the backup in, the id scan, the rename) runs on the loop. The caller fences
+ * its own connections first (core/workspace-db-app `restoreBackupForApp`).
+ */
+export async function restoreBackupAsync(workspacePath: string, backup: string, options: { waitMs?: number } = {}): Promise<RestoreResult> {
   const live = dbFilePath(workspacePath);
-  const source = path.isAbsolute(backup) ? backup : path.join(backupsDir(workspacePath), backup);
-  if (!existsSync(source)) throw new WorkspaceDbError('backup_failed', `There is no backup ${source}.`);
-  assertBackup(source);
-  // A journal at the live path with no database beside it belongs to a database that is not there (a failed recovery
-  // left it). Installing a backup next to it could apply it to the wrong file: refuse before anything moves.
-  if (!existsSync(live) && existsSync(`${live}-journal`)) {
-    throw new WorkspaceDbError('backup_failed', `There is a journal at ${live}-journal but no database at ${live}. Move that journal away, or recover the old database it belongs to, before restoring. Nothing was changed.`);
+  const waitMs = options.waitMs ?? 5000;
+  let held: DatabaseSync | null = null;
+  if (existsSync(live)) {
+    let current: DatabaseSync | null = null;
+    try {
+      current = new DatabaseSync(live);
+      current.exec('PRAGMA busy_timeout = 0');
+    } catch {
+      try { current?.close(); } catch { /* ignore */ }
+      current = null; // a damaged file: the restore itself finds out, and keeps it aside
+    }
+    const started = Date.now();
+    let pause = 5;
+    while (current) {
+      try {
+        current.exec('BEGIN IMMEDIATE');
+        held = current;
+        break;
+      } catch (error) {
+        if (!isBusyError(error)) { try { current.close(); } catch { /* ignore */ } current = null; break; }
+        if (Date.now() - started >= waitMs) {
+          try { current.close(); } catch { /* ignore */ }
+          throw new WorkspaceDbError('busy', 'Busy, try again in a moment: another process is writing to the workspace database, so the backup was not restored. Nothing was changed.', { cause: error });
+        }
+        await sleep(pause);
+        pause = Math.min(pause * 2, 200);
+      }
+    }
   }
-  mkdirSync(path.dirname(live), { recursive: true });
-  const temp = path.join(path.dirname(live), `.restore-${process.pid}-${randomBytes(4).toString('hex')}.db`);
-  copyFileSync(source, temp);
-  const held: { db: DatabaseSync | null } = { db: null };
+  return restoreCore(workspacePath, backup, held, 0);
+}
+
+/** `pre`: the live file's connection with its write lock already won (or null to take it here, waiting up to `busyMs`). */
+function restoreCore(workspacePath: string, backup: string, pre: DatabaseSync | null, busyMs: number): RestoreResult {
+  // Not fenced on its own: it holds the live file's write lock only for its own scan and promotion, waits for it inside
+  // SQLite (up to 5 s), and the Windows rename of an open file is refused with `file_in_use` (nothing changed). A running
+  // app calls core/workspace-db-app `restoreBackupForApp`, which fences it (the workspace locks, its own connections
+  // closed and held back, every other connection told `replaced`) and waits between timers (`restoreBackupAsync`).
+  const live = dbFilePath(workspacePath);
+  const held: { db: DatabaseSync | null } = { db: pre };
   const releaseLive = () => { try { held.db?.exec('ROLLBACK'); } catch { /* none open */ } try { held.db?.close(); } catch { /* ignore */ } held.db = null; };
+  const source = path.isAbsolute(backup) ? backup : path.join(backupsDir(workspacePath), backup);
+  let temp: string;
+  try {
+    if (!existsSync(source)) throw new WorkspaceDbError('backup_failed', `There is no backup ${source}.`);
+    assertBackup(source);
+    // A journal at the live path with no database beside it belongs to a database that is not there (a failed recovery
+    // left it). Installing a backup next to it could apply it to the wrong file: refuse before anything moves.
+    if (!existsSync(live) && existsSync(`${live}-journal`)) {
+      throw new WorkspaceDbError('backup_failed', `There is a journal at ${live}-journal but no database at ${live}. Move that journal away, or recover the old database it belongs to, before restoring. Nothing was changed.`);
+    }
+    mkdirSync(path.dirname(live), { recursive: true });
+    temp = path.join(path.dirname(live), `.restore-${process.pid}-${randomBytes(4).toString('hex')}.db`);
+    copyFileSync(source, temp);
+  } catch (error) {
+    releaseLive();
+    throw error;
+  }
   try {
     const restored = new DatabaseSync(temp);
     let result: Omit<RestoreResult, 'keptAs'>;
@@ -285,24 +395,40 @@ export function restoreBackup(workspacePath: string, backup: string): RestoreRes
       restored.exec('BEGIN IMMEDIATE');
       let carried = 0;
       let idsFrom: RestoreResult['idsFrom'] = 'none';
+      let former: string[] = [];
+      let formerExports = {};
+      let liveDraftState: LiveDraftState | undefined;
       if (existsSync(live)) {
         let ids = new Set<string>();
         try {
           // hold the live file's write lock from here until the new file is in place: nothing is issued in between
-          const current = new DatabaseSync(live);
-          held.db = current;
-          current.exec('PRAGMA busy_timeout = 5000');
-          current.exec('BEGIN IMMEDIATE');
+          let current = held.db;
+          if (!current) {
+            current = new DatabaseSync(live);
+            held.db = current;
+            current.exec(`PRAGMA busy_timeout = ${busyMs}`);
+            current.exec('BEGIN IMMEDIATE');
+          }
           const scan = scanIds(current);
           ids = scan.ids;
           idsFrom = scan.complete ? 'live' : 'partial';
+          former = formerOf(current);
+          formerExports = latestExportHashes(current);
+          liveDraftState = readLiveDraftState(current);
         } catch (error) {
           if (isBusyError(error)) throw error;
           // the live file is damaged (not a database, or unreadable): recover what can be read from it, keep it aside
           releaseLive();
           try {
             const damaged = new DatabaseSync(live, { readOnly: true });
-            try { const scan = scanIds(damaged); ids = scan.ids; idsFrom = ids.size ? 'partial' : 'backup'; } finally { damaged.close(); }
+            try {
+              const scan = scanIds(damaged);
+              ids = scan.ids;
+              idsFrom = ids.size ? 'partial' : 'backup';
+              former = formerOf(damaged);
+              formerExports = latestExportHashes(damaged);
+              liveDraftState = readLiveDraftState(damaged);
+            } finally { damaged.close(); }
           } catch { idsFrom = 'backup'; }
         }
         const insert = restored.prepare('INSERT OR IGNORE INTO ids_used(id) VALUES (?)');
@@ -311,6 +437,11 @@ export function restoreBackup(workspacePath: string, backup: string): RestoreRes
       }
       restored.exec('INSERT OR IGNORE INTO ids_used(id) SELECT id FROM blocks UNION SELECT id FROM cards');
       const dbId = randomBytes(8).toString('hex');
+      // the generations this file replaces: the exports they wrote are ours, and are written again from the new one
+      const generations = [...new Set([...former, getMeta(restored, 'db_id'), ...formerOf(restored)].filter((id): id is string => typeof id === 'string' && id !== '' && id !== dbId))].slice(0, 50);
+      setMeta(restored, 'former_db_ids', JSON.stringify(generations));
+      setMeta(restored, 'former_export_hashes', JSON.stringify(formerExports));
+      if (liveDraftState) preserveLiveDraftState(restored, liveDraftState);
       setMeta(restored, 'db_id', dbId);
       const revision = readRevision(restored) + 1;
       setMeta(restored, 'revision', revision);

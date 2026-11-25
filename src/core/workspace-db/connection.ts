@@ -43,7 +43,10 @@ function migrationOne(db: DatabaseSync): void {
   if ((db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type IN ('table', 'view', 'trigger') AND name NOT LIKE 'sqlite_%'").get() as { n: number }).n > 0) {
     throw new WorkspaceDbError('foreign', 'This file already holds tables that are not ContextSpace\'s. It was not changed.');
   }
-  for (const statement of createStatements()) db.exec(statement);
+  for (const statement of createStatements()) {
+    db.exec(statement.startsWith('CREATE UNIQUE INDEX exports_key ')
+      ? 'CREATE UNIQUE INDEX exports_key ON exports(file, revision)' : statement);
+  }
   const insert = db.prepare('INSERT INTO meta(key, value) VALUES (?, ?)');
   insert.run('workspace', WORKSPACE_MARKER);
   insert.run('db_id', randomBytes(8).toString('hex'));
@@ -56,7 +59,12 @@ function migrationOne(db: DatabaseSync): void {
 export const WORKSPACE_MARKER = 'contextspace-workspace-db';
 
 /** Append only. Never edit a migration that has shipped. */
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, run: migrationOne }];
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, run: migrationOne },
+  { version: 2, run(db) {
+    db.exec('DROP INDEX exports_key; CREATE UNIQUE INDEX exports_key ON exports(file, db_id, revision, digest)');
+  } },
+];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
 
@@ -230,8 +238,8 @@ function openCore(workspacePath: string, options: OpenOptions, create: boolean):
       try { sqlite.close(); } catch { /* ignore */ }
     },
     readerConnection() {
-      if (readOnly) return sqlite;
       if (!this.isCurrent()) throw replaced();
+      if (readOnly) return sqlite;
       if (!reader) {
         reader = new DatabaseSync(file, { readOnly: true, allowExtension: false });
         reader.exec(`PRAGMA busy_timeout = ${options.busy === 'cli' ? CLI_BUSY_MS : 0}`);
@@ -243,6 +251,7 @@ function openCore(workspacePath: string, options: OpenOptions, create: boolean):
       while (pending.size) await Promise.allSettled([...pending]);
     },
     isCurrent() {
+      if (closed) return false;
       if (identity === '') return true;
       const now = identityOf(file);
       return now !== '' && now === identity; // a vanished file is not the one we opened

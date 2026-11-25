@@ -28,6 +28,12 @@ export async function remotePushCommand(workspaceArg?: string): Promise<void> {
 export async function remotePullCommand(workspaceArg?: string): Promise<void> {
   const workspacePath = await workspace(workspaceArg);
   if (!workspacePath) return;
-  await pullWorkspaceArtifacts(workspacePath);
+  const result = await pullWorkspaceArtifacts(workspacePath);
+  if (result.status === 'draft') {
+    console.log(chalk.yellow(result.pending
+      ? `Saved the incoming database snapshot as draft ${result.digest}. Review it with ctxspace plan import. Your Git branch and working files stayed as they were.`
+      : `The incoming snapshot draft ${result.digest} was already handled. Reconcile the Git branches before pushing. Keep the approved workspace exports if Git asks you to resolve them.`));
+    return;
+  }
   console.log(chalk.green('✔ Pulled workspace artifact history with rebase.'));
 }

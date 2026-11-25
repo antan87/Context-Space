@@ -88,24 +88,23 @@ describe('the older plan store (contextspace-plan.json) and the lifecycle, with 
     }
   });
 
-  it('advance, reopen, block and the milestone editor refuse (a restore that has not cleared the switch yet)', async () => {
+  it('advance, reopen, block and the milestone editor refuse while restoring', async () => {
     const { plan } = await storeWorkspace('restoring');
-    const pending = plan.items.find((i) => i.kind === 'milestone' && i.status !== 'done' && i.status !== 'in_progress') ?? plan.items[1]!;
+    const pending = plan.items[1]!;
     const done = plan.items.find((i) => i.status === 'done')!;
-    await refusedAndUnchanged(() => advanceLifecycleStep(root, pending.id, 'start', { by: 'user' }), PlanError);
-    await refusedAndUnchanged(() => reopenLifecycleStep(root, done.id, { reason: 'again', by: 'user' }), PlanError);
-    await refusedAndUnchanged(() => blockLifecycleStep(root, pending.id, { reason: 'waiting' }), PlanError);
-    await refusedAndUnchanged(() => updateLifecyclePlan(root, { revision: plan.revision, steps: [] }), PlanError);
+    await refusedAndUnchanged(() => advanceLifecycleStep(root, pending.id, 'start', { by: 'user' }), WorkspaceMovedError);
+    await refusedAndUnchanged(() => reopenLifecycleStep(root, done.id, { reason: 'again', by: 'user' }), WorkspaceMovedError);
+    await refusedAndUnchanged(() => blockLifecycleStep(root, pending.id, { reason: 'waiting' }), WorkspaceMovedError);
+    await refusedAndUnchanged(() => updateLifecyclePlan(root, { revision: plan.revision, steps: [] }), WorkspaceMovedError);
   });
 
-  it('loading the lifecycle (GET lifecycle, work, progress) reads it and moves or records nothing, even with an older lifecycle not moved yet', async () => {
+  it('refuses to show an older lifecycle when the moved database is missing, and writes nothing', async () => {
     await legacyWorkspace();
     await turnOn('on');
     const before = await treeHash();
-    const lifecycle = await loadWorkspaceLifecycle(root, { includeFleet: false });
-    expect(lifecycle.steps.length).toBeGreaterThan(0);
-    expect((await readWorkspaceLifecycle(root)).steps.length).toBe(lifecycle.steps.length);
-    expect(await treeHash()).toEqual(before); // no contextspace-plan.json made, state.json untouched
+    await expect(loadWorkspaceLifecycle(root, { includeFleet: false })).rejects.toMatchObject({ code: 'missing' });
+    await expect(readWorkspaceLifecycle(root)).rejects.toMatchObject({ code: 'missing' });
+    expect(await treeHash()).toEqual(before);
   });
 
   it('state.json: the plan\'s fields (evidence, lifecycle, checks) are refused, everything else is written as before', async () => {
@@ -186,8 +185,15 @@ describe('a saved document keeps its permission bits (fix round 2, N7)', () => {
 });
 
 describe('the workspace\'s own Git (ctxspace remote pull)', () => {
-  it('does not pull into a moved workspace: a pull would rewrite PLAN.md and bring archived files back', async () => {
+  it.each(['moving', 'restoring'] as const)('does not pull while the switch is %s', async (state) => {
+    await turnOn(state);
+    await refusedAndUnchanged(() => pullWorkspaceArtifacts(root), WorkspaceMovedError);
+  });
+
+  it('checks the database before pulling into a moved workspace', async () => {
     await turnOn('on');
-    await refusedAndUnchanged(() => pullWorkspaceArtifacts(root), WorkspaceMovedError); // not even a git init
+    const before = await treeHash();
+    await expect(pullWorkspaceArtifacts(root)).rejects.toMatchObject({ code: 'missing' });
+    expect(await treeHash()).toEqual(before); // not even a git init
   });
 });

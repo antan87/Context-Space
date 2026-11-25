@@ -214,18 +214,26 @@ async function sharedProjectDocuments(workspacePath: string) {
 }
 
 export async function getWorkContext(workspacePath: string) {
+  const { storeOf } = await import('./workspace-db-app.js');
+  const database = storeOf(workspacePath) === 'database';
   const feature = await requireFeature(workspacePath);
   const guidance = await loadWorkGuidance(workspacePath);
   const state = await loadWorkspaceState(workspacePath);
   // Read-only: the milestones as the plan store holds them, or as an older lifecycle will be moved there.
   const { readWorkspaceLifecycle } = await import('./lifecycle.js');
-  const hasPlan = Boolean(state.lifecycle) || await planStoreExists(workspacePath);
+  const hasPlan = database || Boolean(state.lifecycle) || await planStoreExists(workspacePath);
   const lifecycle = hasPlan ? await readWorkspaceLifecycle(workspacePath) : undefined;
-  // Where the plan stands, as `ctxspace plan` prints it, for tools that only have MCP and for read-only roles.
-  const { readPlanFile, readPlanChecks } = await import('./plan-file-store.js');
-  const { renderPlanStanding } = await import('./plan-file-text.js');
-  const read = await readPlanFile(workspacePath);
-  const plan = read.source === 'none' ? null : `${renderPlanStanding(read, await readPlanChecks(workspacePath))}\n\n${read.text.trim()}`;
+  // Use the same compact view as the CLI, with ids, when the plan is in the database.
+  let plan: string | null;
+  if (database) {
+    const { planDbText } = await import('./plan-db-command.js');
+    plan = await planDbText(workspacePath);
+  } else {
+    const { readPlanFile, readPlanChecks } = await import('./plan-file-store.js');
+    const { renderPlanStanding } = await import('./plan-file-text.js');
+    const read = await readPlanFile(workspacePath);
+    plan = read.source === 'none' ? null : `${renderPlanStanding(read, await readPlanChecks(workspacePath))}\n\n${read.text.trim()}`;
+  }
   const shared = await sharedProjectDocuments(workspacePath);
   const sources = new Map(shared.map((item) => [item.document.id, documentLocation(item.workspacePath, item.workspaceId, item.document)]));
   return { guidance, projectId: feature.projectId, lifecycle: lifecycle ?? null, plan,
