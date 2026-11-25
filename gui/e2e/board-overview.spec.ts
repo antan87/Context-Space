@@ -37,7 +37,7 @@ test.describe('Board', () => {
   test('opens from the rail, right after Overview, on its own address, with legacy plan aliased', async ({ page }) => {
     await routeBoard(page);
     await page.goto('/#/workspaces/demo/overview');
-    await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Sessions', 'Skills']);
+    await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Docs', 'Sessions', 'Skills']);
     await workspaceNav(page).getByRole('link', { name: 'Board' }).click();
     await expect(page).toHaveURL(/#\/workspaces\/demo\/board$/);
     await expect(workspaceNav(page).getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');

@@ -524,6 +524,7 @@ describe('affected e2e specs', () => {
       'gui/src/design/index.ts',
       'gui/src/features/board/cards/FileCard.tsx',
       'gui/src/features/board/cards/NoteCard.tsx',
+      'gui/src/features/documents/DocumentsPage.tsx',
       'gui/src/pages/DesignPieces.tsx',
     ]);
     expect(findDesignPieceUsers('gui/src', ['Mark']).sort()).toEqual(['gui/src/design/index.ts', 'gui/src/features/board/cards/cardParts.tsx', 'gui/src/pages/DesignPieces.tsx']);

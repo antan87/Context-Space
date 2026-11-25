@@ -70,7 +70,7 @@ const workspaceNav = (page: Page) => page.getByRole('navigation', { name: 'Works
 test('archive previews what happens, parks unmerged work on request, and restores the workspace', async ({ page }) => {
   const calls = await mockArchiveBackend(page);
   await page.goto('/#/workspaces/demo');
-  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Sessions', 'Skills']);
+  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Docs', 'Sessions', 'Skills']);
 
   await openMenuFor(page.getByRole('button', { name: 'Workspace actions' }), page.getByRole('menuitem', { name: 'Archive workspace…' }));
   await page.getByRole('menuitem', { name: 'Archive workspace…' }).click();
@@ -102,7 +102,7 @@ test('archive previews what happens, parks unmerged work on request, and restore
   // The record is read-only and shows what archive kept.
   await expect(page.getByRole('status').filter({ hasText: 'Archived on' })).toBeVisible();
   // The record and what it knew; nothing to act on.
-  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Record', 'Board']);
+  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Record', 'Board', 'Docs']);
   const record = page.getByRole('table');
   await expect(record).toContainText('feat/speed');
   await expect(record).toContainText('1234567890');
@@ -134,7 +134,7 @@ test('archive previews what happens, parks unmerged work on request, and restore
 
   await page.getByRole('button', { name: 'Restore workspace' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Archived on' })).toHaveCount(0);
-  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Sessions', 'Skills']);
+  await expect(workspaceNav(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Docs', 'Sessions', 'Skills']);
   await workspaceNav(page).getByRole('link', { name: 'Board', exact: true }).click();
   await page.getByRole('button', { name: 'Assignment: Find the bottleneck' }).click();
   await page.getByTestId('assignment-panel').getByRole('button', { name: 'Edit', exact: true }).click();

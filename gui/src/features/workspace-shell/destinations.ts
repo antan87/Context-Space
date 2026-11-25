@@ -21,12 +21,12 @@ export const SECTION_LABELS: Record<WorkspaceSection, string> = {
 const ALL_SECTIONS = new Set<string>(Object.keys(SECTION_LABELS));
 
 /**
- * No segment opens the board. The old 'plan', 'changes', 'documents', 'services' and 'knowledge' addresses alias to 'board'
+ * No segment opens the board. The old 'plan', 'changes', 'services' and 'knowledge' addresses alias to 'board'
  * (there are no screens of those names any more). An unknown one (an old or mistyped link) falls back to the overview
  * instead of a blank page.
  */
 export function parseSection(segment: string | undefined | null): WorkspaceSection {
-  if (!segment || segment === 'plan' || segment === 'changes' || segment === 'documents' || segment === 'services' || segment === 'knowledge') return 'board';
+  if (!segment || segment === 'plan' || segment === 'changes' || segment === 'services' || segment === 'knowledge') return 'board';
   return ALL_SECTIONS.has(segment) ? segment as WorkspaceSection : 'overview';
 }
 
@@ -49,19 +49,18 @@ export const ARCHIVED_SECTIONS: readonly WorkspaceSection[] = ['overview', 'plan
 /**
  * What can open beside the chat, in the rail's order:
  * Overview (workspace summary and mapped repositories), Board (the plan, documents and commits on a canvas),
- * Sessions (CLI sessions and history), and Skills (workspace assistant instructions).
- * Legacy sections (code changes, documents, services, plan) keep their URLs for deep link compatibility,
- * but the streamlined rail focuses on the workspace board, skills, and sessions.
+ * Documents (folders, previews, and folded evidence), Sessions (CLI sessions and history), and Skills (workspace assistant instructions).
  */
 export const RAIL_SECTIONS: readonly WorkspaceSection[] = [
   'overview',
   'board',
+  'documents',
   'sessions',
   'skills',
 ];
 
-/** The rail of an archived workspace is its record and its board. */
-const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'board'];
+/** The rail of an archived workspace is its record, board, and documents. */
+const ARCHIVED_RAIL: readonly WorkspaceSection[] = ['overview', 'board', 'documents'];
 
 /**
  * What the rail offers for active and archived workspaces.

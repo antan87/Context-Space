@@ -8,13 +8,12 @@ describe('workspace sections', () => {
   });
 
   it('keep old tab URLs working, aliasing deprecated sections to board', () => {
-    for (const active of ['overview', 'board', 'sessions', 'skills']) {
+    for (const active of ['overview', 'board', 'documents', 'sessions', 'skills']) {
       expect(parseSection(active)).toBe(active);
     }
-    // Plan, changes, documents, and services tabs are deprecated and alias to board
+    // Plan, changes, and services tabs are deprecated and alias to board
     expect(parseSection('plan')).toBe('board');
     expect(parseSection('changes')).toBe('board');
-    expect(parseSection('documents')).toBe('board');
     expect(parseSection('services')).toBe('board');
     // The Knowledge tab is gone too: its old address opens the board, with Knowledge open in the reader (see knowledgeRedirect)
     expect(parseSection('knowledge')).toBe('board');
@@ -26,7 +25,7 @@ describe('workspace sections', () => {
     expect(parseSection('chat')).toBe('chat');
   });
 
-  it('show an archived workspace only its record and board', () => {
+  it('show an archived workspace only its record, board, and documents', () => {
     // A deep link to a working section of an archived workspace lands on its overview.
     expect(visibleSection('changes', true)).toBe('overview');
     expect(visibleSection('sessions', true)).toBe('overview');
@@ -36,22 +35,23 @@ describe('workspace sections', () => {
     expect(visibleSection('chat', false)).toBe('chat');
     expect(visibleSection(parseSection('knowledge'), true)).toBe('board');
     expect(visibleSection('board', true)).toBe('board');
+    expect(visibleSection('documents', true)).toBe('documents');
     expect(visibleSection('changes', false)).toBe('changes');
   });
 });
 
 describe('railSectionsFor', () => {
-  it('offers the parts a developer works in: streamlined to overview, board, sessions, and skills', () => {
+  it('offers the parts a developer works in: overview, board, documents, sessions, and skills', () => {
     expect(railSectionsFor(false)).toEqual([
       'overview',
       'board',
+      'documents',
       'sessions',
       'skills',
     ]);
     expect(railSectionsFor(false)).not.toContain('plan');
     expect(railSectionsFor(false)).not.toContain('chat');
     expect(railSectionsFor(false)).not.toContain('changes');
-    expect(railSectionsFor(false)).not.toContain('documents');
     expect(railSectionsFor(false)).not.toContain('services');
     expect(railSectionsFor(false)).not.toContain('knowledge');
   });
@@ -67,7 +67,7 @@ describe('railSectionsFor', () => {
   });
 
   it('keeps old addresses working: active sections parse to themselves, deprecated alias to board', () => {
-    for (const section of ['overview', 'sessions', 'skills', 'board'] as const) expect(parseSection(section)).toBe(section);
+    for (const section of ['overview', 'sessions', 'skills', 'board', 'documents'] as const) expect(parseSection(section)).toBe(section);
     expect(parseSection('plan')).toBe('board');
     expect(parseSection('services')).toBe('board');
     // Not on the rail does not mean hidden: an active workspace still shows them.
@@ -75,8 +75,8 @@ describe('railSectionsFor', () => {
     expect(visibleSection('skills', false)).toBe('skills');
   });
 
-  it('shows an archived workspace its record and its board, and nothing to act on', () => {
-    expect(railSectionsFor(true)).toEqual(['overview', 'board']);
+  it('shows an archived workspace its record, board, and documents, and nothing to act on', () => {
+    expect(railSectionsFor(true)).toEqual(['overview', 'board', 'documents']);
     // Its knowledge is still open to read: its old address opens the board with Knowledge in the reader.
     expect(knowledgeRedirect('/workspaces/old-one/knowledge')).not.toBeNull();
     expect(visibleSection(parseSection('knowledge'), true)).toBe('board');

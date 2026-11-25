@@ -20,6 +20,7 @@ async function mockWorkspace(page: Page) {
   await page.route('**/api/workspace/demo/lifecycle', (route) => route.fulfill({ json: { lifecycle, report: { overallStatus: 'pass', canProgress: true, durationMs: 1200, repos: [] } } }));
   await page.route('**/api/workspace/demo/work', (route) => route.fulfill({ json: { guidance, lifecycle, sharedDocuments: [], assignment: '' } }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
+  await page.route('**/api/workspace/demo/documents/catalog', (route) => route.fulfill({ json: { items: [], folders: [], recent: [] } }));
   await page.route('**/api/workspace/demo/plan', (route) => route.fulfill({ json: planFile({ checkpoints: [
     checkpoint('Measure baseline', { done: true }),
     checkpoint('Cache invoice lookups', { steps: [step('Cache the totals', true), step('Expire them on change')] }),
@@ -63,6 +64,7 @@ test('one header shows where the task stands and links to where to act', async (
   await expect(workspaceNav(page).getByRole('link')).toHaveText([
     'Overview',
     'Board',
+    'Docs',
     'Sessions',
     'Skills',
   ]);
@@ -76,7 +78,7 @@ test('one header shows where the task stands and links to where to act', async (
 test('old section links still open, each marked on the rail when it has a place there, and back navigation works', async ({ page }) => {
   await mockWorkspace(page);
   for (const [section, item] of [
-    ['documents', 'Board'],
+    ['documents', 'Docs'],
     ['services', 'Board'],
     ['plan', 'Board'],
     ['board', 'Board'],

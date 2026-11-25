@@ -10,7 +10,9 @@ import { DiagramFullScreenContext } from '../../components/diagramFixContext.js'
 import { copyPictureToClipboard, safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
 import type { ReaderLineTools } from '../board/ReaderLines.js';
+import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 import { DocumentPreview, type DocumentPreviewData } from './DocumentPreview.js';
+import { ESCAPE_MESSAGE } from './previewPolicy.js';
 
 /** Matches the app's existing overlay idiom (dialog.tsx, PluggableDiffViewer, WorktreeTitleModal). */
 const OVERLAY = 'fixed inset-0 z-[100] flex flex-col bg-background';
@@ -234,15 +236,22 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
 
   useEffect(() => {
     if (!expanded) return;
+    const hasCoveringOverlay = () =>
+      Array.from(
+        document.querySelectorAll('[data-slot="menu-popup"], [data-slot="popover-popup"], [role="alertdialog"], [role="dialog"]'),
+      ).some((el) => el !== overlayRef.current && el.getClientRects().length > 0 && !el.closest('[inert], [hidden]'));
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.isComposing) return;
+      if (isCodeWindowOpen()) return;
       if (event.key === 'Escape') {
-        // Escape inside an open menu closes the menu only.
-        if (event.defaultPrevented || document.querySelector('[data-slot="menu-popup"]')) return;
+        // Escape inside an open menu, popover, or external dialog closes that overlay only.
+        if (event.defaultPrevented || hasCoveringOverlay()) return;
+        event.preventDefault();
         event.stopPropagation();
         setExpanded(false);
         return;
       }
-      if (event.key === 'Tab' && overlayRef.current) {
+      if (event.key === 'Tab' && overlayRef.current && !hasCoveringOverlay()) {
         const focusable = overlayRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
         );
@@ -258,8 +267,20 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         }
       }
     };
+    const onMessage = (event: MessageEvent) => {
+      if (event.data !== ESCAPE_MESSAGE || !event.source) return;
+      if (isCodeWindowOpen() || hasCoveringOverlay()) return;
+      const frames = overlayRef.current?.querySelectorAll('iframe') ?? [];
+      if (Array.from(frames).some((frame) => frame.contentWindow === event.source)) {
+        setExpanded(false);
+      }
+    };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('message', onMessage);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('message', onMessage);
+    };
   }, [expanded]);
 
   const [copiedPath, setCopiedPath] = useState(false);

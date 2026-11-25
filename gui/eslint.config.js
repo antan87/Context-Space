@@ -86,7 +86,6 @@ export const LEGACY_UI_IMPORTERS = [
   'src/pages/StartWorkPage.tsx',
   'src/pages/StrategiesPage.tsx',
   'src/pages/WorkroomsPage.tsx',
-  'src/pages/WorkspacesPage.tsx',
 ];
 
 export default defineConfig([

@@ -68,21 +68,29 @@ const renderEditorIcon = (id: string, name: string) => {
   return <Code2 size={14} className="shrink-0" />;
 };
 
-import { Button } from '../components/ui/button.js';
-import { Card } from '../components/ui/card.js';
 import {
+  Button,
+  Card,
   Dialog,
-  DialogPopup,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
-  DialogPanel,
   DialogFooter,
-} from '../components/ui/dialog.js';
-import { Input } from '../components/ui/input.js';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from '../components/ui/menu.js';
-import { Spinner } from '../components/ui/spinner.js';
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  IconButton,
+  Input,
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuTrigger,
+  Spinner,
+} from '../design/index.js';
 import { AddRepoPicker } from '../components/AddRepoPicker.js';
 import {
   useConfig,
@@ -101,7 +109,6 @@ import { apiFetch } from '../lib/api/client.js';
 import { cn } from '../lib/utils.js';
 import { toErrorMessage } from '../lib/errors.js';
 import { SessionHistory } from '../features/sessions/SessionHistory.js';
-import { IconButton } from '../components/ui/icon-button.js';
 import { useFloatingChat } from '../features/chat/floatingChatStore.js';
 import { ChatDockSlot } from '../features/chat/ChatDockSlot.js';
 import { CHAT_LAYOUT, chatLayout, fittingChatPercent, hasRoomBeside, useChatLayout } from '../features/chat/chatLayout.js';
@@ -119,6 +126,7 @@ type SubTab = WorkspaceSection;
 
 // React Flow is only needed once the Board is opened, so it loads then, in a chunk of its own.
 const BoardSection = lazy(() => import('../features/board/BoardSection.js').then((module) => ({ default: module.BoardSection })));
+const DocumentsPage = lazy(() => import('../features/documents/DocumentsPage.js').then((module) => ({ default: module.DocumentsPage })));
 
 // Per workspace, the sections already opened. Module scope keeps them across route changes in a session.
 const visitedByWorkspace = new Map<string, Set<WorkspaceSection>>();
@@ -259,9 +267,9 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
     if (!roomBeside) {
       onSelectTab(selected.branchName, 'chat');
     } else {
-      if (layout.hidden || subTab !== 'board') {
+      if (layout.hidden || (subTab !== 'board' && subTab !== 'documents')) {
         chatLayout.setHidden(false);
-        if (subTab !== 'board') {
+        if (subTab !== 'board' && subTab !== 'documents') {
           onSelectTab(selected.branchName, 'board');
         }
       }
@@ -971,7 +979,7 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
           <div className="relative flex min-w-0 flex-1 flex-col" style={{ flex: showChat ? `0 0 ${100 - chatPercent}%` : '1 1 100%' }}>
             {/* What is open, and the way back to the chat, which is always one click: the cross, or the rail item again.
                 Code, Docs and the Board carry these in their own toolbars or corners, so each spends no row on a title. */}
-            {subTab !== 'board' && (
+            {subTab !== 'board' && subTab !== 'documents' && (
             <div className="z-10 flex shrink-0 items-center gap-0.5 border-b border-border/60 bg-background/95 px-6 py-1.5 backdrop-blur">
               {/* A label, not a heading: the part below names itself, and its region carries the same name. On the plan, the
                   sessions sit beside it as tabs. */}
@@ -994,7 +1002,27 @@ export function WorkspacesPage(props: WorkspacesPageProps) {
               </Suspense>
             </div>
           )}
-          <div hidden={subTab === 'board'} className="min-h-0 flex-1 overflow-y-auto">
+          {visitedSections.has('documents') && (
+            <div
+              role="region"
+              aria-label={SECTION_LABELS.documents}
+              hidden={subTab !== 'documents'}
+              className={cn('min-h-0 flex-1', subTab === 'documents' && 'flex flex-col')}
+            >
+              <Suspense fallback={<div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner role="presentation" aria-hidden="true" className="size-4" />Loading documents</div>}>
+                <DocumentsPage
+                  key={selected.branchName}
+                  workspaceId={selected.branchName}
+                  workspacePath={selected.workspacePath}
+                  active={subTab === 'documents'}
+                  panelActions={panelActions}
+                  readOnly={archived}
+                  askInCLI={archived ? undefined : askInCLI}
+                />
+              </Suspense>
+            </div>
+          )}
+          <div hidden={subTab === 'board' || subTab === 'documents'} className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-6 pb-12 pt-5">
           {/* Legacy Migration Alert Banner */}
           {isLegacy && (

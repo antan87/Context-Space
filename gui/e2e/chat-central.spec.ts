@@ -405,15 +405,15 @@ test.describe('the rail beside the panel opens the parts, and the header is one 
     const rail = await boxOf(destinations(page));
     expect(rail.x + rail.width).toBeGreaterThan(1440 - 2);
     expect(rail.width).toBeLessThanOrEqual(RAIL + 1);
-    // What can open beside the chat: Overview, Plan, Board, Sessions, Code, Docs, Skills, Services.
-    await expect(destinations(page).getByRole('link')).toHaveText(['Overview', 'Board', /^Sessions/, 'Skills']);
+    // What can open beside the chat: Overview, Board, Docs, Sessions, Skills.
+    await expect(destinations(page).getByRole('link')).toHaveText(['Overview', 'Board', 'Docs', /^Sessions/, 'Skills']);
     await expect(chatOf(page).getByTestId('terminal-state')).toHaveText('Running');
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/workspace-chat.png` });
   });
 
   test('has items for sessions and skills on the rail so they are directly accessible', async ({ page }) => {
     await page.goto('/#/workspaces/alpha/chat');
-    await expect(destinations(page).getByRole('link')).toHaveCount(4);
+    await expect(destinations(page).getByRole('link')).toHaveCount(5);
     await expect(destinations(page).getByRole('link', { name: /^Sessions/ })).toBeVisible();
     await expect(destinations(page).getByRole('link', { name: /^Skills/ })).toBeVisible();
     // The way in is also in the chat's own toolbar, named for what it opens.

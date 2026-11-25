@@ -25,6 +25,48 @@ async function mockWorkspace(page: Page) {
     lifecycle, sharedDocuments: [], assignment: '',
   } }));
   await page.route('**/api/workspace/demo/documents', (route) => route.fulfill({ json: { documents: [] } }));
+  await page.route('**/api/workspace/demo/documents/catalog', (route) => route.fulfill({
+    json: {
+      items: [
+        {
+          path: 'PLAN.md',
+          name: 'PLAN.md',
+          folder: '',
+          kind: 'markdown',
+          size: 512,
+          modifiedAt: '2026-10-02T11:00:00.000Z',
+          title: 'Invoice speed-up plan',
+          excerpt: 'Cache invoice lookups and report the speed-up.',
+          evidence: false,
+        },
+        {
+          path: 'run.log',
+          name: 'run.log',
+          folder: '',
+          kind: 'text',
+          size: 256,
+          modifiedAt: '2026-10-02T11:10:00.000Z',
+          title: 'Run',
+          excerpt: '',
+          evidence: true,
+        },
+      ],
+      folders: [
+        {
+          path: 'design',
+          name: 'design',
+          parent: '',
+          evidence: false,
+          summary: 'Plans and notes',
+          folderCount: 0,
+          docCount: 1,
+          pictureCount: 0,
+          evidenceCount: 0,
+        },
+      ],
+      recent: ['PLAN.md'],
+    },
+  }));
   await page.route('**/api/workspace/demo/changes', (route) => route.fulfill({ json: { changes: [{ repoName: 'api', repoPath: '/dev/api', files: [{ file: 'cache.ts', type: 'modified', additions: 4, deletions: 1 }] }] } }));
   await page.route('**/api/workspace/demo/board', (route) => route.fulfill({ json: { file: 'contextspace-board.json', revision: 1, positions: {}, cards: [] } }));
 }
@@ -197,11 +239,17 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
     test('workspace destinations', async ({ page }) => {
       await mockWorkspace(page);
-      for (const section of ['overview', 'board', 'sessions', 'skills']) {
+      for (const [section, label] of [
+        ['overview', 'Overview'],
+        ['board', 'Board'],
+        ['documents', 'Docs'],
+        ['sessions', 'Sessions'],
+        ['skills', 'Skills'],
+      ] as const) {
         await page.goto(`/#/workspaces/demo/${section}`);
         await expect(page.getByRole('heading', { level: 1, name: 'Invoice speed-up' })).toBeVisible();
         await expect(page.locator('header').filter({ has: page.getByRole('heading', { level: 1 }) }).getByRole('link', { name: 'Checks failed' })).toBeVisible();
-        await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${section[0].toUpperCase()}${section.slice(1)}`) })).toHaveAttribute('aria-current', 'page');
+        await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${label}`) })).toHaveAttribute('aria-current', 'page');
         await expectNoSeriousViolations(page, `workspace ${section}`);
       }
     });
@@ -288,7 +336,7 @@ test.describe('constrained windows', () => {
     const main = await page.getByRole('main').boundingBox();
     expect(main!.width).toBeGreaterThanOrEqual(800);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(900);
-    for (const name of ['Overview', 'Board', 'Sessions', 'Skills']) {
+    for (const name of ['Overview', 'Board', 'Docs', 'Sessions', 'Skills']) {
       await expect(page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInViewport();
     }
     // The full list still opens on request, by keyboard.

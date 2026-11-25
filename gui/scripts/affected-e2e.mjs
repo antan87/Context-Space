@@ -813,8 +813,8 @@ const FOLDER_ROWS = [
     folder: 'src/design/KindLabel',
     path: 'gui/src/design/KindLabel.tsx',
     bareNames: ['KindLabel', 'KindLabel.tsx'],
-    specs: DESIGN_PIECE_SPECS,
-    safety: 'The kind of a card (an icon and the word) in the title row of the note and file cards (R1b); only those two card files and the design page import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, and all of e2e/board plus accessibility.spec.ts.',
+    specs: [...DESIGN_PIECE_SPECS, 'e2e/documents-page.spec.ts'],
+    safety: 'The kind of a card (an icon and the word) in the title row of the note and file cards (R1b) and the Documents page; those cards, DocumentsPage and the design page import it (design/index.ts, which exports it, is APP_WIDE); verified by pieces.test.tsx, the golden markup, all of e2e/board, e2e/documents-page.spec.ts, and accessibility.spec.ts.',
   },
   {
     folder: 'src/design/kindIcons',
@@ -932,6 +932,30 @@ const FOLDER_ROWS = [
     bareNames: ['RowControls', 'RowControls.tsx'],
     specs: ROW_CONTROL_SPECS,
     safety: 'Only BoardNodes.tsx imports it; the fold row, "+N more" tile and pager; the specs listed failed when the three drew nothing, and grep for the fold, "Show N more", the pager and [data-row-control] (and the reveal helper) added the rest; verified by the golden markup and those specs.',
+  },
+  {
+    folder: 'src/features/documents',
+    path: 'gui/src/features/documents/DocumentsPage.tsx',
+    bareNames: ['DocumentsPage', 'DocumentsPage.tsx'],
+    specs: [
+      'e2e/documents-page.spec.ts',
+      'e2e/workspace-shell.spec.ts',
+      'e2e/archive-navigation.spec.ts',
+      'e2e/accessibility.spec.ts',
+    ],
+    safety: 'Lazy-loaded Documents rail destination (WorkspacesPage.tsx); covered by documents-page, workspace-shell, archive-navigation, and accessibility specs.',
+  },
+  {
+    folder: 'src/features/documents/documentsCatalog',
+    path: 'gui/src/features/documents/documentsCatalog.ts',
+    bareNames: ['documentsCatalog', 'documentsCatalog.ts'],
+    specs: [
+      'e2e/documents-page.spec.ts',
+      'e2e/workspace-shell.spec.ts',
+      'e2e/archive-navigation.spec.ts',
+      'e2e/accessibility.spec.ts',
+    ],
+    safety: 'Pure catalog selectors, folding, search, and URL helpers for DocumentsPage.tsx; covered by documentsCatalog.test.ts plus Documents page specs.',
   },
 ];
 

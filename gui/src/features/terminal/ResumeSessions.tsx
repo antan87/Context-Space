@@ -43,18 +43,32 @@ export function ResumeSessions({ workspace, active, busy, status, fill, embedded
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || e.isComposing) return;
       if (isCodeWindowOpen()) return;
-      // "/" is this search's only when this list is on screen (a hidden one never takes it), and, with the Board beside it, only while the
-      // keyboard is in this list: with it in neither pane, the key goes to the Board's search
+      if (e.defaultPrevented) return;
+      // "/" is this search's only when this list is on screen (a hidden one never takes it), and, with the Board or Documents beside it, only while the
+      // keyboard is in this list: with it in neither pane, the key goes to the Board's or Documents' search
       const section = sectionRef.current;
-      const shown = Boolean(section && section.getClientRects().length > 0 && !section.closest('[inert]'));
-      const boardShown = Array.from(document.querySelectorAll('[data-board-pane]')).some((pane) => pane.getClientRects().length > 0);
-      const slashIsMine = shown && !document.querySelector('[role="dialog"]') && (!boardShown || Boolean(section?.contains(document.activeElement)));
+      const isShownEl = (el: Element) => el.getClientRects().length > 0 && !el.closest('[inert], [hidden]');
+      const shown = Boolean(section && isShownEl(section));
+      const otherSearchPaneShown = Array.from(document.querySelectorAll('[data-board-pane], [data-documents-page]')).some(isShownEl);
+      const hasBlockingOverlay = Array.from(
+        document.querySelectorAll('[role="dialog"], [role="alertdialog"], [data-slot="menu-popup"], [data-slot="popover-popup"], [data-documents-reader]'),
+      ).some(isShownEl);
+      const inSection = Boolean(section?.contains(document.activeElement));
+      const slashIsMine = shown && !hasBlockingOverlay && (!otherSearchPaneShown || inSection);
       if (e.key === '/' && slashIsMine && !isTypingTarget(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
-      } else if (e.key === 'Escape' && !isTypingTarget(e.target) && search) {
+      } else if (
+        e.key === 'Escape' &&
+        shown &&
+        !hasBlockingOverlay &&
+        !isTypingTarget(e.target) &&
+        search &&
+        (!otherSearchPaneShown || inSection)
+      ) {
         e.preventDefault();
         setSearch('');
       }

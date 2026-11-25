@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { addWorkDocument, getWorkContext, readWorkDocument, updateWorkDocument, updateWorkGuidance } from '../core/work-guidance.js';
 import { loadWorkspaceLifecycle, updateLifecyclePlan } from '../core/lifecycle.js';
 import { createRootFolder, listRootDocuments, moveRootDocument, openRootDocumentForStream, previewRootDocument, readRootDocument, writeRootDocument } from '../core/root-documents.js';
+import { buildDocumentCatalog } from '../core/document-catalog.js';
 import { refreshPlanningContext } from '../core/planning-refresh.js';
 import { loadFeatureConfig } from '../core/workspace.js';
 import { resolveFeatureRepoPath } from '../utils/feature.js';
@@ -46,6 +47,9 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
     const folder = c.req.query('folder') ?? '';
     const recursive = c.req.query('recursive') === '1';
     return listRootDocuments(root, folder, recursive, { repoFolders: await repositoryFolders(root) });
+  }));
+  app.get('/api/workspace/:id/documents/catalog', handle(async (root) => {
+    return buildDocumentCatalog(root, { repoFolders: await repositoryFolders(root) });
   }));
   app.get('/api/workspace/:id/documents/preview', handle(async (root, c) => {
     return previewRootDocument(await resolveDocumentRoot(root, c.req.query('repo')), c.req.query('name') ?? '', { metaOnly: c.req.query('meta') === '1' });
