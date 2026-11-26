@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, FileImage, Folder, Search, Terminal, X } from 'lucide-react';
+import { ChevronRight, Edit3, FileImage, FilePlus, Folder, FolderPlus, Search, Terminal, Upload, X } from 'lucide-react';
 import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertDialog,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  AlertTitle,
   Button,
   Empty,
   EmptyDescription,
@@ -27,6 +37,26 @@ import { DocumentPreview, type DocumentPreviewData } from '../work-guidance/Docu
 import { DocumentViewer } from '../work-guidance/DocumentViewer.js';
 import { ESCAPE_MESSAGE } from '../work-guidance/previewPolicy.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
+import { DocumentEditor } from './DocumentEditor.js';
+import { NewDocumentDialog, NewFolderDialog } from './NewDocumentDialog.js';
+import {
+  getWorkspaceDocumentDrafts,
+  isManagedReadOnlyItem,
+  moveDocument,
+  parseDocumentConflict,
+  saveDocument,
+  setWorkspaceDocumentDrafts,
+  suggestCopyPath,
+  suggestNumberedPath,
+  uploadDocument,
+  validateUploadFile,
+  type DocumentConflictDetails,
+  type DocumentFolderResult,
+  type DocumentSaveResult,
+  type ReaderDocumentDraftState,
+  type SideDocumentDraftState,
+  type WorkspaceDocumentDraftSnapshot,
+} from './documentMutations.js';
 import {
   buildBreadcrumbs,
   changedLatelyItems,
@@ -65,7 +95,9 @@ function isElementVisible(el: Element | null): el is HTMLElement {
     el instanceof HTMLElement
     && el.isConnected
     && !el.closest('[inert], [hidden]')
-    && el.getClientRects().length > 0,
+    && el.getClientRects().length > 0
+    && !el.matches(':disabled')
+    && el.getAttribute('aria-disabled') !== 'true',
   );
 }
 
@@ -116,15 +148,55 @@ export function DocumentsPage({
   const clockNow = useClockTick();
   const nowDate = useMemo(() => new Date(clockNow), [clockNow]);
 
-  const [folder, setFolder] = useState('');
+  const [draftSeed] = useState<WorkspaceDocumentDraftSnapshot | null>(() => getWorkspaceDocumentDrafts(workspaceId));
+  const [stateWorkspaceId, setStateWorkspaceId] = useState(workspaceId);
+
+  const [folder, setFolder] = useState(() => draftSeed?.folder ?? '');
+  const [folderNavSeq, setFolderNavSeq] = useState(0);
   const [query, setQuery] = useState('');
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [readerPath, setReaderPath] = useState<string | null>(null);
+  const isSearching = query.trim().length > 0;
+  const [selectedPath, setSelectedPath] = useState<string | null>(() => draftSeed?.sideDraft?.path ?? null);
+  const [readerPath, setReaderPath] = useState<string | null>(() => draftSeed?.readerPath ?? null);
   const [readerRaw, setReaderRaw] = useState(false);
   const [readerRequest, setReaderRequest] = useState(0);
+  const [readerInitialEditing, setReaderInitialEditing] = useState(() =>
+    Boolean(draftSeed?.readerPath && draftSeed.readerDrafts[draftSeed.readerPath]?.editing),
+  );
   const [showEvidence, setShowEvidence] = useState(false);
   const [brokenImages, setBrokenImages] = useState<Set<string>>(() => new Set());
   const [isWide, setIsWide] = useState(true);
+
+  const [newDocOpen, setNewDocOpen] = useState(false);
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [uploadConflicts, setUploadConflicts] = useState<
+    Array<{ id: string; file: File; folder: string; targetPath: string }>
+  >([]);
+
+  const [sideEditing, setSideEditing] = useState(() => Boolean(draftSeed?.sideDraft));
+  const [sideEditPath, setSideEditPath] = useState<string | null>(() => draftSeed?.sideDraft?.path ?? null);
+  const [sideEditContent, setSideEditContent] = useState(() => draftSeed?.sideDraft?.content ?? '');
+  const [sideBaseContent, setSideBaseContent] = useState(() => draftSeed?.sideDraft?.baseContent ?? '');
+  const [sideBaseRevision, setSideBaseRevision] = useState<string | undefined>(() => draftSeed?.sideDraft?.baseRevision);
+  const [sideBaseModifiedAt, setSideBaseModifiedAt] = useState<string | undefined>(() => draftSeed?.sideDraft?.baseModifiedAt);
+  const [sideBaseCatalogModifiedAt, setSideBaseCatalogModifiedAt] = useState<string | undefined>(
+    () => draftSeed?.sideDraft?.baseCatalogModifiedAt,
+  );
+  const [sideSaving, setSideSaving] = useState(false);
+  const [sideSaveError, setSideSaveError] = useState<string | null>(() => draftSeed?.sideDraft?.saveError ?? null);
+  const [sideConflict, setSideConflict] = useState<DocumentConflictDetails | null>(() => draftSeed?.sideDraft?.conflict ?? null);
+  const [sideAutoFocus, setSideAutoFocus] = useState(() => Boolean(draftSeed?.sideDraft));
+
+  type PendingSideAction =
+    | { type: 'cancel-edit' }
+    | { type: 'select-doc'; path: string; opener?: HTMLElement | null }
+    | { type: 'enter-folder'; folder: string; via: 'card' | 'crumb' }
+    | { type: 'open-new-doc' }
+    | { type: 'open-new-folder' }
+    | { type: 'open-reader-link'; path: string; opener?: HTMLElement | null };
+  const [pendingSideAction, setPendingSideAction] = useState<PendingSideAction | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const asideRef = useRef<HTMLElement>(null);
@@ -132,32 +204,103 @@ export function DocumentsPage({
   const crumbsRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const newDocTriggerRef = useRef<HTMLButtonElement>(null);
+  const newFolderTriggerRef = useRef<HTMLButtonElement>(null);
+  const sideEditButtonRef = useRef<HTMLButtonElement>(null);
+  const sideOpenInReaderRef = useRef<HTMLButtonElement>(null);
+  const sideTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const sideLinkOriginRef = useRef<HTMLElement | null>(null);
+  const keepSideEditingRef = useRef<HTMLButtonElement>(null);
+  const pendingSideExitFocusRef = useRef(false);
+  const sideAlertExitModeRef = useRef<'keep' | 'discard-stay' | 'discard-away'>('keep');
+  const sideEditingRef = useRef(sideEditing);
+  const activeRef = useRef(active);
+  const readerPathRef = useRef(readerPath);
+  const newDocOpenRef = useRef(newDocOpen);
+  const newFolderOpenRef = useRef(newFolderOpen);
+  const dragDepthRef = useRef(0);
 
   const readerOpenerRef = useRef<HTMLElement | null>(null);
   const readerOpenerKindRef = useRef<'open-button' | 'card' | null>(null);
-  const readerOpenedPathRef = useRef<string | null>(null);
-  const lastReaderPathRef = useRef<string | null>(null);
+  const readerOpenedPathRef = useRef<string | null>(draftSeed?.readerPath ?? null);
+  const lastReaderPathRef = useRef<string | null>(draftSeed?.readerPath ?? null);
   const wasReaderOpenRef = useRef(false);
   const pendingFolderFocusRef = useRef<'card' | 'crumb' | null>(null);
+  const readerRequestCloseRef = useRef<(() => void) | null>(null);
+  type ReaderDraftState = ReaderDocumentDraftState;
+  const [readerDrafts, setReaderDrafts] = useState<Record<string, ReaderDraftState>>(() => draftSeed?.readerDrafts ?? {});
 
-  // Reset workspace-scoped view state only if workspaceId prop changes without a remount.
-  const prevWorkspaceRef = useRef(workspaceId);
+  useLayoutEffect(() => {
+    sideEditingRef.current = sideEditing;
+    activeRef.current = active;
+    readerPathRef.current = readerPath;
+    newDocOpenRef.current = newDocOpen;
+    newFolderOpenRef.current = newFolderOpen;
+  }, [sideEditing, active, readerPath, newDocOpen, newFolderOpen]);
+
+  // Switch workspace-scoped view state cleanly if workspaceId prop changes without a remount.
   useEffect(() => {
-    if (prevWorkspaceRef.current === workspaceId) return;
-    prevWorkspaceRef.current = workspaceId;
+    if (stateWorkspaceId === workspaceId) return;
+    const restored = getWorkspaceDocumentDrafts(workspaceId);
     readerOpenerRef.current = null;
     readerOpenerKindRef.current = null;
-    readerOpenedPathRef.current = null;
-    lastReaderPathRef.current = null;
+    readerOpenedPathRef.current = restored?.readerPath ?? null;
+    lastReaderPathRef.current = restored?.readerPath ?? null;
     wasReaderOpenRef.current = false;
-    setFolder('');
+    pendingFolderFocusRef.current = null;
+    pendingSideExitFocusRef.current = false;
+    sideLinkOriginRef.current = null;
+    setReaderDrafts(restored?.readerDrafts ?? {});
+    dragDepthRef.current = 0;
+    setFolder(restored?.folder ?? '');
     setQuery('');
-    setSelectedPath(null);
-    setReaderPath(null);
+    setSelectedPath(restored?.sideDraft?.path ?? null);
+    setReaderPath(restored?.readerPath ?? null);
     setReaderRaw(false);
+    setReaderInitialEditing(Boolean(restored?.readerPath && restored.readerDrafts[restored.readerPath]?.editing));
     setShowEvidence(false);
     setBrokenImages(new Set());
-  }, [workspaceId]);
+    setNewDocOpen(false);
+    setNewFolderOpen(false);
+    setIsDraggingFiles(false);
+    setUploading(false);
+    setUploadErrors([]);
+    setUploadConflicts([]);
+    setSideEditing(Boolean(restored?.sideDraft));
+    setSideEditPath(restored?.sideDraft?.path ?? null);
+    setSideEditContent(restored?.sideDraft?.content ?? '');
+    setSideBaseContent(restored?.sideDraft?.baseContent ?? '');
+    setSideBaseRevision(restored?.sideDraft?.baseRevision);
+    setSideBaseModifiedAt(restored?.sideDraft?.baseModifiedAt);
+    setSideBaseCatalogModifiedAt(restored?.sideDraft?.baseCatalogModifiedAt);
+    setSideSaving(false);
+    setSideSaveError(restored?.sideDraft?.saveError ?? null);
+    setSideConflict(restored?.sideDraft?.conflict ?? null);
+    setSideAutoFocus(Boolean(restored?.sideDraft));
+    setPendingSideAction(null);
+    setStateWorkspaceId(workspaceId);
+  }, [stateWorkspaceId, workspaceId]);
+
+  useEffect(() => {
+    if (!active) {
+      dragDepthRef.current = 0;
+      setIsDraggingFiles(false);
+      setNewDocOpen(false);
+      setNewFolderOpen(false);
+      setPendingSideAction(null);
+    }
+  }, [active]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const clearDrag = () => {
+      dragDepthRef.current = 0;
+      setIsDraggingFiles(false);
+    };
+    window.addEventListener('blur', clearDrag);
+    return () => window.removeEventListener('blur', clearDrag);
+  }, []);
 
   const measureWide = useCallback(() => {
     const aside = asideRef.current;
@@ -169,7 +312,7 @@ export function DocumentsPage({
 
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!root) return;
+    if (!active || !root) return;
     measureWide();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
@@ -306,8 +449,182 @@ export function DocumentsPage({
     return readerPreviewQuery.data ?? null;
   }, [readerPath, readerKind, readerItem?.size, readerItem?.modifiedAt, readerPreviewQuery.data]);
 
+  const sideDirty = sideEditing && sideEditContent !== sideBaseContent;
+
+  // Keep workspace-scoped unsaved drafts persisted across unmount/remount (X, Ctrl+3, Terminal, rail toggle).
+  useLayoutEffect(() => {
+    if (stateWorkspaceId !== workspaceId) return;
+    const sideDraft: SideDocumentDraftState | null = sideEditing && sideEditPath
+      ? {
+          path: sideEditPath,
+          folder,
+          content: sideEditContent,
+          baseContent: sideBaseContent,
+          baseRevision: sideBaseRevision,
+          baseModifiedAt: sideBaseModifiedAt,
+          baseCatalogModifiedAt: sideBaseCatalogModifiedAt,
+          conflict: sideConflict,
+          saveError: sideSaveError,
+          dirty: sideDirty,
+        }
+      : null;
+    const hasReaderDrafts = Object.keys(readerDrafts).length > 0;
+    const persistedReaderPath = hasReaderDrafts && readerPath && readerDrafts[readerPath] ? readerPath : null;
+    setWorkspaceDocumentDrafts(workspaceId, {
+      folder,
+      sideDraft,
+      readerPath: persistedReaderPath,
+      readerDrafts,
+    });
+  }, [
+    stateWorkspaceId,
+    workspaceId,
+    folder,
+    sideEditing,
+    sideEditPath,
+    sideEditContent,
+    sideBaseContent,
+    sideBaseRevision,
+    sideBaseModifiedAt,
+    sideBaseCatalogModifiedAt,
+    sideConflict,
+    sideSaveError,
+    sideDirty,
+    readerPath,
+    readerDrafts,
+  ]);
+  const sideExternalChangeNotice = Boolean(
+    sideEditing
+    && sideEditPath === selectedItem?.path
+    && sidePreviewData
+    && (
+      (sideBaseRevision && sidePreviewData.revision && sidePreviewData.revision !== sideBaseRevision)
+      || (sideBaseModifiedAt && sidePreviewData.modifiedAt && sidePreviewData.modifiedAt !== sideBaseModifiedAt && sidePreviewData.content !== sideBaseContent)
+      || (sideBaseCatalogModifiedAt && selectedItem?.modifiedAt && selectedItem.modifiedAt !== sideBaseCatalogModifiedAt && selectedItem.modifiedAt !== sideBaseModifiedAt)
+    ),
+  );
+
+  const upsertCatalogItem = useCallback(
+    (entry: {
+      path: string;
+      kind: DocumentCatalogKind;
+      size: number;
+      modifiedAt: string;
+      title?: string;
+      excerpt?: string;
+      editable?: boolean;
+    }) => {
+      const normalized = normalizeCatalogPath(entry.path);
+      if (!normalized) return;
+      const slash = normalized.lastIndexOf('/');
+      const itemFolder = slash < 0 ? '' : normalized.slice(0, slash);
+      const itemName = slash < 0 ? normalized : normalized.slice(slash + 1);
+      const defaultEditable = entry.kind === 'markdown' || entry.kind === 'text' || entry.kind === 'html';
+      queryClient.setQueryData<DocumentCatalog>(documentCatalogKey(workspaceId), (prev) => {
+        if (!prev) return prev;
+        const prevItem = prev.items.find((i) => i.path === normalized);
+        const nextItem: DocumentCatalogItem = {
+          path: normalized,
+          name: itemName,
+          folder: itemFolder,
+          kind: entry.kind,
+          size: entry.size,
+          modifiedAt: entry.modifiedAt,
+          title: entry.title ?? prevItem?.title ?? itemName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' '),
+          excerpt: entry.excerpt ?? prevItem?.excerpt ?? '',
+          evidence: prevItem?.evidence ?? false,
+          editable: entry.editable ?? prevItem?.editable ?? defaultEditable,
+          ...(prevItem?.readOnlyReason ? { readOnlyReason: prevItem.readOnlyReason } : {}),
+        };
+        const items = prevItem
+          ? prev.items.map((i) => (i.path === normalized ? nextItem : i))
+          : [...prev.items, nextItem];
+        const folders = [...prev.folders];
+        if (itemFolder) {
+          const parts = itemFolder.split('/');
+          let acc = '';
+          for (const part of parts) {
+            const parent = acc;
+            acc = acc ? `${acc}/${part}` : part;
+            if (!folders.some((f) => f.path === acc)) {
+              folders.push({
+                path: acc,
+                name: part,
+                parent,
+                evidence: false,
+                summary: '',
+                folderCount: 0,
+                docCount: 0,
+                pictureCount: 0,
+                evidenceCount: 0,
+              });
+            }
+          }
+        }
+        return {
+          ...prev,
+          items,
+          folders,
+        };
+      });
+    },
+    [queryClient, workspaceId],
+  );
+
+  const upsertCatalogFolder = useCallback(
+    (folderPath: string) => {
+      const normalized = normalizeCatalogPath(folderPath);
+      if (!normalized) return;
+      queryClient.setQueryData<DocumentCatalog>(documentCatalogKey(workspaceId), (prev) => {
+        if (!prev) return prev;
+        const folders = [...prev.folders];
+        const parts = normalized.split('/');
+        let acc = '';
+        for (const part of parts) {
+          const parent = acc;
+          acc = acc ? `${acc}/${part}` : part;
+          if (!folders.some((f) => f.path === acc)) {
+            folders.push({
+              path: acc,
+              name: part,
+              parent,
+              evidence: false,
+              summary: '',
+              folderCount: 0,
+              docCount: 0,
+              pictureCount: 0,
+              evidenceCount: 0,
+            });
+          }
+        }
+        return { ...prev, folders };
+      });
+    },
+    [queryClient, workspaceId],
+  );
+
+  const seedPreviewCache = useCallback(
+    (res: DocumentSaveResult) => {
+      queryClient.setQueryData<DocumentPreviewData>(['documents-page-preview', workspaceId, res.name], {
+        name: res.name,
+        kind: res.kind,
+        size: res.size,
+        modifiedAt: res.modifiedAt,
+        revision: res.revision,
+        content: res.content,
+        editable: true,
+      });
+    },
+    [queryClient, workspaceId],
+  );
+
   const openReader = useCallback(
-    (docPath: string, opener: HTMLElement | null, openerKind: 'open-button' | 'card' = 'card') => {
+    (
+      docPath: string,
+      opener: HTMLElement | null,
+      openerKind: 'open-button' | 'card' = 'card',
+      options?: { initialEditing?: boolean },
+    ) => {
       const normalized = normalizeCatalogPath(docPath);
       if (!normalized) return;
       const fromInsideReader = Boolean(opener && overlayRef.current?.contains(opener));
@@ -316,8 +633,17 @@ export function DocumentsPage({
         readerOpenerKindRef.current = openerKind;
         readerOpenedPathRef.current = normalized;
       }
+      if (readerPath !== null && normalized !== readerPath) {
+        setReaderDrafts((prev) => {
+          if (!(readerPath in prev) || prev[readerPath]?.dirty) return prev;
+          const next = { ...prev };
+          delete next[readerPath];
+          return next;
+        });
+      }
       lastReaderPathRef.current = normalized;
       setReaderRaw(false);
+      setReaderInitialEditing(Boolean(options?.initialEditing));
       setReaderPath(normalized);
       setReaderRequest((n) => n + 1);
     },
@@ -325,21 +651,549 @@ export function DocumentsPage({
   );
 
   const closeReader = useCallback(() => {
+    if (readerPath) {
+      setReaderDrafts((prev) => {
+        if (!(readerPath in prev)) return prev;
+        const next = { ...prev };
+        delete next[readerPath];
+        return next;
+      });
+    }
     setReaderPath(null);
     setReaderRaw(false);
+    setReaderInitialEditing(false);
+  }, [readerPath]);
+
+  const resolveSidePostExitFocus = useCallback((): HTMLElement | null => {
+    if (isElementVisible(sideEditButtonRef.current)) return sideEditButtonRef.current;
+    if (isElementVisible(sideOpenInReaderRef.current)) return sideOpenInReaderRef.current;
+    if (listRef.current) {
+      const cards = Array.from(listRef.current.querySelectorAll<HTMLElement>('button[data-doc-path]'));
+      if (selectedPath) {
+        const match = cards.find((el) => el.dataset.docPath === selectedPath && isElementVisible(el));
+        if (match) return match;
+      }
+      const firstBtn = Array.from(listRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')).find(
+        (el) => isElementVisible(el),
+      );
+      if (firstBtn) return firstBtn;
+    }
+    if (isElementVisible(searchRef.current)) return searchRef.current;
+    return null;
+  }, [selectedPath]);
+
+  const resolveSideKeepEditingFocus = useCallback((): HTMLElement | null => {
+    if (isElementVisible(sideTextareaRef.current)) return sideTextareaRef.current;
+    if (isElementVisible(sideLinkOriginRef.current)) return sideLinkOriginRef.current;
+    const editorTabs = [
+      asideRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"] [role="tab"][aria-selected="true"]') ?? null,
+      asideRef.current?.querySelector<HTMLElement>('[data-testid="document-editor"] [role="tab"]') ?? null,
+      sideOpenInReaderRef.current,
+    ];
+    for (const candidate of editorTabs) {
+      if (isElementVisible(candidate)) return candidate;
+    }
+    return null;
   }, []);
 
-  const enterFolder = useCallback((nextFolder: string, via: 'card' | 'crumb') => {
+  const applyFolderNavigation = useCallback((nextFolder: string, via: 'card' | 'crumb') => {
     const normalized = normalizeCatalogPath(nextFolder);
     pendingFolderFocusRef.current = via;
+    sideLinkOriginRef.current = null;
+    setSideEditing(false);
+    setSideEditPath(null);
+    setSideConflict(null);
+    setSideSaveError(null);
     setFolder(normalized);
+    setFolderNavSeq((n) => n + 1);
     setShowEvidence(false);
     setSelectedPath(null);
     setQuery('');
     if (listRef.current) listRef.current.scrollTop = 0;
   }, []);
 
-  // Move focus into the folder view after stepping into a folder card.
+  const enterFolder = useCallback(
+    (nextFolder: string, via: 'card' | 'crumb') => {
+      const normalized = normalizeCatalogPath(nextFolder);
+      if (normalized === folder && !isSearching) return;
+      if (sideDirty) {
+        sideLinkOriginRef.current = null;
+        setPendingSideAction({ type: 'enter-folder', folder: normalized, via });
+        return;
+      }
+      applyFolderNavigation(normalized, via);
+    },
+    [folder, isSearching, sideDirty, applyFolderNavigation],
+  );
+
+  const startSideEdit = useCallback(
+    (docPath: string, previewData: DocumentPreviewData | null, focus = true) => {
+      if (!previewData || previewData.content === undefined) return;
+      sideLinkOriginRef.current = null;
+      setSideEditPath(docPath);
+      setSideEditContent(previewData.content);
+      setSideBaseContent(previewData.content);
+      setSideBaseRevision(previewData.revision);
+      setSideBaseModifiedAt(previewData.modifiedAt);
+      setSideBaseCatalogModifiedAt(selectedItem?.path === docPath ? selectedItem.modifiedAt : previewData.modifiedAt);
+      setSideConflict(null);
+      setSideSaveError(null);
+      setSideAutoFocus(focus);
+      setSideEditing(true);
+    },
+    [selectedItem],
+  );
+
+  const discardSideEdit = useCallback((options?: { restoreFocus?: boolean }) => {
+    if (options?.restoreFocus !== undefined) {
+      pendingSideExitFocusRef.current = options.restoreFocus;
+    }
+    sideLinkOriginRef.current = null;
+    setSideEditing(false);
+    setSideEditPath(null);
+    setSideEditContent('');
+    setSideBaseContent('');
+    setSideBaseRevision(undefined);
+    setSideBaseModifiedAt(undefined);
+    setSideBaseCatalogModifiedAt(undefined);
+    setSideConflict(null);
+    setSideSaveError(null);
+    setSideAutoFocus(false);
+  }, []);
+
+  // A Save button that was focused turns disabled while saving / in conflict and the browser drops
+  // focus to <body>. After a failed save, move it to the conflict choices (or the text).
+  const refocusAfterFailedSideSave = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (!activeRef.current || readerPathRef.current !== null) return;
+      const active = document.activeElement;
+      const lost = !active || active === document.body || (active as HTMLButtonElement).disabled === true;
+      if (!lost) return;
+      const conflictBtn = asideRef.current?.querySelector<HTMLElement>(
+        '[data-testid="document-conflict-bar"] button:not([disabled])',
+      ) ?? null;
+      if (isElementVisible(conflictBtn)) {
+        conflictBtn.focus({ preventScroll: true });
+        return;
+      }
+      resolveSideKeepEditingFocus()?.focus({ preventScroll: true });
+    });
+  }, [resolveSideKeepEditingFocus]);
+
+  const executeSideSave = useCallback(
+    async (
+      expectedRevOverride?: string | null,
+      options?: { restoreFocus?: boolean },
+    ): Promise<boolean> => {
+      const targetPath = sideEditPath ?? selectedPath;
+      if (!targetPath || sideSaving) return false;
+      setSideSaving(true);
+      setSideSaveError(null);
+      try {
+        const expectedRevision = expectedRevOverride === null ? undefined : (expectedRevOverride ?? sideBaseRevision);
+        const saved = await saveDocument(workspaceId, {
+          name: targetPath,
+          content: sideEditContent,
+          ...(expectedRevision ? { expectedRevision } : {}),
+        });
+        seedPreviewCache(saved);
+        upsertCatalogItem({
+          path: saved.name,
+          kind: saved.kind,
+          size: saved.size,
+          modifiedAt: saved.modifiedAt,
+          editable: true,
+        });
+        void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+        setSideBaseContent(saved.content);
+        setSideBaseRevision(saved.revision);
+        setSideBaseModifiedAt(saved.modifiedAt);
+        setSideBaseCatalogModifiedAt(saved.modifiedAt);
+        setSideConflict(null);
+        if (options?.restoreFocus !== false) {
+          pendingSideExitFocusRef.current = true;
+        }
+        setSideEditing(false);
+        setSideEditPath(null);
+        return true;
+      } catch (error) {
+        const parsed = parseDocumentConflict(error);
+        if (parsed) {
+          setSideConflict(parsed);
+          setSideSaveError(null);
+          refocusAfterFailedSideSave();
+          return false;
+        }
+        setSideSaveError(error instanceof Error ? error.message : 'Unable to save document.');
+        refocusAfterFailedSideSave();
+        return false;
+      } finally {
+        setSideSaving(false);
+      }
+    },
+    [sideEditPath, selectedPath, sideSaving, sideBaseRevision, workspaceId, sideEditContent, seedPreviewCache, upsertCatalogItem, queryClient, refocusAfterFailedSideSave],
+  );
+
+  const saveCopyFromContent = useCallback(
+    async (basePath: string, content: string): Promise<DocumentSaveResult> => {
+      const existing = new Set((catalog?.items ?? []).map((i) => i.path));
+      let candidate = suggestCopyPath(basePath, existing);
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          const saved = await saveDocument(workspaceId, {
+            name: candidate,
+            content,
+            createOnly: true,
+          });
+          seedPreviewCache(saved);
+          upsertCatalogItem({
+            path: saved.name,
+            kind: saved.kind,
+            size: saved.size,
+            modifiedAt: saved.modifiedAt,
+            editable: true,
+          });
+          void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+          return saved;
+        } catch (error) {
+          const parsed = parseDocumentConflict(error);
+          if (parsed?.code === 'ALREADY_EXISTS') {
+            existing.add(candidate);
+            candidate = suggestCopyPath(basePath, existing);
+            continue;
+          }
+          throw error;
+        }
+      }
+      throw new Error('Could not find an available copy filename.');
+    },
+    [catalog?.items, workspaceId, seedPreviewCache, upsertCatalogItem, queryClient],
+  );
+
+  const handleSideSaveAsCopy = useCallback(async () => {
+    const basePath = sideEditPath ?? selectedPath;
+    if (!basePath || sideSaving) return;
+    setSideSaving(true);
+    setSideSaveError(null);
+    try {
+      const saved = await saveCopyFromContent(basePath, sideEditContent);
+      pendingSideExitFocusRef.current = true;
+      discardSideEdit();
+      setSelectedPath(saved.name);
+    } catch (error) {
+      setSideSaveError(error instanceof Error ? error.message : 'Unable to save copy.');
+    } finally {
+      setSideSaving(false);
+    }
+  }, [sideEditPath, selectedPath, sideSaving, saveCopyFromContent, sideEditContent, discardSideEdit]);
+
+  const handleSideLoadLatest = useCallback(() => {
+    if (!sideConflict || sideConflict.currentContent === undefined) return;
+    sideLinkOriginRef.current = null;
+    setSideEditContent(sideConflict.currentContent);
+    setSideBaseContent(sideConflict.currentContent);
+    setSideBaseRevision(sideConflict.currentRevision ?? undefined);
+    setSideBaseModifiedAt(sideConflict.currentModifiedAt ?? undefined);
+    setSideBaseCatalogModifiedAt(sideConflict.currentModifiedAt ?? undefined);
+    setSideConflict(null);
+    setSideSaveError(null);
+    requestAnimationFrame(() => {
+      if (!activeRef.current || readerPathRef.current !== null) return;
+      if (isElementVisible(sideTextareaRef.current)) {
+        sideTextareaRef.current.focus({ preventScroll: true });
+      } else {
+        resolveSideKeepEditingFocus()?.focus({ preventScroll: true });
+      }
+    });
+  }, [sideConflict, resolveSideKeepEditingFocus]);
+
+  const requestCancelSideEdit = useCallback(() => {
+    if (sideDirty) {
+      sideLinkOriginRef.current = null;
+      setPendingSideAction({ type: 'cancel-edit' });
+      return;
+    }
+    pendingSideExitFocusRef.current = true;
+    discardSideEdit();
+  }, [sideDirty, discardSideEdit]);
+
+  const performPendingSideAction = useCallback(
+    (action: PendingSideAction) => {
+      switch (action.type) {
+        case 'cancel-edit':
+          break;
+        case 'select-doc':
+          if (measureWide()) {
+            setSelectedPath(action.path);
+          } else {
+            openReader(action.path, action.opener ?? null, 'card');
+          }
+          break;
+        case 'enter-folder':
+          applyFolderNavigation(action.folder, action.via);
+          break;
+        case 'open-new-doc':
+          setNewDocOpen(true);
+          break;
+        case 'open-new-folder':
+          setNewFolderOpen(true);
+          break;
+        case 'open-reader-link':
+          openReader(action.path, action.opener ?? null, 'card');
+          break;
+      }
+    },
+    [applyFolderNavigation, measureWide, openReader],
+  );
+
+  const requestOpenNewDoc = useCallback(() => {
+    if (sideDirty) {
+      sideLinkOriginRef.current = null;
+      setPendingSideAction({ type: 'open-new-doc' });
+      return;
+    }
+    setNewDocOpen(true);
+  }, [sideDirty]);
+
+  const requestOpenNewFolder = useCallback(() => {
+    if (sideDirty) {
+      sideLinkOriginRef.current = null;
+      setPendingSideAction({ type: 'open-new-folder' });
+      return;
+    }
+    setNewFolderOpen(true);
+  }, [sideDirty]);
+
+  const clearSearch = useCallback(() => {
+    setQuery('');
+    searchRef.current?.focus();
+  }, []);
+
+  const handleDocumentCreated = useCallback(
+    (saved: DocumentSaveResult) => {
+      seedPreviewCache(saved);
+      upsertCatalogItem({
+        path: saved.name,
+        kind: saved.kind,
+        size: saved.size,
+        modifiedAt: saved.modifiedAt,
+        editable: true,
+      });
+      void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+
+      const slash = saved.name.lastIndexOf('/');
+      const docFolder = slash < 0 ? '' : saved.name.slice(0, slash);
+      if (docFolder !== folder) {
+        setFolder(docFolder);
+        setShowEvidence(false);
+      }
+      setQuery('');
+
+      if (measureWide()) {
+        setSelectedPath(saved.name);
+        setSideEditPath(saved.name);
+        setSideEditContent(saved.content);
+        setSideBaseContent(saved.content);
+        setSideBaseRevision(saved.revision);
+        setSideBaseModifiedAt(saved.modifiedAt);
+        setSideBaseCatalogModifiedAt(saved.modifiedAt);
+        setSideConflict(null);
+        setSideSaveError(null);
+        setSideAutoFocus(true);
+        setSideEditing(true);
+      } else {
+        openReader(saved.name, null, 'card', { initialEditing: true });
+      }
+    },
+    [seedPreviewCache, upsertCatalogItem, queryClient, workspaceId, folder, measureWide, openReader],
+  );
+
+  const handleFolderCreated = useCallback(
+    (created: DocumentFolderResult) => {
+      upsertCatalogFolder(created.folder);
+      void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+    },
+    [upsertCatalogFolder, queryClient, workspaceId],
+  );
+
+  const processUploadFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const list = Array.from(files);
+      if (list.length === 0 || readOnly) return;
+      setUploading(true);
+      const nextErrors: string[] = [];
+      const nextConflicts: Array<{ id: string; file: File; folder: string; targetPath: string }> = [];
+      let firstUploaded: string | null = null;
+
+      for (const file of list) {
+        const checked = validateUploadFile(file);
+        if (!checked.ok) {
+          nextErrors.push(checked.error);
+          continue;
+        }
+        try {
+          const uploaded = await uploadDocument(workspaceId, {
+            file,
+            folder,
+            createOnly: true,
+          });
+          firstUploaded ??= uploaded.name;
+          upsertCatalogItem({
+            path: uploaded.name,
+            kind: uploaded.kind,
+            size: uploaded.size,
+            modifiedAt: uploaded.modifiedAt,
+            editable: uploaded.kind === 'markdown' || uploaded.kind === 'text' || uploaded.kind === 'html',
+          });
+        } catch (error) {
+          const parsed = parseDocumentConflict(error);
+          if (parsed?.code === 'ALREADY_EXISTS') {
+            const targetPath = folder ? `${folder}/${checked.fileName}` : checked.fileName;
+            nextConflicts.push({
+              id: `${targetPath}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              file,
+              folder,
+              targetPath,
+            });
+          } else {
+            nextErrors.push(`${file.name}: ${error instanceof Error ? error.message : 'Upload failed.'}`);
+          }
+        }
+      }
+
+      if (firstUploaded) {
+        void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+        // An upload never ends or hides an edit session: read the live state, not the closure.
+        if (!sideEditingRef.current) setSelectedPath(firstUploaded);
+      }
+      if (nextErrors.length > 0) {
+        setUploadErrors((prev) => [...prev, ...nextErrors]);
+      }
+      if (nextConflicts.length > 0) {
+        setUploadConflicts((prev) => [...prev, ...nextConflicts]);
+      }
+      setUploading(false);
+    },
+    [readOnly, workspaceId, folder, upsertCatalogItem, queryClient],
+  );
+
+  const handleKeepBothUpload = useCallback(
+    async (entry: { id: string; file: File; folder: string; targetPath: string }) => {
+      setUploading(true);
+      const existing = new Set((catalog?.items ?? []).map((i) => i.path));
+      let candidatePath = suggestNumberedPath(entry.targetPath, existing);
+      try {
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          const nextName = candidatePath.includes('/')
+            ? candidatePath.slice(candidatePath.lastIndexOf('/') + 1)
+            : candidatePath;
+          try {
+            const uploaded = await uploadDocument(workspaceId, {
+              file: entry.file,
+              folder: entry.folder,
+              name: nextName,
+              createOnly: true,
+            });
+            upsertCatalogItem({
+              path: uploaded.name,
+              kind: uploaded.kind,
+              size: uploaded.size,
+              modifiedAt: uploaded.modifiedAt,
+              editable: uploaded.kind === 'markdown' || uploaded.kind === 'text' || uploaded.kind === 'html',
+            });
+            void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+            setUploadConflicts((prev) => prev.filter((item) => item.id !== entry.id));
+            if (!sideEditingRef.current) setSelectedPath(uploaded.name);
+            return;
+          } catch (error) {
+            const parsed = parseDocumentConflict(error);
+            if (parsed?.code === 'ALREADY_EXISTS') {
+              existing.add(candidatePath);
+              candidatePath = suggestNumberedPath(entry.targetPath, existing);
+              continue;
+            }
+            setUploadErrors((prev) => [
+              ...prev,
+              `${entry.file.name}: ${error instanceof Error ? error.message : 'Upload failed.'}`,
+            ]);
+            setUploadConflicts((prev) => prev.filter((item) => item.id !== entry.id));
+            return;
+          }
+        }
+        setUploadErrors((prev) => [...prev, `${entry.file.name}: Could not find an available filename.`]);
+        setUploadConflicts((prev) => prev.filter((item) => item.id !== entry.id));
+      } finally {
+        setUploading(false);
+      }
+    },
+    [catalog?.items, workspaceId, upsertCatalogItem, queryClient],
+  );
+
+  const handleReaderSave = useCallback(
+    async (docPath: string, content: string, options?: { expectedRevision?: string }) => {
+      const saved = await saveDocument(workspaceId, {
+        name: docPath,
+        content,
+        ...(options?.expectedRevision ? { expectedRevision: options.expectedRevision } : {}),
+      });
+      seedPreviewCache(saved);
+      upsertCatalogItem({
+        path: saved.name,
+        kind: saved.kind,
+        size: saved.size,
+        modifiedAt: saved.modifiedAt,
+        editable: true,
+      });
+      void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+      return saved;
+    },
+    [workspaceId, seedPreviewCache, upsertCatalogItem, queryClient],
+  );
+
+  const handleReaderSaveAsCopy = useCallback(
+    async (basePath: string, content: string) => {
+      const saved = await saveCopyFromContent(basePath, content);
+      setReaderDrafts((prev) => {
+        if (!(basePath in prev)) return prev;
+        const next = { ...prev };
+        delete next[basePath];
+        return next;
+      });
+      setReaderInitialEditing(false);
+      lastReaderPathRef.current = saved.name;
+      if (selectedPath === basePath || isWide) {
+        setSelectedPath(saved.name);
+      }
+      setReaderPath(saved.name);
+      setReaderRequest((n) => n + 1);
+    },
+    [saveCopyFromContent, selectedPath, isWide],
+  );
+
+  const handleReaderMove = useCallback(
+    async (fromPath: string, toPath: string) => {
+      const res = await moveDocument(workspaceId, fromPath, toPath);
+      if (res.from === res.to) return;
+      setReaderDrafts((prev) => {
+        if (!(res.from in prev)) return prev;
+        const next = { ...prev };
+        delete next[res.from];
+        return next;
+      });
+      queryClient.removeQueries({ queryKey: ['documents-page-preview', workspaceId, res.from] });
+      void queryClient.invalidateQueries({ queryKey: documentCatalogKey(workspaceId) });
+      void queryClient.invalidateQueries({ queryKey: ['documents-page-preview', workspaceId, res.to] });
+      if (selectedPath === res.from) setSelectedPath(res.to);
+      if (readerPath === res.from) {
+        lastReaderPathRef.current = res.to;
+        setReaderPath(res.to);
+        setReaderRequest((n) => n + 1);
+      }
+    },
+    [workspaceId, queryClient, selectedPath, readerPath],
+  );
+
+  // Move focus into the folder view after stepping into a folder card or breadcrumb.
   useLayoutEffect(() => {
     const via = pendingFolderFocusRef.current;
     if (!via || !active) return;
@@ -353,14 +1207,36 @@ export function DocumentsPage({
       const crumbButtons = crumbsRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])');
       const lastCrumb = crumbButtons?.[crumbButtons.length - 1];
       lastCrumb?.focus({ preventScroll: true });
+    } else if (via === 'crumb') {
+      const crumbButtons = crumbsRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])');
+      const lastCrumb = crumbButtons?.[crumbButtons.length - 1];
+      if (isElementVisible(lastCrumb ?? null)) {
+        lastCrumb!.focus({ preventScroll: true });
+      }
     }
-  }, [folder, active]);
+  }, [folder, folderNavSeq, active]);
+
+  useLayoutEffect(() => {
+    if (!active || !pendingSideExitFocusRef.current) return;
+    if (sideEditing || readerPath !== null || pendingSideAction || newDocOpen || newFolderOpen) return;
+    pendingSideExitFocusRef.current = false;
+    resolveSidePostExitFocus()?.focus({ preventScroll: true });
+  }, [active, sideEditing, selectedPath, readerPath, pendingSideAction, newDocOpen, newFolderOpen, resolveSidePostExitFocus]);
 
   const prevReaderFocusRef = useRef<{ active: boolean; readerPath: string | null; readerRequest: number }>({
     active,
     readerPath,
     readerRequest,
   });
+
+  useEffect(() => {
+    if (!active || !sideEditing || !sideAutoFocus || newDocOpen) return;
+    const frame = requestAnimationFrame(() => {
+      sideTextareaRef.current?.focus({ preventScroll: true });
+      setSideAutoFocus(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, sideEditing, sideAutoFocus, newDocOpen]);
 
   // Move focus into the reader when it opens, and restore focus to the opener when it closes.
   useLayoutEffect(() => {
@@ -379,12 +1255,21 @@ export function DocumentsPage({
         || prev.readerRequest !== readerRequest;
       if (!shouldFocusReader) return;
 
-      const closeBtn = overlayRef.current?.querySelector<HTMLElement>('button[aria-label="Close document"]');
-      if (closeBtn) {
-        closeBtn.focus({ preventScroll: true });
+      const wantsEditFocus = readerInitialEditing || Boolean(readerDrafts[readerPath]?.editing);
+      const findFocusTarget = () => {
+        if (wantsEditFocus) {
+          const textarea = overlayRef.current?.querySelector<HTMLElement>('textarea');
+          if (textarea) return textarea;
+        }
+        return overlayRef.current?.querySelector<HTMLElement>('button[aria-label="Close document"]') ?? null;
+      };
+
+      const target = findFocusTarget();
+      if (target && (!wantsEditFocus || target.tagName === 'TEXTAREA')) {
+        target.focus({ preventScroll: true });
       } else {
         const frame = requestAnimationFrame(() => {
-          overlayRef.current?.querySelector<HTMLElement>('button[aria-label="Close document"]')?.focus({ preventScroll: true });
+          findFocusTarget()?.focus({ preventScroll: true });
         });
         return () => cancelAnimationFrame(frame);
       }
@@ -436,7 +1321,7 @@ export function DocumentsPage({
     if (isElementVisible(searchRef.current)) {
       searchRef.current.focus({ preventScroll: true });
     }
-  }, [readerPath, readerRequest, active]);
+  }, [readerPath, readerRequest, active, readerInitialEditing, readerDrafts]);
 
   // Keyboard shortcuts when DocumentsPage is active.
   useEffect(() => {
@@ -449,9 +1334,20 @@ export function DocumentsPage({
       if (event.key === 'Escape') {
         if (event.defaultPrevented) return;
         if (readerPath !== null) {
-          if (isTypingTarget(event.target)) return;
+          const insideReader = event.target instanceof Node && Boolean(overlayRef.current?.contains(event.target));
+          if (isTypingTarget(event.target) && !insideReader) return;
           event.preventDefault();
-          closeReader();
+          if (readerRequestCloseRef.current) {
+            readerRequestCloseRef.current();
+          } else {
+            closeReader();
+          }
+          return;
+        }
+        if (sideEditing && event.target instanceof Node && rootRef.current?.contains(event.target)) {
+          if (isTypingTarget(event.target) && !asideRef.current?.contains(event.target)) return;
+          event.preventDefault();
+          requestCancelSideEdit();
         }
         return;
       }
@@ -471,7 +1367,7 @@ export function DocumentsPage({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [active, readerPath, closeReader]);
+  }, [active, readerPath, closeReader, sideEditing, requestCancelSideEdit]);
 
   // Escape inside a sandboxed HTML document iframe relays ESCAPE_MESSAGE.
   useEffect(() => {
@@ -482,31 +1378,122 @@ export function DocumentsPage({
       if (hasVisibleOverlay()) return;
       const frames = overlayRef.current?.querySelectorAll('iframe') ?? [];
       if (Array.from(frames).some((frame) => frame.contentWindow === event.source)) {
-        closeReader();
+        if (readerRequestCloseRef.current) {
+          readerRequestCloseRef.current();
+        } else {
+          closeReader();
+        }
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, [active, readerPath, closeReader]);
 
+  const promoteSideEditToReader = useCallback(
+    (docPath: string, opener: HTMLElement | null, openerKind: 'open-button' | 'card') => {
+      if (sideEditing && sideEditPath === docPath) {
+        setReaderDrafts((prev) => ({
+          ...prev,
+          [docPath]: {
+            editing: true,
+            dirty: sideDirty,
+            draft: sideEditContent,
+            baseContent: sideBaseContent,
+            baseRevision: sideBaseRevision,
+            baseModifiedAt: sideBaseModifiedAt,
+          },
+        }));
+        pendingSideExitFocusRef.current = false;
+        discardSideEdit();
+        openReader(docPath, opener, openerKind, { initialEditing: true });
+        return;
+      }
+      openReader(docPath, opener, openerKind);
+    },
+    [sideEditing, sideEditPath, sideDirty, sideEditContent, sideBaseContent, sideBaseRevision, sideBaseModifiedAt, discardSideEdit, openReader],
+  );
+
+  // When container narrows below 56rem (Split chat toggled, Ask in CLI, resize), promote active side edit into Reader.
+  useLayoutEffect(() => {
+    if (!active || isWide || !sideEditing || !sideEditPath || readerPath !== null || pendingSideAction) {
+      return;
+    }
+    if (measureWide()) return;
+    const matchingCard =
+      listRef.current
+        ? Array.from(listRef.current.querySelectorAll<HTMLElement>('button[data-doc-path]')).find(
+            (el) => el.dataset.docPath === sideEditPath && isElementVisible(el),
+          ) ?? null
+        : null;
+    promoteSideEditToReader(sideEditPath, matchingCard, 'card');
+  }, [active, isWide, sideEditing, sideEditPath, readerPath, pendingSideAction, measureWide, promoteSideEditToReader]);
+
+  const handleReaderDraftStateChange = useCallback(
+    (docPath: string, state: ReaderDraftState) => {
+      if (!state.editing && docPath === readerPath) {
+        setReaderInitialEditing(false);
+      }
+      setReaderDrafts((prev) => {
+        if (!state.editing && !state.dirty) {
+          if (!(docPath in prev)) return prev;
+          const next = { ...prev };
+          delete next[docPath];
+          return next;
+        }
+        const cur = prev[docPath];
+        if (
+          cur
+          && cur.editing === state.editing
+          && cur.dirty === state.dirty
+          && cur.draft === state.draft
+          && cur.baseContent === state.baseContent
+          && cur.baseRevision === state.baseRevision
+          && cur.baseModifiedAt === state.baseModifiedAt
+        ) {
+          return prev;
+        }
+        return { ...prev, [docPath]: state };
+      });
+    },
+    [readerPath],
+  );
+
   const handleCardClick = useCallback(
     (item: DocumentCatalogItem, target: HTMLElement) => {
       if (measureWide()) {
+        if (selectedPath === item.path) return;
+        if (sideDirty) {
+          sideLinkOriginRef.current = null;
+          setPendingSideAction({ type: 'select-doc', path: item.path });
+          return;
+        }
+        if (sideEditing) discardSideEdit();
         setSelectedPath(item.path);
       } else {
+        if (sideEditing && sideEditPath === item.path) {
+          promoteSideEditToReader(item.path, target, 'card');
+          return;
+        }
+        if (sideDirty) {
+          sideLinkOriginRef.current = null;
+          setPendingSideAction({ type: 'select-doc', path: item.path, opener: target });
+          return;
+        }
+        if (sideEditing) discardSideEdit();
         openReader(item.path, target, 'card');
       }
     },
-    [measureWide, openReader],
+    [measureWide, selectedPath, sideDirty, sideEditing, sideEditPath, discardSideEdit, promoteSideEditToReader, openReader],
   );
 
   const handleCardDoubleClick = useCallback(
     (item: DocumentCatalogItem, target: HTMLElement) => {
       if (measureWide()) {
-        openReader(item.path, target, 'card');
+        if (sideDirty && sideEditPath !== item.path) return;
+        promoteSideEditToReader(item.path, target, 'card');
       }
     },
-    [measureWide, openReader],
+    [measureWide, sideDirty, sideEditPath, promoteSideEditToReader],
   );
 
   const markBrokenImage = useCallback((docPath: string) => {
@@ -529,7 +1516,33 @@ export function DocumentsPage({
     [workspaceId, workspacePath, openReader],
   );
 
-  const isSearching = query.trim().length > 0;
+  const makeSideEditorLinks = useCallback(
+    (docPath: string): MarkdownDocumentLinks => ({
+      workspaceRoot: workspacePath,
+      documentPath: docPath,
+      resolveReferences: true,
+      fileUrl: (name) => documentFileUrl(workspaceId, name),
+      onOpenFile: (linkedPath) => {
+        const targetNorm = normalizeCatalogPath(linkedPath);
+        const editNorm = sideEditPath ? normalizeCatalogPath(sideEditPath) : '';
+        if (sideEditing && targetNorm && editNorm && targetNorm === editNorm) {
+          return;
+        }
+        const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        if (sideDirty) {
+          sideLinkOriginRef.current = opener;
+          setPendingSideAction({ type: 'open-reader-link', path: linkedPath, opener });
+          return;
+        }
+        if (sideEditing) {
+          discardSideEdit({ restoreFocus: false });
+        }
+        openReader(linkedPath, opener, 'card');
+      },
+    }),
+    [workspaceId, workspacePath, sideEditing, sideEditPath, sideDirty, discardSideEdit, openReader],
+  );
+
   const breadcrumbs = useMemo(() => buildBreadcrumbs(folder), [folder]);
 
   const changedLately = useMemo(() => {
@@ -565,7 +1578,7 @@ export function DocumentsPage({
   );
 
   const renderFolderCard = (entry: DocumentCatalogFolder) => {
-    const countsText = formatFolderCounts(entry, { evidence: entry.evidence });
+    const countsText = formatFolderCounts(entry, { evidence: entry.evidence }) || (!entry.evidence ? 'Empty' : '');
     return (
       <button
         key={entry.path}
@@ -669,6 +1682,95 @@ export function DocumentsPage({
     );
   };
 
+  const availableFolders = useMemo(
+    () => (catalog?.folders ?? []).filter((entry) => !entry.evidence).map((entry) => entry.path),
+    [catalog?.folders],
+  );
+
+  const activeSideDoc: DocumentCatalogItem | null = selectedItem ?? (
+    sideEditing && sideEditPath
+      ? {
+          path: sideEditPath,
+          name: sideEditPath.split('/').pop() ?? sideEditPath,
+          folder: sideEditPath.includes('/') ? sideEditPath.slice(0, sideEditPath.lastIndexOf('/')) : '',
+          kind: inferKindFromPath(sideEditPath),
+          size: sideEditContent.length,
+          modifiedAt: sideBaseModifiedAt ?? '',
+          title: sideEditPath.split('/').pop() ?? sideEditPath,
+          excerpt: '',
+          evidence: false,
+          editable: true,
+        }
+      : null
+  );
+  const selectedManagedReadOnly = activeSideDoc ? isManagedReadOnlyItem(activeSideDoc) : false;
+  const selectedReadOnlyReason = sidePreviewData?.readOnlyReason ?? activeSideDoc?.readOnlyReason;
+  const selectedEditable = Boolean(
+    !readOnly
+    && activeSideDoc
+    && activeSideDoc.editable
+    && (sidePreviewData?.editable ?? true)
+    && !selectedManagedReadOnly
+    && (activeSideDoc.kind === 'markdown' || activeSideDoc.kind === 'text' || activeSideDoc.kind === 'html'),
+  );
+  const sideMissingOnDisk = Boolean(catalog && sideEditing && sideEditPath && !selectedItem);
+
+  const readerManagedReadOnly = readerPath
+    ? (readerItem ? isManagedReadOnlyItem(readerItem) : readerPath.toLowerCase() === 'agents.md')
+    : false;
+  const readerReadOnlyReason = readerPreviewData?.readOnlyReason ?? readerItem?.readOnlyReason;
+  const readerEditable = Boolean(
+    !readOnly
+    && readerPath
+    && (readerItem ? readerItem.editable : true)
+    && (readerPreviewData?.editable ?? true)
+    && !readerManagedReadOnly
+    && (readerKind === 'markdown' || readerKind === 'text' || readerKind === 'html'),
+  );
+
+  const handleDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (readOnly || readerPath !== null || !event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDraggingFiles(true);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (readOnly || readerPath !== null || !event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (readOnly || readerPath !== null) return;
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDraggingFiles(false);
+    }
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    if (readOnly || readerPath !== null) return;
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    void processUploadFiles(event.dataTransfer.files);
+  };
+
+  const pendingActionLabel = pendingSideAction
+    ? pendingSideAction.type === 'cancel-edit'
+      ? 'Discard your edits and exit editing?'
+      : pendingSideAction.type === 'select-doc' || pendingSideAction.type === 'open-reader-link'
+        ? `Discard your edits and open "${pendingSideAction.path}"?`
+        : pendingSideAction.type === 'enter-folder'
+          ? `Discard your edits and open "${pendingSideAction.folder || 'All documents'}"?`
+          : pendingSideAction.type === 'open-new-doc'
+            ? 'Discard your edits and create a new document?'
+            : 'Discard your edits and create a new folder?'
+    : '';
+
   const folderIsEvidence = catalog ? isFolderEvidence(catalog, folder) : false;
   const isEmptyFolder =
     !isSearching
@@ -719,8 +1821,8 @@ export function DocumentsPage({
           </nav>
         </div>
 
-        <div className="flex w-full min-w-0 items-center gap-1.5 @[38rem]:ml-auto @[38rem]:w-auto @[38rem]:shrink-0">
-          <div className="relative min-w-0 flex-1 @[38rem]:w-84 @[38rem]:flex-initial">
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 @[52rem]:ml-auto @[52rem]:w-auto @[52rem]:shrink-0">
+          <div className="relative min-w-0 basis-full @[28rem]:flex-1 @[28rem]:basis-52 @[64rem]:w-84 @[64rem]:flex-initial">
             <Search
               aria-hidden="true"
               className="pointer-events-none absolute left-2.5 top-1/2 z-10 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -735,26 +1837,74 @@ export function DocumentsPage({
                 if (event.key === 'Escape' && query) {
                   event.preventDefault();
                   event.stopPropagation();
-                  setQuery('');
+                  clearSearch();
                 }
               }}
               placeholder="Find a document by title, words or path"
               aria-label="Find a document by title, words or path"
-              className={cn('w-full pl-6 sm:text-[length:var(--type-ui-size)]', query ? 'pr-7' : 'pr-0.5')}
+              className={cn('w-full pl-5 sm:text-[length:var(--type-ui-size)]', query ? 'pr-7' : 'pr-0.5')}
             />
             {query && (
               <IconButton
                 size="xs"
                 label="Clear search"
                 icon={<X />}
-                onClick={() => {
-                  setQuery('');
-                  searchRef.current?.focus();
-                }}
+                onClick={clearSearch}
                 className="absolute right-0.5 top-1/2 z-10 -translate-y-1/2"
               />
             )}
           </div>
+          {!readOnly && (
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              <Button
+                ref={newDocTriggerRef}
+                type="button"
+                size="sm"
+                variant={sideEditing ? 'outline' : 'default'}
+                data-testid="new-document-button"
+                onClick={requestOpenNewDoc}
+              >
+                <FilePlus aria-hidden="true" />
+                <span>New document</span>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                data-testid="upload-document-button"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploading ? <Spinner aria-hidden="true" className="size-3.5" /> : <Upload aria-hidden="true" />}
+                <span>{uploading ? 'Uploading…' : 'Upload'}</span>
+              </Button>
+              <Button
+                ref={newFolderTriggerRef}
+                type="button"
+                size="sm"
+                variant="outline"
+                data-testid="new-folder-button"
+                onClick={requestOpenNewFolder}
+              >
+                <FolderPlus aria-hidden="true" />
+                <span>New folder</span>
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                aria-hidden="true"
+                tabIndex={-1}
+                onChange={(event) => {
+                  if (event.target.files && event.target.files.length > 0) {
+                    void processUploadFiles(event.target.files);
+                  }
+                  event.target.value = '';
+                }}
+              />
+            </div>
+          )}
           {panelActions}
         </div>
       </header>
@@ -762,6 +1912,10 @@ export function DocumentsPage({
       {/* Main content area: single-column when < 56rem, split list + 380px preview when >= 56rem */}
       <div
         inert={active && readerPath !== null ? true : undefined}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         className="grid min-h-0 flex-1 grid-cols-1 @[56rem]:grid-cols-[minmax(0,1fr)_380px]"
       >
         <section
@@ -769,6 +1923,68 @@ export function DocumentsPage({
           aria-label="Documents list"
           className="@container min-h-0 min-w-0 overflow-y-auto px-4 pb-10 pt-4 @[48rem]:px-5"
         >
+          {isDraggingFiles && !readOnly && (
+            <div
+              role="status"
+              data-testid="documents-drop-zone"
+              className="pointer-events-none sticky top-2 z-10 mb-4 rounded-card border-2 border-dashed border-primary bg-card/95 px-4 py-3 text-center text-xs font-medium leading-4 text-foreground shadow-sm"
+            >
+              Drop files to add to {folder ? `"${folder}"` : 'workspace root'}
+            </div>
+          )}
+
+          {uploadErrors.length > 0 && (
+            <Alert variant="error" role="alert" data-testid="upload-error-banner" className="mb-4 py-2.5 text-xs">
+              <AlertTitle className="text-xs font-semibold leading-4 text-foreground">
+                Upload could not complete
+              </AlertTitle>
+              <AlertDescription className="gap-0.5 text-xs leading-4 text-foreground">
+                {uploadErrors.map((errMsg, index) => (
+                  <p key={`${index}-${errMsg}`}>{errMsg}</p>
+                ))}
+              </AlertDescription>
+              <AlertAction>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setUploadErrors([])}
+                >
+                  Dismiss
+                </Button>
+              </AlertAction>
+            </Alert>
+          )}
+
+          {uploadConflicts.map((entry) => (
+            <Alert key={entry.id} variant="warning" role="alert" data-testid="upload-conflict-banner" className="mb-4 py-2.5 text-xs">
+              <AlertDescription className="text-xs leading-4 text-foreground">
+                <span>
+                  <span className="font-mono">{entry.targetPath}</span> already exists. Keep both or skip?
+                </span>
+              </AlertDescription>
+              <AlertAction className="flex-wrap">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={uploading}
+                  onClick={() => void handleKeepBothUpload(entry)}
+                >
+                  Keep both
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={uploading}
+                  onClick={() => setUploadConflicts((prev) => prev.filter((item) => item.id !== entry.id))}
+                >
+                  Skip
+                </Button>
+              </AlertAction>
+            </Alert>
+          ))}
           {catalogQuery.isPending && !catalog && (
             <div role="status" className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Spinner aria-hidden="true" className="size-4" />
@@ -825,10 +2041,7 @@ export function DocumentsPage({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      setQuery('');
-                      searchRef.current?.focus();
-                    }}
+                    onClick={clearSearch}
                   >
                     Clear search
                   </Button>
@@ -984,6 +2197,29 @@ export function DocumentsPage({
                       {folder ? `No documents or subfolders inside "${folder}".` : 'No workspace documents found yet.'}
                     </EmptyDescription>
                   </EmptyHeader>
+                  {!readOnly && (
+                    <div className="mt-3 flex flex-wrap justify-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={requestOpenNewDoc}
+                      >
+                        <FilePlus aria-hidden="true" />
+                        <span>New document</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={uploading}
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Upload aria-hidden="true" />
+                        <span>Upload files</span>
+                      </Button>
+                    </div>
+                  )}
                 </Empty>
               )}
             </div>
@@ -996,7 +2232,7 @@ export function DocumentsPage({
           aria-label="Document preview"
           className="hidden min-h-0 flex-col border-l border-border bg-card @[56rem]:flex"
         >
-          {!selectedItem ? (
+          {!activeSideDoc ? (
             <div className="flex flex-1 items-center justify-center p-6 text-center text-[length:var(--type-ui-size)] leading-[var(--type-ui-leading)] text-muted-foreground">
               Pick a document or picture to see its preview here.
             </div>
@@ -1004,48 +2240,102 @@ export function DocumentsPage({
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="shrink-0 space-y-2 border-b border-border p-4">
                 <h3 className="break-words text-base font-semibold leading-snug text-foreground">
-                  {selectedItem.title}
+                  {activeSideDoc.title}
                 </h3>
                 <p className="break-all font-mono text-xs leading-4 text-muted-foreground">
-                  {selectedItem.path}
+                  {activeSideDoc.path}
                 </p>
                 <div className="flex flex-wrap items-center gap-2 text-xs leading-4 text-muted-foreground">
-                  <KindLabel kind={kindLabelFor(selectedItem.kind)} className="text-xs leading-4" />
-                  <span className="tabular-nums">{formatFileSize(selectedItem.size)}</span>
-                  {selectedItem.modifiedAt && (
-                    <span className="tabular-nums">{agoText(selectedItem.modifiedAt, nowDate)}</span>
+                  <KindLabel kind={kindLabelFor(activeSideDoc.kind)} className="text-xs leading-4" />
+                  <span className="tabular-nums">{formatFileSize(activeSideDoc.size)}</span>
+                  {activeSideDoc.modifiedAt && (
+                    <span className="tabular-nums">{agoText(activeSideDoc.modifiedAt, nowDate)}</span>
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <Button
+                    ref={sideOpenInReaderRef}
                     size="sm"
-                    variant="default"
+                    variant="outline"
                     data-testid="open-in-reader"
-                    onClick={(e) => openReader(selectedItem.path, e.currentTarget, 'open-button')}
+                    onClick={(e) => promoteSideEditToReader(activeSideDoc.path, e.currentTarget, 'open-button')}
                   >
                     Open in reader
                   </Button>
+                  {selectedEditable && !(sideEditing && sideEditPath === activeSideDoc.path) && (
+                    <Button
+                      ref={sideEditButtonRef}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      data-testid="side-edit-button"
+                      disabled={!sidePreviewData || sidePreviewQuery.isError}
+                      onClick={() => startSideEdit(activeSideDoc.path, sidePreviewData, true)}
+                    >
+                      <Edit3 aria-hidden="true" />
+                      <span>Edit</span>
+                    </Button>
+                  )}
                   {!readOnly && askInCLI && (
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => askInCLI(askCard({ kind: 'file', title: selectedItem.title, path: selectedItem.path }))}
+                      onClick={() => askInCLI(askCard({ kind: 'file', title: activeSideDoc.title, path: activeSideDoc.path }))}
                     >
                       <Terminal aria-hidden="true" />
                       <span>Ask in CLI</span>
                     </Button>
                   )}
                 </div>
+                {!readOnly && selectedReadOnlyReason && (
+                  <p data-testid="doc-readonly-reason" className="pt-0.5 text-xs leading-4 text-muted-foreground">
+                    {selectedReadOnlyReason}
+                  </p>
+                )}
               </div>
 
-              <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4 wrap-anywhere">
-                {sidePreviewData ? (
+              <div
+                className={cn(
+                  'min-h-0 min-w-0 flex-1 p-4',
+                  sideEditing && sideEditPath === activeSideDoc.path
+                    ? 'flex flex-col overflow-hidden'
+                    : 'overflow-auto wrap-anywhere',
+                )}
+              >
+                {sideEditing && sideEditPath === activeSideDoc.path ? (
+                  <DocumentEditor
+                    docPath={activeSideDoc.path}
+                    kind={
+                      activeSideDoc.kind === 'markdown' || activeSideDoc.kind === 'html'
+                        ? activeSideDoc.kind
+                        : 'text'
+                    }
+                    value={sideEditContent}
+                    onChange={setSideEditContent}
+                    dirty={sideDirty}
+                    saving={sideSaving}
+                    saveError={sideSaveError}
+                    externalChangeNotice={sideExternalChangeNotice || sideMissingOnDisk}
+                    conflict={sideConflict}
+                    onSave={() => void executeSideSave()}
+                    onCancel={requestCancelSideEdit}
+                    onOverwriteConflict={() => void executeSideSave(sideConflict?.currentRevision ?? null)}
+                    onSaveAsCopy={() => void handleSideSaveAsCopy()}
+                    onLoadLatest={handleSideLoadLatest}
+                    links={makeSideEditorLinks(activeSideDoc.path)}
+                    fileUrl={documentFileUrl(workspaceId, activeSideDoc.path)}
+                    autoFocus={sideAutoFocus}
+                    compact
+                    showActions
+                    textareaRef={sideTextareaRef}
+                  />
+                ) : sidePreviewData ? (
                   <DocumentPreview
                     preview={sidePreviewData}
-                    fileUrl={documentFileUrl(workspaceId, selectedItem.path)}
+                    fileUrl={documentFileUrl(workspaceId, activeSideDoc.path)}
                     raw={false}
                     trusted
-                    links={makeMarkdownLinks(selectedItem.path)}
+                    links={makeMarkdownLinks(activeSideDoc.path)}
                   />
                 ) : sidePreviewQuery.isError ? (
                   <div className="space-y-2">
@@ -1095,6 +2385,37 @@ export function DocumentsPage({
             }
             rawLabels={readerKind === 'markdown' ? ['View source', 'View formatted'] : ['View source', 'View page']}
             onClose={closeReader}
+            editable={readerEditable}
+            onSave={
+              readerEditable
+                ? (content, options) => handleReaderSave(readerPath, content, options)
+                : undefined
+            }
+            onSaveAsCopy={
+              readerEditable
+                ? (content) => handleReaderSaveAsCopy(readerPath, content)
+                : undefined
+            }
+            onMove={
+              !readOnly && !readerManagedReadOnly
+                ? (to) => handleReaderMove(readerPath, to)
+                : undefined
+            }
+            notice={
+              !readOnly && readerReadOnlyReason ? (
+                <p
+                  data-testid="reader-readonly-reason"
+                  className="mb-3 shrink-0 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-4 text-muted-foreground"
+                >
+                  {readerReadOnlyReason}
+                </p>
+              ) : undefined
+            }
+            initialEditing={readerInitialEditing || Boolean(readerDrafts[readerPath]?.editing)}
+            initialDraft={readerDrafts[readerPath]}
+            onDraftStateChange={(state) => handleReaderDraftStateChange(readerPath, state)}
+            externalModifiedAt={readerItem?.modifiedAt}
+            requestCloseRef={readerRequestCloseRef}
             status={
               readerPreviewQuery.isError ? (
                 <div className="space-y-2">
@@ -1114,6 +2435,146 @@ export function DocumentsPage({
             }
           />
         </div>
+      )}
+
+      {!readOnly && (
+        <>
+          <NewDocumentDialog
+            open={active && newDocOpen}
+            onOpenChange={setNewDocOpen}
+            workspaceId={workspaceId}
+            initialFolder={folder}
+            availableFolders={availableFolders}
+            returnFocusRef={newDocTriggerRef}
+            onCreated={handleDocumentCreated}
+          />
+          <NewFolderDialog
+            open={active && newFolderOpen}
+            onOpenChange={setNewFolderOpen}
+            workspaceId={workspaceId}
+            parentFolder={folder}
+            returnFocusRef={newFolderTriggerRef}
+            onCreated={handleFolderCreated}
+          />
+        </>
+      )}
+
+      {active && pendingSideAction && (
+        <AlertDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              sideAlertExitModeRef.current = 'keep';
+              setPendingSideAction(null);
+              requestAnimationFrame(() => {
+                if (!activeRef.current || newDocOpenRef.current || newFolderOpenRef.current || readerPathRef.current !== null) {
+                  return;
+                }
+                if (sideEditingRef.current) {
+                  resolveSideKeepEditingFocus()?.focus({ preventScroll: true });
+                } else {
+                  resolveSidePostExitFocus()?.focus({ preventScroll: true });
+                }
+              });
+            }
+          }}
+        >
+          <AlertDialogPopup
+            initialFocus={keepSideEditingRef}
+            finalFocus={() => {
+              if (
+                !activeRef.current
+                || sideAlertExitModeRef.current === 'discard-away'
+                || newDocOpenRef.current
+                || newFolderOpenRef.current
+                || readerPathRef.current !== null
+              ) {
+                return false;
+              }
+              if (sideEditingRef.current) {
+                return resolveSideKeepEditingFocus() ?? false;
+              }
+              return resolveSidePostExitFocus() ?? false;
+            }}
+            data-testid="side-discard-dialog"
+          >
+            <AlertDialogHeader>
+              <AlertDialogTitle>Unsaved changes</AlertDialogTitle>
+              <AlertDialogDescription>{pendingActionLabel}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button
+                ref={keepSideEditingRef}
+                type="button"
+                variant="outline"
+                autoFocus
+                onClick={() => {
+                  sideAlertExitModeRef.current = 'keep';
+                  setPendingSideAction(null);
+                  requestAnimationFrame(() => {
+                    if (!activeRef.current || readerPathRef.current !== null) return;
+                    resolveSideKeepEditingFocus()?.focus({ preventScroll: true });
+                  });
+                }}
+              >
+                Keep editing
+              </Button>
+              <Button
+                type="button"
+                variant="destructive-outline"
+                onClick={() => {
+                  const action = pendingSideAction;
+                  const stayInSide = Boolean(
+                    action
+                    && (action.type === 'cancel-edit' || (action.type === 'select-doc' && measureWide())),
+                  );
+                  sideAlertExitModeRef.current = stayInSide ? 'discard-stay' : 'discard-away';
+                  setPendingSideAction(null);
+                  discardSideEdit({ restoreFocus: stayInSide });
+                  if (action) performPendingSideAction(action);
+                }}
+              >
+                Discard changes
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                disabled={sideSaving || sideConflict !== null}
+                onClick={() => {
+                  const action = pendingSideAction;
+                  const stayInSide = Boolean(
+                    action
+                    && (action.type === 'cancel-edit' || (action.type === 'select-doc' && measureWide())),
+                  );
+                  sideAlertExitModeRef.current = stayInSide ? 'discard-stay' : 'discard-away';
+                  void executeSideSave(undefined, { restoreFocus: stayInSide }).then((ok) => {
+                    if (!ok) {
+                      sideAlertExitModeRef.current = 'keep';
+                      pendingSideExitFocusRef.current = false;
+                      setPendingSideAction(null);
+                      requestAnimationFrame(() => {
+                        if (!activeRef.current || readerPathRef.current !== null) return;
+                        const conflictBtn = asideRef.current?.querySelector<HTMLElement>(
+                          '[data-testid="document-conflict-bar"] button:not([disabled])',
+                        ) ?? null;
+                        if (isElementVisible(conflictBtn)) {
+                          conflictBtn.focus({ preventScroll: true });
+                          return;
+                        }
+                        resolveSideKeepEditingFocus()?.focus({ preventScroll: true });
+                      });
+                      return;
+                    }
+                    setPendingSideAction(null);
+                    if (action) performPendingSideAction(action);
+                  });
+                }}
+              >
+                {sideSaving ? 'Saving…' : 'Save & continue'}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        </AlertDialog>
       )}
     </div>
   );

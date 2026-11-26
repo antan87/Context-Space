@@ -6,7 +6,17 @@ import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { addWorkDocument, getWorkContext, readWorkDocument, updateWorkDocument, updateWorkGuidance } from '../core/work-guidance.js';
 import { loadWorkspaceLifecycle, updateLifecyclePlan } from '../core/lifecycle.js';
-import { createRootFolder, listRootDocuments, moveRootDocument, openRootDocumentForStream, previewRootDocument, readRootDocument, writeRootDocument } from '../core/root-documents.js';
+import {
+  DocumentConflictError,
+  createRootFolder,
+  listRootDocuments,
+  moveRootDocument,
+  openRootDocumentForStream,
+  previewRootDocument,
+  readRootDocument,
+  uploadRootDocument,
+  writeRootDocument,
+} from '../core/root-documents.js';
 import { buildDocumentCatalog } from '../core/document-catalog.js';
 import { refreshPlanningContext } from '../core/planning-refresh.js';
 import { loadFeatureConfig } from '../core/workspace.js';
@@ -38,6 +48,15 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
       if (!root) return c.json({ error: 'Workspace not found.' }, 404);
       return c.json(await action(root, c));
     } catch (error) {
+      if (error instanceof DocumentConflictError) {
+        return c.json({
+          error: error.message,
+          code: error.code,
+          currentRevision: error.currentRevision,
+          currentContent: error.currentContent,
+          currentModifiedAt: error.currentModifiedAt,
+        }, 409);
+      }
       const message = error instanceof Error ? error.message : String(error);
       return c.json({ error: message }, error instanceof z.ZodError ? 400 : /changed.*session|Reload/.test(message) ? 409 : 400);
     }
@@ -52,15 +71,58 @@ export function registerWorkGuidanceRoutes(app: Hono, resolveWorkspace: (id: str
     return buildDocumentCatalog(root, { repoFolders: await repositoryFolders(root) });
   }));
   app.get('/api/workspace/:id/documents/preview', handle(async (root, c) => {
-    return previewRootDocument(await resolveDocumentRoot(root, c.req.query('repo')), c.req.query('name') ?? '', { metaOnly: c.req.query('meta') === '1' });
+    const repo = c.req.query('repo');
+    const preview = await previewRootDocument(await resolveDocumentRoot(root, repo), c.req.query('name') ?? '', { metaOnly: c.req.query('meta') === '1' });
+    if (repo) {
+      return {
+        ...preview,
+        editable: false,
+        readOnlyReason: 'Repository files are read-only here — edit them in the repository.',
+      };
+    }
+    return preview;
   }));
   const documentBodyLimit = bodyLimit({ maxSize: 2_000_000 });
   app.put('/api/workspace/:id/documents', documentBodyLimit, handle(async (root, c) => {
     const input = z.object({
       name: z.string().min(1),
       content: z.string(),
+      expectedRevision: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      createOnly: z.boolean().optional(),
     }).parse(await c.req.json());
-    return writeRootDocument(root, input.name, input.content);
+    return writeRootDocument(root, input.name, input.content, {
+      expectedRevision: input.expectedRevision,
+      createOnly: input.createOnly,
+    });
+  }));
+  const uploadBodyLimit = bodyLimit({
+    maxSize: 26 * 1024 * 1024,
+    onError: (c) => c.json({ error: 'Uploaded file exceeds the 25 MB upload limit.' }, 413),
+  });
+  app.post('/api/workspace/:id/documents/upload', uploadBodyLimit, handle(async (root, c) => {
+    let formData: FormData;
+    try {
+      formData = await c.req.formData();
+    } catch {
+      throw new Error('Expected multipart/form-data upload payload.');
+    }
+    const fileEntry = formData.get('file');
+    if (!fileEntry || typeof fileEntry === 'string' || typeof fileEntry.arrayBuffer !== 'function') {
+      throw new Error('Select a file to upload.');
+    }
+    const folderRaw = formData.get('folder');
+    const nameOverrideRaw = formData.get('name');
+    const createOnlyRaw = formData.get('createOnly');
+    const folder = typeof folderRaw === 'string' ? folderRaw.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') : '';
+    const nameOverride = typeof nameOverrideRaw === 'string' ? nameOverrideRaw.trim() : '';
+    const uploadedName = nameOverride || path.posix.basename(((fileEntry as File).name ?? '').replace(/\\/g, '/'));
+    if (!uploadedName) {
+      throw new Error('Select a file with a valid filename.');
+    }
+    const targetName = folder ? `${folder}/${uploadedName}` : uploadedName;
+    const createOnly = typeof createOnlyRaw === 'string' ? createOnlyRaw !== '0' && createOnlyRaw !== 'false' : true;
+    const bytes = new Uint8Array(await fileEntry.arrayBuffer());
+    return uploadRootDocument(root, targetName, bytes, { createOnly });
   }));
   app.post('/api/workspace/:id/documents/folders', bounded, handle(async (root, c) => {
     const input = z.object({

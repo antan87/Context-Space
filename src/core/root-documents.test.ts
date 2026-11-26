@@ -1,17 +1,22 @@
+import { createHash } from 'node:crypto';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import {
+  DocumentConflictError,
   createRootFolder,
+  documentEditability,
   listRootDocuments,
   moveRootDocument,
   openableDocumentName,
   openRootDocumentForStream,
   previewRootDocument,
   readRootDocument,
+  uploadRootDocument,
   writeRootDocument,
 } from './root-documents.js';
+import { SWITCH_FILE, WorkspaceMovedError } from './workspace-db-switch.js';
 import * as fsSafety from '../resources/fs-safety.js';
 
 let root: string;
@@ -281,11 +286,15 @@ it('creates root folders and moves documents into subfolders', async () => {
   // Rejects creating folder over existing file
   await expect(createRootFolder(root, 'docs/nested/spec.md')).rejects.toThrow('existing file');
 
-  // Moving same path returns directly
+  // Moving same path returns directly when valid, and still validates invalid/missing/store paths
   expect(await moveRootDocument(root, 'docs/nested/spec.md', 'docs/nested/spec.md')).toEqual({
     from: 'docs/nested/spec.md',
     to: 'docs/nested/spec.md',
   });
+  await expect(moveRootDocument(root, '../escape.md', '../escape.md')).rejects.toThrow('Choose a document inside this workspace');
+  await expect(moveRootDocument(root, 'missing-self.md', 'missing-self.md')).rejects.toThrow('Document not found');
+  await fs.writeFile(path.join(root, 'contextspace.json'), '{}');
+  await expect(moveRootDocument(root, 'contextspace.json', 'contextspace.json')).rejects.toThrow('store file');
 
   // Rejects moving nonexistent source
   await expect(moveRootDocument(root, 'nonexistent.md', 'dest.md')).rejects.toThrow('Document not found');
@@ -387,5 +396,160 @@ it('openRootDocumentForStream returns handle and metadata without buffering file
   expect(bytesRead).toBe(16);
   expect(buf.toString('utf-8')).toBe('PNG_BYTES_HEADER');
   await doc.handle.close();
+});
+
+it('tracks SHA-256 revisions, enforces createOnly & expectedRevision conflicts, and serializes concurrent saves', async () => {
+  const initial = await writeRootDocument(root, 'notes.md', '# V1', { createOnly: true });
+  const expectedSha = createHash('sha256').update('# V1', 'utf-8').digest('hex');
+  expect(initial.revision).toBe(expectedSha);
+
+  const preview = await previewRootDocument(root, 'notes.md');
+  expect(preview.revision).toBe(expectedSha);
+  expect(preview.editable).toBe(true);
+  const read = await readRootDocument(root, 'notes.md');
+  expect(read.revision).toBe(expectedSha);
+
+  // createOnly rejects existing file without overwriting
+  await expect(writeRootDocument(root, 'notes.md', '# Overwrite', { createOnly: true })).rejects.toMatchObject({
+    name: 'DocumentConflictError',
+    code: 'ALREADY_EXISTS',
+    currentRevision: expectedSha,
+    currentContent: '# V1',
+  });
+  expect(await fs.readFile(path.join(root, 'notes.md'), 'utf-8')).toBe('# V1');
+
+  // Matching expectedRevision succeeds and returns new revision
+  const updated = await writeRootDocument(root, 'notes.md', '# V2', { expectedRevision: expectedSha });
+  const shaV2 = createHash('sha256').update('# V2', 'utf-8').digest('hex');
+  expect(updated.revision).toBe(shaV2);
+
+  // Empty or malformed expectedRevision is rejected rather than silently bypassing conflict checks
+  await expect(writeRootDocument(root, 'notes.md', '# Empty rev', { expectedRevision: '' })).rejects.toThrow('Invalid expectedRevision');
+  await expect(writeRootDocument(root, 'notes.md', '# Bad rev', { expectedRevision: 'abc' })).rejects.toThrow('Invalid expectedRevision');
+
+  // Stale expectedRevision fails with CONFLICT and current state
+  await expect(writeRootDocument(root, 'notes.md', '# Mine', { expectedRevision: expectedSha })).rejects.toMatchObject({
+    name: 'DocumentConflictError',
+    code: 'CONFLICT',
+    currentRevision: shaV2,
+    currentContent: '# V2',
+  });
+  expect(await fs.readFile(path.join(root, 'notes.md'), 'utf-8')).toBe('# V2');
+
+  // Concurrent writes with the same expectedRevision serialize cleanly: one wins, one gets CONFLICT
+  const [r1, r2] = await Promise.allSettled([
+    writeRootDocument(root, 'notes.md', '# Concurrent A', { expectedRevision: shaV2 }),
+    writeRootDocument(root, 'notes.md', '# Concurrent B', { expectedRevision: shaV2 }),
+  ]);
+  const fulfilled = [r1, r2].filter((r) => r.status === 'fulfilled');
+  const rejected = [r1, r2].filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+  expect(fulfilled).toHaveLength(1);
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0]!.reason).toBeInstanceOf(DocumentConflictError);
+  expect((rejected[0]!.reason as DocumentConflictError).code).toBe('CONFLICT');
+
+  // Deleted file with expectedRevision returns CONFLICT (currentRevision: null) instead of silently recreating
+  await fs.rm(path.join(root, 'notes.md'));
+  await expect(writeRootDocument(root, 'notes.md', '# Recreate?', { expectedRevision: shaV2 })).rejects.toMatchObject({
+    name: 'DocumentConflictError',
+    code: 'CONFLICT',
+    currentRevision: null,
+    currentContent: '',
+    currentModifiedAt: null,
+  });
+  await expect(fs.access(path.join(root, 'notes.md'))).rejects.toThrow();
+
+  // SQLite-moved PLAN.md continues throwing WorkspaceMovedError
+  await fs.mkdir(path.join(root, '.contextspace'), { recursive: true });
+  await fs.writeFile(path.join(root, SWITCH_FILE), JSON.stringify({ state: 'on', archive: '.contextspace/archive/a', id: 'db1' }));
+  await expect(writeRootDocument(root, 'PLAN.md', '# Blocked')).rejects.toBeInstanceOf(WorkspaceMovedError);
+});
+
+it('uploads supported binary & text files safely and rejects invalid, oversized, symlinked, or duplicate targets', async () => {
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  const pngRes = await uploadRootDocument(root, 'assets/chart.png', pngBytes);
+  expect(pngRes).toMatchObject({ name: 'assets/chart.png', kind: 'image', size: 4 });
+  expect(pngRes).not.toHaveProperty('revision');
+
+  const pdfRes = await uploadRootDocument(root, 'spec.pdf', Buffer.from('%PDF-1.7'));
+  expect(pdfRes).toMatchObject({ name: 'spec.pdf', kind: 'pdf' });
+
+  const docxRes = await uploadRootDocument(root, 'brief.docx', Buffer.from('PK\x03\x04'));
+  expect(docxRes).toMatchObject({ name: 'brief.docx', kind: 'download' });
+
+  const mdBytes = Buffer.from('# Uploaded Notes\n', 'utf-8');
+  const mdRes = await uploadRootDocument(root, 'docs/notes.md', mdBytes);
+  expect(mdRes).toMatchObject({
+    name: 'docs/notes.md',
+    kind: 'markdown',
+    revision: createHash('sha256').update(mdBytes).digest('hex'),
+  });
+
+  // Duplicate conflict by default (createOnly: true)
+  await expect(uploadRootDocument(root, 'docs/notes.md', Buffer.from('# Dup'))).rejects.toMatchObject({
+    name: 'DocumentConflictError',
+    code: 'ALREADY_EXISTS',
+    currentContent: '# Uploaded Notes\n',
+  });
+  expect(await fs.readFile(path.join(root, 'docs', 'notes.md'), 'utf-8')).toBe('# Uploaded Notes\n');
+
+  // Explicit createOnly: false overwrites cleanly
+  await uploadRootDocument(root, 'docs/notes.md', Buffer.from('# Replaced'), { createOnly: false });
+  expect(await fs.readFile(path.join(root, 'docs', 'notes.md'), 'utf-8')).toBe('# Replaced');
+
+  // Rejects unsupported formats, hidden dotfiles, traversal, invalid UTF-8 text, and size limits
+  await expect(uploadRootDocument(root, 'app.exe', Buffer.from('MZ'))).rejects.toThrow("can't be opened here");
+  await expect(uploadRootDocument(root, 'keys.env', Buffer.from('SECRET=1'))).rejects.toThrow("can't be opened here");
+  await expect(uploadRootDocument(root, '.env', Buffer.from('SECRET=1'))).rejects.toThrow('Choose a document inside this workspace');
+  await expect(uploadRootDocument(root, '.secret.md', Buffer.from('x'))).rejects.toThrow('Hidden files');
+  await expect(uploadRootDocument(root, '../escape.md', Buffer.from('x'))).rejects.toThrow('Choose a document inside this workspace');
+  await expect(uploadRootDocument(root, 'bad-utf8.md', new Uint8Array([0xff, 0xfe]))).rejects.toThrow('valid UTF-8');
+  await expect(uploadRootDocument(root, 'huge.md', Buffer.alloc(1024 * 1024 + 1, 'a'))).rejects.toThrow('upload limit');
+  await expect(uploadRootDocument(root, 'huge.png', new Uint8Array(25 * 1024 * 1024 + 1))).rejects.toThrow('upload limit');
+
+  // Rejects symlinks and directories
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'upload-outside-'));
+  try {
+    await fs.writeFile(path.join(outside, 'target.md'), 'outside');
+    await fs.symlink(path.join(outside, 'target.md'), path.join(root, 'linked.md'));
+    await expect(uploadRootDocument(root, 'linked.md', Buffer.from('bad'), { createOnly: false })).rejects.toThrow('Linked path');
+    await fs.mkdir(path.join(root, 'dir.md'));
+    await expect(uploadRootDocument(root, 'dir.md', Buffer.from('bad'), { createOnly: false })).rejects.toThrow('is a directory');
+  } finally {
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+it('reports consistent documentEditability for writable, binary, AGENTS.md, and SQLite-moved PLAN.md', async () => {
+  expect(documentEditability(root, 'design/spec.md')).toEqual({ editable: true });
+  expect(documentEditability(root, 'docs/AGENTS.md')).toEqual({ editable: true });
+  expect(documentEditability(root, 'PLAN.md')).toEqual({ editable: true });
+  expect(documentEditability(root, 'AGENTS.md')).toEqual({
+    editable: false,
+    readOnlyReason: 'Generated by ContextSpace — refreshed automatically.',
+    managed: true,
+  });
+  expect(documentEditability(root, 'chart.png')).toEqual({
+    editable: false,
+    readOnlyReason: 'Only text, markdown, and HTML documents can be edited directly.',
+  });
+  expect(documentEditability(root, 'contextspace.json')).toEqual({
+    editable: false,
+    readOnlyReason: "ContextSpace's own store file cannot be edited directly.",
+    managed: true,
+  });
+
+  await fs.mkdir(path.join(root, '.contextspace'), { recursive: true });
+  await fs.writeFile(path.join(root, SWITCH_FILE), JSON.stringify({ state: 'on', archive: '.contextspace/archive/a', id: 'db1' }));
+  expect(documentEditability(root, 'PLAN.md')).toEqual({
+    editable: false,
+    readOnlyReason: 'Managed on the Board database — edit steps on the Board.',
+    managed: true,
+  });
+  expect(documentEditability(root, 'contextspace-milestones.md')).toEqual({
+    editable: false,
+    readOnlyReason: 'Managed on the Board database — edit steps on the Board.',
+    managed: true,
+  });
 });
 

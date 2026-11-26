@@ -957,6 +957,44 @@ const FOLDER_ROWS = [
     ],
     safety: 'Pure catalog selectors, folding, search, and URL helpers for DocumentsPage.tsx; covered by documentsCatalog.test.ts plus Documents page specs.',
   },
+  {
+    folder: 'src/features/documents/documentMutations',
+    path: 'gui/src/features/documents/documentMutations.ts',
+    bareNames: ['documentMutations', 'documentMutations.ts'],
+    specs: [
+      'e2e/documents-page.spec.ts',
+      'e2e/workspace-shell.spec.ts',
+      'e2e/archive-navigation.spec.ts',
+      'e2e/accessibility.spec.ts',
+      'e2e/board-reader.spec.ts',
+    ],
+    safety: 'Client document write/upload/folder/move requests and conflict/filename helpers used by DocumentsPage, DocumentEditor, NewDocumentDialog, and DocumentViewer; covered by documentMutations.test.ts plus Documents and reader specs.',
+  },
+  {
+    folder: 'src/features/documents/DocumentEditor',
+    path: 'gui/src/features/documents/DocumentEditor.tsx',
+    bareNames: ['DocumentEditor', 'DocumentEditor.tsx'],
+    specs: [
+      'e2e/documents-page.spec.ts',
+      'e2e/workspace-shell.spec.ts',
+      'e2e/archive-navigation.spec.ts',
+      'e2e/accessibility.spec.ts',
+      'e2e/board-reader.spec.ts',
+    ],
+    safety: 'In-place document editor (Write/Preview, conflict bar, shortcuts) used only when editing on DocumentsPage and DocumentViewer; covered by Documents and reader specs.',
+  },
+  {
+    folder: 'src/features/documents/NewDocumentDialog',
+    path: 'gui/src/features/documents/NewDocumentDialog.tsx',
+    bareNames: ['NewDocumentDialog', 'NewDocumentDialog.tsx'],
+    specs: [
+      'e2e/documents-page.spec.ts',
+      'e2e/workspace-shell.spec.ts',
+      'e2e/archive-navigation.spec.ts',
+      'e2e/accessibility.spec.ts',
+    ],
+    safety: 'Modal dialogs for creating documents and folders on DocumentsPage; covered by Documents page specs.',
+  },
 ];
 
 /**

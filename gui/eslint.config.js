@@ -64,7 +64,6 @@ export const LEGACY_UI_IMPORTERS = [
   'src/features/terminal/TerminalPane.tsx',
   'src/features/terminal/TerminalWorkspace.tsx',
   'src/features/work-guidance/BriefDraftNotices.tsx',
-  'src/features/work-guidance/DocumentViewer.tsx',
   'src/features/workrooms/HandoffStream.tsx',
   'src/features/workrooms/WorkspaceWorkroomTab.tsx',
   'src/features/workspace-home/WorkspaceTabs.tsx',

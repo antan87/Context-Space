@@ -2,7 +2,8 @@ import * as fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import * as path from 'node:path';
 import * as fsSafety from '../resources/fs-safety.js';
-import { listRootDocuments } from './root-documents.js';
+import { documentEditability, listRootDocuments } from './root-documents.js';
+import { readSwitch } from './workspace-db-switch.js';
 
 export type DocumentCatalogKind = 'markdown' | 'text' | 'html' | 'pdf' | 'image' | 'download';
 
@@ -16,6 +17,8 @@ export interface DocumentCatalogItem {
   title: string;
   excerpt: string;
   evidence: boolean;
+  editable: boolean;
+  readOnlyReason?: string;
 }
 
 export interface DocumentCatalogFolder {
@@ -401,10 +404,12 @@ export async function buildDocumentCatalog(
     metaByPath.set(doc.name, await readHeadMetadata(root, doc));
   });
 
+  const switchedToDb = readSwitch(root) !== null;
   const items: DocumentCatalogItem[] = rawDocs.map((doc) => {
     const { name, parent: folder } = splitPath(doc.name);
     const evidence = isEvidencePath(doc.name);
     const meta = !evidence ? metaByPath.get(doc.name) : undefined;
+    const editability = documentEditability(root, doc.name, { switchedToDb });
     return {
       path: doc.name,
       name,
@@ -415,57 +420,109 @@ export async function buildDocumentCatalog(
       title: meta?.title ?? humanizeDocumentFilename(doc.name),
       excerpt: meta?.excerpt ?? '',
       evidence,
+      editable: editability.editable,
+      ...(editability.readOnlyReason ? { readOnlyReason: editability.readOnlyReason } : {}),
     };
   });
 
   const folderPaths = [...folderSet].sort((a, b) => a.localeCompare(b));
+  type PreliminaryFolder = {
+    path: string;
+    name: string;
+    parent: string;
+    evidence: boolean;
+    summary: string;
+    docCount: number;
+    pictureCount: number;
+    evidenceCount: number;
+  };
+  const preliminaryByPath = new Map<string, PreliminaryFolder>();
+  const zeroCountFolders: PreliminaryFolder[] = [];
+
+  for (const folderPath of folderPaths) {
+    const { name, parent } = splitPath(folderPath);
+    let evidence = isEvidencePath(folderPath);
+    let docCount = 0;
+    let pictureCount = 0;
+    let evidenceCount = 0;
+    let readmeExcerpt = '';
+    let fallbackReadmeExcerpt = '';
+
+    for (const item of items) {
+      if (!isWithinFolder(item.folder, folderPath)) continue;
+      if (item.evidence) {
+        evidenceCount += 1;
+      } else if (item.kind === 'image') {
+        pictureCount += 1;
+      } else {
+        docCount += 1;
+      }
+
+      if (!evidence && !item.evidence && item.folder === folderPath) {
+        if (item.name === 'README.md' && item.excerpt) readmeExcerpt = item.excerpt;
+        else if (!fallbackReadmeExcerpt && item.name.toLowerCase() === 'readme.md' && item.excerpt) {
+          fallbackReadmeExcerpt = item.excerpt;
+        }
+      }
+    }
+
+    if (docCount + pictureCount + evidenceCount === 0) {
+      if (!evidence) {
+        zeroCountFolders.push({
+          path: folderPath,
+          name,
+          parent,
+          evidence: false,
+          summary: '',
+          docCount: 0,
+          pictureCount: 0,
+          evidenceCount: 0,
+        });
+      }
+      continue;
+    }
+    // Folders that hold only evidence/log artifacts fold alongside evidence
+    if (!evidence && docCount === 0 && pictureCount === 0 && evidenceCount > 0) {
+      evidence = true;
+    }
+
+    preliminaryByPath.set(folderPath, {
+      path: folderPath,
+      name,
+      parent,
+      evidence,
+      summary: evidence ? '' : (readmeExcerpt || fallbackReadmeExcerpt),
+      docCount,
+      pictureCount,
+      evidenceCount,
+    });
+  }
+
+  // Include genuinely empty folders (e.g. newly created via createRootFolder) and parents that only hold empty visible
+  // subfolders, while continuing to skip folders holding uncataloged files/scripts/symlinks (bin/, scratch/, scripts/).
+  zeroCountFolders.sort((a, b) => b.path.split('/').length - a.path.split('/').length || a.path.localeCompare(b.path));
+  for (const candidate of zeroCountFolders) {
+    const targetDir = path.join(root, ...candidate.path.split('/'));
+    try {
+      await fsSafety.assertNoLinkedPathComponents(root, targetDir);
+      const entries = await fs.readdir(targetDir, { withFileTypes: true });
+      const onlyEmptyVisibleSubdirs = entries.every((entry) => {
+        if (entry.isSymbolicLink() || !entry.isDirectory()) return false;
+        const childPath = `${candidate.path}/${entry.name}`;
+        const child = preliminaryByPath.get(childPath);
+        return Boolean(child && !child.evidence);
+      });
+      if (onlyEmptyVisibleSubdirs) {
+        preliminaryByPath.set(candidate.path, candidate);
+      }
+    } catch {
+      // Ignore unreadable or disappearing directories
+    }
+  }
+
   const preliminaryFolders = folderPaths
-    .map((folderPath) => {
-      const { name, parent } = splitPath(folderPath);
-      let evidence = isEvidencePath(folderPath);
-      let docCount = 0;
-      let pictureCount = 0;
-      let evidenceCount = 0;
-      let readmeExcerpt = '';
-      let fallbackReadmeExcerpt = '';
-
-      for (const item of items) {
-        if (!isWithinFolder(item.folder, folderPath)) continue;
-        if (item.evidence) {
-          evidenceCount += 1;
-        } else if (item.kind === 'image') {
-          pictureCount += 1;
-        } else {
-          docCount += 1;
-        }
-
-        if (!evidence && !item.evidence && item.folder === folderPath) {
-          if (item.name === 'README.md' && item.excerpt) readmeExcerpt = item.excerpt;
-          else if (!fallbackReadmeExcerpt && item.name.toLowerCase() === 'readme.md' && item.excerpt) {
-            fallbackReadmeExcerpt = item.excerpt;
-          }
-        }
-      }
-
-      // Skip folders containing zero cataloged files (e.g. bin/, scratch/, scripts/, test-results/)
-      if (docCount + pictureCount + evidenceCount === 0) return null;
-      // Folders that hold only evidence/log artifacts fold alongside evidence
-      if (!evidence && docCount === 0 && pictureCount === 0 && evidenceCount > 0) {
-        evidence = true;
-      }
-
-      return {
-        path: folderPath,
-        name,
-        parent,
-        evidence,
-        summary: evidence ? '' : (readmeExcerpt || fallbackReadmeExcerpt),
-        docCount,
-        pictureCount,
-        evidenceCount,
-      };
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    .map((folderPath) => preliminaryByPath.get(folderPath))
+    .filter((entry): entry is PreliminaryFolder => entry !== undefined);
 
   const visibleNonEvidenceFolders = preliminaryFolders.filter((entry) => !entry.evidence);
   const folders: DocumentCatalogFolder[] = preliminaryFolders.map((entry) => {

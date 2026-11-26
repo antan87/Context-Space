@@ -19,6 +19,9 @@ export interface DocumentPreviewData {
   content?: string;
   size?: number;
   modifiedAt?: string;
+  revision?: string;
+  editable?: boolean;
+  readOnlyReason?: string;
 }
 
 /**

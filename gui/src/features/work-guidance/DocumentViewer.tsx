@@ -1,21 +1,62 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Code2, Copy, Download, Edit3, ExternalLink, Eye, FolderInput, Maximize2, Minimize2, MoreHorizontal, Save, X } from 'lucide-react';
-import { Button, buttonVariants } from '../../components/ui/button.js';
-import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '../../components/ui/dialog.js';
-import { Input } from '../../components/ui/input.js';
-import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from '../../components/ui/menu.js';
+import {
+  AlertDialog,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  Button,
+  buttonVariants,
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  Input,
+  Menu,
+  MenuCheckboxItem,
+  MenuItem,
+  MenuPopup,
+  MenuTrigger,
+} from '../../design/index.js';
 import type { MarkdownDocumentLinks } from '../../components/ChatMarkdown.js';
 import { DiagramFullScreenContext } from '../../components/diagramFixContext.js';
 import { copyPictureToClipboard, safeCopyToClipboard } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils';
 import type { ReaderLineTools } from '../board/ReaderLines.js';
+import { DocumentEditor } from '../documents/DocumentEditor.js';
+import { parseDocumentConflict, type DocumentConflictDetails } from '../documents/documentMutations.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
 import { DocumentPreview, type DocumentPreviewData } from './DocumentPreview.js';
 import { ESCAPE_MESSAGE } from './previewPolicy.js';
 
 /** Matches the app's existing overlay idiom (dialog.tsx, PluggableDiffViewer, WorktreeTitleModal). */
 const OVERLAY = 'fixed inset-0 z-[100] flex flex-col bg-background';
+
+type DocumentViewerDiscardAction =
+  | { type: 'cancel-edit' }
+  | { type: 'close-reader' }
+  | { type: 'open-link'; path: string; line?: number };
+
+function normalizeDocPath(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function isElementVisible(el: Element | null): el is HTMLElement {
+  return Boolean(
+    el instanceof HTMLElement
+    && el.isConnected
+    && !el.closest('[inert], [hidden]')
+    && el.getClientRects().length > 0
+    && !el.matches(':disabled')
+    && el.getAttribute('aria-disabled') !== 'true',
+  );
+}
 
 export interface DocumentViewerProps {
   title: string;
@@ -60,11 +101,36 @@ export interface DocumentViewerProps {
   onToggleWatch?: () => void;
   /** Enable editing and saving document directly */
   editable?: boolean;
-  onSave?: (content: string) => Promise<void> | void;
+  onSave?: (
+    content: string,
+    options?: { expectedRevision?: string },
+  ) => Promise<{ revision?: string; content?: string; modifiedAt?: string } | void> | void;
+  /** Save a copy to a new path when resolving a 409 conflict */
+  onSaveAsCopy?: (content: string) => Promise<void> | void;
   /** Move or rename document */
   onMove?: (to: string) => Promise<void> | void;
   /** Initial editing state (useful for tests or opening directly in edit mode) */
   initialEditing?: boolean;
+  /** Optional initial unsaved draft (e.g. restored after switching tabs) */
+  initialDraft?: {
+    draft: string;
+    baseContent: string;
+    baseRevision?: string;
+    baseModifiedAt?: string;
+  };
+  /** Reports live editing / dirty state to parent containers */
+  onDraftStateChange?: (state: {
+    editing: boolean;
+    dirty: boolean;
+    draft: string;
+    baseContent: string;
+    baseRevision?: string;
+    baseModifiedAt?: string;
+  }) => void;
+  /** Latest catalog modifiedAt to surface external disk updates while editing */
+  externalModifiedAt?: string;
+  /** Exposes close-request handler (honors dirty guard) for parent Escape shortcuts */
+  requestCloseRef?: React.MutableRefObject<(() => void) | null>;
   /** Direct click handler for image preview (e.g. toggle full screen) */
   onImageClick?: () => void;
   /** Controlled image expanded state (e.g. driven by BoardReader fullscreen) */
@@ -77,27 +143,80 @@ export interface DocumentViewerProps {
  * browser Fullscreen API — so Download and the raw toggle stay reachable, and
  * docked side panels like the chat cannot overlap it.
  */
-export function DocumentViewer({ title, preview, status, fileUrl = '', downloadHref, browserHref, links, raw, onToggleRaw, rawLabels = ['View source', 'View page'], onClose, compact = false, fill = false, fillFrame = false, chromeless = false, leading, notice, className, watching = false, onToggleWatch, editable, onSave, onMove, initialEditing = false, onImageClick, imageExpanded, lineTools }: DocumentViewerProps) {
+export function DocumentViewer({
+  title,
+  preview,
+  status,
+  fileUrl = '',
+  downloadHref,
+  browserHref,
+  links,
+  raw,
+  onToggleRaw,
+  rawLabels = ['View source', 'View page'],
+  onClose,
+  compact = false,
+  fill = false,
+  fillFrame = false,
+  chromeless = false,
+  leading,
+  notice,
+  className,
+  watching = false,
+  onToggleWatch,
+  editable,
+  onSave,
+  onSaveAsCopy,
+  onMove,
+  initialEditing = false,
+  initialDraft,
+  onDraftStateChange,
+  externalModifiedAt,
+  requestCloseRef,
+  onImageClick,
+  imageExpanded,
+  lineTools,
+}: DocumentViewerProps) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(initialEditing);
-  const [editContent, setEditContent] = useState('');
+  const [editorTab, setEditorTab] = useState<'write' | 'preview'>('write');
+  const [editContent, setEditContent] = useState(() => initialDraft?.draft ?? preview?.content ?? '');
+  const [baseContent, setBaseContent] = useState(() => initialDraft?.baseContent ?? preview?.content ?? '');
+  const [baseRevision, setBaseRevision] = useState<string | undefined>(() => initialDraft?.baseRevision ?? preview?.revision);
+  const [baseModifiedAt, setBaseModifiedAt] = useState<string | undefined>(() => initialDraft?.baseModifiedAt ?? preview?.modifiedAt);
+  const [baseCatalogModifiedAt, setBaseCatalogModifiedAt] = useState<string | undefined>(() => externalModifiedAt);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<DocumentConflictDetails | null>(null);
+  const [discardPrompt, setDiscardPrompt] = useState<DocumentViewerDiscardAction | null>(null);
+  const [restoreExpandedAfterPrompt, setRestoreExpandedAfterPrompt] = useState(false);
   const [pictureCopyStatus, setPictureCopyStatus] = useState<{ ok: boolean; message: string; repeat: boolean } | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
   const [targetPath, setTargetPath] = useState('');
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const viewerRootRef = useRef<HTMLDivElement>(null);
   const inlineToggle = useRef<HTMLButtonElement>(null);
   const overlayToggle = useRef<HTMLButtonElement>(null);
+  const inlineEditRef = useRef<HTMLButtonElement>(null);
+  const overlayEditRef = useRef<HTMLButtonElement>(null);
+  const inlineCloseRef = useRef<HTMLButtonElement>(null);
+  const overlayCloseRef = useRef<HTMLButtonElement>(null);
   const moreInline = useRef<HTMLButtonElement>(null);
+  const overlayMoreRef = useRef<HTMLButtonElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const editorTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const keepEditingButtonRef = useRef<HTMLButtonElement>(null);
+  const linkOriginRef = useRef<HTMLElement | null>(null);
+  const pendingEditExitFocusRef = useRef(false);
+  const viewerAlertExitModeRef = useRef<'keep' | 'exit-edit' | 'leave-doc'>('keep');
   const wasExpanded = useRef(false);
   const mountedRef = useRef(true);
   const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyPictureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyPictureGenRef = useRef(0);
+  const seededInitialEditRef = useRef(Boolean(initialDraft || preview?.content !== undefined));
 
   useEffect(() => {
     mountedRef.current = true;
@@ -116,10 +235,6 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         copyPathTimerRef.current = null;
       }
       setPictureCopyStatus(null);
-      if (copyPictureTimerRef.current) {
-        clearTimeout(copyPictureTimerRef.current);
-        copyPictureTimerRef.current = null;
-      }
     };
   }, []);
 
@@ -147,9 +262,18 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   useEffect(() => {
     if (currentDocName && previousDocName.current !== currentDocName) {
       previousDocName.current = currentDocName;
+      seededInitialEditRef.current = false;
       setExpanded(false);
       setEditing(false);
+      setEditorTab('write');
+      linkOriginRef.current = null;
       setEditContent(preview?.content ?? '');
+      setBaseContent(preview?.content ?? '');
+      setBaseRevision(preview?.revision);
+      setBaseModifiedAt(preview?.modifiedAt);
+      setBaseCatalogModifiedAt(externalModifiedAt);
+      setConflict(null);
+      setDiscardPrompt(null);
       setSaveStatus(null);
       if (saveStatusTimerRef.current) {
         clearTimeout(saveStatusTimerRef.current);
@@ -165,23 +289,147 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         copyPictureTimerRef.current = null;
       }
     }
-  }, [currentDocName, preview?.content]);
+  }, [currentDocName, preview?.content, preview?.revision, preview?.modifiedAt, externalModifiedAt]);
 
   useEffect(() => {
     if (!editing && preview?.content !== undefined) {
       setEditContent(preview.content);
+      setBaseContent(preview.content);
+      setBaseRevision(preview.revision);
+      setBaseModifiedAt(preview.modifiedAt);
+      setBaseCatalogModifiedAt(externalModifiedAt);
+      seededInitialEditRef.current = false;
+    } else if (editing && !seededInitialEditRef.current && preview?.content !== undefined) {
+      seededInitialEditRef.current = true;
+      setEditContent(preview.content);
+      setBaseContent(preview.content);
+      setBaseRevision(preview.revision);
+      setBaseModifiedAt(preview.modifiedAt);
+      setBaseCatalogModifiedAt(externalModifiedAt);
     }
-  }, [preview?.content, editing]);
+  }, [preview?.content, preview?.revision, preview?.modifiedAt, editing, externalModifiedAt]);
 
-  const canEdit = (editable ?? Boolean(onSave)) && preview && (preview.kind === 'markdown' || preview.kind === 'html' || preview.kind === 'text') && preview.content !== undefined;
+  const dirty = editing && editContent !== baseContent;
 
-  const handleSave = async () => {
-    if (!onSave || saving) return;
+  const onDraftStateChangeRef = useRef(onDraftStateChange);
+  useEffect(() => {
+    onDraftStateChangeRef.current = onDraftStateChange;
+  }, [onDraftStateChange]);
+  useEffect(() => {
+    onDraftStateChangeRef.current?.({
+      editing,
+      dirty,
+      draft: editContent,
+      baseContent,
+      baseRevision,
+      baseModifiedAt,
+    });
+  }, [editing, dirty, editContent, baseContent, baseRevision, baseModifiedAt]);
+
+  const canEdit =
+    (editable ?? Boolean(onSave))
+    && preview
+    && (preview.kind === 'markdown' || preview.kind === 'html' || preview.kind === 'text')
+    && preview.content !== undefined;
+
+  const externalChangeNotice = Boolean(
+    editing
+    && preview
+    && (
+      (baseRevision && preview.revision && preview.revision !== baseRevision)
+      || (baseModifiedAt && preview.modifiedAt && preview.modifiedAt !== baseModifiedAt && preview.content !== baseContent)
+      || (baseCatalogModifiedAt && externalModifiedAt && externalModifiedAt !== baseCatalogModifiedAt && externalModifiedAt !== baseModifiedAt)
+    ),
+  );
+
+  const resolvePostEditExitFocus = useCallback(
+    (preferExpanded = expanded): HTMLElement | null => {
+      const primary = preferExpanded
+        ? [overlayEditRef.current, overlayToggle.current, overlayCloseRef.current, overlayMoreRef.current]
+        : [inlineEditRef.current, inlineToggle.current, inlineCloseRef.current, moreInline.current];
+      const secondary = preferExpanded
+        ? [inlineEditRef.current, inlineToggle.current, inlineCloseRef.current, moreInline.current]
+        : [overlayEditRef.current, overlayToggle.current, overlayCloseRef.current, overlayMoreRef.current];
+      for (const candidate of [...primary, ...secondary]) {
+        if (isElementVisible(candidate)) return candidate;
+      }
+      return null;
+    },
+    [expanded],
+  );
+
+  const resolveKeepEditingFocus = useCallback((): HTMLElement | null => {
+    if (isElementVisible(editorTextareaRef.current)) return editorTextareaRef.current;
+    if (isElementVisible(linkOriginRef.current)) return linkOriginRef.current;
+    const container = expanded ? overlayRef.current : viewerRootRef.current;
+    const candidates = [
+      container?.querySelector<HTMLElement>('[data-testid="document-editor"] [role="tab"][aria-selected="true"]') ?? null,
+      container?.querySelector<HTMLElement>('[data-testid="document-editor"] [role="tab"]') ?? null,
+      expanded ? overlayCloseRef.current : inlineCloseRef.current,
+    ];
+    for (const candidate of candidates) {
+      if (isElementVisible(candidate)) return candidate;
+    }
+    return null;
+  }, [expanded]);
+
+  const enterEditMode = useCallback(() => {
+    if (!preview) return;
+    seededInitialEditRef.current = true;
+    linkOriginRef.current = null;
+    setEditorTab('write');
+    setEditContent(preview.content ?? '');
+    setBaseContent(preview.content ?? '');
+    setBaseRevision(preview.revision);
+    setBaseModifiedAt(preview.modifiedAt);
+    setBaseCatalogModifiedAt(externalModifiedAt);
+    setConflict(null);
+    setSaveStatus(null);
+    setEditing(true);
+    requestAnimationFrame(() => {
+      editorTextareaRef.current?.focus();
+    });
+  }, [preview, externalModifiedAt]);
+
+
+  // A Save button that was focused turns disabled while saving / in conflict and the browser drops
+  // focus to <body>. After a failed save, move it to the conflict choices (or the text).
+  const refocusAfterFailedSave = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (!mountedRef.current) return;
+      const active = document.activeElement;
+      const lost = !active || active === document.body || (active as HTMLButtonElement).disabled === true;
+      if (!lost) return;
+      for (const container of [overlayRef.current, viewerRootRef.current]) {
+        const conflictBtn = container?.querySelector<HTMLElement>(
+          '[data-testid="document-conflict-bar"] button:not([disabled])',
+        ) ?? null;
+        if (isElementVisible(conflictBtn)) {
+          conflictBtn.focus({ preventScroll: true });
+          return;
+        }
+      }
+      resolveKeepEditingFocus()?.focus({ preventScroll: true });
+    });
+  }, [resolveKeepEditingFocus]);
+  const executeSave = useCallback(async (expectedRevOverride?: string | null): Promise<boolean> => {
+    if (!onSave || saving) return false;
     setSaving(true);
     setSaveStatus(null);
     try {
-      await onSave(editContent);
-      if (!mountedRef.current) return;
+      const expectedRevision = expectedRevOverride === null
+        ? undefined
+        : (expectedRevOverride ?? baseRevision);
+      const res = await onSave(editContent, expectedRevision ? { expectedRevision } : undefined);
+      if (!mountedRef.current) return false;
+      const nextContent = res && typeof res === 'object' && typeof res.content === 'string' ? res.content : editContent;
+      const nextRevision = res && typeof res === 'object' && typeof res.revision === 'string' ? res.revision : preview?.revision;
+      const nextModifiedAt = res && typeof res === 'object' && typeof res.modifiedAt === 'string' ? res.modifiedAt : preview?.modifiedAt;
+      setBaseContent(nextContent);
+      setBaseRevision(nextRevision);
+      setBaseModifiedAt(nextModifiedAt);
+      setBaseCatalogModifiedAt(nextModifiedAt);
+      setConflict(null);
       setSaveStatus('Saved');
       if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
       saveStatusTimerRef.current = setTimeout(() => {
@@ -189,40 +437,193 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         setSaveStatus(null);
         saveStatusTimerRef.current = null;
       }, 2000);
+      pendingEditExitFocusRef.current = true;
       setEditing(false);
+      onDraftStateChangeRef.current?.({
+        editing: false,
+        dirty: false,
+        draft: nextContent,
+        baseContent: nextContent,
+        baseRevision: nextRevision,
+        baseModifiedAt: nextModifiedAt,
+      });
+      return true;
     } catch (err) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) return false;
+      const parsedConflict = parseDocumentConflict(err);
+      if (parsedConflict) {
+        setConflict(parsedConflict);
+        setSaveStatus(null);
+        refocusAfterFailedSave();
+        return false;
+      }
       setSaveStatus(err instanceof Error ? err.message : 'Failed to save');
+      refocusAfterFailedSave();
+      return false;
     } finally {
       if (mountedRef.current) {
         setSaving(false);
       }
     }
-  };
+  }, [onSave, saving, baseRevision, editContent, preview, refocusAfterFailedSave]);
 
-  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-      e.preventDefault();
-      void handleSave();
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
+  const handleSave = useCallback(() => executeSave(), [executeSave]);
+
+  const handleOverwriteConflict = useCallback(() => {
+    if (!conflict) return;
+    void executeSave(conflict.currentRevision);
+  }, [conflict, executeSave]);
+
+  const handleSaveAsCopy = useCallback(async () => {
+    if (!onSaveAsCopy || saving) return;
+    setSaving(true);
+    setSaveStatus(null);
+    try {
+      await onSaveAsCopy(editContent);
+      if (!mountedRef.current) return;
+      setConflict(null);
+      pendingEditExitFocusRef.current = true;
       setEditing(false);
-      setEditContent(preview?.content ?? '');
+      onDraftStateChangeRef.current?.({
+        editing: false,
+        dirty: false,
+        draft: editContent,
+        baseContent: editContent,
+        baseRevision: preview?.revision,
+        baseModifiedAt: preview?.modifiedAt,
+      });
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setSaveStatus(err instanceof Error ? err.message : 'Failed to save copy');
+    } finally {
+      if (mountedRef.current) {
+        setSaving(false);
+      }
     }
-  };
+  }, [onSaveAsCopy, saving, editContent, preview]);
+
+  const handleLoadLatest = useCallback(() => {
+    if (!conflict || conflict.currentContent === undefined) return;
+    linkOriginRef.current = null;
+    setEditContent(conflict.currentContent);
+    setBaseContent(conflict.currentContent);
+    setBaseRevision(conflict.currentRevision ?? undefined);
+    setBaseModifiedAt(conflict.currentModifiedAt ?? undefined);
+    setBaseCatalogModifiedAt(conflict.currentModifiedAt ?? undefined);
+    setConflict(null);
+    setSaveStatus(null);
+    requestAnimationFrame(() => {
+      if (!mountedRef.current) return;
+      resolveKeepEditingFocus()?.focus({ preventScroll: true });
+    });
+  }, [conflict, resolveKeepEditingFocus]);
+
+  const discardAndExitEdit = useCallback((options?: { restoreFocus?: boolean }) => {
+    const cleanContent = preview?.content ?? baseContent;
+    linkOriginRef.current = null;
+    setEditorTab('write');
+    setConflict(null);
+    setSaveStatus(null);
+    if (options?.restoreFocus !== false) {
+      pendingEditExitFocusRef.current = true;
+    }
+    setEditing(false);
+    setEditContent(cleanContent);
+    setBaseContent(cleanContent);
+    setBaseRevision(preview?.revision);
+    setBaseModifiedAt(preview?.modifiedAt);
+    setBaseCatalogModifiedAt(externalModifiedAt);
+    onDraftStateChangeRef.current?.({
+      editing: false,
+      dirty: false,
+      draft: cleanContent,
+      baseContent: cleanContent,
+      baseRevision: preview?.revision,
+      baseModifiedAt: preview?.modifiedAt,
+    });
+  }, [preview?.content, preview?.revision, preview?.modifiedAt, baseContent, externalModifiedAt]);
+
+  const handleRequestCancelEdit = useCallback(() => {
+    linkOriginRef.current = null;
+    if (dirty) {
+      if (expanded) {
+        setExpanded(false);
+        setRestoreExpandedAfterPrompt(true);
+      }
+      setDiscardPrompt({ type: 'cancel-edit' });
+      return;
+    }
+    discardAndExitEdit();
+  }, [dirty, expanded, discardAndExitEdit]);
+
+  const handleRequestClose = useCallback(() => {
+    linkOriginRef.current = null;
+    if (editing && dirty) {
+      if (expanded) {
+        setExpanded(false);
+        setRestoreExpandedAfterPrompt(true);
+      }
+      setDiscardPrompt({ type: 'close-reader' });
+      return;
+    }
+    if (expanded) setExpanded(false);
+    onClose?.();
+  }, [editing, dirty, expanded, onClose]);
+
+  useEffect(() => {
+    if (!requestCloseRef) return;
+    requestCloseRef.current = () => {
+      if (editing) {
+        handleRequestCancelEdit();
+      } else {
+        handleRequestClose();
+      }
+    };
+    return () => {
+      requestCloseRef.current = null;
+    };
+  }, [requestCloseRef, editing, handleRequestCancelEdit, handleRequestClose]);
 
   useEffect(() => {
     if (expanded) {
       wasExpanded.current = true;
-      overlayToggle.current?.focus();
+      if (pendingEditExitFocusRef.current && !editing && !discardPrompt) {
+        pendingEditExitFocusRef.current = false;
+        const target = resolvePostEditExitFocus(true);
+        if (target) {
+          target.focus({ preventScroll: true });
+          return;
+        }
+      }
+      if (editing) {
+        const target = isElementVisible(editorTextareaRef.current)
+          ? editorTextareaRef.current
+          : resolveKeepEditingFocus();
+        target?.focus({ preventScroll: true });
+      } else {
+        overlayToggle.current?.focus({ preventScroll: true });
+      }
       return;
+    }
+    if (discardPrompt) {
+      return;
+    }
+    if (pendingEditExitFocusRef.current && !editing) {
+      pendingEditExitFocusRef.current = false;
+      wasExpanded.current = false;
+      const target = resolvePostEditExitFocus(false);
+      if (target) {
+        target.focus({ preventScroll: true });
+        return;
+      }
     }
     if (wasExpanded.current) {
       wasExpanded.current = false;
-      inlineToggle.current?.focus();
+      if (isElementVisible(inlineToggle.current)) {
+        inlineToggle.current.focus({ preventScroll: true });
+      }
     }
-  }, [expanded]);
+  }, [expanded, editing, discardPrompt, resolvePostEditExitFocus, resolveKeepEditingFocus]);
 
   // Lock background scrolling while expanded.
   useEffect(() => {
@@ -248,7 +649,11 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         if (event.defaultPrevented || hasCoveringOverlay()) return;
         event.preventDefault();
         event.stopPropagation();
-        setExpanded(false);
+        if (editing) {
+          handleRequestCancelEdit();
+        } else {
+          setExpanded(false);
+        }
         return;
       }
       if (event.key === 'Tab' && overlayRef.current && !hasCoveringOverlay()) {
@@ -281,7 +686,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('message', onMessage);
     };
-  }, [expanded]);
+  }, [expanded, editing, handleRequestCancelEdit]);
 
   const [copiedPath, setCopiedPath] = useState(false);
   const pathToCopy = preview?.name ?? title;
@@ -324,20 +729,57 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
 
   const buttonSize = compact ? 'xs' : 'sm';
   const guidance = notice;
+  const guardedLinks: MarkdownDocumentLinks | undefined = links
+    ? {
+        ...links,
+        onOpenFile: (linkedPath, line) => {
+          const targetNorm = normalizeDocPath(linkedPath);
+          const currentNorm = normalizeDocPath(currentDocName);
+          if (editing && dirty && targetNorm && targetNorm !== currentNorm) {
+            linkOriginRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            if (expanded) {
+              setExpanded(false);
+              setRestoreExpandedAfterPrompt(true);
+            }
+            setDiscardPrompt({ type: 'open-link', path: linkedPath, line });
+            return;
+          }
+          if (editing && targetNorm && targetNorm === currentNorm) {
+            return;
+          }
+          if (editing && !dirty && targetNorm && targetNorm !== currentNorm) {
+            discardAndExitEdit({ restoreFocus: false });
+          }
+          links.onOpenFile(linkedPath, line);
+        },
+      }
+    : undefined;
+
+  const editorKind = preview?.kind === 'markdown' || preview?.kind === 'html' ? preview.kind : 'text';
   const editorView = (
-    <div className="flex flex-col flex-1 h-full min-h-[350px] gap-2">
-      <textarea
-        value={editContent}
-        onChange={(e) => setEditContent(e.target.value)}
-        onKeyDown={handleEditorKeyDown}
-        aria-label={`Edit ${title}`}
-        className="w-full flex-1 min-h-[350px] font-mono text-xs sm:text-sm p-4 bg-background text-foreground border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary leading-relaxed"
-        placeholder="Document content…"
-      />
-      {saveStatus && saveStatus !== 'Saved' && (
-        <p role="alert" className="text-xs text-destructive">{saveStatus}</p>
-      )}
-    </div>
+    <DocumentEditor
+      docPath={preview?.name ?? title}
+      kind={editorKind}
+      value={editContent}
+      onChange={setEditContent}
+      dirty={dirty}
+      saving={saving}
+      saveError={saveStatus && saveStatus !== 'Saved' ? saveStatus : null}
+      externalChangeNotice={externalChangeNotice}
+      conflict={conflict}
+      onSave={() => void handleSave()}
+      onCancel={handleRequestCancelEdit}
+      onOverwriteConflict={handleOverwriteConflict}
+      onSaveAsCopy={() => void handleSaveAsCopy()}
+      onLoadLatest={handleLoadLatest}
+      links={guardedLinks}
+      fileUrl={fileUrl}
+      autoFocus={initialEditing}
+      showActions={false}
+      textareaRef={editorTextareaRef}
+      tab={editorTab}
+      onTabChange={setEditorTab}
+    />
   );
 
   const isImageExpanded = expanded || Boolean(imageExpanded);
@@ -348,7 +790,9 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   const hasExpand = !fill || !chromeless;
   const body = (expandedNow: boolean) => {
     const content = editing
-      ? editorView
+      ? expandedNow === expanded
+        ? editorView
+        : null
       : preview
         ? <DocumentPreview
             lineTools={lineTools}
@@ -358,7 +802,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
             expanded={expandedNow || isImageExpanded}
             fillFrame={framed && !expandedNow}
             trusted
-            links={links}
+            links={guardedLinks}
             onImageClick={preview.kind === 'image' ? handleImageClick : undefined}
           />
         : <>{status}</>;
@@ -380,8 +824,9 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       </h3>
       {watching && <span role="img" aria-label="Watching for changes" title="Watching for changes" className="inline-flex shrink-0 text-muted-foreground"><Eye aria-hidden="true" size={13} /></span>}
       {canEdit && !editing && (
-        <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Edit document" title="Edit document" onClick={() => { setEditContent(preview?.content ?? ''); setEditing(true); }}>
-          <Edit3 size={13} />
+        <Button ref={expandedNow ? overlayEditRef : inlineEditRef} size="xs" variant="outline" className="h-7 shrink-0 gap-1 px-2 text-xs" aria-label="Edit document" title="Edit document" onClick={enterEditMode}>
+          <Edit3 aria-hidden="true" size={13} />
+          <span>Edit</span>
         </Button>
       )}
       {noPreview && downloadHref && !editing && (
@@ -391,17 +836,17 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
       )}
       {editing && (
         <>
-          <Button size="xs" variant="default" className="h-7 shrink-0 gap-1 px-2 text-xs" disabled={saving} aria-label="Save document" onClick={handleSave}>
-            <Save size={13} />{saving ? 'Saving…' : 'Save'}
+          <Button size="xs" variant="default" className="h-7 shrink-0 gap-1 px-2 text-xs" disabled={saving || conflict !== null} aria-label="Save document" onClick={() => void handleSave()}>
+            <Save aria-hidden="true" size={13} />{saving ? 'Saving…' : 'Save'}
           </Button>
-          <Button size="xs" variant="ghost" className="h-7 shrink-0 px-2 text-xs" onClick={() => { setEditing(false); setEditContent(preview?.content ?? ''); }}>
+          <Button size="xs" variant="ghost" className="h-7 shrink-0 px-2 text-xs" disabled={saving} onClick={handleRequestCancelEdit}>
             Cancel
           </Button>
         </>
       )}
       {/* The rest sits in one menu so the title keeps its room in a narrow panel. */}
       <Menu>
-        <MenuTrigger ref={expandedNow ? undefined : moreInline} aria-label="More document actions" title="More document actions" className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+        <MenuTrigger ref={expandedNow ? overlayMoreRef : moreInline} aria-label="More document actions" title="More document actions" className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
           <MoreHorizontal aria-hidden="true" size={14} />
         </MenuTrigger>
         <MenuPopup align="end" className="w-60" positionerClassName={expandedNow ? 'z-[110]' : undefined}>
@@ -454,7 +899,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         {expandedNow ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
       </Button>
       {onClose && (
-        <Button size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Close document" title="Close document" onClick={() => { if (expandedNow) setExpanded(false); onClose(); }}>
+        <Button ref={expandedNow ? overlayCloseRef : inlineCloseRef} size="xs" variant="ghost" className="size-7 shrink-0 p-0" aria-label="Close document" title="Close document" onClick={handleRequestClose}>
           <X size={13} />
         </Button>
       )}
@@ -499,12 +944,13 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
         <div className={cn('flex flex-wrap items-center gap-2', compact ? 'text-xs' : 'text-sm')}>
           {canEdit && !editing && (
             <Button
+              ref={expandedNow ? overlayEditRef : inlineEditRef}
               size={buttonSize}
               variant="outline"
               className="gap-1.5"
               aria-label="Edit document"
               title="Edit document"
-              onClick={() => { setEditContent(preview?.content ?? ''); setEditing(true); }}
+              onClick={enterEditMode}
             >
               <Edit3 size={compact ? 12 : 14} />
               <span>Edit</span>
@@ -512,11 +958,11 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
           )}
           {editing && (
             <>
-              <Button size={buttonSize} variant="default" className="gap-1.5" disabled={saving} aria-label="Save document" onClick={handleSave}>
+              <Button size={buttonSize} variant="default" className="gap-1.5" disabled={saving || conflict !== null} aria-label="Save document" onClick={() => void handleSave()}>
                 <Save size={compact ? 12 : 14} />
                 <span>{saving ? 'Saving…' : 'Save'}</span>
               </Button>
-              <Button size={buttonSize} variant="ghost" onClick={() => { setEditing(false); setEditContent(preview?.content ?? ''); }}>
+              <Button size={buttonSize} variant="ghost" disabled={saving} onClick={handleRequestCancelEdit}>
                 Cancel
               </Button>
             </>
@@ -595,7 +1041,7 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
             {expandedNow ? <Minimize2 size={compact ? 12 : 14} /> : <Maximize2 size={compact ? 12 : 14} />}
             {expandedNow ? 'Collapse' : 'Expand'}
           </Button>
-          {onClose && <Button size={buttonSize} variant="ghost" aria-label="Close document" title="Close document" onClick={() => { if (expandedNow) setExpanded(false); onClose(); }}><X size={compact ? 12 : 14} /></Button>}
+          {onClose && <Button ref={expandedNow ? overlayCloseRef : inlineCloseRef} size={buttonSize} variant="ghost" aria-label="Close document" title="Close document" onClick={handleRequestClose}><X size={compact ? 12 : 14} /></Button>}
         </div>
       </div>
       {guidance}
@@ -605,15 +1051,15 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
   return (
     <>
       {fill ? (
-        <div className={cn('flex h-full min-h-0 flex-col', expanded && 'hidden', className)}>
+        <div ref={viewerRootRef} className={cn('flex h-full min-h-0 flex-col', expanded && 'hidden', className)}>
           {!chromeless && fillChrome(false)}
-          <div className={cn('min-h-0 flex-1 px-5 py-4', framed || (isImageExpanded && preview?.kind === 'image') ? 'flex flex-col overflow-hidden' : 'overflow-auto')}>
+          <div className={cn('min-h-0 flex-1 px-5 py-4', framed || editing || (isImageExpanded && preview?.kind === 'image') ? 'flex flex-col overflow-hidden' : 'overflow-auto')}>
             {guidance}
             {body(false)}
           </div>
         </div>
       ) : (
-      <div className={cn(expanded && 'hidden', className)}>
+      <div ref={viewerRootRef} className={cn(expanded && 'hidden', className)}>
         {chrome(false)}
         <div className={cn('overflow-auto', expanded ? 'h-full' : 'max-h-[70vh]')}>
           {body(false)}
@@ -667,8 +1113,12 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
                   onChange={(e) => setTargetPath(e.target.value)}
                   placeholder="path/to/document.md"
                   autoFocus
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   className="mt-1 font-mono text-xs"
                   onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing) return;
                     if (e.key === 'Enter' && targetPath.trim() && !moving) {
                       e.preventDefault();
                       void handleMoveSubmit();
@@ -689,6 +1139,125 @@ export function DocumentViewer({ title, preview, status, fileUrl = '', downloadH
           </DialogPopup>
         </Dialog>
       )}
+      {discardPrompt && (
+        <AlertDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) {
+              viewerAlertExitModeRef.current = 'keep';
+              setDiscardPrompt(null);
+              if (restoreExpandedAfterPrompt) {
+                setRestoreExpandedAfterPrompt(false);
+                setExpanded(true);
+              }
+            }
+          }}
+        >
+          <AlertDialogPopup
+            initialFocus={keepEditingButtonRef}
+            finalFocus={() => {
+              if (viewerAlertExitModeRef.current !== 'keep') {
+                return false;
+              }
+              return resolveKeepEditingFocus() ?? false;
+            }}
+          >
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-base font-semibold text-foreground">
+                Unsaved changes
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-sm text-muted-foreground">
+                You have unsaved edits to <span className="font-mono text-foreground">{preview?.name ?? title}</span>. Discard your changes or save before continuing?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button
+                ref={keepEditingButtonRef}
+                type="button"
+                variant="outline"
+                size="sm"
+                autoFocus
+                onClick={() => {
+                  viewerAlertExitModeRef.current = 'keep';
+                  setDiscardPrompt(null);
+                  if (restoreExpandedAfterPrompt) {
+                    setRestoreExpandedAfterPrompt(false);
+                    setExpanded(true);
+                  }
+                  requestAnimationFrame(() => {
+                    resolveKeepEditingFocus()?.focus({ preventScroll: true });
+                  });
+                }}
+              >
+                Keep editing
+              </Button>
+              <Button
+                type="button"
+                variant="destructive-outline"
+                size="sm"
+                onClick={() => {
+                  const action = discardPrompt;
+                  viewerAlertExitModeRef.current = action.type === 'cancel-edit' ? 'exit-edit' : 'leave-doc';
+                  setDiscardPrompt(null);
+                  setRestoreExpandedAfterPrompt(false);
+                  discardAndExitEdit({ restoreFocus: action.type === 'cancel-edit' });
+                  if (action.type === 'close-reader') {
+                    onClose?.();
+                  } else if (action.type === 'open-link') {
+                    links?.onOpenFile(action.path, action.line);
+                  }
+                }}
+              >
+                Discard changes
+              </Button>
+              {!conflict && (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => {
+                    const action = discardPrompt;
+                    viewerAlertExitModeRef.current = action.type === 'cancel-edit' ? 'exit-edit' : 'leave-doc';
+                    setDiscardPrompt(null);
+                    setRestoreExpandedAfterPrompt(false);
+                    void executeSave().then((ok) => {
+                      if (!ok) {
+                        viewerAlertExitModeRef.current = 'keep';
+                        requestAnimationFrame(() => {
+                          if (!mountedRef.current) return;
+                          for (const container of [overlayRef.current, viewerRootRef.current]) {
+                            const conflictBtn = container?.querySelector<HTMLElement>(
+                              '[data-testid="document-conflict-bar"] button:not([disabled])',
+                            ) ?? null;
+                            if (isElementVisible(conflictBtn)) {
+                              conflictBtn.focus({ preventScroll: true });
+                              return;
+                            }
+                          }
+                          resolveKeepEditingFocus()?.focus({ preventScroll: true });
+                        });
+                        return;
+                      }
+                      if (action.type === 'close-reader') {
+                        onClose?.();
+                      } else if (action.type === 'open-link') {
+                        links?.onOpenFile(action.path, action.line);
+                      }
+                    });
+                  }}
+                >
+                  {actionLabelForSave(discardPrompt)}
+                </Button>
+              )}
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        </AlertDialog>
+      )}
     </>
   );
+}
+
+function actionLabelForSave(action: DocumentViewerDiscardAction | null): string {
+  return action?.type === 'close-reader' ? 'Save & close' : 'Save & continue';
 }
