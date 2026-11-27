@@ -23,6 +23,7 @@ import type { BoardCard, BoardLink, BoardPoint, BoardView } from './boardData.js
 import type { AnswerCardData } from './questionsArea.js';
 export type { BoardCard, BoardLink, BoardPoint, BoardView };
 import { groupOpen, type Folds } from './boardFolds.js';
+import { plainText } from '../../lib/plainText.js';
 
 /**
  * What a big workspace is cut to, so the board stays readable. The rest is counted, not drawn. The commits are the ones
@@ -336,19 +337,74 @@ export function isFresh(card: Pick<BoardCard, 'updatedBy' | 'updatedAt'>, now: n
  * What a picture is called for someone who cannot see it: its title, unless that is only the file's name, which says
  * little; then the description does.
  */
+/**
+ * A picture's own name: file name without its folder or extension.
+ */
+export function isPicturePath(path: string): boolean {
+  return fileTypeOf(path) === 'image' || /\.svg(?:$|[?#])/i.test(path.trim());
+}
+
+export function pictureName(path: string): string {
+  const clean = path.replace(/[\\/]+$/, '');
+  const base = clean.split(/[\\/]/).pop() ?? clean;
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
+/**
+ * Short, readable step title for picture captions, tooltips, and reader footers.
+ */
+export function shortStepTitle(text: string, maxLen = 72): string {
+  let clean = plainText(text);
+  clean = clean.replace(/(?:[.\s]+)?(?:Packet|Pictures):\s[\s\S]*$/i, (match, offset) => (offset > 0 ? '' : match));
+  clean = clean.replace(/\s+details\s*$/i, '');
+  clean = clean.replace(/\s*\([^)]*\b(?:[0-9a-f]{7,}|pushed|merged|pending)\b[^)]*\)\s*$/i, '');
+  clean = clean.replace(/\s*;\s*pictures?\b[^)]*(?=\))/gi, '');
+  clean = clean.replace(/\s*\(\s*pictures?\s+[^)]*\)\s*$/i, '');
+  clean = clean.replace(/\s+details\s*$/i, '');
+  clean = clean.trim();
+  if (!clean) clean = plainText(text).trim();
+  if (clean.length <= maxLen) return clean;
+  const cut = clean.slice(0, maxLen - 1);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > maxLen * 0.5 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+export function isFolderFallback(description: string, path: string): boolean {
+  const lower = description.toLowerCase();
+  if (lower === 'workspace root' || lower.startsWith('in folder:') || lower.startsWith('in step:')) return true;
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  const slash = normalized.lastIndexOf('/');
+  const folder = slash > 0 ? normalized.slice(0, slash).toLowerCase() : '';
+  return Boolean(folder && lower === folder);
+}
+
+/**
+ * What a picture is called for someone who cannot see it: its title, unless that is only the file's name, which says
+ * little; then a real description does (never falling back to a bare folder or location prefix).
+ */
 export function imageAlt(card: { title: string; description: string; path: string }): string {
   const name = card.path.split('/').pop() ?? card.path;
   const description = card.description.trim().replace(/\s+/g, ' ');
-  return card.title.trim().toLowerCase() === name.toLowerCase() && description ? description.slice(0, 160) : card.title;
+  return card.title.trim().toLowerCase() === name.toLowerCase() && description && !isFolderFallback(description, card.path)
+    ? description.slice(0, 160)
+    : card.title;
 }
 
 /**
  * The oldest first, so a card that is added takes the next place and the ones already there keep theirs. The order they
  * came in decides between equals. A pinned card is not moved up for it: it shows by its mark and by standing in front.
  */
-export function cardOrder(cards: BoardCard[]): BoardCard[] {
+export function cardOrder<T extends BoardCard>(cards: T[]): T[] {
   return cards.map((card, index) => ({ card, index, at: Date.parse(card.at) || 0 }))
     .sort((a, b) => a.at - b.at || a.index - b.index)
+    .map(({ card }) => card);
+}
+
+/** Pinned cards first, then the newest. */
+export function shownOrder<T extends BoardCard>(cards: T[]): T[] {
+  return cards.map((card, index) => ({ card, index, at: Date.parse(card.at) || 0 }))
+    .sort((a, b) => Number(b.card.pinned) - Number(a.card.pinned) || b.at - a.at || a.index - b.index)
     .map(({ card }) => card);
 }
 

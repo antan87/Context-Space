@@ -308,7 +308,7 @@ test.describe('Board & Terminal Unified Co-Working', () => {
 
     for (const [id, label, line] of [
       ['wsfile:PLAN.md', 'Ask in CLI about PLAN.md', 'About PLAN.md: '],
-      ['wsfile:shots/pic.png', 'Ask in CLI about pic.png', 'About shots/pic.png ("pic.png"): '],
+      ['wsfile:shots/pic.png', 'Ask in CLI about pic', 'About shots/pic.png ("pic"): '],
     ] as const) {
       await page.getByTestId('view-mode-board').click();
       typedInputs.length = 0;

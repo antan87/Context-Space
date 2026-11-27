@@ -1613,14 +1613,22 @@ export function BoardArea({ id, data }: NodeProps<AreaNode>) {
           <div className="mt-2 flex h-16 shrink-0 items-center gap-2 overflow-hidden rounded-md">
             {visiblePics.map((pic) => (
               <button
-                key={pic.path}
+                key={pic.card ?? pic.path}
                 type="button"
                 data-path={pic.path}
+                {...(pic.card ? { 'data-card': pic.card } : {})}
                 aria-label={pic.alt || pic.path}
                 title={pic.alt || pic.path}
                 onClick={(e) => {
                   e.stopPropagation();
-                  actions.openInReader({ path: pic.path, title: pic.alt || pic.path }, e.currentTarget);
+                  actions.openInReader({
+                    path: pic.path,
+                    title: pic.title ?? (pic.alt || pic.path),
+                    ...(pic.card ? { card: pic.card } : {}),
+                    ...(pic.stepKey ? { stepKey: pic.stepKey } : {}),
+                    ...(pic.text ? { text: pic.text } : {}),
+                    ...(pic.byline ? { byline: pic.byline } : {}),
+                  }, e.currentTarget);
                 }}
                 className="nodrag nopan relative h-full w-20 shrink-0 overflow-hidden rounded border border-border/50 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:opacity-85 transition-opacity"
               >
@@ -1991,14 +1999,22 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
           <div className="flex shrink-0 items-center gap-1.5 overflow-hidden">
             {pics.map((pic) => (
               <button
-                key={pic.path}
+                key={pic.card ?? pic.path}
                 type="button"
                 data-path={pic.path}
+                {...(pic.card ? { 'data-card': pic.card } : {})}
                 aria-label={pic.alt || pic.path}
                 title={pic.alt || pic.path}
                 onClick={(e) => {
                   e.stopPropagation();
-                  actions.openInReader({ path: pic.path, title: pic.alt || pic.path }, e.currentTarget);
+                  actions.openInReader({
+                    path: pic.path,
+                    title: pic.title ?? (pic.alt || pic.path),
+                    ...(pic.card ? { card: pic.card } : {}),
+                    ...(pic.stepKey ? { stepKey: pic.stepKey } : {}),
+                    ...(pic.text ? { text: pic.text } : {}),
+                    ...(pic.byline ? { byline: pic.byline } : {}),
+                  }, e.currentTarget);
                 }}
                 className={cn(
                   'nodrag nopan relative shrink-0 overflow-hidden rounded border border-border/50 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:opacity-85 transition-opacity',
@@ -2191,11 +2207,19 @@ export function BoardAreaMini({ id, data, width, height }: NodeProps<AreaMiniNod
         <button
           type="button"
           data-path={picture.path}
+          {...(picture.card ? { 'data-card': picture.card } : {})}
           aria-label={picture.alt || picture.path}
           title={picture.alt || picture.path}
           onClick={(e) => {
             e.stopPropagation();
-            actions.openInReader({ path: picture.path, title: picture.alt || picture.path }, e.currentTarget);
+            actions.openInReader({
+              path: picture.path,
+              title: picture.title ?? (picture.alt || picture.path),
+              ...(picture.card ? { card: picture.card } : {}),
+              ...(picture.stepKey ? { stepKey: picture.stepKey } : {}),
+              ...(picture.text ? { text: picture.text } : {}),
+              ...(picture.byline ? { byline: picture.byline } : {}),
+            }, e.currentTarget);
           }}
           className="nodrag nopan absolute right-3 top-2.5 bottom-2.5 w-20 rounded-lg cursor-pointer focus-visible:outline-2 focus-visible:outline-ring hover:bg-black/10 dark:hover:bg-white/10 transition-colors z-10"
         />

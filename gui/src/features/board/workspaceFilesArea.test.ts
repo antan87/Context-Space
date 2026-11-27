@@ -688,4 +688,146 @@ describe('WF2 step-named files on step rows, Area counts/miniatures, and exclusi
     expect(rows.map((r) => r.id)).toEqual(['row:step:s1', 'row:more-steps', 'row:done']);
     expect(cp1.allMemberNodeIds.some((id) => id.endsWith(':PLAN.md'))).toBe(false);
   });
+
+  it('names step and workspace pictures by themselves (no folder or extension) and attaches step metadata', () => {
+    const now = Date.parse('2026-11-26T12:00:00.000Z');
+    const plan: PlanFileView = {
+      file: 'PLAN.md',
+      source: 'file',
+      title: 'Plan',
+      intro: '',
+      sections: [],
+      decisions: [],
+      now: null,
+      changes: [],
+      steps: [],
+      checkpoints: [
+        {
+          key: 'cp-docs',
+          title: 'Documents',
+          done: false,
+          steps: [
+            {
+              key: 'dc2',
+              text: 'DC2: Add, upload and write documents in place (`63491df`, pushed, 26 Nov) [details](design/evidence/dc2/README.md) Packet: `design/packets/dc2.md`. Pictures: `board-pictures/dc2-conflict-1440-board-dark.png`, `board-pictures/dc2-preview-1440-board-dark.png`',
+              done: false,
+            },
+          ],
+          decisions: [],
+        },
+      ],
+    };
+
+    const areas = buildBoardAreas({
+      plan,
+      board: { revision: 1, positions: {}, links: [], cards: [] },
+      workspaceFiles: [
+        { path: 'board-pictures/dc2-conflict-1440-board-dark.png', modifiedAt: new Date(now - 60_000).toISOString(), size: 120 },
+        { path: 'board-pictures/dc2-preview-1440-board-dark.png', modifiedAt: new Date(now - 120_000).toISOString(), size: 120 },
+        { path: 'board-pictures/unmentioned.png', modifiedAt: new Date(now - 180_000).toISOString(), size: 90 },
+        { path: 'root-shot.png', modifiedAt: new Date(now - 240_000).toISOString(), size: 80 },
+      ],
+      now,
+    });
+
+    const cpDocs = areas.find((a) => a.id === 'checkpoint:cp-docs')!;
+    const ws = areas.find((a) => a.id === FILES_AREA_ID)!;
+
+    expect(cpDocs.data.pictures[0]).toMatchObject({
+      path: 'board-pictures/dc2-conflict-1440-board-dark.png',
+      alt: 'dc2-conflict-1440-board-dark · DC2: Add, upload and write documents in place',
+      title: 'dc2-conflict-1440-board-dark',
+      card: 'wsfile:step:dc2:board-pictures/dc2-conflict-1440-board-dark.png',
+      stepKey: 'dc2',
+      text: 'In step: DC2: Add, upload and write documents in place',
+    });
+
+    expect(ws.data.pictures[0]).toMatchObject({
+      path: 'board-pictures/unmentioned.png',
+      alt: 'unmentioned',
+      title: 'unmentioned',
+      card: 'wsfile:board-pictures/unmentioned.png',
+      text: 'In folder: board-pictures',
+    });
+    expect(ws.data.pictures[1]).toMatchObject({
+      path: 'root-shot.png',
+      alt: 'root-shot',
+      title: 'root-shot',
+      card: 'wsfile:root-shot.png',
+      text: 'Workspace root',
+    });
+
+    const stepCard = areaRows(cpDocs, { now, size: { width: 1200, height: 900 } })
+      .flatMap((r) => r.items)
+      .find((item) => item.id === 'wsfile:step:dc2:board-pictures/dc2-conflict-1440-board-dark.png');
+    expect(stepCard?.data).toMatchObject({
+      title: 'dc2-conflict-1440-board-dark',
+      text: 'In step: DC2: Add, upload and write documents in place',
+    });
+  });
+
+  it('PX1 fix1: drops stale card.step from overview pictures and loose Area file cards when the step no longer exists', () => {
+    const now = Date.parse('2026-11-27T05:00:00.000Z');
+    const plan: PlanFileView = {
+      file: 'PLAN.md',
+      source: 'file',
+      title: 'Plan',
+      intro: '',
+      sections: [],
+      decisions: [],
+      now: null,
+      changes: [],
+      steps: [],
+      checkpoints: [
+        {
+          key: 'cp-done',
+          title: 'Real work checkpoint',
+          done: true,
+          steps: [{ key: 'existing-step', text: 'Existing step', done: true }],
+          decisions: [],
+        },
+      ],
+    };
+
+    const areas = buildBoardAreas({
+      plan,
+      board: {
+        revision: 1,
+        positions: {},
+        links: [],
+        cards: [
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            kind: 'file',
+            path: 'board-pictures/commit-reader.png',
+            title: 'Commit reader',
+            description: 'board-pictures',
+            area: 'checkpoint:cp-done',
+            step: 'deleted-step-key',
+            pinned: false,
+            archived: false,
+            by: 'claude',
+            at: new Date(now - 60_000).toISOString(),
+            updatedBy: 'claude',
+            updatedAt: new Date(now - 60_000).toISOString(),
+          },
+        ],
+      },
+      workspaceFiles: [],
+      now,
+    });
+
+    const cpDone = areas.find((a) => a.id === 'checkpoint:cp-done')!;
+    expect(cpDone.data.pictures[0]).toMatchObject({
+      path: 'board-pictures/commit-reader.png',
+      title: 'Commit reader',
+      alt: 'Commit reader',
+      text: 'Real work checkpoint',
+    });
+    expect(cpDone.data.pictures[0]!.stepKey).toBeUndefined();
+
+    const looseCard = areaRows(cpDone, { now, size: { width: 1200, height: 900 } })
+      .find((r) => r.id === 'lane:board')?.items[0];
+    expect((looseCard?.data as { step?: string } | undefined)?.step).toBeUndefined();
+  });
 });

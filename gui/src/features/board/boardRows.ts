@@ -27,12 +27,14 @@ import {
 import { ANSWER_CARD_HEIGHT, checkSummary, codeHead, readableText, type AnswerCardData } from './questionsArea.js';
 import { filesChangedText, plusMinusText, type RepoChangeSummary } from '../changes/changeSummary.js';
 import { extractFreshSets, textEm, type BoardArea, type Size, type Viewport } from './boardAreas.js';
+import { shortStepTitle } from './boardLayout.js';
 import {
   BOARD_SIZE,
   cardPlan,
   commitsSince,
   documentsSummary,
   moreText,
+  shownOrder,
   uniqueId,
   type BoardDecision,
   type BoardNode,
@@ -210,13 +212,6 @@ interface Model { waiting: Waiting | null; rows: AreaRow[] }
 
 const cardsText = (count: number) => (count === 0 ? 'No cards' : `${count} ${count === 1 ? 'card' : 'cards'}`);
 
-/** Pinned cards first, then the newest. */
-function shownOrder(cards: BoardCard[]): BoardCard[] {
-  return cards.map((card, index) => ({ card, index, at: Date.parse(card.at) || 0 }))
-    .sort((a, b) => Number(b.card.pinned) - Number(a.card.pinned) || b.at - a.at || a.index - b.index)
-    .map(({ card }) => card);
-}
-
 /** A thing as it is drawn inside an Area: its compact variant, at the height that variant has. */
 /** The card of a repository's uncommitted work, at the commit card's size. */
 function uncommittedItem(changes: RepoChangeSummary, taken: Set<string>): LaneCard {
@@ -376,8 +371,9 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
   const loose: BoardCard[] = [];
   for (const card of shownOrder(area.cards)) {
     if (card.step && stepKeys.has(card.step)) byStep.set(card.step, [...(byStep.get(card.step) ?? []), card]);
-    else loose.push(card);
+    else loose.push(card.kind === 'file' ? { ...card, step: undefined } : card);
   }
+  const stepTitleByKey = new Map(steps.map((entry) => [entry.key, shortStepTitle(entry.text)]));
   const plans = (cards: BoardCard[]): LaneCard[] => cards.map((card) => compact(cardPlan(card, now)));
   const stepNowDate = new Date(now);
   const stepItems = (stepKey: string): LaneCard[] => [
@@ -387,6 +383,8 @@ function modelOf(area: BoardArea, options: Pick<AreaBoardLayoutOptions, 'news' |
         id: stepWorkspaceFileNodeId(stepKey, file.path),
         height: workspaceFileHeight(file.group),
         nowDate: stepNowDate,
+        stepKey,
+        stepTitle: stepTitleByKey.get(stepKey),
       }),
     ),
   ];

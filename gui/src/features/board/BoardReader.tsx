@@ -40,7 +40,7 @@ import { documentFileUrl, type ReaderTarget } from './boardActions.js';
 import { LARGE_WINDOW, type ReaderLayout } from './boardReaderLayout.js';
 import { ReaderPage } from './ReaderPage.js';
 import { isCodeWindowOpen } from '../workspace-shell/codeWindowOpen.js';
-import { useCodeWindowOpen } from '../workspace-shell/openRequests.js';
+import { findOpenerTarget, useCodeWindowOpen, type OpenerTarget } from '../workspace-shell/openRequests.js';
 import { useDockRect } from '../chat/dockPlacement.js';
 
 /** How many frames the reader keeps trying to take the keyboard: something that is closing (a dialog) may hold it back for a moment. */
@@ -75,6 +75,7 @@ export function BoardReader({
   onOpenFile,
   back,
   trailId = 0,
+  restoreFocus,
   onNext,
   onPrevious,
   nextTitle,
@@ -97,11 +98,13 @@ export function BoardReader({
   width: number;
   onClose: () => void;
   /** A link in the document to another file of the workspace. */
-  onOpenFile: (path: string, line?: number, root?: string) => void;
+  onOpenFile: (path: string, line?: number, root?: string, opener?: HTMLElement | null) => void;
   /** Where Back returns to (its name), when the reader followed something from inside itself. */
   back?: { label: string; onBack: () => void };
   /** A monotonic id for the trail: another trail starts clean with its own id. */
   trailId?: number;
+  /** When Back returned to an earlier document, re-focus the link/button that opened the trail step. */
+  restoreFocus?: { request: number; target: OpenerTarget | null } | null;
   onNext?: () => void;
   onPrevious?: () => void;
   nextTitle?: string;
@@ -319,10 +322,10 @@ export function BoardReader({
   const fileUrl = source ? '' : documentFileUrl(workspaceId, path, repo?.name);
   const repoName = repo?.name;
   const repoPath = repo?.path;
-  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: repoPath ?? workspacePath, documentPath: path, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name, repoName), onOpenFile: (name, line) => onOpenFile(name, line, repoPath ?? workspacePath) }), [workspaceId, workspacePath, path, repoName, repoPath, onOpenFile]);
+  const links = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: repoPath ?? workspacePath, documentPath: path, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name, repoName), onOpenFile: (name, line, opener) => onOpenFile(name, line, repoPath ?? workspacePath, opener) }), [workspaceId, workspacePath, path, repoName, repoPath, onOpenFile]);
 
   // The words of the card the file belongs to: their links open files in this reader, by their path from the workspace folder
-  const noteLinks = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile: (name, line) => onOpenFile(name, line, workspacePath) }), [workspaceId, workspacePath, onOpenFile]);
+  const noteLinks = useMemo<MarkdownDocumentLinks>(() => ({ workspaceRoot: workspacePath, resolveReferences: true, fileUrl: (name) => documentFileUrl(workspaceId, name), onOpenFile: (name, line, opener) => onOpenFile(name, line, workspacePath, opener) }), [workspaceId, workspacePath, onOpenFile]);
 
   // Escape pressed in the page of an HTML document, where the keyboard may be (a key in a frame never reaches this page): its script
   // says so with one fixed message. Only from a frame of this reader: its origin is "null", which says nothing, and a message from
@@ -359,6 +362,11 @@ export function BoardReader({
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [maximized, active]);
 
+  const navKeysRef = useRef({ back, onNext, onPrevious });
+  useLayoutEffect(() => {
+    navKeysRef.current = { back, onNext, onPrevious };
+  }, [back, onNext, onPrevious]);
+
   // Keyboard navigation between elements: [ and ] or Alt+ArrowLeft and Alt+ArrowRight
   useEffect(() => {
     if (!active) return;
@@ -378,33 +386,41 @@ export function BoardReader({
       }
       if (event.defaultPrevented) return;
 
+      const { back: curBack, onNext: curNext, onPrevious: curPrevious } = navKeysRef.current;
       if (event.altKey && event.key === 'ArrowLeft') {
         event.preventDefault();
-        if (back) {
+        if (curBack) {
           // One step back along the trail
           setMaximized(false);
-          back.onBack();
-        } else if (onPrevious) {
+          curBack.onBack();
+        } else if (curPrevious) {
           // Previous card
-          onPrevious();
+          curPrevious();
         }
         // With no trail and no previous card, stay in the app: preventDefault is called and does nothing
       } else if (event.key === '[') {
-        if (onPrevious) {
+        if (curPrevious) {
           event.preventDefault();
-          onPrevious();
+          curPrevious();
         }
       } else if (event.key === ']' || (event.altKey && event.key === 'ArrowRight')) {
-        if (onNext) {
+        if (curNext) {
           event.preventDefault();
-          onNext();
+          curNext();
         }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [active, onNext, onPrevious, back]);
+  }, [active]);
 
+  const restoreFocusRef = useRef(restoreFocus);
+  useLayoutEffect(() => {
+    restoreFocusRef.current = restoreFocus;
+  }, [restoreFocus]);
+  const restoreSucceededRef = useRef<number | null>(null);
+  const restoreConsumedRef = useRef<number | null>(null);
+  const prevTakeContextRef = useRef({ request, active, portalHost });
   const frame = useRef(0);
   const take = useCallback(() => {
     cancelAnimationFrame(frame.current);
@@ -413,12 +429,32 @@ export function BoardReader({
       // An input or menu chosen since opening owns the keyboard, even if our first effect/frame was delayed.
       const held = document.activeElement;
       if (tries > 0 && held && held !== title.current && (panel.current?.contains(held) || held.closest('[data-slot="menu-popup"]'))) return;
-      title.current?.focus({ preventScroll: true });
-      if (document.activeElement !== title.current && tries++ < FOCUS_FRAMES) frame.current = requestAnimationFrame(step);
+      const pendingBack = restoreFocusRef.current;
+      const wantedBack = pendingBack?.request === request && restoreConsumedRef.current !== request ? pendingBack.target : null;
+      const backTargetEl = wantedBack ? findOpenerTarget(wantedBack) : null;
+      if (backTargetEl && (!panel.current || panel.current.contains(backTargetEl))) {
+        backTargetEl.focus({ preventScroll: true });
+        if (document.activeElement === backTargetEl) {
+          restoreSucceededRef.current = request;
+          return;
+        }
+      } else if (tries === 0 || !wantedBack) {
+        title.current?.focus({ preventScroll: true });
+      }
+      if ((wantedBack || document.activeElement !== title.current) && tries++ < FOCUS_FRAMES) {
+        frame.current = requestAnimationFrame(step);
+      } else if (wantedBack) {
+        restoreConsumedRef.current = request;
+      }
     };
     step();
-  }, []);
+  }, [request]);
   useLayoutEffect(() => {
+    const prev = prevTakeContextRef.current;
+    if (prev.request === request && (prev.portalHost !== portalHost || (!prev.active && active)) && restoreSucceededRef.current === request) {
+      restoreConsumedRef.current = request;
+    }
+    prevTakeContextRef.current = { request, active, portalHost };
     if (!active) return undefined;
     take();
     return () => cancelAnimationFrame(frame.current);
@@ -428,8 +464,11 @@ export function BoardReader({
   useEffect(() => {
     const held = document.activeElement;
     const lost = !held || held === document.body || (held.closest('[inert]') !== null && Boolean(slot?.parentElement?.contains(held)));
-    if (active && covering && lost) take();
-  }, [active, covering, take, slot]);
+    if (active && covering && lost) {
+      if (restoreSucceededRef.current === request) restoreConsumedRef.current = request;
+      take();
+    }
+  }, [active, covering, request, take, slot]);
 
   const kind = data?.kind;
   const canViewSource = !isKnowledge && (isHtml || kind === 'markdown' || kind === 'html');

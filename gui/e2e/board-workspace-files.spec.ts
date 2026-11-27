@@ -11,6 +11,7 @@ import {
   routeBoard,
   routeCards,
   routeWork,
+  routeWorkspaceDocumentReferences,
   stepIntoArea,
   viewAtRest,
   workspace,
@@ -28,6 +29,7 @@ function isoHoursAgo(hours: number): string {
 async function routeDocumentViews(
   page: import('@playwright/test').Page,
   htmlBodies: Record<string, string>,
+  markdownBodies: Record<string, string> = {},
 ) {
   await page.route('**/api/workspace/demo/documents/file?*', (route) => {
     const name = new URL(route.request().url()).searchParams.get('name') ?? '';
@@ -45,7 +47,7 @@ async function routeDocumentViews(
       return route.fulfill({ json: { name, kind: 'image', modifiedAt: isoHoursAgo(1), size: 128 } });
     }
     return route.fulfill({
-      json: { name, kind: name.endsWith('.md') ? 'markdown' : 'text', modifiedAt: isoHoursAgo(2), size: 150, content: `# File ${name}` },
+      json: { name, kind: name.endsWith('.md') ? 'markdown' : 'text', modifiedAt: isoHoursAgo(2), size: 150, content: markdownBodies[name] ?? `# File ${name}` },
     });
   });
   await page.route('**/api/workspace/demo/documents/view-link', async (route) => {
@@ -567,10 +569,15 @@ test('places step-named files on open and done step rows, removes them and assig
   await expect(s1Pic).not.toHaveClass(/react-flow__node-draggable/);
   await expect(s1Pic.getByRole('button', { name: /Actions|Edit|Archive|Pin/i })).toHaveCount(0);
 
-  // Open picture from s1 in reader and navigate with ] / [ / Escape.
-  await s1Pic.getByRole('button', { name: 'Open step-shot.png' }).click();
+  // Open picture from s1 in reader (scoped to s1's pictures), then open s1's HTML page and navigate with [ / Escape.
+  await s1Pic.getByRole('button', { name: 'Open step-shot' }).click();
   await expect(page.locator('img[alt="board-pictures/step-shot.png"]')).toBeVisible();
   await page.keyboard.press('[');
+  await expect(page.locator('img[alt="board-pictures/step-shot.png"]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('img[alt="board-pictures/step-shot.png"]')).toHaveCount(0);
+
+  await node(page, 'wsfile:step:s1:pages/step-page.html').getByRole('button', { name: 'Open step-page.html' }).click();
   await expect(page.frameLocator('iframe[title="Preview of pages/step-page.html"]').getByRole('heading', { name: 'Step Page' })).toBeVisible();
   await page.keyboard.press('[');
   await expect(page.getByRole('heading', { name: 'File design/packets/spec.md' })).toBeVisible();
@@ -654,7 +661,7 @@ test('excludes assigned document when no step names it, opens step picture from 
   await expect(picNode).toBeVisible();
 
   // Open picture in reader; a plan refresh keeps the reader open.
-  await picNode.getByRole('button', { name: 'Open overview-pic.png' }).click();
+  await picNode.getByRole('button', { name: 'Open overview-pic' }).click();
   await expect(page.locator('img[alt="board-pictures/overview-pic.png"]')).toBeVisible();
 
   planData = planFile({
@@ -679,4 +686,903 @@ test('excludes assigned document when no step names it, opens step picture from 
   nextEvent = 'plan';
   await expect(board(page).locator('#board-area .react-flow__node[data-id="row:step:s1"]')).toContainText('(refreshed)');
   await expect(page.locator('img[alt="board-pictures/overview-pic.png"]')).toBeVisible();
+});
+
+test('PX1: names overview thumbnails and workspace pictures without folders or extensions and shows In step / In folder / Workspace root footers', async ({ page }) => {
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 'dc2', by: 'claude', at: minutesAgo(2) },
+        title: 'ContextSpace',
+        checkpoints: [
+          checkpoint('Documents', {
+            steps: [
+              {
+                key: 'dc2',
+                line: 10,
+                text: 'DC2: Add, upload and write documents in place (`63491df`, pushed, 26 Nov) [details](design/evidence/README.md) Packet: `design/packets/dc2.md`. Pictures: `board-pictures/dc2-conflict-1440-board-dark.png`, `board-pictures/dc2-preview-1440-board-dark.png`',
+                done: false,
+                kind: 'step',
+                indent: 0,
+                current: true,
+              },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'board-pictures/dc2-conflict-1440-board-dark.png', modifiedAt: isoHoursAgo(0.2), size: 220 },
+          { path: 'board-pictures/dc2-preview-1440-board-dark.png', modifiedAt: isoHoursAgo(0.5), size: 220 },
+          { path: 'board-pictures/unmentioned.png', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'root-shot.png', modifiedAt: isoHoursAgo(2), size: 180 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {});
+
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+
+  const cpDocs = node(page, 'checkpoint:documents');
+  const thumb = cpDocs.locator('button[data-path="board-pictures/dc2-conflict-1440-board-dark.png"]');
+  await expect(thumb).toHaveAttribute('aria-label', 'dc2-conflict-1440-board-dark · DC2: Add, upload and write documents in place');
+  await expect(thumb).toHaveAttribute('title', 'dc2-conflict-1440-board-dark · DC2: Add, upload and write documents in place');
+
+  const wsThumb = node(page, 'files:workspace').locator('button[data-path="board-pictures/unmentioned.png"]');
+  await expect(wsThumb).toHaveAttribute('aria-label', 'unmentioned');
+  await expect(wsThumb).toHaveAttribute('title', 'unmentioned');
+
+  // Opening overview thumbnail opens the picture as itself, in its step, with step-scoped 1 / 2 counter.
+  await thumb.click();
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.getByRole('heading', { name: 'dc2-conflict-1440-board-dark', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In step: DC2: Add, upload and write documents in place');
+  await expect(reader.locator('footer')).not.toContainText(/^board-pictures$/);
+  await expect(reader.getByText('1 / 2')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // Opening unattached pictures from Workspace files Area shows In folder / Workspace root.
+  await stepIntoArea(page, /Workspace files/);
+  await node(page, 'wsfile:board-pictures/unmentioned.png').getByRole('button', { name: 'Open unmentioned' }).click();
+  await expect(reader.getByRole('heading', { name: 'unmentioned', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In folder: board-pictures');
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'root-shot', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('Workspace root');
+});
+
+test('PX1: step picture navigation walks that step’s pictures only in order and survives plan refresh', async ({ page }) => {
+  await routeBoard(page);
+  let refreshed = false;
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'Step seq test',
+        checkpoints: [
+          checkpoint('Step Pictures', {
+            steps: [
+              {
+                key: 's1',
+                line: 4,
+                text: refreshed
+                  ? 'First step refreshed: `docs/spec.md`, `board-pictures/s1-first.png`, `board-pictures/s1-second.png`, `board-pictures/s1-third.png`'
+                  : 'First step: `docs/spec.md`, `board-pictures/s1-first.png`, `board-pictures/s1-second.png`, `board-pictures/s1-third.png`',
+                done: false,
+                kind: 'step',
+                indent: 0,
+                current: true,
+              },
+              {
+                key: 's2',
+                line: 5,
+                text: 'Second step: `board-pictures/s2-other.png`',
+                done: false,
+                kind: 'step',
+                indent: 0,
+              },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'docs/spec.md', modifiedAt: isoHoursAgo(1), size: 120 },
+          { path: 'board-pictures/s1-first.png', modifiedAt: isoHoursAgo(4), size: 220 },
+          { path: 'board-pictures/s1-second.png', modifiedAt: isoHoursAgo(3), size: 220 },
+          { path: 'board-pictures/s1-third.png', modifiedAt: isoHoursAgo(2), size: 220 },
+          { path: 'board-pictures/s2-other.png', modifiedAt: isoHoursAgo(0.5), size: 220 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {});
+
+  let nextEvent: 'ping' | 'plan' = 'ping';
+  await page.route('**/api/workspace/demo/screen-events**', (route) => {
+    const kind = nextEvent;
+    nextEvent = 'ping';
+    const body = kind === 'plan'
+      ? `retry: 150\n\n${frame('plan', { timestamp: new Date().toISOString() }, 'px1-refresh')}`
+      : `retry: 150\n\n${PING}`;
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+  });
+
+  await page.goto('/#/workspaces/demo/board');
+  await stepIntoArea(page, /Step Pictures/);
+
+  await node(page, 'wsfile:step:s1:board-pictures/s1-second.png').getByRole('button', { name: 'Open s1-second' }).click();
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.getByRole('heading', { name: 's1-second', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('2 / 3')).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In step: First step:');
+
+  // Live plan refresh keeps reader scoped to s1's 3 pictures at 2 / 3.
+  refreshed = true;
+  nextEvent = 'plan';
+  await expect(board(page).locator('#board-area .react-flow__node[data-id="row:step:s1"]')).toContainText('First step refreshed');
+  await expect(reader.getByText('2 / 3')).toBeVisible();
+  await expect(reader.getByRole('heading', { name: 's1-second', level: 2, exact: true })).toBeVisible();
+
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 's1-third', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('3 / 3')).toBeVisible();
+  await expect(reader.getByRole('button', { name: /^Next/ })).toBeDisabled();
+
+  await reader.getByRole('button', { name: /^Previous/ }).click();
+  await expect(reader.getByRole('heading', { name: 's1-second', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('2 / 3')).toBeVisible();
+
+  await page.keyboard.press('[');
+  await expect(reader.getByRole('heading', { name: 's1-first', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('1 / 3')).toBeVisible();
+  await expect(reader.getByRole('button', { name: /^Previous/ })).toBeDisabled();
+});
+
+test('PX1: duplicate picture path across two steps and two checkpoints opens and walks the clicked card and step', async ({ page }) => {
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'Duplicate pics',
+        checkpoints: [
+          checkpoint('Alpha Checkpoint', {
+            steps: [
+              { key: 's1', line: 4, text: 'Step one: `board-pictures/shared.png` and `board-pictures/s1-only.png`', done: false, kind: 'step', indent: 0, current: true },
+              { key: 's2', line: 5, text: 'Step two: `board-pictures/shared.png` and `board-pictures/s2-only.png`', done: false, kind: 'step', indent: 0 },
+            ],
+          }),
+          checkpoint('Beta Checkpoint', {
+            steps: [
+              { key: 'b1', line: 8, text: 'Beta step: `board-pictures/shared.png` and `board-pictures/beta-only.png`', done: false, kind: 'step', indent: 0 },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'board-pictures/shared.png', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'board-pictures/s1-only.png', modifiedAt: isoHoursAgo(2), size: 220 },
+          { path: 'board-pictures/s2-only.png', modifiedAt: isoHoursAgo(3), size: 220 },
+          { path: 'board-pictures/beta-only.png', modifiedAt: isoHoursAgo(4), size: 220 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {});
+
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+
+  // Overview thumbnail on Beta Checkpoint opens Beta's card & sequence, not Alpha's s1.
+  const betaThumb = node(page, 'checkpoint:beta-checkpoint').locator('button[data-path="board-pictures/shared.png"]');
+  await betaThumb.click();
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.locator('footer')).toContainText('In step: Beta step:');
+  await expect(reader.getByText('1 / 2')).toBeVisible();
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'beta-only', level: 2, exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // Inside Alpha Checkpoint, clicking shared in Step two opens s2, highlights s2, and walks s2-only.
+  await stepIntoArea(page, /Alpha Checkpoint/);
+  const s1Shared = board(page).locator('#board-area .react-flow__node[data-id="wsfile:step:s1:board-pictures/shared.png"]');
+  const s2Shared = board(page).locator('#board-area .react-flow__node[data-id="wsfile:step:s2:board-pictures/shared.png"]');
+  await s2Shared.getByRole('button', { name: 'Open shared' }).click();
+
+  await expect(s2Shared.locator('article')).toHaveAttribute('aria-current', 'true');
+  await expect(s1Shared.locator('article')).not.toHaveAttribute('aria-current', 'true');
+  await expect(reader.locator('footer')).toContainText('In step: Step two:');
+  await expect(reader.getByText('1 / 2')).toBeVisible();
+
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 's2-only', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('2 / 2')).toBeVisible();
+});
+
+test('PX1: Markdown picture in a Board reader document opens in reader and Back returns focus to that picture button', async ({ page }) => {
+  await routeWorkspaceDocumentReferences(
+    page,
+    () => ['docs/guide.md', 'docs/linked-target.md', 'board-pictures/diagram.png', 'board-pictures/linked.png'],
+    workspace.workspacePath,
+  );
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'Markdown pics',
+        checkpoints: [
+          checkpoint('Guide Checkpoint', {
+            steps: [
+              { key: 's1', line: 4, text: 'Inspect `docs/guide.md` and `board-pictures/diagram.png`', done: false, kind: 'step', indent: 0, current: true },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'docs/guide.md', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'board-pictures/diagram.png', modifiedAt: isoHoursAgo(0.5), size: 220 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {}, {
+    'docs/guide.md': [
+      '# Architecture Guide',
+      '',
+      '![Architecture diagram](../board-pictures/diagram.png)',
+      '',
+      '[![Linked shot](../board-pictures/linked.png)](linked-target.md)',
+      '',
+      '![Remote](https://example.com/r.png)',
+    ].join('\n'),
+  });
+
+  await page.goto('/#/workspaces/demo/board');
+  await stepIntoArea(page, /Guide Checkpoint/);
+
+  await node(page, 'wsfile:step:s1:docs/guide.md').getByRole('button', { name: 'Open guide.md' }).click();
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.getByRole('heading', { name: 'Architecture Guide' })).toBeVisible();
+
+  const picBtn = reader.getByRole('button', { name: 'Architecture diagram', exact: true });
+  await expect(picBtn).toBeVisible();
+  await expect(picBtn.locator('img')).toBeVisible();
+  await expect(picBtn).toHaveClass(/focus-visible:ring/);
+  await expect(reader.getByRole('link').filter({ has: page.locator('button') })).toHaveCount(0);
+  await expect(reader.locator('img[src="https://example.com/r.png"]')).toBeVisible();
+
+  await picBtn.focus();
+  await picBtn.press('Enter');
+  await expect(reader.getByRole('heading', { name: 'diagram', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByRole('heading', { name: 'diagram', level: 2, exact: true })).toBeFocused();
+  const backBtn = reader.getByRole('button', { name: /^Back to / });
+  await expect(backBtn).toBeVisible();
+
+  await backBtn.click();
+  await expect(reader.getByRole('heading', { name: 'Architecture Guide' })).toBeVisible();
+  await expect(reader.getByRole('button', { name: 'Architecture diagram', exact: true })).toBeFocused();
+
+  await reader.getByRole('button', { name: 'Architecture diagram', exact: true }).press('Enter');
+  await expect(reader.getByRole('heading', { name: 'diagram', level: 2, exact: true })).toBeVisible();
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect(reader.getByRole('heading', { name: 'Architecture Guide' })).toBeVisible();
+  await expect(reader.getByRole('button', { name: 'Architecture diagram', exact: true })).toBeFocused();
+});
+
+test('PX1 regression: svg step picture stays step-scoped, while commit picture thumbnail walks the full Area list', async ({ page }) => {
+  const sha = 'abc1234def5678901234567890abcdef12345678';
+  const commitList = [{ repo: 'app', more: 0, commits: [{ sha, author: 'Anna', subject: 'Add svg shot', at: minutesAgo(3) }] }];
+  await routeWorkspaceDocumentReferences(
+    page,
+    () => ['design.md', 'board-pictures/one.png', 'board-pictures/two.svg'],
+    workspace.workspacePath,
+  );
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/news', (route) => route.fulfill({ json: whatsNew({ commits: commitList }) }));
+  await page.route('**/api/workspace/demo/recent-commits', (route) =>
+    route.fulfill({ json: { at: new Date().toISOString(), from: isoHoursAgo(24), commits: commitList } }),
+  );
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'SVG & commit scope',
+        checkpoints: [
+          checkpoint('Media Checkpoint', {
+            steps: [
+              {
+                key: 's1',
+                line: 4,
+                text: 'Capture screenshots (`abc1234`, 26 Nov) Pictures: `board-pictures/one.png`, `board-pictures/two.svg`',
+                done: false,
+                kind: 'step',
+                indent: 0,
+                current: true,
+              },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, [
+    boardDocument('Design spec', {
+      filename: 'design.md',
+      scope: { checkpoints: ['media-checkpoint'] },
+    }),
+  ]);
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'design.md', modifiedAt: isoHoursAgo(2), size: 120 },
+          { path: 'board-pictures/one.png', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'board-pictures/two.svg', modifiedAt: isoHoursAgo(0.5), size: 140 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {}, { 'design.md': '# Design Spec\n\nOverview document.' });
+
+  await page.goto('/#/workspaces/demo/board');
+  await stepIntoArea(page, /Media Checkpoint/);
+
+  // 1. Clicking an .svg step picture scopes [ / ] to that step's 2 pictures (skipping Design spec).
+  await node(page, 'wsfile:step:s1:board-pictures/two.svg').getByRole('button', { name: 'Open two' }).click();
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.getByRole('heading', { name: 'two', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In step: Capture screenshots');
+  await expect(reader.getByText('2 / 2')).toBeVisible();
+  await page.keyboard.press('[');
+  await expect(reader.getByRole('heading', { name: 'one', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('1 / 2')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // 2. Clicking the commit picture thumbnail walks the full Area list (including Design spec: 2 / 3), not step-only.
+  await board(page).locator('#board-area .react-flow__node-commit').getByRole('button', { name: 'View picture: one.png', exact: true }).click();
+  await expect(reader.getByRole('heading', { name: 'one', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('2 / 3')).toBeVisible();
+  await page.keyboard.press('[');
+  await expect(reader.getByRole('heading', { name: 'Design spec', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('1 / 3')).toBeVisible();
+});
+
+test('PX1 regression: Back restores focus once across layout toggles, and clicking pic 1 after ] in side-by-side opens pic 1', async ({ page }) => {
+  await routeWorkspaceDocumentReferences(
+    page,
+    () => ['docs/guide.md', 'board-pictures/diagram.png', 'board-pictures/first.png', 'board-pictures/second.png'],
+    workspace.workspacePath,
+  );
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'Reader focus & thumb regression',
+        checkpoints: [
+          checkpoint('Reader Regression', {
+            steps: [
+              {
+                key: 's1',
+                line: 4,
+                text: 'Inspect guide and shots Pictures: `board-pictures/first.png`, `board-pictures/second.png`',
+                done: false,
+                kind: 'step',
+                indent: 0,
+                current: true,
+              },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, [
+    boardDocument('Guide doc', {
+      filename: 'docs/guide.md',
+      scope: { checkpoints: ['reader-regression'] },
+    }),
+  ]);
+  await page.route('**/api/workspace/demo/work/documents/**', (route) =>
+    route.fulfill({ json: { content: '# Guide Body\n\n![Architecture diagram](../board-pictures/diagram.png)' } }),
+  );
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'docs/guide.md', modifiedAt: isoHoursAgo(2), size: 220 },
+          { path: 'board-pictures/diagram.png', modifiedAt: isoHoursAgo(1.5), size: 220 },
+          { path: 'board-pictures/first.png', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'board-pictures/second.png', modifiedAt: isoHoursAgo(0.5), size: 220 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {}, { 'docs/guide.md': '# Guide Body\n\n![Architecture diagram](../board-pictures/diagram.png)' });
+
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+
+  // 1. After Back restores focus to pic button, toggling to "Show beside the board" does not re-steal focus to pic button.
+  await stepIntoArea(page, /Reader Regression/);
+  await node(page, 'document:guide-doc').getByRole('button', { name: 'Open Guide doc' }).click();
+  const reader = board(page).locator('[data-board-reader]');
+  const picBtn = reader.getByRole('button', { name: 'Architecture diagram', exact: true });
+  await picBtn.click();
+  await expect(reader.getByRole('heading', { name: 'diagram', level: 2, exact: true })).toBeVisible();
+  await reader.getByRole('button', { name: /^Back to / }).click();
+  await expect(picBtn).toBeFocused();
+
+  await reader.getByRole('button', { name: 'More actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Show beside the board' }).click();
+  await expect(reader).toHaveClass(/border-l/);
+  await expect(picBtn).not.toBeFocused();
+  await expect(reader.locator(':focus')).toHaveCount(1);
+
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // 2. Side-by-side layout persists: click overview pic 1 -> press ] to pic 2 -> clicking overview pic 1 opens pic 1 (never closes reader).
+  await board(page).getByRole('button', { name: 'Board ›', exact: true }).click();
+  await viewAtRest(page);
+  const cp = node(page, 'checkpoint:reader-regression');
+  const firstThumb = cp.locator('button[data-path="board-pictures/first.png"]');
+  await firstThumb.click();
+  await expect(reader.getByRole('heading', { name: 'first', level: 2, exact: true })).toBeVisible();
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'second', level: 2, exact: true })).toBeVisible();
+  await firstThumb.click();
+  await expect(reader).toBeVisible();
+  await expect(reader.getByRole('heading', { name: 'first', level: 2, exact: true })).toBeVisible();
+});
+
+test('PX1 regression: unmatched repository and unindexed pictures from Files, terminal links, and Markdown images drop extensions and keep folder footers', async ({ page }) => {
+  await routeWorkspaceDocumentReferences(
+    page,
+    () => ['docs/guide.md', 'assets/repo-shot.svg', 'unindexed/term-shot.png'],
+    workspace.workspacePath,
+  );
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'Unmatched picture opens',
+        checkpoints: [
+          checkpoint('Repo & Files', {
+            steps: [
+              { key: 's1', line: 4, text: 'Check `board-pictures/indexed.png`', done: false, kind: 'step', indent: 0, current: true },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({ cards: [] }));
+  let filesCalls = 0;
+  await page.route('**/api/workspace/demo/files', (route) => {
+    filesCalls += 1;
+    return route.fulfill({
+      json: {
+        files: filesCalls === 1
+          ? [{ path: 'board-pictures/indexed.png', modifiedAt: isoHoursAgo(1), size: 220 }]
+          : [
+              { path: 'board-pictures/indexed.png', modifiedAt: isoHoursAgo(1), size: 220 },
+              { path: 'unindexed/extra-shot.png', modifiedAt: isoHoursAgo(0.5), size: 220 },
+            ],
+        truncated: false,
+        errors: [],
+      },
+    });
+  });
+  await page.route('**/api/workspace/demo/changes?include=all', (route) =>
+    route.fulfill({
+      json: {
+        changes: [
+          {
+            repoName: 'api',
+            repoPath: '/repos/api',
+            files: [
+              { file: 'assets/repo-shot.svg', type: 'unchanged' },
+              { file: 'docs/guide.md', type: 'unchanged' },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {}, {
+    'docs/guide.md': '# Repo Guide\n\n![Repo diagram](../assets/repo-shot.svg)',
+  });
+  await page.route('**/api/terminals/bootstrap', (route) => route.fulfill({ json: { token: 'test-token', expiresAt: Date.now() + 300_000 } }));
+  await page.route('**/api/terminals/*/status', (route) => route.fulfill({
+    json: {
+      available: true,
+      sessions: [{ id: 'term-demo', workspace: 'demo', target: 'claude', label: 'claude', cwd: '/tmp/demo', state: 'running' }],
+      targets: [{ id: 'claude', name: 'claude', available: true, reason: null }],
+    },
+  }));
+  await page.route('**/api/workspace/*/sessions', (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.routeWebSocket('**/ws/terminal', (socket) => {
+    socket.onMessage((message) => {
+      const parsed = JSON.parse(String(message));
+      if (parsed.type !== 'attach') return;
+      socket.send(JSON.stringify({
+        type: 'ready',
+        terminal: { id: parsed.id, workspace: parsed.workspace, target: 'claude', label: 'claude', cwd: '/tmp/demo', state: 'running' },
+        truncated: false,
+      }));
+      socket.send(JSON.stringify({ type: 'output', data: 'opened unindexed/term-shot.png\r\n' }));
+      socket.send(JSON.stringify({ type: 'replayed' }));
+    });
+  });
+  await page.route('**/api/workspace/demo/files/reference?*', (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    const reqPath = query.get('path') ?? '';
+    const cwd = query.get('cwd') ?? '';
+    if (cwd === '/repos/api' || reqPath.includes('repo-shot.svg')) {
+      return route.fulfill({
+        json: { status: 'found', target: { origin: { kind: 'repository', repoName: 'api', repoPath: '/repos/api' }, file: 'assets/repo-shot.svg', viewer: 'reader' } },
+      });
+    }
+    return route.fulfill({
+      json: { status: 'found', target: { origin: { kind: 'workspace', workspacePath: workspace.workspacePath }, file: reqPath, viewer: 'reader' } },
+    });
+  });
+
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+
+  // 1. Open Board index -> Files: repository picture and unindexed workspace picture drop extensions and show folder footer.
+  await page.getByRole('button', { name: 'Board index', exact: true }).click();
+  const nav = page.getByRole('navigation', { name: 'Board index' });
+  await nav.getByRole('button', { name: 'Files', exact: true }).click();
+
+  await nav.getByRole('button', { name: 'assets/repo-shot.svg Repository · api', exact: true }).click();
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.getByRole('heading', { name: 'repo-shot', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In folder: assets');
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  await nav.getByRole('button', { name: 'unindexed/extra-shot.png Workspace', exact: true }).click();
+  await expect(reader.getByRole('heading', { name: 'extra-shot', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In folder: unindexed');
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // 2. Repository Markdown document -> clicking Markdown image button opens unmatched repo picture without .svg.
+  await nav.getByRole('button', { name: 'docs/guide.md Repository · api', exact: true }).click();
+  await expect(reader.getByRole('heading', { name: 'Repo Guide' })).toBeVisible();
+  const repoPicBtn = reader.getByRole('button', { name: 'Repo diagram', exact: true });
+  await repoPicBtn.click();
+  await expect(reader.getByRole('heading', { name: 'repo-shot', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In folder: assets');
+  await reader.getByRole('button', { name: /^Back to / }).click();
+  await expect(repoPicBtn).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // 3. Terminal link to unindexed picture opens via documentRequest without .png and shows folder footer.
+  await page.getByTestId('view-mode-split').click();
+  const pane = page.getByTestId('terminal-pane');
+  await expect(pane.getByTestId('terminal-state')).toHaveText('Running');
+  const cell = await pane.locator('.xterm-screen').evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const first = element.querySelector('.xterm-rows')?.firstElementChild?.getBoundingClientRect();
+    return { x: bounds.x + 80, y: (first?.y ?? bounds.y) + (first?.height ?? 17) * 0.5 };
+  });
+  await pane.locator('.xterm-helper-textarea').focus();
+  await page.mouse.move(cell.x + 120, cell.y + 30);
+  await page.mouse.move(cell.x, cell.y);
+  await expect(pane.locator('.xterm-cursor-pointer')).toHaveCount(1);
+  await page.mouse.click(cell.x, cell.y);
+
+  await expect(reader.getByRole('heading', { name: 'term-shot', level: 2, exact: true })).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('In folder: unindexed');
+});
+
+test('PX1 fix1: picture card with a stale step key keeps Area counter and working ] from overview, Board index, and Not tied to a step', async ({ page }) => {
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's-active', by: 'claude', at: minutesAgo(1) },
+        title: 'Stale step cards',
+        checkpoints: [
+          checkpoint('Active Checkpoint', {
+            steps: [
+              { key: 's-active', line: 4, text: 'Active step', done: false, kind: 'step', indent: 0, current: true },
+            ],
+          }),
+          checkpoint('Real Work Done', {
+            done: true,
+            steps: [
+              { key: 's-done', line: 8, text: 'Current step key', done: true, kind: 'step', indent: 0 },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({
+    cards: [
+      boardFileCard(1, 'board-pictures/commit-reader.png', {
+        title: 'Commit reader',
+        description: 'board-pictures',
+        area: 'checkpoint:real-work-done',
+        step: 'c1-deleted-step-key',
+        at: minutesAgo(30),
+        updatedAt: minutesAgo(30),
+      }),
+      boardFileCard(2, 'board-pictures/orphan-two.png', {
+        title: 'Orphan two',
+        description: 'Second orphan picture',
+        area: 'checkpoint:real-work-done',
+        step: 'c1-deleted-step-key-2',
+        at: minutesAgo(20),
+        updatedAt: minutesAgo(20),
+      }),
+      boardFileCard(3, 'board-pictures/loose-three.png', {
+        title: 'Loose three',
+        description: 'Third loose picture',
+        area: 'checkpoint:real-work-done',
+        step: undefined,
+        at: minutesAgo(10),
+        updatedAt: minutesAgo(10),
+      }),
+    ],
+  }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({ json: { files: [], truncated: false, errors: [] } }),
+  );
+  await routeDocumentViews(page, {});
+
+  await page.goto('/#/workspaces/demo/board');
+  await viewAtRest(page);
+
+  // 1. Expand the done fold and click the Commit reader overview thumbnail.
+  await board(page).locator('#board-overview button.board-area-fold').click();
+  const doneCard = node(page, 'checkpoint:real-work-done');
+  await expect(doneCard).toBeVisible();
+  const thumb = doneCard.locator('button[data-path="board-pictures/commit-reader.png"]');
+  await expect(thumb).toHaveAttribute('aria-label', 'Commit reader');
+  await thumb.click();
+
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.getByRole('heading', { name: 'Commit reader', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('1 / 3')).toBeVisible();
+  await expect(reader.locator('footer')).toContainText('Real Work Done');
+  await expect(reader.locator('footer')).not.toContainText('In step:');
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'Orphan two', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('2 / 3')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // 2. Open Commit reader from Board index (Pictures & pages) -> keeps Area counter and working ].
+  await page.getByRole('button', { name: 'Board index', exact: true }).click();
+  const nav = page.getByRole('navigation', { name: 'Board index' });
+  await nav.getByRole('button', { name: 'Read Commit reader in reader', exact: true }).click();
+  await expect(reader.getByRole('heading', { name: 'Commit reader', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('1 / 3')).toBeVisible();
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'Orphan two', level: 2, exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reader).toHaveCount(0);
+
+  // 3. Inside the Area ("Not tied to a step"), opening Orphan two keeps the full Area sequence (2 / 3 -> 3 / 3).
+  await board(page).locator('#board-area').getByRole('button', { name: 'Open Orphan two', exact: true }).click();
+  await expect(reader.getByRole('heading', { name: 'Orphan two', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('2 / 3')).toBeVisible();
+  await expect(reader.getByRole('button', { name: /^Next/ })).toBeEnabled();
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'Loose three', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('3 / 3')).toBeVisible();
+});
+
+test('PX1 fix1: mixed step (2 cards + 1 step file) opens leftmost card at 1 / 3 and ] walks left to right', async ({ page }) => {
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'Mixed step order',
+        checkpoints: [
+          checkpoint('Mixed Checkpoint', {
+            steps: [
+              {
+                key: 's1',
+                line: 4,
+                text: 'Mixed step Pictures: `board-pictures/step-file.png`',
+                done: false,
+                kind: 'step',
+                indent: 0,
+                current: true,
+              },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({
+    cards: [
+      boardFileCard(1, 'board-pictures/older.png', {
+        title: 'Older card',
+        description: 'Older unpinned card',
+        area: 'checkpoint:mixed-checkpoint',
+        step: 's1',
+        pinned: false,
+        at: minutesAgo(30),
+        updatedAt: minutesAgo(30),
+      }),
+      boardFileCard(2, 'board-pictures/pinned.png', {
+        title: 'Pinned card',
+        description: 'Newer pinned card',
+        area: 'checkpoint:mixed-checkpoint',
+        step: 's1',
+        pinned: true,
+        at: minutesAgo(10),
+        updatedAt: minutesAgo(10),
+      }),
+    ],
+  }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'board-pictures/step-file.png', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'board-pictures/older.png', modifiedAt: isoHoursAgo(2), size: 220 },
+          { path: 'board-pictures/pinned.png', modifiedAt: isoHoursAgo(3), size: 220 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {});
+
+  await page.goto('/#/workspaces/demo/board');
+  await stepIntoArea(page, /Mixed Checkpoint/);
+
+  const rowOrder = await board(page).locator('#board-area .react-flow__node-file').evaluateAll((nodes) =>
+    nodes
+      .map((el) => ({
+        id: el.getAttribute('data-id') ?? '',
+        left: Math.round(el.getBoundingClientRect().left),
+        title: el.querySelector('h2')?.textContent?.trim() ?? '',
+      }))
+      .sort((a, b) => a.left - b.left),
+  );
+  expect(rowOrder.map((entry) => entry.title)).toEqual(['Pinned card', 'Older card', 'step-file']);
+
+  await board(page).locator(`#board-area .react-flow__node[data-id="${rowOrder[0]!.id}"] button[data-card-main]`).click();
+  const reader = board(page).locator('[data-board-reader]');
+  await expect(reader.getByRole('heading', { name: 'Pinned card', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('1 / 3')).toBeVisible();
+
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'Older card', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('2 / 3')).toBeVisible();
+
+  await page.keyboard.press(']');
+  await expect(reader.getByRole('heading', { name: 'step-file', level: 2, exact: true })).toBeVisible();
+  await expect(reader.getByText('3 / 3')).toBeVisible();
+  await expect(reader.getByRole('button', { name: /^Next/ })).toBeDisabled();
+});
+
+test('PX1 fix1: self-link after Back from Markdown picture does not pull focus back to the picture', async ({ page }) => {
+  await routeWorkspaceDocumentReferences(
+    page,
+    () => ['docs/guide.md', 'board-pictures/diagram.png'],
+    workspace.workspacePath,
+  );
+  await routeBoard(page);
+  await page.route('**/api/workspace/demo/plan', (route) =>
+    route.fulfill({
+      json: planFile({
+        now: { key: 's1', by: 'claude', at: minutesAgo(1) },
+        title: 'Self-link focus after Back',
+        checkpoints: [
+          checkpoint('Guide Checkpoint', {
+            steps: [
+              { key: 's1', line: 4, text: 'Inspect `docs/guide.md`', done: false, kind: 'step', indent: 0, current: true },
+            ],
+          }),
+        ],
+      }),
+    }),
+  );
+  await routeWork(page, []);
+  await routeCards(page, boardFile({ cards: [] }));
+  await page.route('**/api/workspace/demo/files', (route) =>
+    route.fulfill({
+      json: {
+        files: [
+          { path: 'docs/guide.md', modifiedAt: isoHoursAgo(1), size: 220 },
+          { path: 'board-pictures/diagram.png', modifiedAt: isoHoursAgo(0.5), size: 220 },
+        ],
+        truncated: false,
+        errors: [],
+      },
+    }),
+  );
+  await routeDocumentViews(page, {}, {
+    'docs/guide.md': [
+      '# Architecture Guide',
+      '',
+      'Read [Self link](guide.md).',
+      '',
+      '![Architecture diagram](../board-pictures/diagram.png)',
+    ].join('\n'),
+  });
+
+  await page.goto('/#/workspaces/demo/board');
+  await stepIntoArea(page, /Guide Checkpoint/);
+
+  await node(page, 'wsfile:step:s1:docs/guide.md').getByRole('button', { name: 'Open guide.md' }).click();
+  const reader = board(page).locator('[data-board-reader]');
+  const picBtn = reader.getByRole('button', { name: 'Architecture diagram', exact: true });
+  await picBtn.click();
+  await expect(reader.getByRole('heading', { name: 'diagram', level: 2, exact: true })).toBeVisible();
+
+  await reader.getByRole('button', { name: /^Back to / }).click();
+  await expect(picBtn).toBeFocused();
+
+  await reader.getByRole('link', { name: 'Self link', exact: true }).click();
+  await expect(reader.getByRole('heading', { name: 'Architecture Guide' })).toBeVisible();
+  await expect(reader.getByRole('heading', { name: 'guide.md', level: 2, exact: true })).toBeFocused();
+  await expect(picBtn).not.toBeFocused();
 });

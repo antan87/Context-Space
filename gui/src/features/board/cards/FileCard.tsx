@@ -39,7 +39,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
     const openItem = (event: MouseEvent<HTMLElement>) => {
       if (hasDragSelection(event.currentTarget, event)) return;
       actions?.openInReader(
-        { path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) },
+        { path: data.path, title: data.title, card: id, ...(data.step ? { stepKey: data.step } : {}), ...(data.text ? { text: data.text } : {}) },
         event.currentTarget,
       );
     };
@@ -133,7 +133,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
                 aria-label={`Open ${data.title}`}
                 onClick={(event) => {
                   if (hasDragSelection(event.currentTarget, event)) return;
-                  actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}) }, event.currentTarget);
+                  actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.step ? { stepKey: data.step } : {}), ...(data.text ? { text: data.text } : {}) }, event.currentTarget);
                 }}
               >{title}</button>
               : title}
@@ -170,7 +170,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
           <div className="flex shrink-0 items-start gap-1.5">
           <h2 className={cn('flex min-h-7 min-w-0 flex-1 items-center text-sm font-semibold leading-5', data.archived ? 'text-muted-foreground' : 'text-foreground')}>
             {actions
-              ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} onClick={(event) => { if (hasDragSelection(event.currentTarget, event)) return; actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget); }}>{title}</button>
+              ? <button type="button" data-card-main className={TITLE_BUTTON} aria-label={`Open ${data.title}`} onClick={(event) => { if (hasDragSelection(event.currentTarget, event)) return; actions.openInReader({ path: data.path, title: data.title, card: id, ...(data.step ? { stepKey: data.step } : {}), ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget); }}>{title}</button>
               : title}
           </h2>
           {data.readOnly
@@ -194,7 +194,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
           <img
             src={pictureSrc(actions, data.path)} alt={imageAlt({ title: data.title, description: data.text, path: data.path })}
             loading="lazy" decoding="async" draggable={false} onError={() => setBrokenPath(data.path)} className="size-full object-cover transition-transform duration-200 group-hover/thumb:scale-105 cursor-pointer"
-            onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}
+            onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.step ? { stepKey: data.step } : {}), ...(data.text ? { text: data.text } : {}), byline: bylineText(data) }, event.currentTarget)}
           />
           <span className="absolute bottom-1 right-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover/thumb:opacity-100 pointer-events-none">
             Double-click to enlarge
@@ -209,7 +209,7 @@ export function BoardFile({ id, data }: NodeProps<FileNode>) {
         {data.readOnly ? (data.age ?? '') : (bylineText(data) || 'live visual snapshot')}
       </span>
       <div className="flex items-center gap-1 shrink-0">
-        <Button size="xs" variant="ghost" className="nodrag nopan h-6 px-1.5 text-xs" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" className="size-3" />Open</Button>
+        <Button size="xs" variant="ghost" className="nodrag nopan h-6 px-1.5 text-xs" aria-label={`Open ${data.title}`} onClick={(event) => actions?.openInReader({ path: data.path, title: data.title, card: id, ...(data.step ? { stepKey: data.step } : {}), ...(data.text ? { text: data.text } : {}), ...(data.readOnly ? {} : { byline: bylineText(data) }) }, event.currentTarget)} disabled={!actions}><PanelRightOpen aria-hidden="true" className="size-3" />Open</Button>
         {(titleCut || textCut) && <ReadAll data={data} />}
         {actions?.askInCLI && !actions.readOnly && (
           <button

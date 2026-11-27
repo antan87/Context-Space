@@ -1,6 +1,7 @@
 import { lineNoteViewer } from '../changes/codeLineNotes.js';
 import { ApiError, apiFetch } from '../../lib/api/client.js';
 import type { ReferenceTarget } from '../workspace-shell/openRequests.js';
+import { describeOpener, type OpenerTarget } from '../workspace-shell/openRequests.js';
 import type { LineRange } from './lineNotes.js';
 import type { AskLine } from './askText.js';
 import { useOpenFileReference } from '../workspace-shell/useOpenFileReference.js';
@@ -55,7 +56,7 @@ import { isAnswerCardId, refreshRequest } from './questionsArea.js';
 import { formatWorkspaceFileCounts } from './workspaceFilesArea.js';
 import { NoteDialog, type NoteDialogProps } from './NoteDialog.js';
 import { fileTitle, readerDock } from './boardDock.js';
-import { boardEdges, oneLinePerPair, type BoardNode } from './boardLayout.js';
+import { boardEdges, isPicturePath, oneLinePerPair, pictureName, type BoardNode } from './boardLayout.js';
 import {
   buildBoardNav,
   readNavMode,
@@ -74,7 +75,7 @@ import { REVEAL_MARGIN, revealViewport } from './boardReveal.js';
 import { BoardReader } from './BoardReader.js';
 import { commitOpenFor } from './commitSequence.js';
 import { CommitNotesContext, commitNotesOf, requestNotesView } from './commitNotes.js';
-import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
+import { collectAreaReaderTargets, findReaderTargetIndex, isSameReaderTarget, pictureFallback, useReaderLayout, type ReaderLayout } from './boardReaderLayout.js';
 import { BoardSidebar } from './BoardSidebar.js';
 import { PlanDraftNotice } from './PlanDraftNotice.js';
 import { BoardNowLine } from './BoardNowLine.js';
@@ -350,7 +351,14 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const stageWidth = boardRowSize.width - (navOpen ? SIDEBAR.width : SIDEBAR.railWidth);
   const stageDock = readerDock(stageWidth);
   // Reader and stepped state sit here: the focus card's form below depends on them
-  const [reader, setReader] = useState<{ target: ReaderTarget; request: number; trail: ReaderTrail } | null>(null);
+  const [reader, setReader] = useState<{
+    target: ReaderTarget;
+    request: number;
+    trail: ReaderTrail;
+    stepSequenceKey?: string;
+    trailOpeners?: Array<OpenerTarget | null>;
+    restoreOpener?: OpenerTarget | null;
+  } | null>(null);
   const [layout, setLayout] = useReaderLayout();
   const [stepped, setStepped] = useState<SteppedState>(null);
   // The Areas folded into the overview's last row, shown (not saved)
@@ -408,13 +416,37 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const label = opener.current?.getAttribute('aria-label') ?? (opener.current instanceof HTMLAnchorElement ? opener.current.textContent?.trim() : null);
     openerWas.current = node && label ? { node, label } : null;
     requests.current += 1;
-    const allTargets = areas.flatMap((a) => collectAreaReaderTargets(a));
-    const matching = allTargets.find((t) => isSameReaderTarget(t, target) || (!t.source && !target.source && !t.repo && !target.repo && !t.commit && !target.commit && !isAnswerCardId(t.card) && t.path === target.path));
+    const orderedAreas = stepped
+      ? [...areas.filter((a) => a.id === stepped.areaId), ...areas.filter((a) => a.id !== stepped.areaId)]
+      : areas;
+    const allTargets = orderedAreas.flatMap((a) => collectAreaReaderTargets(a));
+    const matching = allTargets.find((t) =>
+      isSameReaderTarget(t, target)
+      || (!target.card && !t.source && !target.source && !t.repo && !target.repo && !t.commit && !target.commit && !isAnswerCardId(t.card) && t.path === target.path),
+    );
+    const unmatchedPicture = !matching && !target.source && !target.commit && !target.knowledge && isPicturePath(target.path);
+    const fallback = unmatchedPicture ? pictureFallback(target.path, target.repo) : null;
     const resolved: ReaderTarget = matching
-      ? { ...matching, ...target, ...(matching.card ? { card: matching.card } : {}), ...(matching.text ? { text: matching.text } : {}), ...(matching.byline ? { byline: matching.byline } : {}) }
-      : target;
-    setReader({ target: resolved, request: requests.current, trail: startTrail(resolved) });
-  }, [areas, setReader, workspaceId]);
+      ? {
+          ...matching,
+          ...target,
+          ...(matching.title && isPicturePath(matching.path) ? { title: matching.title } : {}),
+          ...(matching.card ? { card: matching.card } : {}),
+          stepKey: matching.stepKey,
+          ...(matching.text ? { text: matching.text } : {}),
+          ...(matching.byline ? { byline: matching.byline } : {}),
+        }
+      : fallback
+        ? {
+            ...target,
+            stepKey: undefined,
+            ...(!target.title || target.title === fileTitle(target.path) || target.title === fallback.title ? { title: fallback.title } : {}),
+            ...(target.text ? {} : { text: fallback.text }),
+          }
+        : target;
+    const stepSequenceKey = target.stepKey && matching?.stepKey && isPicturePath(resolved.path) ? matching.stepKey : undefined;
+    setReader({ target: resolved, request: requests.current, trail: startTrail(resolved), ...(stepSequenceKey ? { stepSequenceKey } : {}) });
+  }, [areas, setReader, stepped, workspaceId]);
 
   const openInReader = useCallback((target: ReaderTarget, from: HTMLElement | null) => show(target, from), [show]);
   const closeReader = useCallback(() => {
@@ -432,18 +464,50 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   useLayoutEffect(() => {
     areasRef.current = areas;
   }, [areas]);
-  const openLinked = useCallback((path: string, line?: number, root = workspacePath) => {
+  const openLinked = useCallback((path: string, line?: number, root = workspacePath, openerEl?: HTMLElement | null) => {
+    const trigger = openerEl ?? pressedLink.current;
+    const triggerDesc = describeOpener(trigger);
+    const fromMarkdownPic = Boolean(trigger?.hasAttribute('data-markdown-image'));
     void openFileReference({ path, line, cwd: root, onReader: (resolved, intent) => {
-      const allTargets = areasRef.current.flatMap((a) => collectAreaReaderTargets(a));
       requests.current += 1;
       const request = requests.current;
       setReader((current) => {
         if (!current || !referenceIntentIsCurrent(intent)) return current;
+        const activeId = steppedRef.current?.areaId;
+        const currentArea = activeId
+          ? areasRef.current.find((a) => a.id === activeId)
+          : areasRef.current.find((a) => collectAreaReaderTargets(a).some((t) => isSameReaderTarget(t, current.trail.origin)));
+        const orderedAreas = currentArea
+          ? [currentArea, ...areasRef.current.filter((a) => a !== currentArea)]
+          : areasRef.current;
+        const allTargets = orderedAreas.flatMap((a) => collectAreaReaderTargets(a));
         const repo = resolved.origin.kind === 'repository' ? { name: resolved.origin.repoName, path: resolved.origin.repoPath } : undefined;
-        const target = (!repo ? allTargets.find((t) => !t.source && !t.repo && !t.commit && !isAnswerCardId(t.card) && t.path === resolved.file) : undefined)
-          ?? { path: resolved.file, title: fileTitle(resolved.file), ...(repo ? { repo } : {}) };
+        const preferredStepKey = current.stepSequenceKey ?? current.trail.origin.stepKey;
+        const candidates = !repo ? allTargets.filter((t) => !t.source && !t.repo && !t.commit && !isAnswerCardId(t.card) && t.path === resolved.file) : [];
+        const matched = (preferredStepKey ? candidates.find((t) => t.stepKey === preferredStepKey) : undefined) ?? candidates[0];
+        const target = matched
+          ?? (fromMarkdownPic && isPicturePath(resolved.file)
+            ? {
+                path: resolved.file,
+                ...pictureFallback(resolved.file, repo),
+                ...(repo ? { repo } : {}),
+              }
+            : {
+                path: resolved.file,
+                title: fileTitle(resolved.file),
+                ...(repo ? { repo } : {}),
+              });
         const trail = pushTrail(current.trail, target);
-        return trail === current.trail ? { ...current, request } : { target, request, trail };
+        if (trail === current.trail) return { ...current, request, restoreOpener: null };
+        const trailOpeners = [...(current.trailOpeners ?? []), triggerDesc].slice(-(trail.entries.length - 1));
+        return {
+          target,
+          request,
+          trail,
+          ...(current.stepSequenceKey ? { stepSequenceKey: current.stepSequenceKey } : {}),
+          trailOpeners,
+          restoreOpener: null,
+        };
       });
     } });
   }, [openFileReference, workspacePath]);
@@ -453,7 +517,18 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const request = requests.current;
     setReader((current) => {
       const target = current && backTarget(current.trail);
-      return current && target ? { target, request, trail: backTrail(current.trail) } : current;
+      if (!current || !target) return current;
+      const trail = backTrail(current.trail);
+      const trailOpeners = current.trailOpeners ?? [];
+      const restoreOpener = trailOpeners.length > 0 ? (trailOpeners[trailOpeners.length - 1] ?? null) : null;
+      return {
+        target,
+        request,
+        trail,
+        ...(current.stepSequenceKey ? { stepSequenceKey: current.stepSequenceKey } : {}),
+        trailOpeners: trailOpeners.slice(0, -1),
+        restoreOpener,
+      };
     });
   }, []);
   const documentRequest = useDocumentRequest(workspaceId);
@@ -462,7 +537,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
     const { name, repo, opener: from, intent } = documentRequest.request;
     if (intent === undefined || referenceIntentIsCurrent(intent)) {
       pressedLink.current = null;
-      show({ path: name, title: fileTitle(name), repo }, from ?? null, intent !== undefined);
+      show({ path: name, title: isPicturePath(name) ? pictureName(name) : fileTitle(name), repo }, from ?? null, intent !== undefined);
     }
     documentRequests.acknowledge(workspaceId, documentRequest.id);
   }, [active, documentRequest, show, workspaceId]);
@@ -1807,14 +1882,20 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       if (!target.closest('#board-overview')) return 'close';
       const clickedBtn = target.closest('button');
       const openPath = reader?.target.path;
+      const openCard = reader?.target.card;
+      const clickedCard = clickedBtn?.getAttribute('data-card');
+      const clickedPath = clickedBtn?.getAttribute('data-path');
       const isSameThumbnail = Boolean(
         clickedBtn &&
         openPath &&
-        (clickedBtn === opener.current ||
-         clickedBtn.getAttribute('data-path') === openPath ||
-         clickedBtn.getAttribute('aria-label') === (reader?.target.title || openPath) ||
-         clickedBtn.querySelector(`img[src*="${encodeURIComponent(openPath)}"]`) ||
-         clickedBtn.querySelector(`img[src*="${openPath}"]`))
+        (openCard && clickedCard ? clickedCard === openCard
+          : clickedPath ? clickedPath === openPath
+          : (
+            clickedBtn === opener.current ||
+            clickedBtn.getAttribute('aria-label') === (reader?.target.title || openPath) ||
+            clickedBtn.querySelector(`img[src*="${encodeURIComponent(openPath)}"]`) ||
+            clickedBtn.querySelector(`img[src*="${openPath}"]`)
+          ))
       );
       if (isSameThumbnail) return 'same';
       if (layout === 'large' || currentCovers) return 'close';
@@ -1970,10 +2051,18 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
   const readerArea = useMemo(() => {
     if (activeArea) return activeArea;
     if (!reader) return null;
-    return areas.find((a) => collectAreaReaderTargets(a).some((t) => isSameReaderTarget(t, reader.target) || (!t.source && !reader.target.source && !t.repo && !reader.target.repo && !t.commit && !reader.target.commit && t.path === reader.target.path))) ?? null;
+    return areas.find((a) => collectAreaReaderTargets(a).some((t) =>
+      isSameReaderTarget(t, reader.target)
+      || (!reader.target.card && !t.source && !reader.target.source && !t.repo && !reader.target.repo && !t.commit && !reader.target.commit && t.path === reader.target.path),
+    )) ?? null;
   }, [activeArea, reader, areas]);
 
-  const areaReaderTargets = useMemo(() => (readerArea ? collectAreaReaderTargets(readerArea) : []), [readerArea]);
+  const areaReaderTargets = useMemo(() => {
+    if (!readerArea) return [];
+    return reader?.stepSequenceKey
+      ? collectAreaReaderTargets(readerArea, reader.stepSequenceKey)
+      : collectAreaReaderTargets(readerArea);
+  }, [readerArea, reader?.stepSequenceKey]);
 
   const currentReaderIndex = useMemo(() => {
     if (!reader) return -1;
@@ -1999,7 +2088,13 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       const targetArea = readerArea ?? activeArea;
       const resolvedCard = target.card ?? (targetArea ? collectAreaReaderTargets(targetArea).find((t) => isSameReaderTarget(t, target))?.card : undefined);
       const resolvedTarget = resolvedCard ? { ...target, card: resolvedCard } : target;
-      setReader({ target: resolvedTarget, request: requests.current, trail: startTrail(resolvedTarget) });
+      const nextRequest = requests.current;
+      setReader((current) => ({
+        target: resolvedTarget,
+        request: nextRequest,
+        trail: startTrail(resolvedTarget),
+        ...(current?.stepSequenceKey ? { stepSequenceKey: current.stepSequenceKey } : {}),
+      }));
     },
     [readerArea, activeArea],
   );
@@ -2469,7 +2564,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
             if (navDock.overlays) setNarrowNavOpen(false);
             if (file.repo && !file.document) openCodeWindow(workspaceId, { opener: button, area: stepped ? activeArea?.data.title : undefined, file: { repoName: file.repo.name, repoPath: file.repo.path, file: file.path } });
             else if (!file.document) openCodeWindow(workspaceId, { opener: button, area: stepped ? activeArea?.data.title : undefined, workspaceFile: { workspaceId, file: file.path } });
-            else show({ path: file.path, title: fileTitle(file.path), repo: file.repo }, button);
+            else show({ path: file.path, title: isPicturePath(file.path) ? pictureName(file.path) : fileTitle(file.path), repo: file.repo }, button);
           }}
           dock={navDock}
           open={navOpen}
@@ -2617,6 +2712,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                 active={active}
                 back={readerBack ? { label: readerBack, onBack: goBack } : undefined}
                 trailId={reader.trail.id}
+                restoreFocus={reader.restoreOpener ? { request: reader.request, target: reader.restoreOpener } : null}
                 onNext={nextTarget ? () => navigateToReaderTarget(nextTarget) : undefined}
                 onPrevious={previousTarget ? () => navigateToReaderTarget(previousTarget) : undefined}
                 nextTitle={nextTarget?.title}
@@ -2949,6 +3045,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
                     active={active}
                     back={readerBack ? { label: readerBack, onBack: goBack } : undefined}
                     trailId={reader.trail.id}
+                    restoreFocus={reader.restoreOpener ? { request: reader.request, target: reader.restoreOpener } : null}
                     onNext={nextTarget ? () => navigateToReaderTarget(nextTarget) : undefined}
                     onPrevious={previousTarget ? () => navigateToReaderTarget(previousTarget) : undefined}
                     nextTitle={nextTarget?.title}
@@ -2972,7 +3069,7 @@ export function BoardSection({ workspaceId, workspacePath, active, panelActions,
       data-board-pane
       className="relative flex h-full min-h-0 min-w-0 flex-col"
       onClickCapture={(event) => {
-        pressedLink.current = event.target instanceof Element ? event.target.closest<HTMLElement>('a') : null;
+        pressedLink.current = event.target instanceof Element ? event.target.closest<HTMLElement>('a, button[data-markdown-image]') : null;
       }}
     >
       {notices}

@@ -8,6 +8,7 @@ import {
   isSameReaderTarget,
   collectAreaReaderTargets,
   findReaderTargetIndex,
+  pictureFallback,
 } from './boardReaderLayout.js';
 import type { BoardArea } from './boardAreas.js';
 
@@ -216,5 +217,321 @@ describe('collectAreaReaderTargets', () => {
     // Test findReaderTargetIndex
     expect(findReaderTargetIndex(targets, targets[1]!)).toBe(1);
     expect(findReaderTargetIndex(targets, { path: 'nonexistent' } as any)).toBe(-1);
+  });
+
+  it('collects step-scoped pictures with own titles and In step/In folder footers, matching duplicate paths by card id', () => {
+    const areaWithStepPics: BoardArea = {
+      id: 'checkpoint:cp-px1',
+      kind: 'checkpoint',
+      data: {
+        kind: 'checkpoint',
+        title: 'Pictures',
+        noteCount: 0,
+        fileCount: 3,
+        pictureCount: 3,
+        commitCount: 0,
+        docCount: 0,
+        decisionCount: 0,
+        openDecisionCount: 0,
+        stepsDone: 0,
+        stepsTotal: 2,
+        pictures: [],
+        done: false,
+        current: true,
+        nowSet: false,
+        fresh: false,
+      },
+      cards: [],
+      planItems: {
+        steps: [
+          { key: 's1', text: 'First step: Capture `board-pictures/shared.png`', done: false },
+          { key: 's2', text: 'Second step: Compare `board-pictures/shared.png` and `board-pictures/s2-only.png`', done: false },
+        ],
+        decisions: [],
+        waitingKeys: [],
+        counts: { total: 2, done: 0, waiting: 0, decisions: 0, openDecisions: 0 },
+      },
+      stepFiles: {
+        s1: [{ path: 'board-pictures/shared.png', name: 'shared.png', folder: 'board-pictures', fileType: 'image', group: 'pictures', modifiedAt: '' }],
+        s2: [
+          { path: 'board-pictures/shared.png', name: 'shared.png', folder: 'board-pictures', fileType: 'image', group: 'pictures', modifiedAt: '' },
+          { path: 'board-pictures/s2-only.png', name: 's2-only.png', folder: 'board-pictures', fileType: 'image', group: 'pictures', modifiedAt: '' },
+        ],
+      },
+      documents: [],
+      commits: [],
+      archivedCount: 0,
+      allMemberNodeIds: [],
+    };
+
+    const stepTargets = collectAreaReaderTargets(areaWithStepPics);
+    expect(stepTargets[0]).toMatchObject({
+      path: 'board-pictures/shared.png',
+      title: 'shared',
+      card: 'wsfile:step:s1:board-pictures/shared.png',
+      stepKey: 's1',
+      text: 'In step: First step: Capture board-pictures/shared.png',
+    });
+    expect(stepTargets[1]).toMatchObject({
+      path: 'board-pictures/shared.png',
+      title: 'shared',
+      card: 'wsfile:step:s2:board-pictures/shared.png',
+      stepKey: 's2',
+      text: 'In step: Second step: Compare board-pictures/shared.png and…',
+    });
+    expect(findReaderTargetIndex(stepTargets, {
+      path: 'board-pictures/shared.png',
+      title: 'shared',
+      card: 'wsfile:step:s2:board-pictures/shared.png',
+    })).toBe(1);
+
+    const wsArea: BoardArea = {
+      id: 'files:workspace',
+      kind: 'files',
+      data: {
+        kind: 'files',
+        title: 'Workspace files',
+        noteCount: 0,
+        fileCount: 2,
+        pictureCount: 2,
+        commitCount: 0,
+        docCount: 0,
+        decisionCount: 0,
+        openDecisionCount: 0,
+        stepsDone: 0,
+        stepsTotal: 0,
+        pictures: [],
+        done: false,
+        current: false,
+        nowSet: false,
+        fresh: false,
+      },
+      cards: [],
+      workspaceFiles: {
+        documents: [],
+        pages: [],
+        pictures: [
+          { path: 'board-pictures/loose.png', name: 'loose.png', folder: 'board-pictures', fileType: 'image', group: 'pictures', modifiedAt: '' },
+          { path: 'root-pic.png', name: 'root-pic.png', folder: '', fileType: 'image', group: 'pictures', modifiedAt: '' },
+        ],
+      },
+      documents: [],
+      commits: [],
+      archivedCount: 0,
+      allMemberNodeIds: [],
+    };
+    const wsTargets = collectAreaReaderTargets(wsArea);
+    expect(wsTargets[0]).toMatchObject({ path: 'board-pictures/loose.png', title: 'loose', text: 'In folder: board-pictures' });
+    expect(wsTargets[1]).toMatchObject({ path: 'root-pic.png', title: 'root-pic', text: 'Workspace root' });
+  });
+
+  it('PX1: BoardCard folder fallback never leaks into footers, strips raw picture extension, and collects svg step pictures', () => {
+    const areaWithBoardCard: BoardArea = {
+      id: 'checkpoint:cp',
+      kind: 'checkpoint',
+      data: {
+        kind: 'checkpoint',
+        title: 'Checkpoint Alpha',
+        noteCount: 0,
+        fileCount: 3,
+        pictureCount: 3,
+        commitCount: 0,
+        docCount: 0,
+        decisionCount: 0,
+        openDecisionCount: 0,
+        stepsDone: 0,
+        stepsTotal: 1,
+        pictures: [],
+        done: false,
+        current: false,
+        nowSet: false,
+        fresh: false,
+      },
+      planItems: {
+        steps: [{ key: 's1', line: 3, text: 'Capture mock (18 Nov; pictures `board-pictures/shot.png`)', done: false, kind: 'step', indent: 0 }],
+        decisions: [],
+      },
+      cards: [
+        { id: 'c-step', kind: 'file', path: 'board-pictures/shot.png', title: 'shot.png', description: 'board-pictures', step: 's1', createdAt: '2026-11-01T10:00:00Z', updatedAt: '2026-11-01T10:00:00Z', createdBy: 'claude', archived: false },
+        { id: 'c-area', kind: 'file', path: 'board-pictures/loose-card.png', title: 'loose-card.png', description: 'In folder: board-pictures', createdAt: '2026-11-01T09:00:00Z', updatedAt: '2026-11-01T09:00:00Z', createdBy: 'claude', archived: false },
+      ],
+      stepFiles: {
+        s1: [{ path: 'board-pictures/arch.svg', name: 'arch', folder: 'board-pictures', fileType: 'image', group: 'pictures', modifiedAt: '' }],
+      },
+      documents: [],
+      commits: [],
+      archivedCount: 0,
+      allMemberNodeIds: [],
+    };
+    const targets = collectAreaReaderTargets(areaWithBoardCard);
+    expect(targets.find((t) => t.card === 'c-step')).toMatchObject({ title: 'shot', text: 'In step: Capture mock (18 Nov)', stepKey: 's1' });
+    expect(targets.find((t) => t.card === 'c-area')).toMatchObject({ title: 'loose-card', text: 'Checkpoint Alpha' });
+    expect(targets.find((t) => t.card === 'wsfile:step:s1:board-pictures/arch.svg')).toMatchObject({ title: 'arch', stepKey: 's1', text: 'In step: Capture mock (18 Nov)' });
+  });
+
+  it('PX1: pictureFallback drops picture extensions and computes folder/repo footers for unmatched pictures', () => {
+    expect(pictureFallback('board-pictures/shot.png')).toEqual({
+      title: 'shot',
+      text: 'In folder: board-pictures',
+    });
+    expect(pictureFallback('./root-shot.svg')).toEqual({
+      title: 'root-shot',
+      text: 'Workspace root',
+    });
+    expect(pictureFallback('assets/repo-diagram.svg', { name: 'api' })).toEqual({
+      title: 'repo-diagram',
+      text: 'In folder: assets',
+    });
+    expect(pictureFallback('repo-root.png', { name: 'api' })).toEqual({
+      title: 'repo-root',
+      text: 'api',
+    });
+  });
+
+  it('PX1 fix1: a card with an unknown card.step gets no stepKey and no In step footer', () => {
+    const areaWithOrphanCard: BoardArea = {
+      id: 'checkpoint:cp-orphan',
+      kind: 'checkpoint',
+      data: {
+        kind: 'checkpoint',
+        title: 'Board tab real work',
+        noteCount: 0,
+        fileCount: 2,
+        pictureCount: 2,
+        commitCount: 0,
+        docCount: 0,
+        decisionCount: 0,
+        openDecisionCount: 0,
+        stepsDone: 1,
+        stepsTotal: 1,
+        pictures: [],
+        done: true,
+        current: false,
+        nowSet: false,
+        fresh: false,
+      },
+      planItems: {
+        steps: [{ key: 's-real', text: 'Real step still here', done: true }],
+        decisions: [],
+      },
+      cards: [
+        {
+          id: 'c-orphan',
+          kind: 'file',
+          path: 'board-pictures/commit-reader.png',
+          title: 'Commit reader',
+          description: 'board-pictures',
+          step: 'stale-deleted-step',
+          by: 'claude',
+          at: '2026-11-01T10:00:00Z',
+          updatedBy: 'claude',
+          updatedAt: '2026-11-01T10:00:00Z',
+          pinned: false,
+          archived: false,
+        },
+        {
+          id: 'c-valid',
+          kind: 'file',
+          path: 'board-pictures/valid-shot.png',
+          title: 'Valid shot',
+          description: '',
+          step: 's-real',
+          by: 'claude',
+          at: '2026-11-02T10:00:00Z',
+          updatedBy: 'claude',
+          updatedAt: '2026-11-02T10:00:00Z',
+          pinned: false,
+          archived: false,
+        },
+      ],
+      documents: [],
+      commits: [],
+      archivedCount: 0,
+      allMemberNodeIds: [],
+    };
+
+    const targets = collectAreaReaderTargets(areaWithOrphanCard);
+    const orphan = targets.find((t) => t.card === 'c-orphan');
+    const valid = targets.find((t) => t.card === 'c-valid');
+    expect(orphan).toBeDefined();
+    expect(orphan?.stepKey).toBeUndefined();
+    expect(orphan?.text).toBe('Board tab real work');
+    expect(orphan?.text).not.toContain('In step:');
+    expect(valid).toMatchObject({ stepKey: 's-real', text: 'In step: Real step still here' });
+  });
+
+  it('PX1 fix1: two step cards (one pinned) plus a step file come out in the row order', () => {
+    const areaWithMixedStep: BoardArea = {
+      id: 'checkpoint:cp-mixed',
+      kind: 'checkpoint',
+      data: {
+        kind: 'checkpoint',
+        title: 'Mixed step',
+        noteCount: 0,
+        fileCount: 3,
+        pictureCount: 3,
+        commitCount: 0,
+        docCount: 0,
+        decisionCount: 0,
+        openDecisionCount: 0,
+        stepsDone: 0,
+        stepsTotal: 1,
+        pictures: [],
+        done: false,
+        current: true,
+        nowSet: true,
+        fresh: false,
+      },
+      planItems: {
+        steps: [{ key: 's1', text: 'Mixed step Pictures: `board-pictures/s1-file.png`', done: false }],
+        decisions: [],
+      },
+      cards: [
+        {
+          id: 'c-older-unpinned',
+          kind: 'file',
+          path: 'board-pictures/older.png',
+          title: 'Older unpinned',
+          description: 'First created',
+          step: 's1',
+          by: 'user',
+          at: '2026-11-01T10:00:00Z',
+          updatedBy: 'user',
+          updatedAt: '2026-11-01T10:00:00Z',
+          pinned: false,
+          archived: false,
+        },
+        {
+          id: 'c-newer-pinned',
+          kind: 'file',
+          path: 'board-pictures/pinned.png',
+          title: 'Newer pinned',
+          description: 'Pinned on left',
+          step: 's1',
+          by: 'user',
+          at: '2026-11-02T10:00:00Z',
+          updatedBy: 'user',
+          updatedAt: '2026-11-02T10:00:00Z',
+          pinned: true,
+          archived: false,
+        },
+      ],
+      stepFiles: {
+        s1: [
+          { path: 'board-pictures/s1-file.png', name: 's1-file.png', folder: 'board-pictures', fileType: 'image', group: 'pictures', modifiedAt: '' },
+        ],
+      },
+      documents: [],
+      commits: [],
+      archivedCount: 0,
+      allMemberNodeIds: [],
+    };
+
+    const targets = collectAreaReaderTargets(areaWithMixedStep, 's1');
+    expect(targets.map((t) => t.card)).toEqual([
+      'c-newer-pinned',
+      'c-older-unpinned',
+      'wsfile:step:s1:board-pictures/s1-file.png',
+    ]);
   });
 });

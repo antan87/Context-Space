@@ -150,4 +150,25 @@ describe('ChatMarkdown - text on a card of the board', () => {
     expect(normal).not.toContain('text-[15px]');
     expect(normal).not.toContain('text-[14px]');
   });
+
+  it('makes workspace Markdown pictures pressable buttons with alt/file name, focus ring, and no button inside a link', () => {
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, {
+      content: [
+        '![Diagram alt](board-pictures/diagram.png)',
+        '',
+        '![](board-pictures/no-alt.png)',
+        '',
+        '[![Linked pic](board-pictures/linked.png)](docs/spec.md)',
+        '',
+        '![External](https://example.com/ext.png)',
+      ].join('\n'),
+      links,
+    }));
+
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*aria-label="Diagram alt"[^>]*focus-visible:ring[^>]*><img[^>]*src="\/file\?name=board-pictures\/diagram\.png"/);
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*aria-label="no-alt"[^>]*><img[^>]*src="\/file\?name=board-pictures\/no-alt\.png"/);
+    expect(html).toMatch(/<a[^>]*href="\/file\?name=docs\/spec\.md"[^>]*><img[^>]*src="\/file\?name=board-pictures\/linked\.png"[^>]*\/?><\/a>/);
+    expect(html).not.toMatch(/<a[^>]*>(?:(?!<\/a>).)*<button/);
+    expect(html).not.toMatch(/<button[^>]*><img[^>]*src="https:\/\/example\.com\/ext\.png"/);
+  });
 });

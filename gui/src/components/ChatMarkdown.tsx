@@ -18,8 +18,19 @@ const keepUrl = (url: string) => url;
 
 /** Lets links in a document open workspace files in the surrounding viewer. */
 export interface MarkdownDocumentLinks extends MarkdownLinkContext {
-  onOpenFile: (path: string, line?: number) => void;
+  onOpenFile: (path: string, line?: number, opener?: HTMLElement | null) => void;
   fileUrl: (path: string) => string;
+}
+
+const MarkdownInLinkContext = createContext(false);
+
+function markdownImageLabel(path: string, alt?: string): string {
+  const cleanAlt = (alt ?? '').trim();
+  if (cleanAlt) return cleanAlt;
+  const clean = path.replace(/[\\/]+$/, '');
+  const base = clean.split(/[\\/]/).pop() ?? clean;
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(0, dot) : base;
 }
 
 type SourceLayout = (blocks: LineRange[], children: React.ReactNode) => React.ReactNode;
@@ -148,34 +159,55 @@ function MarkdownAnchor({ node: _node, href, children, className, ...props }: Re
   if (onCard && !(target.kind === 'external' && !target.href.startsWith('mailto:')) && !(target.kind === 'workspace-file' && links)) return <>{children}</>;
   const linkClass = onCard ? cn(className, 'nodrag nopan') : className;
   const tabIndex = onCard && cut ? -1 : undefined;
+  const wrapped = <MarkdownInLinkContext.Provider value={true}>{children}</MarkdownInLinkContext.Provider>;
   if (target.kind === 'anchor') {
     return <a {...props} className={linkClass} tabIndex={tabIndex} href={`#${target.id}`} onClick={(event) => {
       // The app routes on the hash, so letting this through would leave the page.
       event.preventDefault();
       scrollToAnchor(target.id);
-    }}>{children}</a>;
+    }}>{wrapped}</a>;
   }
   if (target.kind === 'external') {
     return <a {...props} className={linkClass} tabIndex={tabIndex} href={target.href} target="_blank" rel="noopener noreferrer">
-      {children}<ExternalLink aria-hidden="true" className="ml-0.5 inline size-3 align-baseline" /><span className="sr-only"> (opens outside the app)</span>
+      {wrapped}<ExternalLink aria-hidden="true" className="ml-0.5 inline size-3 align-baseline" /><span className="sr-only"> (opens outside the app)</span>
     </a>;
   }
   if (target.kind === 'workspace-file' && links) {
     return <a {...props} className={linkClass} tabIndex={tabIndex} href={links.fileUrl(target.path)} onClick={(event) => {
       event.preventDefault();
-      links.onOpenFile(target.path, target.line);
-    }}>{children}</a>;
+      links.onOpenFile(target.path, target.line, event.currentTarget);
+    }}>{wrapped}</a>;
   }
-  return <LocalPath label={target.kind === 'inert' ? target.label : target.path}>{children}</LocalPath>;
+  return <LocalPath label={target.kind === 'inert' ? target.label : target.path}>{wrapped}</LocalPath>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function MarkdownImage({ node: _node, src, alt, ...props }: React.ComponentProps<'img'> & { node?: unknown }) {
+function MarkdownImage({ node: _node, src, alt, className, ...props }: React.ComponentProps<'img'> & { node?: unknown }) {
   const { links, onCard } = useContext(MarkdownRenderContext);
+  const insideLink = useContext(MarkdownInLinkContext);
   if (onCard) return <>{`[image${alt ? `: ${alt}` : ''}]`}</>;
   const target = classifyMarkdownLink(typeof src === 'string' ? src : undefined, links && { ...links, resolveReferences: false });
-  if (target.kind === 'external' && !target.href.startsWith('mailto:')) return <img {...props} src={target.href} alt={alt ?? ''} />;
-  if (target.kind === 'workspace-file' && links) return <img {...props} src={links.fileUrl(target.path)} alt={alt ?? ''} />;
+  if (target.kind === 'external' && !target.href.startsWith('mailto:')) return <img {...props} className={className} src={target.href} alt={alt ?? ''} />;
+  if (target.kind === 'workspace-file' && links) {
+    const fileUrl = links.fileUrl(target.path);
+    if (!fileUrl || insideLink) return <img {...props} className={className} src={fileUrl} alt={alt ?? ''} />;
+    const label = markdownImageLabel(target.path, alt);
+    return (
+      <button
+        type="button"
+        data-markdown-image=""
+        data-path={target.path}
+        aria-label={label}
+        title={label}
+        className="not-prose my-2 inline-flex min-h-6 min-w-6 max-w-full cursor-pointer items-center justify-center rounded align-middle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        onClick={(event) => {
+          links.onOpenFile(target.path, undefined, event.currentTarget);
+        }}
+      >
+        <img {...props} className={cn(className, '!my-0 max-w-full rounded')} src={fileUrl} alt={alt ?? ''} />
+      </button>
+    );
+  }
   return <LocalPath label={target.kind === 'inert' ? target.label : ''}>{`[image${alt ? `: ${alt}` : ''}]`}</LocalPath>;
 }
 

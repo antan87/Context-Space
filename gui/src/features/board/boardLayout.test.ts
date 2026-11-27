@@ -4,7 +4,7 @@ import type { PlanFileCheckpoint, PlanFileDecision, PlanFileView } from '../plan
 import type { NewsRepo, WhatsNewView } from '../plan/whatsNew.js';
 import type { BoardCard, BoardLink, BoardView } from './boardData.js';
 import {
-  BOARD_LIMITS, BOARD_SIZE, FRESH_MS, authorName, boardEdges, boardLayout, clearPlace, fileTypeOf, imageAlt, isFolded, isFresh, isGroup, moreText, nodeRects, nodeResolver, sidesBetween,
+  BOARD_LIMITS, BOARD_SIZE, FRESH_MS, authorName, boardEdges, boardLayout, clearPlace, fileTypeOf, imageAlt, isFolded, isFresh, isGroup, isPicturePath, moreText, nodeRects, nodeResolver, shortStepTitle, sidesBetween,
   type BoardNode, type BoardSources, type CheckpointNode, type CommitNode, type DocumentNode, type FileNode, type LaneNode, type NoteNode, type PlaceholderNode,
 } from './boardLayout.js';
 
@@ -881,6 +881,18 @@ describe('words on the cards', () => {
     expect(imageAlt({ title: 'flow.png', description: 'Boxes\nand   arrows.', path: 'docs/flow.png' })).toBe('Boxes and arrows.');
     expect(imageAlt({ title: 'flow.png', description: '  ', path: 'docs/flow.png' })).toBe('flow.png');
     expect(imageAlt({ title: 'flow.png', description: 'x'.repeat(500), path: 'flow.png' })).toHaveLength(160);
+    expect(imageAlt({ title: 'shot.png', description: 'board-pictures', path: 'board-pictures/shot.png' })).toBe('shot.png');
+    expect(imageAlt({ title: 'shot.png', description: 'Workspace root', path: 'shot.png' })).toBe('shot.png');
+    expect(imageAlt({ title: 'shot.png', description: 'In folder: board-pictures', path: 'board-pictures/shot.png' })).toBe('shot.png');
+    expect(imageAlt({ title: 'shot.png', description: 'In step: DC2', path: 'board-pictures/shot.png' })).toBe('shot.png');
+  });
+
+  it('recognizes svg workspace pictures and strips trailing picture lists in shortStepTitle', () => {
+    expect(isPicturePath('diagram.svg')).toBe(true);
+    expect(isPicturePath('board-pictures/shot.png')).toBe(true);
+    expect(isPicturePath('docs/guide.md')).toBe(false);
+    expect(shortStepTitle('A clickable mock to try (18 Nov; pictures `board-pictures/documents-folders-mock-root-1440-dark.png`, `documents-folders-mock-packets-1440-dark.png`) [details](docs/mock.md)')).toBe('A clickable mock to try (18 Nov)');
+    expect(shortStepTitle('Step summary (pictures `board-pictures/a.png`) details')).toBe('Step summary');
   });
 });
 

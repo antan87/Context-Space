@@ -1511,7 +1511,7 @@ export function DocumentsPage({
       documentPath: docPath,
       resolveReferences: true,
       fileUrl: (name) => documentFileUrl(workspaceId, name),
-      onOpenFile: (linkedPath) => openReader(linkedPath, document.activeElement instanceof HTMLElement ? document.activeElement : null, 'card'),
+      onOpenFile: (linkedPath, _line, opener) => openReader(linkedPath, opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), 'card'),
     }),
     [workspaceId, workspacePath, openReader],
   );
@@ -1522,13 +1522,13 @@ export function DocumentsPage({
       documentPath: docPath,
       resolveReferences: true,
       fileUrl: (name) => documentFileUrl(workspaceId, name),
-      onOpenFile: (linkedPath) => {
+      onOpenFile: (linkedPath, _line, openerEl) => {
         const targetNorm = normalizeCatalogPath(linkedPath);
         const editNorm = sideEditPath ? normalizeCatalogPath(sideEditPath) : '';
         if (sideEditing && targetNorm && editNorm && targetNorm === editNorm) {
           return;
         }
-        const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const opener = openerEl ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
         if (sideDirty) {
           sideLinkOriginRef.current = opener;
           setPendingSideAction({ type: 'open-reader-link', path: linkedPath, opener });

@@ -28,6 +28,7 @@ import {
 } from './workspaceFilesArea.js';
 import { buildQuestionAreas, placeQuestionAreas, type AnswerCounts, type AnswerView, type QuestionAnswerDto } from './questionsArea.js';
 import { resolveCommitContext } from './commitContext.js';
+import { bylineText } from './boardActions.js';
 import {
   areaCountItems,
   resolveCountTarget,
@@ -48,9 +49,12 @@ import {
   cardOrder,
   fileTypeOf,
   imageAlt,
+  isFolderFallback,
   isFresh,
   newestFirst,
   nodeResolver,
+  pictureName,
+  shortStepTitle,
   sidesBetween,
   uniqueId,
   type LaneCard,
@@ -81,7 +85,15 @@ export const stepsText = (data: { stepsDone: number; stepsTotal: number }) =>
 export const waitingText = (waiting: number) =>
   waiting === 1 ? 'Waits for you' : `${waiting} wait for you`;
 
-export type AreaPicture = { path: string; alt: string };
+export type AreaPicture = {
+  path: string;
+  alt: string;
+  title?: string;
+  card?: string;
+  stepKey?: string;
+  text?: string;
+  byline?: string;
+};
 export type AreaOpenStep = { key: string; text: string; done: boolean };
 
 /** The Areas that are not plan work: they have no steps to count, no progress bar and no "Now". */
@@ -759,7 +771,7 @@ export function buildBoardAreas({
     const rawDraftStepFiles = rawStepFilesByDraft.get(draft.id);
     const stepFiles: Record<string, GroupedWorkspaceFile[]> = {};
     const stepFileMemberIds: string[] = [];
-    const areaStepUniqueByPath = new Map<string, GroupedWorkspaceFile>();
+    const areaStepUniqueByPath = new Map<string, { file: GroupedWorkspaceFile; stepKey: string }>();
     if (rawDraftStepFiles) {
       for (const [stepKey, items] of rawDraftStepFiles.entries()) {
         const realOnStep = realFilePathsByStep.get(stepKey);
@@ -769,30 +781,60 @@ export function buildBoardAreas({
           for (const item of filtered) {
             stepFileMemberIds.push(stepWorkspaceFileNodeId(stepKey, item.path));
             if (!areaStepUniqueByPath.has(item.path)) {
-              areaStepUniqueByPath.set(item.path, item);
+              areaStepUniqueByPath.set(item.path, { file: item, stepKey });
             }
           }
         }
       }
     }
 
-    const uniqueExtraStepFiles = [...areaStepUniqueByPath.values()].filter((f) => !realFilePaths.has(f.path));
-    const uniqueExtraStepPictures = uniqueExtraStepFiles.filter((f) => f.group === 'pictures');
+    const uniqueExtraStepEntries = [...areaStepUniqueByPath.values()].filter((entry) => !realFilePaths.has(entry.file.path));
+    const uniqueExtraStepPictures = uniqueExtraStepEntries.filter((entry) => entry.file.group === 'pictures');
 
-    const fileCount = fileCards.length + uniqueExtraStepFiles.length;
+    const fileCount = fileCards.length + uniqueExtraStepEntries.length;
     const pictureCount = pictureCards.length + uniqueExtraStepPictures.length;
+    const stepTitleByKey = new Map((draft.kind === 'work' ? [] : (draft.planItems?.steps ?? [])).map((s) => [s.key, shortStepTitle(s.text)]));
     const extraPictureThumbs: AreaPicture[] = [...uniqueExtraStepPictures]
-      .sort((a, b) => (b.modifiedAt || '').localeCompare(a.modifiedAt || ''))
+      .sort((a, b) => (b.file.modifiedAt || '').localeCompare(a.file.modifiedAt || ''))
       .slice(0, Math.max(0, 3 - pictureCards.length))
-      .map((f) => ({
-        path: f.path,
-        alt: imageAlt({ title: f.name, description: f.folder, path: f.path }),
-      }));
+      .map(({ file, stepKey }) => {
+        const ownTitle = pictureName(file.path);
+        const stepTitle = stepTitleByKey.get(stepKey) ?? '';
+        return {
+          path: file.path,
+          alt: stepTitle ? `${ownTitle} · ${stepTitle}` : ownTitle,
+          title: ownTitle,
+          card: stepWorkspaceFileNodeId(stepKey, file.path),
+          stepKey,
+          text: stepTitle ? `In step: ${stepTitle}` : draft.title,
+        };
+      });
     const pictures: AreaPicture[] = [
-      ...pictureCards.slice(0, 3).map((c) => ({
-        path: c.path,
-        alt: imageAlt({ title: c.title, description: (c as { description?: string }).description ?? '', path: c.path ?? '' }),
-      })),
+      ...pictureCards.slice(0, 3).map((c) => {
+        const rawDesc = (c as { description?: string }).description ?? '';
+        const stepKey = c.step && stepTitleByKey.has(c.step) ? c.step : undefined;
+        const stepTitle = stepKey ? (stepTitleByKey.get(stepKey) ?? '') : '';
+        const baseAlt = imageAlt({ title: c.title, description: rawDesc, path: c.path ?? '' });
+        const rawFileName = (c.path ?? '').split(/[\\/]/).pop() ?? '';
+        const ownTitle = rawFileName && c.title.trim().toLowerCase() === rawFileName.toLowerCase()
+          ? pictureName(c.path ?? '')
+          : c.title;
+        const altBase = rawFileName && baseAlt.toLowerCase() === rawFileName.toLowerCase() ? pictureName(c.path ?? '') : baseAlt;
+        const hasRealDesc = rawDesc.trim() !== '' && baseAlt !== c.title;
+        const alt = !hasRealDesc && stepTitle ? `${altBase} · ${stepTitle}` : altBase;
+        const trimmedDesc = rawDesc.trim();
+        const realDesc = trimmedDesc && !isFolderFallback(trimmedDesc, c.path ?? '') ? trimmedDesc : '';
+        const text = realDesc || (stepTitle ? `In step: ${stepTitle}` : draft.title);
+        return {
+          path: c.path,
+          alt,
+          title: ownTitle,
+          card: c.id,
+          ...(stepKey ? { stepKey } : {}),
+          ...(text ? { text } : {}),
+          byline: bylineText(c),
+        };
+      }),
       ...extraPictureThumbs,
     ];
 

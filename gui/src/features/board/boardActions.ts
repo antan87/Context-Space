@@ -18,6 +18,8 @@ export interface ReaderTarget {
   endLine?: number;
   lineNoteId?: string;
   card?: string;
+  /** The plan step key the picture or file belongs to, when opened from a step or its overview thumbnail. */
+  stepKey?: string;
   /** The id of a source document: it is read by the work route, through the storage port, and not from the workspace folder by `path`. */
   source?: string;
   repo?: { name: string; path: string };

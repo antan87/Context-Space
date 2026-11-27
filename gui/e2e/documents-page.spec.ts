@@ -2685,4 +2685,66 @@ test.describe('DC2 adversarial probes', () => {
     await alert.getByRole('button', { name: 'Keep editing' }).click();
     await expect(inlineTextarea).toBeFocused();
   });
+
+  test('PX1: Markdown picture in side preview and reader opens in reader without nested buttons and returns focus on Escape', async ({ page }) => {
+    await mockCatalogAndPreviews(page);
+    await page.route('**/api/workspace/demo/documents/preview?*', (route) => {
+      const name = new URL(route.request().url()).searchParams.get('name') ?? '';
+      if (name === 'PLAN.md') {
+        return route.fulfill({
+          json: {
+            name,
+            kind: 'markdown',
+            size: 180,
+            modifiedAt: hoursAgo(1),
+            content: [
+              '# Plan with images',
+              '',
+              '![Mock screenshot](board-pictures/mock-shot.png)',
+              '',
+              '[![Linked pic](board-pictures/linked.png)](design/plans/workspace-db.md)',
+              '',
+              '![Remote pic](https://example.com/remote.png)',
+            ].join('\n'),
+          },
+        });
+      }
+      if (name.endsWith('.png')) {
+        return route.fulfill({ json: { name, kind: 'image', size: 250, modifiedAt: hoursAgo(1) } });
+      }
+      return route.fulfill({
+        json: { name, kind: 'markdown', size: 140, modifiedAt: hoursAgo(1), content: `# Preview of ${name}` },
+      });
+    });
+
+    await page.goto('/#/workspaces/demo/documents');
+    const docs = docsRegion(page);
+    await docs.locator('button[data-doc-path="PLAN.md"]').last().click();
+
+    const aside = docs.locator('aside');
+    const sidePicBtn = aside.getByRole('button', { name: 'Mock screenshot', exact: true });
+    await expect(sidePicBtn).toBeVisible();
+    await expect(sidePicBtn.locator('img')).toBeVisible();
+    await expect(aside.getByRole('link').filter({ has: page.locator('button') })).toHaveCount(0);
+    await expect(aside.locator('img[src="https://example.com/remote.png"]')).toBeVisible();
+    await assertReadableAndPressable(docs);
+
+    await sidePicBtn.focus();
+    await sidePicBtn.press('Enter');
+    const reader = docs.locator('[data-documents-reader]');
+    await expect(reader).toBeVisible();
+    await expect(reader.getByRole('img', { name: 'board-pictures/mock-shot.png' })).toBeVisible();
+    await expect(reader.getByRole('button', { name: 'Close document', exact: true })).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(reader).toHaveCount(0);
+    await expect(sidePicBtn).toBeFocused();
+
+    await docs.locator('aside').getByTestId('open-in-reader').click();
+    await expect(reader).toBeVisible();
+    const readerPicBtn = reader.getByRole('button', { name: 'Mock screenshot', exact: true });
+    await expect(readerPicBtn).toBeVisible();
+    await readerPicBtn.click();
+    await expect(reader.getByRole('img', { name: 'board-pictures/mock-shot.png' })).toBeVisible();
+  });
 });

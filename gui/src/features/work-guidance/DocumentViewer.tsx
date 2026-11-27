@@ -41,7 +41,7 @@ const OVERLAY = 'fixed inset-0 z-[100] flex flex-col bg-background';
 type DocumentViewerDiscardAction =
   | { type: 'cancel-edit' }
   | { type: 'close-reader' }
-  | { type: 'open-link'; path: string; line?: number };
+  | { type: 'open-link'; path: string; line?: number; opener?: HTMLElement | null };
 
 function normalizeDocPath(value: string): string {
   return value.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
@@ -732,16 +732,16 @@ export function DocumentViewer({
   const guardedLinks: MarkdownDocumentLinks | undefined = links
     ? {
         ...links,
-        onOpenFile: (linkedPath, line) => {
+        onOpenFile: (linkedPath, line, opener) => {
           const targetNorm = normalizeDocPath(linkedPath);
           const currentNorm = normalizeDocPath(currentDocName);
           if (editing && dirty && targetNorm && targetNorm !== currentNorm) {
-            linkOriginRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            linkOriginRef.current = opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
             if (expanded) {
               setExpanded(false);
               setRestoreExpandedAfterPrompt(true);
             }
-            setDiscardPrompt({ type: 'open-link', path: linkedPath, line });
+            setDiscardPrompt({ type: 'open-link', path: linkedPath, line, opener });
             return;
           }
           if (editing && targetNorm && targetNorm === currentNorm) {
@@ -750,7 +750,7 @@ export function DocumentViewer({
           if (editing && !dirty && targetNorm && targetNorm !== currentNorm) {
             discardAndExitEdit({ restoreFocus: false });
           }
-          links.onOpenFile(linkedPath, line);
+          links.onOpenFile(linkedPath, line, opener);
         },
       }
     : undefined;
@@ -1204,7 +1204,7 @@ export function DocumentViewer({
                   if (action.type === 'close-reader') {
                     onClose?.();
                   } else if (action.type === 'open-link') {
-                    links?.onOpenFile(action.path, action.line);
+                    links?.onOpenFile(action.path, action.line, action.opener);
                   }
                 }}
               >
@@ -1242,7 +1242,7 @@ export function DocumentViewer({
                       if (action.type === 'close-reader') {
                         onClose?.();
                       } else if (action.type === 'open-link') {
-                        links?.onOpenFile(action.path, action.line);
+                        links?.onOpenFile(action.path, action.line, action.opener);
                       }
                     });
                   }}

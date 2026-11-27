@@ -1,7 +1,7 @@
 import { agoText } from '../plan/whatsNew.js';
 import type { AreaData, AreaPicture, BoardArea } from './boardAreas.js';
 import type { BoardCard, WorkspaceFileEntry } from './boardData.js';
-import { imageAlt, type FileType, type LaneCard } from './boardLayout.js';
+import { pictureName, type FileType, type LaneCard } from './boardLayout.js';
 import { isQuestionFile } from './questionsArea.js';
 
 export const FILES_AREA_ID = 'files:workspace';
@@ -210,22 +210,29 @@ export function extractStepFilePaths(
 /** Converts a classified workspace file into a read-only compact LaneCard item. */
 export function workspaceFileToLaneCard(
   file: GroupedWorkspaceFile,
-  options: { id: string; height: number; nowDate: Date },
+  options: { id: string; height: number; nowDate: Date; stepKey?: string; stepTitle?: string },
 ): LaneCard {
+  const isPicture = file.group === 'pictures';
+  const title = isPicture ? pictureName(file.path) : file.name;
+  const folderLabel = file.folder ? `In folder: ${file.folder}` : 'Workspace root';
+  const text = isPicture
+    ? (options.stepTitle ? `In step: ${options.stepTitle}` : folderLabel)
+    : (file.folder || 'Workspace root');
   return {
     id: options.id,
     type: 'file',
     height: options.height,
     data: {
-      title: file.name,
+      title,
       path: file.path,
       fileType: file.fileType,
       group: file.group,
       by: 'workspace',
       at: file.modifiedAt,
       updatedAt: file.modifiedAt,
-      text: file.folder || 'Workspace root',
+      text,
       folder: file.folder,
+      ...(options.stepKey ? { step: options.stepKey } : {}),
       age: file.modifiedAt ? agoText(file.modifiedAt, options.nowDate) : '',
       readOnly: true,
       compact: true,
@@ -323,10 +330,16 @@ export function buildWorkspaceFilesArea(
   const grouped = groupWorkspaceFiles(files, options);
   if (grouped.total === 0) return null;
 
-  const pictures: AreaPicture[] = grouped.pictures.slice(0, 3).map((pic) => ({
-    path: pic.path,
-    alt: imageAlt({ title: pic.name, description: pic.folder, path: pic.path }),
-  }));
+  const pictures: AreaPicture[] = grouped.pictures.slice(0, 3).map((pic) => {
+    const ownTitle = pictureName(pic.path);
+    return {
+      path: pic.path,
+      alt: ownTitle,
+      title: ownTitle,
+      card: workspaceFileNodeId(pic.path),
+      text: pic.folder ? `In folder: ${pic.folder}` : 'Workspace root',
+    };
+  });
 
   const previewSource = grouped.documents[0] ?? grouped.pages[0];
   const nowDate = options.now !== undefined ? new Date(options.now) : new Date();
