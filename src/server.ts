@@ -14,6 +14,7 @@ import { registerQuestionsRoutes } from './http/questions-routes.js';
 import { registerViewRoutes } from './http/view-routes.js';
 import { registerBoardRoutes } from './http/board-routes.js';
 import { registerNeedsYouRoute } from './http/needs-you-routes.js';
+import { registerMcpRoutes } from './http/mcp-routes.js';
 import { extractAstSymbols, type ExtractedSymbol } from './services/symbolService.js';
 import { looksBinary, MAX_VIEWABLE_FILE_BYTES, readRepositoryFileForView, RepositoryFileAccessError, resolveRepositoryFileForLaunch, type OmittedReason } from './services/repository-file.js';
 /**
@@ -2715,6 +2716,7 @@ registerNeedsYouRoute(app, async (id) => {
   const config = await loadConfig();
   return resolveExactWorkspaceById(config.workspacesDir, id);
 });
+registerMcpRoutes(app);
 
 // 13c-1. Get active workspace lifecycle and sister branch fleet
 app.get('/api/workspace/:id/lifecycle', async (c) => {

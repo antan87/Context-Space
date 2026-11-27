@@ -12,9 +12,13 @@ import { planFileKey } from '../../features/plan/planFile.js';
 import { newsKey, recentCommitsKey } from '../../features/plan/whatsNew.js';
 import { workingIn } from '../../features/chat/liveSessions.js';
 import { RUNNING_TERMINALS_KEY } from '../../features/chat/useRunningTerminals.js';
+import { applyConnectResults } from '../../features/terminal/mcpTools.js';
 import type { RunningTerminal } from '../../features/terminal/client.js';
 import type {
   AISession,
+  AgentMcpResult,
+  AgentMcpStatus,
+  McpAgentId,
   DetectedAI,
   DetectedEditor,
   HarnessInfo,
@@ -319,6 +323,49 @@ export function useAiDetect({ enabled = true }: { enabled?: boolean } = {}) {
     queryFn: ({ signal }) => apiFetch<DetectedAI[]>('/api/ai-detect', { signal }),
     enabled,
     staleTime: 60_000,
+  });
+}
+
+export const MCP_AGENTS_QUERY_KEY = ['mcp-agents'] as const;
+
+export function fetchMcpAgents(signal?: AbortSignal) {
+  return apiFetch<{ agents: AgentMcpStatus[] }>('/api/mcp/agents', { signal }).then((data) => data.agents);
+}
+
+/** Whether each AI tool has ContextSpace's MCP server registered. Reads config files only. */
+export function useMcpAgents({ enabled = true }: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: MCP_AGENTS_QUERY_KEY,
+    queryFn: ({ signal }) => fetchMcpAgents(signal),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+/** Registers ContextSpace's MCP server with missing installed agents (or only the named ones). */
+export function useConnectMcpAgents() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (ids?: readonly McpAgentId[]) =>
+      apiFetch<{ results: AgentMcpResult[] }>('/api/mcp/agents/connect', {
+        method: 'POST',
+        body: JSON.stringify(ids ? { ids } : {}),
+      }).then((data) => data.results),
+    onMutate: async () => {
+      // Cancel any in-flight poll so an older GET response cannot overwrite the post-connect cache update.
+      await queryClient.cancelQueries({ queryKey: MCP_AGENTS_QUERY_KEY });
+    },
+    onSuccess: async (results) => {
+      // Cancel any poll started while Connect was in flight so it cannot overwrite the freshly applied results.
+      await queryClient.cancelQueries({ queryKey: MCP_AGENTS_QUERY_KEY });
+      queryClient.setQueryData<AgentMcpStatus[] | undefined>(MCP_AGENTS_QUERY_KEY, (current) =>
+        applyConnectResults(current, results),
+      );
+      if (results.some((item) => item.outcome.result === 'skipped' || item.outcome.result === 'not-installed')) {
+        void queryClient.invalidateQueries({ queryKey: MCP_AGENTS_QUERY_KEY });
+      }
+    },
   });
 }
 

@@ -606,4 +606,44 @@ describe('registerAgentMcp', () => {
       expect(await exists('.config/mcp/mcp.json')).toBe(false);
     });
   });
+
+  describe('only option', () => {
+    it('touches only the named tools and leaves other installed agents untouched', async () => {
+      await install('claude', 'codex', 'agy');
+
+      const results = await registerAgentMcp(options({ only: ['codex'] }));
+
+      expect(results).toHaveLength(1);
+      expect(byId(results, 'codex').outcome).toMatchObject({ result: 'added' });
+      expect(calls.map((c) => c.file)).toEqual(['codex']);
+      expect(parseToml(await read('.codex/config.toml')).mcp_servers).toHaveProperty(MCP_REGISTRATION_NAME);
+      expect(await exists('.claude.json')).toBe(false);
+      expect(await exists('.gemini/config/mcp_config.json')).toBe(false);
+    });
+
+    it('does nothing when only is empty', async () => {
+      await install('claude', 'codex');
+
+      const results = await registerAgentMcp(options({ only: [] }));
+
+      expect(results).toEqual([]);
+      expect(calls).toEqual([]);
+      expect(await exists('.claude.json')).toBe(false);
+      expect(await exists('.codex/config.toml')).toBe(false);
+    });
+
+    it('honors dryRun with only', async () => {
+      await install('claude', 'codex', 'agy');
+
+      const results = await registerAgentMcp(options({ only: ['claude', 'antigravity'], dryRun: true }));
+
+      expect(results.map((r) => [r.id, r.outcome.result])).toEqual([
+        ['claude', 'would-add'],
+        ['antigravity', 'would-add'],
+      ]);
+      expect(calls).toEqual([]);
+      expect(await exists('.claude.json')).toBe(false);
+      expect(await exists('.gemini/config/mcp_config.json')).toBe(false);
+    });
+  });
 });

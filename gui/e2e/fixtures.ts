@@ -143,6 +143,15 @@ export const test = base.extend<MockDataOptions & { setupMocks: void }>({
     await page.route('**/api/projects', json(projectsData?.data ?? projectsData));
     await page.route('**/api/repos', json(reposData?.data ?? reposData));
     await page.route('**/api/ai-detect', json(aiDetectData));
+    await page.route('**/api/mcp/agents', json({
+      agents: [
+        { id: 'claude', name: 'Claude Code', configPath: '~/.claude.json', status: { state: 'registered', serverName: 'contextspace-mcp' } },
+        { id: 'antigravity', name: 'Antigravity (agy)', configPath: '~/.gemini/config/mcp_config.json', status: { state: 'registered', serverName: 'contextspace-mcp' } },
+        { id: 'codex', name: 'Codex', configPath: '~/.codex/config.toml', status: { state: 'registered', serverName: 'contextspace-mcp' } },
+        { id: 'pi', name: 'Pi', configPath: '~/.config/mcp/mcp.json', status: { state: 'registered', serverName: 'contextspace-mcp' } },
+      ],
+    }));
+    await page.route('**/api/mcp/agents/connect', (route) => route.fulfill({ status: 409, json: { error: 'No MCP connect was expected here.' } }));
     await page.route('**/api/harnesses', json(harnessesData));
     await page.route('**/api/workflows/templates', json(workflowsTemplatesData));
     await page.route('**/api/workspace/*/sessions?*', json({ sessions: [] }));

@@ -1009,3 +1009,33 @@ export interface RepoChangeListing {
   files: ChangedFileEntry[];
   error?: string;
 }
+
+export type McpAgentId = 'claude' | 'antigravity' | 'codex' | 'pi';
+
+export type AgentMcpState =
+  | { state: 'not-installed' }
+  | { state: 'registered'; serverName: string; stale?: string }
+  | { state: 'missing' }
+  | { state: 'unsupported'; reason: string }
+  | { state: 'unreadable'; reason: string };
+
+export interface AgentMcpStatus {
+  id: McpAgentId;
+  name: string;
+  configPath: string;
+  status: AgentMcpState;
+}
+
+export type AgentMcpOutcome =
+  | { result: 'not-installed' }
+  | { result: 'added'; how: string }
+  | { result: 'already'; serverName: string; stale?: string }
+  | { result: 'would-add'; how: string }
+  | { result: 'skipped'; reason: string }
+  | { result: 'failed'; reason: string };
+
+export interface AgentMcpResult {
+  id: McpAgentId;
+  name: string;
+  outcome: AgentMcpOutcome;
+}

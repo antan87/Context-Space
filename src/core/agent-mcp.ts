@@ -122,6 +122,8 @@ export interface AgentMcpOptions {
   dryRun?: boolean;
   /** Finds an agent's executable. Replaced in tests, which cannot fake another platform's PATH rules. */
   findBinary?: (name: string) => string | null;
+  /** When set, only inspect and register these agent ids; skip every other target. */
+  only?: readonly McpAgentId[];
 }
 
 const defaultRunner: CommandRunner = async (file, args, env) => {
@@ -300,6 +302,9 @@ const TARGETS: readonly AgentTarget[] = [
   },
 ];
 
+/** Every agent target id `core/agent-mcp` handles, derived from `TARGETS`. */
+export const MCP_AGENT_IDS = TARGETS.map((target) => target.id) as [McpAgentId, ...McpAgentId[]];
+
 /** A registration that runs the npm package, when the app's own lasting copy could be registered instead. */
 async function staleRegistration(target: AgentTarget, ctx: Context, name: string): Promise<{ stale?: string }> {
   if (unboundMcpServer(ctx.env, ctx.home).command === 'npx') return {};
@@ -346,9 +351,11 @@ export async function inspectAgentMcp(options: AgentMcpOptions = {}): Promise<Ag
 export async function registerAgentMcp(options: AgentMcpOptions = {}): Promise<AgentMcpResult[]> {
   const ctx = contextOf(options);
   const definition = agentMcpServer(ctx.platform, ctx.env, ctx.home);
+  const only = options.only ? new Set(options.only) : null;
   const results: AgentMcpResult[] = [];
 
   for (const target of TARGETS) {
+    if (only && !only.has(target.id)) continue;
     const { status } = await inspectTarget(target, ctx);
     const done = (outcome: AgentMcpOutcome) => results.push({ id: target.id, name: target.name, outcome });
 

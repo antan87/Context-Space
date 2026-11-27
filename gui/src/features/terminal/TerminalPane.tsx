@@ -1,28 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Terminal, type IBufferLine } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
-import { Button } from '../../components/ui/button.js';
-import { IconButton } from '../../components/ui/icon-button.js';
-import { Menu, MenuItem, MenuPopup, MenuSearchInput, MenuTrigger } from '../../components/ui/menu.js';
+import { Button, IconButton, Menu, MenuItem, MenuPopup, MenuSearchInput, MenuTrigger } from '../../design/index.js';
 import { HarnessIcon, harnessName } from '../../components/icons/HarnessIcon.js';
-import { History, RefreshCw, ExternalLink, Square, Search, Copy, PlugZap, WifiOff, MoreHorizontal } from 'lucide-react';
+import { History, RefreshCw, ExternalLink, Square, Search, Copy, PlugZap, WifiOff, MoreHorizontal, X } from 'lucide-react';
 import { floatingChatStore, useFloatingChat } from '../chat/floatingChatStore.js';
 import { browserPath } from '../chat/chatRoute.js';
 import { resolveWorkspaceShortcut } from '../workspace-shell/sessionShortcuts.js';
 import { ResumeSessions } from './ResumeSessions.js';
 import { findTerminalUsageSession, SessionUsageDetails } from './SessionUsage.js';
 import { apiFetch } from '../../lib/api/client.js';
+import { MCP_AGENTS_QUERY_KEY, fetchMcpAgents, useConnectMcpAgents, useMcpAgents } from '../../lib/api/queries.js';
 import { clipboardHtmlToText, readClipboardText, safeCopyToClipboard } from '../../lib/clipboard.js';
+import { cn } from '../../lib/utils.js';
+import { describeShownMcpStatus, formatConnectFailures, toMcpAgentId, type McpConnectNotice } from './mcpTools.js';
 import { terminalRequest, terminalToken, terminalSocketUrl, type TerminalInfo, type TerminalLaunch, type TerminalStatus } from './client.js';
 import { findFileReferences, type FileReference } from './fileReferences.js';
 import { hardWrapSkip } from './wrappedRows.js';
 import { findWebLinks } from './webLinks.js';
 import { promptFillWantsAssistant, toPromptText } from './promptFill.js';
 import { SHIFT_ENTER_SEQUENCE, terminalKeyAction } from './terminalKeys.js';
-import type { AISession } from '../../types.js';
+import type { AISession, AgentMcpResult, AgentMcpStatus, McpAgentId } from '../../types.js';
 
 /**
  * Transport state of the pane, as a closed union.
@@ -108,6 +109,20 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
   const [endedByUser, setEndedByUser] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Result of the user's Connect press or a Start-connect-first attempt; kept separate from query data so polls never hide it.
+  const [mcpNotice, setMcpNotice] = useState<McpConnectNotice | null>(null);
+  const queryClient = useQueryClient();
+  const mcpAgents = useMcpAgents({ enabled: active && !terminal && boundTerminalId !== undefined });
+  const connectMcp = useConnectMcpAgents();
+  const connectMcpAsync = connectMcp.mutateAsync;
+  const mcpBoxRef = useRef<HTMLDivElement>(null);
+  const mcpStatusRef = useRef<HTMLParagraphElement>(null);
+  const staleSummaryRef = useRef<HTMLElement>(null);
+  const connectBtnRef = useRef<HTMLButtonElement>(null);
+  const restoreMcpFocusRef = useRef(false);
+  const connectingRef = useRef<{ ids: readonly McpAgentId[]; promise: Promise<readonly AgentMcpResult[]> } | null>(null);
+  const startingRef = useRef(false);
+  const mcpNoticeGenRef = useRef(0);
   const [retry, setRetry] = useState(0);
   const [query, setQuery] = useState('');
   const [screenReader, setScreenReader] = useState(false);
@@ -147,7 +162,10 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
   useEffect(() => { replyRef.current = onReply; }, [onReply]);
   // Read by the key handler, which is set up once per terminal.
   const targetRef = useRef<string | undefined>(undefined);
-  useEffect(() => { targetRef.current = terminal?.target; }, [terminal]);
+  useEffect(() => {
+    if (terminal && !targetRef.current) mcpNoticeGenRef.current += 1;
+    targetRef.current = terminal?.target;
+  }, [terminal]);
   useEffect(() => {
     statusChangeRef.current?.(paneStatusFor(shownKind));
   }, [shownKind]);
@@ -182,7 +200,12 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
       // Prefer the backend's view of the session we already track, so a session that exited while the pane was
       // closed is not shown as still running. A pane with none shows the one its tab holds; the tabs, not the pane,
       // decide which running terminal goes where, so two panes never show the same one.
-      setTerminal(current => next.sessions.find(s => s.id === current?.id) ?? current ?? (boundRef.current ? next.sessions.find(s => s.id === boundRef.current) ?? null : null));
+      const adopted = boundRef.current ? next.sessions.find(s => s.id === boundRef.current) ?? null : null;
+      if (adopted) {
+        mcpNoticeGenRef.current += 1;
+        if (!targetRef.current && !startingRef.current) setMcpNotice(null);
+      }
+      setTerminal(current => next.sessions.find(s => s.id === current?.id) ?? current ?? adopted);
       if (!next.available) setError(next.reason || 'Native terminal support is unavailable.');
     } catch (e) { setError((e as Error).message); }
   }, [workspace]);
@@ -192,7 +215,11 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
     boundRef.current = boundTerminalId;
     if (!boundTerminalId || terminal?.id === boundTerminalId) return;
     const found = status?.sessions.find(s => s.id === boundTerminalId);
-    if (found) setTerminal(found); else void refresh();
+    if (found) {
+      mcpNoticeGenRef.current += 1;
+      if (!terminal) setMcpNotice(null);
+      setTerminal(found);
+    } else void refresh();
     // Only a new binding matters; the pane's own terminal and list change for other reasons.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boundTerminalId]);
@@ -469,20 +496,68 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminal?.id, retry, workspace, send]);
 
-  const start = useCallback(async (request: TerminalLaunch) => {
+  const start = useCallback(async (request: TerminalLaunch, { allowDuringConnect = false }: { allowDuringConnect?: boolean } = {}) => {
+    if (startingRef.current || (!allowDuringConnect && connectingRef.current)) return;
+    startingRef.current = true;
+    mcpNoticeGenRef.current += 1;
     lastLaunch.current = request; setRetryLaunch(request); setBusy(true); setError(''); setTarget(request.target);
+    restoreMcpFocusRef.current = false;
+    setMcpNotice(null);
     try {
+      const mcpId = toMcpAgentId(request.target);
+      const agents = mcpId
+        ? await queryClient.fetchQuery({
+            queryKey: MCP_AGENTS_QUERY_KEY,
+            queryFn: ({ signal }) => fetchMcpAgents(signal),
+            staleTime: 60_000,
+          }).catch(() => queryClient.getQueryData<AgentMcpStatus[]>(MCP_AGENTS_QUERY_KEY))
+        : undefined;
+      const mcpAgent = mcpId ? agents?.find(item => item.id === mcpId) : undefined;
+      if (mcpId && mcpAgent?.status.state === 'missing') {
+        try {
+          let results: readonly AgentMcpResult[];
+          const activeConnect = connectingRef.current;
+          if (activeConnect?.ids.includes(mcpId)) {
+            results = await activeConnect.promise;
+          } else {
+            if (activeConnect) await activeConnect.promise.catch(() => undefined);
+            const promise = connectMcpAsync([mcpId]);
+            connectingRef.current = { ids: [mcpId], promise };
+            try { results = await promise; }
+            finally {
+              if (connectingRef.current?.promise === promise) connectingRef.current = null;
+            }
+          }
+          const match = results.find(item => item.id === mcpId);
+          const outcome = match?.outcome;
+          if (outcome?.result === 'added') {
+            setMcpNotice({ kind: 'connected-first', message: `Connected ${harnessName(request.target)} to ContextSpace's tools first.` });
+          } else if (outcome?.result === 'failed') {
+            setMcpNotice({ kind: 'error', message: formatConnectFailures(match ? [match] : results), ids: [mcpId] });
+          } else if (outcome?.result === 'skipped') {
+            setMcpNotice({ kind: 'error', message: `${harnessName(request.target)}: ${outcome.reason}`, ids: [mcpId] });
+          } else {
+            setMcpNotice(null);
+          }
+        } catch (connectError) {
+          setMcpNotice({ kind: 'error', message: connectError instanceof Error ? connectError.message : String(connectError), ids: [mcpId] });
+        }
+      }
       const { terminal: created } = await terminalRequest<{ terminal: TerminalInfo }>(workspace, 'create', { launchId: request.id, target: request.target, sessionId: request.sessionId, cwd: request.cwd, ...(request.prompt ? { prompt: request.prompt } : {}) });
       setStatus(current => current && ({ ...current, sessions: [...current.sessions.filter(s => s.id !== created.id), created] }));
       setTerminal(created);
       setShowHistory(false);
       await refresh();
     } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
-  }, [workspace, refresh, setTarget]);
+    finally {
+      startingRef.current = false;
+      setBusy(false);
+    }
+  }, [workspace, refresh, setTarget, queryClient, connectMcpAsync]);
   // A launch for a session that is already running must attach to it. Creating a
   // second terminal would leave two shells on one session and lose the first.
-  const resume = useCallback(async (request: TerminalLaunch): Promise<void> => {
+  const resume = useCallback(async (request: TerminalLaunch, options?: { allowDuringConnect?: boolean }): Promise<void> => {
+    if (startingRef.current || (!options?.allowDuringConnect && connectingRef.current)) return;
     // Only the backend's list is authoritative: the pane's own copy of an ended
     // terminal still reads as running and must not swallow the resume. A pane
     // opened just for this resume has not read the list yet, so it reads it first.
@@ -497,17 +572,19 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
       return;
     }
     if (existing) {
+      mcpNoticeGenRef.current += 1;
+      setMcpNotice(null);
       setTerminal(existing);
       setTarget(existing.target);
       setShowHistory(false);
       return;
     }
-    return start(request);
+    return start(request, options);
   }, [status, start, setTarget, claimed, onShowTerminal, workspace]);
   useEffect(() => {
     if (!launch || launchSeen.current === launch.id) return;
     launchSeen.current = launch.id;
-    void resume(launch).finally(() => consumeLaunch(launch.id));
+    void resume(launch, { allowDuringConnect: true }).finally(() => consumeLaunch(launch.id));
   }, [launch, resume, consumeLaunch]);
 
   const stop = async () => {
@@ -577,7 +654,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
   // usage heuristic can pick a sibling's conversation once the list is empty.
   const resumableId = terminal && terminal.target !== 'shell' ? terminal.sessionId : undefined;
   const resumeButton = gone && terminal && (resumableId
-    ? <Button size="xs" variant="ghost" disabled={busy} onClick={() => void resume({ id: crypto.randomUUID(), target: terminal.target, sessionId: resumableId })}><History className="size-3" />Resume conversation</Button>
+    ? <Button size="xs" variant="ghost" disabled={busy || connectMcp.isPending} onClick={() => void resume({ id: crypto.randomUUID(), target: terminal.target, sessionId: resumableId })}><History className="size-3" />Resume conversation</Button>
     : terminal.target !== 'shell' && <Button size="xs" variant="ghost" onClick={() => setShowHistory(true)}><History className="size-3" />Continue a conversation</Button>);
   const stateDotClass = running ? 'bg-emerald-500' : exited ? 'bg-muted-foreground' : disconnected ? 'bg-warning' : 'bg-amber-500';
   const usageSummary = useMemo(() => {
@@ -587,6 +664,70 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
     return null;
   }, [usageHistory.isPending, usageHistory.isError, usageSession]);
   const [paneMenuOpen, setPaneMenuOpen] = useState(false);
+  const refreshTools = () => {
+    setMcpNotice(null);
+    void refresh();
+    void mcpAgents.refetch();
+  };
+  const mcpView = useMemo(
+    () => describeShownMcpStatus({
+      shownToolIds: tools.map(tool => tool.id),
+      agents: mcpAgents.data,
+      notice: mcpNotice,
+      connecting: connectMcp.isPending,
+      connectingIds: connectMcp.variables,
+    }),
+    [tools, mcpAgents.data, mcpNotice, connectMcp.isPending, connectMcp.variables],
+  );
+  const handleConnect = async (ids: readonly McpAgentId[]) => {
+    if (connectingRef.current || startingRef.current || connectMcp.isPending || busy || ids.length === 0) return;
+    const noticeGen = mcpNoticeGenRef.current;
+    restoreMcpFocusRef.current = true;
+    const promise = connectMcpAsync(ids);
+    connectingRef.current = { ids, promise };
+    try {
+      const results = await promise;
+      if (mcpNoticeGenRef.current !== noticeGen) {
+        restoreMcpFocusRef.current = false;
+        return;
+      }
+      const failures = formatConnectFailures(results);
+      if (failures) {
+        const failedIds = results.filter(item => item.outcome.result === 'failed').map(item => item.id);
+        setMcpNotice({ kind: 'error', message: failures, ids: failedIds });
+      } else if (results.some(item => item.outcome.result === 'added' || item.outcome.result === 'already')) {
+        setMcpNotice({ kind: 'connected', message: 'Connected. Sessions already running get the tools when they start again.' });
+      } else {
+        const skippedItems = results
+          .filter((item): item is typeof item & { outcome: { result: 'skipped'; reason: string } } => item.outcome.result === 'skipped');
+        const skipped = skippedItems
+          .map(item => `${harnessName(item.id)}: ${item.outcome.reason}`)
+          .join(' ');
+        setMcpNotice(skipped ? { kind: 'error', message: skipped, ids: skippedItems.map(item => item.id) } : null);
+      }
+    } catch (connectError) {
+      if (mcpNoticeGenRef.current !== noticeGen) {
+        restoreMcpFocusRef.current = false;
+        return;
+      }
+      setMcpNotice({ kind: 'error', message: connectError instanceof Error ? connectError.message : String(connectError), ids });
+    } finally {
+      if (connectingRef.current?.promise === promise) connectingRef.current = null;
+    }
+  };
+  useEffect(() => {
+    if (!restoreMcpFocusRef.current || connectMcp.isPending || busy) return;
+    restoreMcpFocusRef.current = false;
+    if (!active || terminal) return;
+    const activeEl = document.activeElement;
+    const focusWasHereOrLost = !activeEl
+      || activeEl === document.body
+      || activeEl === document.documentElement
+      || Boolean(mcpBoxRef.current?.contains(activeEl));
+    if (focusWasHereOrLost) {
+      (connectBtnRef.current ?? mcpStatusRef.current ?? staleSummaryRef.current)?.focus();
+    }
+  }, [connectMcp.isPending, mcpView, active, terminal, busy]);
   return <div className="flex h-full min-h-0 flex-col" data-testid="terminal-pane">
     {/* One toolbar for the pane. Session history, saved usage and the terminal
         tools used to occupy three further bordered rows; they are now
@@ -635,7 +776,7 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
           <MenuItem onClick={() => void copySelection()} className="flex items-center gap-2 text-xs"><Copy className="size-3" />Copy selection</MenuItem>
           <MenuItem onClick={() => setScreenReader(value => !value)} className="flex items-center gap-2 text-xs">{screenReader ? '✓ ' : '  '}Screen reader mode</MenuItem>
           <div className="my-1 border-t border-border" />
-          <MenuItem onClick={() => void refresh()} className="flex items-center gap-2 text-xs"><RefreshCw className="size-3" />Refresh CLI tools</MenuItem>
+          <MenuItem onClick={() => refreshTools()} className="flex items-center gap-2 text-xs"><RefreshCw className="size-3" />Refresh CLI tools</MenuItem>
           <MenuItem disabled={!target} onClick={() => void external()} className="flex items-center gap-2 text-xs"><ExternalLink className="size-3" />External terminal</MenuItem>
           <div className="my-1 border-t border-border" />
           <p className="truncate px-2 py-1 font-mono text-[10px] text-muted-foreground" title={terminal.cwd}>{terminal.cwd}</p>
@@ -645,20 +786,32 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
       {terminal && disconnected && <Button size="xs" variant="outline" onClick={() => setRetry(value => value + 1)}><PlugZap className="size-3" />Reconnect</Button>}
       {terminal && !exited && terminal.state !== 'exited' && <IconButton label="End" icon={<Square />} onClick={() => void stop()} className="text-muted-foreground" />}
     </div>
-    {error && (!terminal || !disconnected) && <div role="alert" className="border-b border-border px-3 py-2 text-xs text-warning break-words">{error}{retryLaunch && <Button size="xs" variant="ghost" disabled={busy} onClick={() => void start(retryLaunch)}>Retry launch</Button>}</div>}
-    {terminal && showHistory && <ResumeSessions workspace={workspace} active={active} busy={busy} status={status} fill={false} onStartNew={() => setShowHistory(false)} onResume={session => void resume({ id: crypto.randomUUID(), target: session.assistant, sessionId: session.id, cwd: session.workspacePath })} />}
+    {error && (!terminal || !disconnected) && <div role="alert" className="border-b border-border px-3 py-2 text-xs text-warning break-words">{error}{retryLaunch && <Button size="xs" variant="ghost" disabled={busy || connectMcp.isPending} onClick={() => void start(retryLaunch)}>Retry launch</Button>}</div>}
+    {terminal && mcpNotice && (
+      <div
+        role={mcpNotice.kind === 'error' ? 'alert' : 'status'}
+        className={cn(
+          'flex items-start justify-between gap-2 border-b border-border px-3 py-1.5 text-xs break-words',
+          mcpNotice.kind === 'error' ? 'text-warning' : 'text-muted-foreground',
+        )}
+      >
+        <span>{mcpNotice.message}</span>
+        <IconButton label="Dismiss notice" icon={<X />} onClick={() => setMcpNotice(null)} className={mcpNotice.kind === 'error' ? 'shrink-0 text-warning' : 'shrink-0 text-muted-foreground'} />
+      </div>
+    )}
+    {terminal && showHistory && <ResumeSessions workspace={workspace} active={active} busy={busy || connectMcp.isPending} status={status} fill={false} onStartNew={() => setShowHistory(false)} onResume={session => void resume({ id: crypto.randomUUID(), target: session.assistant, sessionId: session.id, cwd: session.workspacePath })} />}
     {!terminal && boundTerminalId === undefined && <p role="status" className="px-4 py-4 text-xs text-muted-foreground">Looking for running sessions…</p>}
     {!terminal && boundTerminalId !== undefined && <section aria-label="Start a CLI session" className="flex min-h-0 flex-1 flex-col overflow-auto">
       <div className="px-4 pb-2 pt-4">
         <div className="flex items-center gap-1">
           <h3 className="text-[13px] font-semibold text-foreground">Start a CLI</h3>
           <span className="flex-1" />
-          <IconButton label="Refresh the CLI tools" icon={<RefreshCw />} onClick={() => void refresh()} className="text-muted-foreground" />
+          <IconButton label="Refresh the CLI tools" icon={<RefreshCw />} onClick={() => refreshTools()} className="text-muted-foreground" />
           <IconButton label="Open an external terminal" icon={<ExternalLink />} disabled={!target} onClick={() => void external()} className="text-muted-foreground" />
         </div>
         {tools.length > 0 && <div role="group" aria-label="CLI tools" className="mt-2 flex flex-wrap gap-1.5">
           {tools.map(tool => (
-            <Button key={tool.id} size="sm" variant="outline" aria-label={`Start ${harnessName(tool.id)}`} disabled={busy || !status?.available}
+            <Button key={tool.id} size="sm" variant="outline" aria-label={`Start ${harnessName(tool.id)}`} disabled={busy || connectMcp.isPending || !status?.available}
               title={tool.id === target ? `Start ${harnessName(tool.id)}, the tool used last here` : `Start ${harnessName(tool.id)}`}
               className={tool.id === target ? 'border-primary/60' : undefined}
               onClick={() => void start({ id: crypto.randomUUID(), target: tool.id })}>
@@ -666,9 +819,65 @@ export function TerminalPane({ workspace, active, launch, consumeLaunch, onOpenF
             </Button>
           ))}
         </div>}
+        {mcpView && (
+          <div ref={mcpBoxRef} className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5" data-testid="mcp-tools-status">
+            {mcpView.staleDetails?.length && mcpView.connectIds.length === 0 && mcpView.tone !== 'alert' ? (
+              <details className="min-w-0 text-xs text-muted-foreground">
+                <summary
+                  ref={staleSummaryRef}
+                  className="min-h-6 cursor-pointer rounded py-1 text-xs leading-4 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                >
+                  {mcpView.text}
+                </summary>
+                <p className="mt-1 pl-4 text-xs text-muted-foreground break-words">
+                  {mcpView.staleDetails.join(' ')}
+                </p>
+              </details>
+            ) : (
+              <>
+                <p
+                  ref={mcpStatusRef}
+                  tabIndex={-1}
+                  role={mcpView.tone === 'alert' ? 'alert' : 'status'}
+                  className={cn(
+                    'min-w-0 rounded text-xs break-words outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+                    mcpView.tone === 'alert' ? 'text-warning' : mcpView.tone === 'neutral' ? 'text-foreground' : 'text-muted-foreground',
+                  )}
+                >
+                  {mcpView.text}
+                </p>
+                {mcpView.connectIds.length > 0 && (
+                  <Button
+                    ref={connectBtnRef}
+                    size="sm"
+                    variant="outline"
+                    aria-disabled={connectMcp.isPending || busy}
+                    className={connectMcp.isPending || busy ? 'cursor-wait opacity-60' : undefined}
+                    onClick={() => void handleConnect(mcpView.connectIds)}
+                  >
+                    {mcpView.connectLabel}
+                  </Button>
+                )}
+                {mcpView.staleDetails?.length ? (
+                  <details className="basis-full min-w-0 text-xs text-muted-foreground">
+                    <summary
+                      ref={staleSummaryRef}
+                      className="min-h-6 cursor-pointer rounded py-1 text-xs leading-4 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    >
+                      {mcpView.staleSummary ?? "An AI tool uses an old copy of ContextSpace's tools."}
+                    </summary>
+                    <p className="mt-1 pl-4 text-xs text-muted-foreground break-words">
+                      {mcpView.staleDetails.join(' ')}
+                    </p>
+                  </details>
+                ) : null}
+              </>
+            )}
+          </div>
+        )}
         <p role="status" className={problem || busy ? 'mt-2 text-xs text-muted-foreground' : 'sr-only'}>{busy ? 'Starting…' : problem}</p>
       </div>
-      <ResumeSessions embedded workspace={workspace} active={active} busy={busy} status={status} fill onStartNew={() => undefined} onResume={session => void resume({ id: crypto.randomUUID(), target: session.assistant, sessionId: session.id, cwd: session.workspacePath })} />
+      <ResumeSessions embedded workspace={workspace} active={active} busy={busy || connectMcp.isPending} status={status} fill onStartNew={() => undefined} onResume={session => void resume({ id: crypto.randomUUID(), target: session.assistant, sessionId: session.id, cwd: session.workspacePath })} />
     </section>}
     <div className={`relative min-h-0 flex-1 bg-[#111b18] p-2 ${terminal ? '' : 'hidden'}`} onPointerDownCapture={event => {
       if (event.button === 2) menuSelection.current = renderer.current?.getSelection() ?? '';

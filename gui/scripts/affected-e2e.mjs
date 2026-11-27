@@ -995,6 +995,19 @@ const FOLDER_ROWS = [
     ],
     safety: 'Modal dialogs for creating documents and folders on DocumentsPage; covered by Documents page specs.',
   },
+  {
+    folder: 'src/features/terminal/mcpTools',
+    path: 'gui/src/features/terminal/mcpTools.ts',
+    bareNames: ['mcpTools', 'mcpTools.ts'],
+    specs: [
+      'e2e/cli-tools-connected.spec.ts',
+      'e2e/cli-chat-entry.spec.ts',
+      'e2e/chat-handoff.spec.ts',
+      'e2e/terminal-resume.spec.ts',
+      'e2e/accessibility.spec.ts',
+    ],
+    safety: 'Pure MCP connection status formatting and tool-id mapping used by TerminalPane; unit tested by mcpTools.test.ts and exercised by the CLI start-screen and accessibility specs.',
+  },
 ];
 
 /**

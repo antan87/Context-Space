@@ -213,6 +213,7 @@ export function DocumentsPage({
   const sideLinkOriginRef = useRef<HTMLElement | null>(null);
   const keepSideEditingRef = useRef<HTMLButtonElement>(null);
   const pendingSideExitFocusRef = useRef(false);
+  const pendingSideFailedSaveFocusRef = useRef(false);
   const sideAlertExitModeRef = useRef<'keep' | 'discard-stay' | 'discard-away'>('keep');
   const sideEditingRef = useRef(sideEditing);
   const activeRef = useRef(active);
@@ -250,6 +251,7 @@ export function DocumentsPage({
     wasReaderOpenRef.current = false;
     pendingFolderFocusRef.current = null;
     pendingSideExitFocusRef.current = false;
+    pendingSideFailedSaveFocusRef.current = false;
     sideLinkOriginRef.current = null;
     setReaderDrafts(restored?.readerDrafts ?? {});
     dragDepthRef.current = 0;
@@ -699,6 +701,7 @@ export function DocumentsPage({
   const applyFolderNavigation = useCallback((nextFolder: string, via: 'card' | 'crumb') => {
     const normalized = normalizeCatalogPath(nextFolder);
     pendingFolderFocusRef.current = via;
+    pendingSideFailedSaveFocusRef.current = false;
     sideLinkOriginRef.current = null;
     setSideEditing(false);
     setSideEditPath(null);
@@ -729,6 +732,7 @@ export function DocumentsPage({
   const startSideEdit = useCallback(
     (docPath: string, previewData: DocumentPreviewData | null, focus = true) => {
       if (!previewData || previewData.content === undefined) return;
+      pendingSideFailedSaveFocusRef.current = false;
       sideLinkOriginRef.current = null;
       setSideEditPath(docPath);
       setSideEditContent(previewData.content);
@@ -748,6 +752,7 @@ export function DocumentsPage({
     if (options?.restoreFocus !== undefined) {
       pendingSideExitFocusRef.current = options.restoreFocus;
     }
+    pendingSideFailedSaveFocusRef.current = false;
     sideLinkOriginRef.current = null;
     setSideEditing(false);
     setSideEditPath(null);
@@ -761,25 +766,6 @@ export function DocumentsPage({
     setSideAutoFocus(false);
   }, []);
 
-  // A Save button that was focused turns disabled while saving / in conflict and the browser drops
-  // focus to <body>. After a failed save, move it to the conflict choices (or the text).
-  const refocusAfterFailedSideSave = useCallback(() => {
-    requestAnimationFrame(() => {
-      if (!activeRef.current || readerPathRef.current !== null) return;
-      const active = document.activeElement;
-      const lost = !active || active === document.body || (active as HTMLButtonElement).disabled === true;
-      if (!lost) return;
-      const conflictBtn = asideRef.current?.querySelector<HTMLElement>(
-        '[data-testid="document-conflict-bar"] button:not([disabled])',
-      ) ?? null;
-      if (isElementVisible(conflictBtn)) {
-        conflictBtn.focus({ preventScroll: true });
-        return;
-      }
-      resolveSideKeepEditingFocus()?.focus({ preventScroll: true });
-    });
-  }, [resolveSideKeepEditingFocus]);
-
   const executeSideSave = useCallback(
     async (
       expectedRevOverride?: string | null,
@@ -787,6 +773,7 @@ export function DocumentsPage({
     ): Promise<boolean> => {
       const targetPath = sideEditPath ?? selectedPath;
       if (!targetPath || sideSaving) return false;
+      pendingSideFailedSaveFocusRef.current = false;
       setSideSaving(true);
       setSideSaveError(null);
       try {
@@ -821,17 +808,17 @@ export function DocumentsPage({
         if (parsed) {
           setSideConflict(parsed);
           setSideSaveError(null);
-          refocusAfterFailedSideSave();
+          pendingSideFailedSaveFocusRef.current = true;
           return false;
         }
         setSideSaveError(error instanceof Error ? error.message : 'Unable to save document.');
-        refocusAfterFailedSideSave();
+        pendingSideFailedSaveFocusRef.current = true;
         return false;
       } finally {
         setSideSaving(false);
       }
     },
-    [sideEditPath, selectedPath, sideSaving, sideBaseRevision, workspaceId, sideEditContent, seedPreviewCache, upsertCatalogItem, queryClient, refocusAfterFailedSideSave],
+    [sideEditPath, selectedPath, sideSaving, sideBaseRevision, workspaceId, sideEditContent, seedPreviewCache, upsertCatalogItem, queryClient],
   );
 
   const saveCopyFromContent = useCallback(
@@ -1222,6 +1209,26 @@ export function DocumentsPage({
     pendingSideExitFocusRef.current = false;
     resolveSidePostExitFocus()?.focus({ preventScroll: true });
   }, [active, sideEditing, selectedPath, readerPath, pendingSideAction, newDocOpen, newFolderOpen, resolveSidePostExitFocus]);
+
+  // A Save button that was focused turns disabled while saving / in conflict and the browser drops
+  // focus to <body>. Move focus after React commits the conflict bar / non-saving state so a premature
+  // requestAnimationFrame cannot miss the newly mounted conflict choices.
+  useLayoutEffect(() => {
+    if (!pendingSideFailedSaveFocusRef.current || sideSaving || pendingSideAction) return;
+    pendingSideFailedSaveFocusRef.current = false;
+    if (!active || readerPath !== null) return;
+    const activeEl = document.activeElement;
+    const lost = !activeEl || activeEl === document.body || (activeEl as HTMLButtonElement).disabled === true;
+    if (!lost) return;
+    const conflictBtn = asideRef.current?.querySelector<HTMLElement>(
+      '[data-testid="document-conflict-bar"] button:not([disabled])',
+    ) ?? null;
+    if (isElementVisible(conflictBtn)) {
+      conflictBtn.focus({ preventScroll: true });
+      return;
+    }
+    resolveSideKeepEditingFocus()?.focus({ preventScroll: true });
+  }, [active, readerPath, sideSaving, sideConflict, sideSaveError, pendingSideAction, resolveSideKeepEditingFocus]);
 
   const prevReaderFocusRef = useRef<{ active: boolean; readerPath: string | null; readerRequest: number }>({
     active,
