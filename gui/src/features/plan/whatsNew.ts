@@ -30,6 +30,8 @@ export interface NewsCommit {
   subject: string;
   at: string;
   firstBodyLine?: string;
+  /** Ids of the plan items the commit names with `Plan-Step:` trailers. */
+  steps?: string[];
   fileCount?: number;
   pushed?: boolean;
   prNumber?: number;

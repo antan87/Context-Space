@@ -30,6 +30,7 @@ export function commitOpenFor(areas: readonly BoardArea[], target: ReaderTarget)
       author: item.author,
       at: item.at,
       ...(item.firstBodyLine !== undefined ? { firstBodyLine: item.firstBodyLine } : {}),
+      ...(item.steps !== undefined ? { steps: item.steps } : {}),
       ...(item.fileCount !== undefined ? { fileCount: item.fileCount } : {}),
       ...(item.pushed !== undefined ? { pushed: item.pushed } : {}),
     })),

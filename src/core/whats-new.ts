@@ -35,7 +35,7 @@ import { detectDefaultBranch, isGitRepo } from '../utils/git.js';
 import { getWorkspaceRepoPaths } from '../utils/multi-git.js';
 import { formatRemoteRepo, parseRemoteUrl, resolvePreferredRemoteUrl } from '../utils/pr.js';
 import type { Feature } from '../types.js';
-import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, type ParsedDetailedCommit } from './commit-log-format.js';
+import { DETAILED_COMMIT_FORMAT, parseDetailedCommitLog, parsePlanStepTrailers, type ParsedDetailedCommit } from './commit-log-format.js';
 import { readLocalIncomingForRepo, type IncomingCommit, type IncomingHost } from './incoming-commits.js';
 import { listBranchPullRequestsState, type BranchPullRequest, type PullRequestState } from './merge-detection.js';
 import { BoardWorkspaceError } from './board.js';
@@ -125,6 +125,8 @@ export interface NewsCommit {
   subject: string;
   at: string;
   firstBodyLine?: string;
+  /** Ids of the plan items the commit names with `Plan-Step:` trailers. */
+  steps?: string[];
   fileCount?: number;
   pushed?: boolean;
   prNumber?: number;
@@ -604,14 +606,17 @@ export function formatCommitNoteNewsLine(note: Pick<NewsCommitNote, 'by' | 'shor
   return `${actor} note on ${note.shortSha} (${note.repo}): ${note.title}`;
 }
 
+const NEWS_COMMIT_FORMAT = '--format=%x00%h%x1f%an%x1f%cI%x1f%s%x1f%b';
 const RECENT_COMMITS_LIMIT = 50;
 const RECENT_PR_WAIT_MS = 1_000;
 
+/** Parses `git log` output in {@link NEWS_COMMIT_FORMAT}: NUL starts each commit; the body is read only for its `Plan-Step:` trailers. */
 function parseCommits(stdout: string): NewsCommit[] {
-  return stdout.split('\n').filter(Boolean).map((line) => {
-    const [sha = '', author = '', date = '', ...subject] = line.split('\x1f');
+  return stdout.split('\x00').filter((entry) => entry.trim() !== '').map((entry) => {
+    const [sha = '', author = '', date = '', subject = '', ...bodyParts] = entry.replace(/^\n+/, '').split('\x1f');
     const time = new Date(date);
-    return { sha, author, at: Number.isNaN(time.getTime()) ? date : time.toISOString(), subject: subject.join('\x1f') };
+    const steps = parsePlanStepTrailers(bodyParts.join('\x1f'));
+    return { sha, author, at: Number.isNaN(time.getTime()) ? date : time.toISOString(), subject, ...(steps.length > 0 ? { steps } : {}) };
   });
 }
 
@@ -897,7 +902,7 @@ async function repoNewsCommits(
   const detailed = options.detailed === true;
   const format = detailed
     ? DETAILED_COMMIT_FORMAT
-    : '--format=%h%x1f%an%x1f%cI%x1f%s';
+    : NEWS_COMMIT_FORMAT;
   const extra = detailed ? ['--shortstat'] : [];
   const sinceArg = `--since=${new Date(from).toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
   let seenIncoming: string | undefined;

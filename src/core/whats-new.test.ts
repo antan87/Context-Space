@@ -324,6 +324,25 @@ describe('the commits section', () => {
     expect(news.empty).toBe(false);
   });
 
+  it('carries the Plan-Step trailers of a commit, read from its body, and nothing else of the body', async () => {
+    const env = { GIT_AUTHOR_NAME: 'Anna', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'Anna', GIT_COMMITTER_EMAIL: 'a@example.com' };
+    const make = async (args: string[]) => {
+      await fs.writeFile(path.join(api, `file-${++counter}.txt`), 'x');
+      await execa('git', ['add', '.'], { cwd: api, env });
+      await execa('git', ['commit', '-q', ...args], { cwd: api, env });
+    };
+    await make(['-m', 'Plain commit']);
+    await make(['-m', 'With trailer', '-m', 'Because.', '-m', 'Plan-Step: s7b273\nCo-Authored-By: A <a@b.c>']);
+    await make(['-m', 'Separate paragraph', '-m', 'Plan-Step: c4ynjc', '-m', 'Co-Authored-By: A <a@b.c>']);
+
+    const news = await whatsNew(root, 'user', { now: new Date() });
+    const bySubject = Object.fromEntries(news.commits[0]!.commits.map((entry) => [entry.subject, entry]));
+    expect(bySubject['With trailer']!.steps).toEqual(['s7b273']);
+    expect('steps' in bySubject['Plain commit']!).toBe(false);
+    expect('steps' in bySubject['Separate paragraph']!).toBe(false);
+    expect(Object.keys(bySubject['With trailer']!).sort()).toEqual(['at', 'author', 'sha', 'steps', 'subject']);
+  });
+
   it('has nothing to say about a repository without commits', async () => {
     expect((await whatsNew(root, 'user', { now: NOW })).commits).toEqual([{ repo: 'api', commits: [], more: 0 }]);
   });

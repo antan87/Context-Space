@@ -76,6 +76,12 @@ describe('firstDescriptionLine', () => {
     expect(firstDescriptionLine('  \n\r\n')).toBeUndefined();
     expect(firstDescriptionLine('\n\n  First line here \n\nSecond paragraph')).toBe('First line here');
   });
+
+  it('skips a valid Plan-Step trailer line, and only that', () => {
+    expect(firstDescriptionLine('Plan-Step: s7b273\n')).toBeUndefined();
+    expect(firstDescriptionLine('plan-step: s7b273\nCo-Authored-By: A <a@b.c>')).toBe('Co-Authored-By: A <a@b.c>');
+    expect(firstDescriptionLine('Plan-Step: nope\nMore')).toBe('Plan-Step: nope');
+  });
 });
 
 describe('buildCommitListGroups and deduplication', () => {

@@ -1093,6 +1093,7 @@ export function CodeSection(props: CodeSectionProps) {
               detail={commitDetail}
               incomingMeta={openIncomingMeta}
               commitMeta={openCommitMeta}
+              commitSteps={openCommitItem?.steps}
               file={commitFile}
               ordered={commitFiles}
               hasNextCommit={hasNextCommit}

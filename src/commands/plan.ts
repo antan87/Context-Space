@@ -210,7 +210,7 @@ export async function planNow(context: PlanCommandContext, words: string, clear 
   const { plan, read } = await readPlanForCommand(context.workspacePath);
   const step = findPlanItem(plan, words, 'step');
   const message = read
-    ? (await changePlanDbForApp(context.workspacePath, { type: 'now', key: step.key }, { by: context.by, read })).message
+    ? `${(await changePlanDbForApp(context.workspacePath, { type: 'now', key: step.key }, { by: context.by, read })).message}\nCommit with: Plan-Step: ${step.key}`
     : `Working on "${(await setPlanNow(context.workspacePath, step.key, context.by, context.now)).text}" now.`;
   context.print(context.json ? JSON.stringify({ ok: true, message, key: step.key, by: context.by }, null, 2) : message);
 }

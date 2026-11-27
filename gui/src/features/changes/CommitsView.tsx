@@ -924,6 +924,7 @@ function CommitOverview({
   detail,
   incomingMeta,
   commitMeta,
+  commitSteps,
   headingRef,
   ready,
   onOpenFile,
@@ -934,6 +935,8 @@ function CommitOverview({
   detail: CommitDetail;
   incomingMeta?: { hostName: string | null; webUrl: string | null } | null;
   commitMeta?: { branch?: string | null; pr?: NewsPullRequest | null } | null;
+  /** Plan item ids the commit names with `Plan-Step:` trailers. */
+  commitSteps?: readonly string[];
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   /** The detail shown is the settled read of this very commit (not a read under way for another form of its sha). */
   ready: boolean;
@@ -943,8 +946,8 @@ function CommitOverview({
   const plan = usePlanFile(workspace);
   const board = useBoard(workspace, { poll: false });
   const { steps } = useMemo(
-    () => resolveCommitContext({ repo: commit.repo, sha: detail.sha || commit.sha, plan: plan.data, board: board.data }),
-    [commit.repo, commit.sha, detail.sha, plan.data, board.data],
+    () => resolveCommitContext({ repo: commit.repo, sha: detail.sha || commit.sha, plan: plan.data, board: board.data, trailerSteps: commitSteps }),
+    [commit.repo, commit.sha, detail.sha, plan.data, board.data, commitSteps],
   );
   const formattedSteps = useMemo(
     () => steps.map((raw) => ({ raw, display: formatCommitStepLabel(raw) })),
@@ -1232,6 +1235,7 @@ export function CommitsMain({
   detail,
   incomingMeta,
   commitMeta,
+  commitSteps,
   file,
   ordered,
   hasNextCommit,
@@ -1252,6 +1256,7 @@ export function CommitsMain({
   detail: ReturnType<typeof useCommitDetail>;
   incomingMeta?: { hostName: string | null; webUrl: string | null } | null;
   commitMeta?: { branch?: string | null; pr?: NewsPullRequest | null } | null;
+  commitSteps?: readonly string[];
   file: string | null;
   ordered: string[];
   hasNextCommit: boolean;
@@ -1382,6 +1387,7 @@ export function CommitsMain({
         detail={data}
         incomingMeta={incomingMeta}
         commitMeta={commitMeta}
+        commitSteps={commitSteps}
         headingRef={commitHeadingRef}
         ready={!detail.isFetching && !detail.isPending}
         onOpenFile={onOpenFile}

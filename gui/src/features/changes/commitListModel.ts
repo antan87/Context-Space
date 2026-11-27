@@ -111,7 +111,7 @@ export function firstDescriptionLine(body: string | undefined): string | undefin
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((entry) => entry.trim())
-    .find((entry) => entry.length > 0);
+    .find((entry) => entry.length > 0 && !/^plan-step:[ \t]*[scd][a-z0-9]{5}$/i.test(entry));
   return line ? line.slice(0, 300) : undefined;
 }
 
@@ -212,6 +212,7 @@ function enrichFromSources(
     author: c.author ?? r?.author ?? fromDetail?.author,
     at: c.at ?? r?.at ?? fromDetail?.at,
     firstBodyLine: c.firstBodyLine ?? r?.firstBodyLine ?? detailFirstLine,
+    ...((c.steps ?? r?.steps) !== undefined ? { steps: c.steps ?? r?.steps } : {}),
     fileCount: c.fileCount ?? r?.fileCount ?? detailFileCount,
     pushed: c.pushed ?? r?.pushed ?? fromDetail?.pushed,
     ...(c.incoming ? { incoming: true } : {}),
@@ -254,6 +255,7 @@ export function buildCommitRepoGroups(
         author: c.author,
         at: c.at,
         ...(c.firstBodyLine !== undefined ? { firstBodyLine: c.firstBodyLine } : {}),
+        ...(c.steps !== undefined ? { steps: c.steps } : {}),
         ...(c.fileCount !== undefined ? { fileCount: c.fileCount } : {}),
         ...(c.pushed !== undefined ? { pushed: c.pushed } : {}),
         ...(c.prNumber !== undefined ? { prNumber: c.prNumber, pr: prByNumber.get(c.prNumber) ?? null } : {}),
@@ -381,6 +383,7 @@ export function buildCommitRepoGroups(
         author: c.author,
         at: c.at,
         ...(c.firstBodyLine !== undefined ? { firstBodyLine: c.firstBodyLine } : {}),
+        ...(c.steps !== undefined ? { steps: c.steps } : {}),
         ...(c.fileCount !== undefined ? { fileCount: c.fileCount } : {}),
         ...(c.pushed !== undefined ? { pushed: c.pushed } : {}),
         ...(c.prNumber !== undefined ? { prNumber: c.prNumber } : {}),
@@ -594,6 +597,7 @@ export function buildCommitListGroups(
         author: c.author,
         at: c.at,
         ...(c.firstBodyLine !== undefined ? { firstBodyLine: c.firstBodyLine } : {}),
+        ...(c.steps !== undefined ? { steps: c.steps } : {}),
         ...(c.fileCount !== undefined ? { fileCount: c.fileCount } : {}),
         ...(c.pushed !== undefined ? { pushed: c.pushed } : {}),
       };

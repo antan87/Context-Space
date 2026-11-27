@@ -212,6 +212,7 @@ describe('ctxspace plan now', () => {
   it('records the step by its words, naming who said it, and leaves PLAN.md alone', async () => {
     await planNowCommand(context(), 'Add the Export');
     expect(output()).toContain('Working on "Add the Export button" now.');
+    expect(output()).not.toContain('Plan-Step');
     expect(await readPlanNow(root)).toMatchObject({ key: 'add-the-export-button', by: 'claude' });
     expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(PLAN);
   });
@@ -355,6 +356,13 @@ describe('ctxspace plan migrate, --status and restore', () => {
     expect(restored.text).toContain(`Workspace: ${root}`);
     expect(await fs.readFile(path.join(root, 'PLAN.md'), 'utf8')).toBe(PLAN);
     expect(readSwitch(root)).toBeNull();
+  });
+
+  it('plan now on the database also says which trailer to commit with', async () => {
+    await run('migrate', '-w', root);
+    printed = [];
+    await planNowCommand(context(), 'Add the Export');
+    expect(output()).toMatch(/Working on "Add the Export button" now\.\nCommit with: Plan-Step: s[a-z0-9]{5}$/);
   });
 
   it('prints only JSON with --json, and a refusal carries the build report', async () => {

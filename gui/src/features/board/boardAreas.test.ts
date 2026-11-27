@@ -319,6 +319,55 @@ describe('boardAreas', () => {
       expect(csv.repos.some((r) => r.repo.repo === 'auth')).toBe(true);
     });
 
+    describe('a commit that names a plan item with a Plan-Step trailer', () => {
+      const dbPlan: PlanFileView = { ...samplePlan, store: 'database' };
+      const newsOf = (commits: Array<{ sha: string; subject: string; steps?: string[] }>): WhatsNewView => ({
+        basis: 'first-look',
+        from: '2026-10-01T00:00:00Z',
+        at: '2026-10-02T00:00:00Z',
+        commits: [{ repo: 'billing', more: 0, commits: commits.map((c) => ({ ...c, author: 'Anna', at: '2026-10-01T12:00:00Z' })) }],
+      });
+
+      it('puts the commit in the Area that holds the step, not the current one', () => {
+        const news = newsOf([{ sha: 'abcdef1234567890', subject: 'Deploy script', steps: ['s1'] }]);
+        const areas = buildBoardAreas({ plan: dbPlan, news });
+        expect(areas.find((a) => a.id === 'checkpoint:ship')!.data.commitCount).toBe(1);
+        expect(areas.find((a) => a.id === 'checkpoint:csv')!.data.commitCount ?? 0).toBe(0);
+      });
+
+      it('beats a hash written in another Area\'s step text', () => {
+        const plan: PlanFileView = {
+          ...dbPlan,
+          checkpoints: dbPlan.checkpoints.map((cp) => cp.key === 'perf' ? { ...cp, steps: [{ key: 'p1', text: 'Done in abcdef1', done: true }] } : cp),
+        };
+        const news = newsOf([{ sha: 'abcdef1234567890', subject: 'Deploy script', steps: ['s1'] }]);
+        const areas = buildBoardAreas({ plan, news });
+        expect(areas.find((a) => a.id === 'checkpoint:ship')!.data.commitCount).toBe(1);
+        expect(areas.find((a) => a.id === 'checkpoint:perf')!.data.commitCount ?? 0).toBe(0);
+      });
+
+      it('keeps the hash-in-text match for a commit without a trailer', () => {
+        const plan: PlanFileView = {
+          ...dbPlan,
+          checkpoints: dbPlan.checkpoints.map((cp) => cp.key === 'perf' ? { ...cp, steps: [{ key: 'p1', text: 'Done in abcdef1', done: true }] } : cp),
+        };
+        const areas = buildBoardAreas({ plan, news: newsOf([{ sha: 'abcdef1234567890', subject: 'Plain' }]) });
+        expect(areas.find((a) => a.id === 'checkpoint:perf')!.data.commitCount).toBe(1);
+      });
+
+      it('falls back to the current Area for an id that is not in the plan', () => {
+        const areas = buildBoardAreas({ plan: dbPlan, news: newsOf([{ sha: '1122334455667788', subject: 'Unknown', steps: ['szzzzz'] }]) });
+        expect(areas.find((a) => a.id === 'checkpoint:csv')!.data.commitCount).toBe(1);
+        expect(areas.find((a) => a.id === 'checkpoint:ship')!.data.commitCount ?? 0).toBe(0);
+      });
+
+      it('ignores trailers on a workspace that is still on files', () => {
+        const areas = buildBoardAreas({ plan: samplePlan, news: newsOf([{ sha: 'abcdef1234567890', subject: 'Deploy script', steps: ['s1'] }]) });
+        expect(areas.find((a) => a.id === 'checkpoint:csv')!.data.commitCount).toBe(1);
+        expect(areas.find((a) => a.id === 'checkpoint:ship')!.data.commitCount ?? 0).toBe(0);
+      });
+    });
+
     it('extracts up to 3 image picture previews and formats fallback text preview', () => {
       const picCard1 = sampleCard('pic1', 'Mockup 1', 'checkpoint:perf', {
         kind: 'file',

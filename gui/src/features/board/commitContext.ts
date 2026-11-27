@@ -120,6 +120,8 @@ export function resolveCommitContext(input: {
   sha: string;
   plan?: PlanFileView;
   board?: BoardView;
+  /** Plan item ids the commit names with `Plan-Step:` trailers; they count only on a plan from the database. */
+  trailerSteps?: readonly string[];
 }): { steps: CommitStepLink[]; pictures: CommitPictureLink[] } {
   const fullOrShortSha = input.sha.trim().toLowerCase();
   if (!/^[0-9a-f]{7,64}$/.test(fullOrShortSha)) {
@@ -192,6 +194,19 @@ export function resolveCommitContext(input: {
       });
     }
   };
+
+  // The steps the commit names come first. A step added here keeps its own place in the list below.
+  if (plan?.store === 'database') {
+    const byKey = new Map<string, { step: PlanFileStep; checkpointTitle?: string }>();
+    for (const s of plan.steps ?? []) byKey.set(s.key, { step: s });
+    for (const cp of plan.checkpoints ?? []) for (const s of cp.steps ?? []) byKey.set(s.key, { step: s, checkpointTitle: cp.title });
+    for (const id of input.trailerSteps ?? []) {
+      const found = byKey.get(id);
+      if (!found || seenStepKeys.has(id)) continue;
+      seenStepKeys.add(id);
+      steps.push({ key: id, text: found.step.text, done: found.step.done, checkpointTitle: found.checkpointTitle, planPath });
+    }
+  }
 
   for (const s of plan?.steps ?? []) {
     addStep(s, undefined);

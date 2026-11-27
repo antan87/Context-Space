@@ -7,6 +7,8 @@ export interface SequenceCommit extends CommitRef {
   author?: string;
   at?: string;
   firstBodyLine?: string;
+  /** Ids of the plan items the commit names with `Plan-Step:` trailers. */
+  steps?: string[];
   fileCount?: number;
   pushed?: boolean;
   incoming?: boolean;
@@ -67,6 +69,7 @@ export function recentSequence(recent: RecentCommits | undefined, repo: string):
       author: commit.author,
       at: commit.at,
       ...(commit.firstBodyLine !== undefined ? { firstBodyLine: commit.firstBodyLine } : {}),
+      ...(commit.steps !== undefined ? { steps: commit.steps } : {}),
       ...(commit.fileCount !== undefined ? { fileCount: commit.fileCount } : {}),
       ...(commit.pushed !== undefined ? { pushed: commit.pushed } : {}),
     })),
@@ -82,6 +85,7 @@ export function newestRecentCommit(recent: RecentCommits | undefined): SequenceC
     author: commit.author,
     at: commit.at,
     ...(commit.firstBodyLine !== undefined ? { firstBodyLine: commit.firstBodyLine } : {}),
+    ...(commit.steps !== undefined ? { steps: commit.steps } : {}),
     ...(commit.fileCount !== undefined ? { fileCount: commit.fileCount } : {}),
     ...(commit.pushed !== undefined ? { pushed: commit.pushed } : {}),
   })));

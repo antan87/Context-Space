@@ -108,6 +108,34 @@ describe('resolveCommitContext', () => {
     ...fields,
   });
 
+  describe('steps named by a Plan-Step trailer', () => {
+    const dbPlan: PlanFileView = {
+      title: 'P',
+      store: 'database',
+      checkpoints: [{ key: 'c1aaaa', title: 'Checkpoint one', done: false, steps: [{ key: 's1aaaa', text: 'Named step', done: false }, { key: 's2bbbb', text: `Mentions ${shortSha}`, done: false }], decisions: [] }],
+      steps: [],
+      decisions: [],
+      waiting: [],
+    } as unknown as PlanFileView;
+
+    it('lists the named step first, under its checkpoint, before steps found by hash', () => {
+      const { steps } = resolveCommitContext({ repo: 'api', sha: commitSha, plan: dbPlan, trailerSteps: ['s1aaaa'] });
+      expect(steps.map((s) => s.key)).toEqual(['s1aaaa', 's2bbbb']);
+      expect(steps[0]).toMatchObject({ text: 'Named step', checkpointTitle: 'Checkpoint one', done: false });
+    });
+
+    it('does not list a step twice when its text also holds the hash', () => {
+      const { steps } = resolveCommitContext({ repo: 'api', sha: commitSha, plan: dbPlan, trailerSteps: ['s2bbbb', 's2bbbb'] });
+      expect(steps.map((s) => s.key)).toEqual(['s2bbbb']);
+    });
+
+    it('ignores an id that is not in the plan, and any id on a plan from files', () => {
+      expect(resolveCommitContext({ repo: 'api', sha: commitSha, plan: dbPlan, trailerSteps: ['szzzzz'] }).steps.map((s) => s.key)).toEqual(['s2bbbb']);
+      const filePlan = { ...dbPlan, store: undefined } as PlanFileView;
+      expect(resolveCommitContext({ repo: 'api', sha: commitSha, plan: filePlan, trailerSteps: ['s1aaaa'] }).steps.map((s) => s.key)).toEqual(['s2bbbb']);
+    });
+  });
+
   it('returns empty results for invalid or too-short SHAs', () => {
     expect(resolveCommitContext({ repo: 'api', sha: '123' })).toEqual({ steps: [], pictures: [] });
     expect(resolveCommitContext({ repo: 'api', sha: 'not-hex-string' })).toEqual({ steps: [], pictures: [] });

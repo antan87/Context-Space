@@ -23,6 +23,7 @@ export function renderPlanFileInstructions(moved = false): string {
     `ctxspace plan apply '{"ifRevision":12,"dbId":"a1b2c3d4e5f60718","ops":[{"op":"tick","id":"s7k2qv"}]}'`,
     '```',
     '',
+    '- When you commit work for a plan item, add `Plan-Step: <id>` with that item’s id (`ctxspace plan` marks Now) as a trailer line next to the others at the end of the message, such as `Co-Authored-By`.',
     '- Use `ctxspace plan now <id>` when you start a step. Run `ctxspace plan done <id>` for a checkpoint with a check.',
     '- Put decisions under what they hold up. Give suggestions and what to do without an answer. Carry on with what you can, and only record the user’s answer.',
   ].join('\n');
