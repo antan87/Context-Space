@@ -854,7 +854,8 @@ export const tools: NexusFlowTool[] = [
           createdAt: new Date().toISOString(),
         };
 
-        await createWorkspace(feature, repoInfos);
+        let databaseNote = '';
+        await createWorkspace(feature, repoInfos, undefined, { onNote: (note) => { databaseNote = ` ${note}`; } });
         await refreshWorkspace(workspacePath);
 
         return json({
@@ -864,7 +865,7 @@ export const tools: NexusFlowTool[] = [
           mode,
           repos: feature.repos,
           status: 'created',
-          instruction: `Workspace created at '${workspacePath}'. Context files and MCP configs generated successfully.`,
+          instruction: `Workspace created at '${workspacePath}'. Context files and MCP configs generated successfully.${databaseNote}`,
         });
       } catch (error) {
         return errorResult(`Error creating workspace: ${toErrorMessage(error)}`);

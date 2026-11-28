@@ -21,6 +21,8 @@ import { baseFileExists, deleteWorkspaceFiles } from './storage.js';
 import { PRIMARY_MANIFEST_FILE, LEGACY_MANIFEST_FILE, PRIMARY_KNOWLEDGE_FILE, BRAND_CONFIG } from './constants.js';
 import { atomicWriteFile } from '../resources/fs-safety.js';
 import { assertWorkspaceActive } from './archive-guard.js';
+import { migrateWorkspace, type MigrateOptions } from './plan-migrate.js';
+import { readSwitch } from './workspace-db-switch.js';
 
 /** Name of the per-workspace manifest file. */
 const MANIFEST_FILE = PRIMARY_MANIFEST_FILE;
@@ -220,6 +222,43 @@ export interface CreateWorkspaceOptions {
    * user's own checkouts.
    */
   autoUpdateBase?: boolean;
+  /** Told, in one line, when the new workspace could not start on the database and stays on files. */
+  onNote?: (note: string) => void;
+  /** Passed to the move (tests: its own seams, such as `findOlderWriters`). */
+  move?: Partial<MigrateOptions>;
+}
+
+/** The plan a new workspace starts with: its name, what it is for, and an empty Checkpoints heading. */
+function starterPlan(feature: Feature): string {
+  // The description is prose: a line that would read as a heading or a plan item gets a backslash in front.
+  const description = feature.description?.trim().replace(/^([ \t]*)(#|[-*+][ \t]*\[)/gm, '$1\\$2');
+  return `# ${feature.name?.trim() || feature.id}\n\n${description ? `${description}\n\n` : ''}## Checkpoints\n`;
+}
+
+/**
+ * A new workspace starts on the workspace database: a starter plan, then the same checked move as
+ * `ctxspace plan migrate` (so the workspace has the usual archive). When the move cannot happen the workspace stays
+ * on files with its starter plan, and the reason comes back as a note; creating never fails because of it.
+ */
+async function startOnDatabase(feature: Feature, options?: CreateWorkspaceOptions): Promise<string | undefined> {
+  const root = feature.workspacePath;
+  const planPath = path.join(root, 'PLAN.md');
+  const starter = starterPlan(feature);
+  const later = 'Run `ctxspace plan migrate` to move it later.';
+  try {
+    await fs.writeFile(planPath, starter, { flag: 'wx' });
+    await migrateWorkspace(root, { by: 'contextspace', ...options?.move });
+    return undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // A move that stopped half-way is not ours to clean up: its own message says how to finish or undo it.
+    try {
+      if (readSwitch(root)?.state === 'moving') return message;
+    } catch { /* nothing to remove */ }
+    // The starter PLAN.md stays, so `ctxspace plan migrate` works later.
+    const why = message.split('\n')[0]!.replace(/\s*Nothing was changed[.;:]?\s*/g, ' ').trim().replace(/\.$/, '');
+    return `This new workspace stays on files (${why}). ${later}`;
+  }
 }
 
 /**
@@ -328,6 +367,8 @@ export async function createWorkspace(
     throw error;
   }
 
+  const note = await startOnDatabase(feature, options);
+  if (note) options?.onNote?.(note);
   return workspacePath;
 }
 

@@ -85,6 +85,7 @@ function buildView(db: WorkspaceDb, options: PlanViewOptions): string {
   const items = rows.filter((r) => r.kind !== 'heading' && r.kind !== 'prose');
   const title = rows.find((r) => r.kind === 'heading')?.name ?? 'plan';
   out.push(`${title} · revision ${revision} · db ${dbId} · ${items.filter((r) => !r.done).length} open of ${items.length} items`);
+  if (!rows.some((r) => r.kind === 'checkpoint')) out.push('No checkpoint yet. Add the first one with {"op":"add","kind":"checkpoint","text":"<the outcome>"} in `ctxspace plan apply` (ops: `{"ops":[…]}` with the revision and dbId above).');
   const stopped = whereWeStopped(rows);
   if (stopped && !options.all) out.push(`Where we stopped: ${clip(stopped, 200)}`);
   out.push(options.all

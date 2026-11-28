@@ -206,6 +206,19 @@ describe('MCP tools', () => {
     expect(refresh.refreshWorkspace).toHaveBeenCalledTimes(1);
   });
 
+  it('create_workspace puts the note about a workspace that stays on files in the instruction', async () => {
+    const tool = findTool('create_workspace');
+    vi.mocked(fs.access).mockResolvedValue(undefined);
+    vi.mocked(workspace.resolveRepoInfos).mockResolvedValue([{ name: 'repo1', path: '/dev/repo1', defaultBranch: 'main' }]);
+    vi.mocked(workspace.createWorkspace).mockImplementation(async (f, _r, _p, options) => {
+      options?.onNote?.('This new workspace stays on files: NOTE-FROM-MOVE. Run `ctxspace plan migrate` to move it later.');
+      return f.workspacePath;
+    });
+    vi.mocked(refresh.refreshWorkspace).mockResolvedValue({} as any);
+    const result = await tool!.handler({ branchName: 'feat-note', repos: ['repo1'], description: 'New feature' }, { config: mockConfig, workspacePath: '/dev/workspaces' });
+    expect(JSON.parse(result.content[0]!.text).instruction).toContain('NOTE-FROM-MOVE');
+  });
+
   it('executes isolate_repo tool handler successfully', async () => {
     const tool = findTool('isolate_repo');
     expect(tool).toBeDefined();

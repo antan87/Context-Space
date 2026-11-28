@@ -347,9 +347,10 @@ export async function createCommand(options: CreateCommandOptions = {}): Promise
     inPlace ? 'Registering workspace...' : 'Creating workspace with git worktrees...',
   ).start();
   try {
+    let databaseNote: string | undefined;
     await createWorkspace(feature, selectedRepos, (repoName, index, total) => {
       wsSpinner.text = `Creating worktrees… ${repoName} (${index + 1}/${total})`;
-    });
+    }, { onNote: (note) => { databaseNote = note; } });
 
     if (selectedSkills.length > 0) {
       await saveWorkspaceSkillsConfig(workspacePath, {
@@ -360,6 +361,7 @@ export async function createCommand(options: CreateCommandOptions = {}): Promise
     }
 
     wsSpinner.succeed(`Workspace created at ${chalk.bold(workspacePath)}`);
+    if (databaseNote) console.log(chalk.yellow(`  ${databaseNote}`));
   } catch (error) {
     wsSpinner.fail('Failed to create workspace');
     const message = error instanceof Error ? error.message : String(error);

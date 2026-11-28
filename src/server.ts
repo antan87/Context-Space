@@ -1261,8 +1261,10 @@ async function runCreationJob(jobId: string, body: WorkspaceCreationPayload, con
     // Step 1: Materialize the workspace (worktrees, or just the lightweight
     // dir). One stable step id for both modes — only the wording differs.
     updateJobStep(jobId, 'workspace', 'running', inPlace ? 'Registering workspace...' : 'Creating git worktrees...');
+    let databaseNote = '';
     await createWorkspace(feature, body.repos, undefined, {
       autoUpdateBase: body.autoUpdateBase === true,
+      onNote: (note) => { databaseNote = ` ${note}`; },
     });
 
     if (Array.isArray(body.enabledSkills) || Array.isArray(body.enabledAgents) || Array.isArray(body.enabledCategories)) {
@@ -1278,7 +1280,7 @@ async function runCreationJob(jobId: string, body: WorkspaceCreationPayload, con
       jobId,
       'workspace',
       'completed',
-      inPlace ? 'Workspace registered — working in-place in the source repos.' : 'Git worktrees created successfully.',
+      `${inPlace ? 'Workspace registered — working in-place in the source repos.' : 'Git worktrees created successfully.'}${databaseNote}`,
     );
 
     // Step 2: Analyze repos — against the worktrees, or the source repos in-place.

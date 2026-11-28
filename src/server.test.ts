@@ -1680,6 +1680,25 @@ describe('Server API Endpoints Unit Tests', () => {
       expect(text).toContain('"progress":100');
     });
 
+    it('carries the note about a workspace that stays on files into the job message', async () => {
+      vi.spyOn(config, 'loadConfig').mockResolvedValue({ devDir: '/mock', workspacesDir: '/mock/workspaces', storageProvider: 'local' } as any);
+      vi.spyOn(workspace, 'createWorkspace').mockImplementation(async (f, _r, _p, options) => {
+        options?.onNote?.('This new workspace stays on files: NOTE-FROM-MOVE. Run `ctxspace plan migrate` to move it later.');
+        return f.workspacePath;
+      });
+      vi.spyOn(analyzers, 'analyzeAllRepos').mockResolvedValue(new Map());
+      vi.spyOn(generators, 'generateContextFiles').mockResolvedValue(undefined);
+      const response = await app.request('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branchName: 'note-ws', description: 'd', repos: [{ name: 'repo-1', path: '/mock/repo-1' }], assistants: ['antigravity'] })
+      });
+      expect(response.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const text = await (await app.request('/api/workspace/create-stream/note-ws')).text();
+      expect(text).toContain('NOTE-FROM-MOVE');
+    });
+
     it('saves enabledSkills and enabledAgents during workspace creation', async () => {
       vi.spyOn(config, 'loadConfig').mockResolvedValue({
         devDir: '/mock',
