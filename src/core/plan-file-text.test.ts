@@ -12,3 +12,13 @@ describe('renderPlanFileInstructions Plan-Step line', () => {
     expect(renderPlanFileInstructions()).not.toContain('Plan-Step');
   });
 });
+
+describe('renderPlanFileInstructions file link line', () => {
+  it('tells AIs on the database to link a picture or document to its item with card.add', () => {
+    expect(renderPlanFileInstructions(true)).toContain('link it to that item with the op `{"op":"card.add","path":"<path>","step":"<id>"}` in a `ctxspace plan apply` batch instead of writing its path into the item’s text.');
+  });
+
+  it('leaves the text for workspaces still on files alone', () => {
+    expect(renderPlanFileInstructions()).not.toContain('card.add');
+  });
+});

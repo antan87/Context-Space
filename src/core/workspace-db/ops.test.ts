@@ -251,6 +251,44 @@ describe('Board ops', () => {
     expect(getCard(db, r.newIds[0]!)).toMatchObject({ stepId: step, area: null });
   });
 
+  it('a file card with no title takes the file name; a note still needs a title; a given title is kept', async () => {
+    const { db } = await seeded();
+    const step = idOf(db, 'Write the file');
+    const r = await apply(db, [
+      { op: 'card.add', path: 'board-pictures/db4b-shot-1440-dark.png', step, as: 'a' },
+      { op: 'card.add', path: 'docs/win/spec.md', as: 'b' },
+      { op: 'card.add', path: 'board-pictures/x.png', title: 'My own title', as: 'c' },
+    ]);
+    expect(getCard(db, r.ids.a!)).toMatchObject({ kind: 'file', title: 'db4b-shot-1440-dark.png', path: 'board-pictures/db4b-shot-1440-dark.png', stepId: step, area: null });
+    expect(getCard(db, r.ids.b!)!.title).toBe('spec.md');
+    expect(getCard(db, r.ids.c!)!.title).toBe('My own title');
+    const note = refused(await applyBatch(db, { ifRevision: rev(db), ops: [{ op: 'card.add', body: 'no title' }] }, { by: 'ai' }));
+    expect(note.errors[0]!.message).toMatch(/title/);
+  });
+
+  it('a card path the Board would drop is refused, on add and on update, and says what to send', async () => {
+    const { db } = await seeded();
+    const bad = ['./board-pictures/shot.png', 'docs/', '.', '..', '/etc/passwd', '../outside.png', 'docs\\win\\spec.md', '///', 'C:/x.png'];
+    for (const path of bad) {
+      const r = refused(await applyBatch(db, { ifRevision: rev(db), ops: [{ op: 'card.add', path }] }, { by: 'ai' }));
+      expect(r.errors[0]!.message, path).toMatch(/is not a file inside the workspace .*board-pictures\/x\.png/);
+    }
+    const ok = await apply(db, [{ op: 'card.add', path: 'board-pictures/not-written-yet.png', as: 'a' }]);
+    const upd = refused(await applyBatch(db, { ifRevision: rev(db), ops: [{ op: 'card.update', id: ok.ids.a!, path: '../x.png', rev: 1 }] }, { by: 'ai' }));
+    expect(upd.errors[0]!.message).toMatch(/is not a file inside the workspace/);
+    expect(getCard(db, ok.ids.a!)!.path).toBe('board-pictures/not-written-yet.png');
+  });
+
+  it('a title taken from a long file name is cut; a file card with no usable path says the path is the problem', async () => {
+    const { db } = await seeded();
+    const long = `${'a'.repeat(230)}.png`;
+    const r = await apply(db, [{ op: 'card.add', path: `board-pictures/${long}`, as: 'a' }]);
+    expect(getCard(db, r.ids.a!)!.title).toBe(long.slice(0, 200));
+    const none = refused(await applyBatch(db, { ifRevision: rev(db), ops: [{ op: 'card.add', kind: 'file' }] }, { by: 'ai' }));
+    expect(none.errors[0]!.message).toMatch(/A file card needs "path"/);
+    expect(none.errors[0]!.message).not.toMatch(/"title" must be a string/);
+  });
+
   it('links are unique per pair and idempotent; unlink; place is last write wins; nodes are checked', async () => {
     const { db } = await seeded();
     const r = await apply(db, [{ op: 'card.add', title: 'A', as: 'a' }, { op: 'card.add', title: 'B', as: 'b' }]);

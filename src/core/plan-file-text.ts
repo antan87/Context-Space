@@ -24,6 +24,7 @@ export function renderPlanFileInstructions(moved = false): string {
     '```',
     '',
     '- When you commit work for a plan item, add `Plan-Step: <id>` with that item’s id (`ctxspace plan` marks Now) as a trailer line next to the others at the end of the message, such as `Co-Authored-By`.',
+    '- When you make a picture, mock or document for a plan item, link it to that item with the op `{"op":"card.add","path":"<path>","step":"<id>"}` in a `ctxspace plan apply` batch instead of writing its path into the item’s text.',
     '- Use `ctxspace plan now <id>` when you start a step. Run `ctxspace plan done <id>` for a checkpoint with a check.',
     '- Put decisions under what they hold up. Give suggestions and what to do without an answer. Carry on with what you can, and only record the user’s answer.',
   ].join('\n');

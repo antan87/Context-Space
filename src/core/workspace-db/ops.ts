@@ -609,11 +609,13 @@ export const OPS: Record<string, OpFn> = {
   'card.add'(ctx, op) {
     const kind = (op.kind ?? (op.path ? 'file' : 'note')) as string;
     if (kind !== 'note' && kind !== 'file') throw bad('card kind is note or file.');
-    const title = oneLine(op.title, 'title', LIMITS.title);
-    if (kind === 'file' && (typeof op.path !== 'string' || !op.path)) throw bad('A file card needs "path".');
+    if (kind === 'file' && (typeof op.path !== 'string' || !op.path)) throw bad('A file card needs "path": a file inside the workspace, such as board-pictures/x.png.');
+    const fields = cardFields(op);
+    // A picture or document linked by path needs no invented title: its file name is the title, cut to the limit.
+    const fileName = kind === 'file' && typeof op.path === 'string' ? op.path.split('/').filter(Boolean).pop()?.slice(0, LIMITS.title) : undefined;
+    const title = oneLine(op.title === undefined && fileName ? fileName : op.title, 'title', LIMITS.title);
     const count = (ctx.db.prepare('SELECT count(*) AS n FROM cards').get() as { n: number }).n;
     if (count >= LIMITS.cards) throw new OpError('limit', `The board already has ${LIMITS.cards} cards, the most it keeps. Remove or archive some first.`);
-    const fields = cardFields(op);
     const step = cardStep(ctx, op.step);
     const area = cardArea(ctx, op.area);
     const id = newId(ctx.db, 'card', ctx.taken);
@@ -748,6 +750,17 @@ export const OPS: Record<string, OpFn> = {
   },
 };
 
+/**
+ * The Board drops a file card whose path is not a plain path inside the workspace (gui `cleanCardPath`), so the AI is told at once.
+ * The file need not exist yet: an AI may link a file before it writes it.
+ */
+export function cardPathProblem(path: string): string | null {
+  const p = path.trim();
+  // eslint-disable-next-line no-control-regex
+  const why = !p ? 'it is empty' : /[\u0000-\u001f\u007f]/.test(p) ? 'it has a control character' : p.includes('\\') ? 'it has a backslash' : p.startsWith('/') || /^[a-zA-Z]:/.test(p) ? 'it is an absolute path' : p.split('/').some((part) => part === '') ? 'it has an empty part or a trailing "/"' : p.split('/').some((part) => part === '.' || part === '..') ? 'it has a "." or ".." part' : null;
+  return why ? `"path" ${JSON.stringify(clip(path, 80))} is not a file inside the workspace (${why}), and the Board would not show the card. Send a path such as board-pictures/x.png: relative, with "/" between parts.` : null;
+}
+
 function cardFields(op: Op): { body?: string | null; path?: string | null; description?: string | null; about?: string | null; look?: string | null } {
   const out: { body?: string | null; path?: string | null; description?: string | null; about?: string | null; look?: string | null } = {};
   const text = (name: 'body' | 'path' | 'description' | 'look', max: number) => {
@@ -756,6 +769,7 @@ function cardFields(op: Op): { body?: string | null; path?: string | null; descr
     if (v === null) { out[name] = null; return; }
     if (typeof v !== 'string') throw bad(`"${name}" must be a string.`);
     if (v.length > max) throw bad(`"${name}" is ${v.length} characters; keep it to ${max} or fewer.`);
+    if (name === 'path') { const problem = cardPathProblem(v); if (problem) throw bad(problem); }
     out[name] = name === 'look' ? v.replace(/\s+/g, ' ').trim() || null : v;
   };
   text('body', LIMITS.body);

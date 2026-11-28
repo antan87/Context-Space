@@ -470,10 +470,20 @@ export function buildBoardAreas({
     ownerOf.set(areaId, areaId);
   }
 
+  // The Area that holds each plan item, by the item's key (its id on the database).
+  const itemToDraftId = new Map<string, string>();
+  for (const draft of drafts) {
+    if (draft.checkpointKey) itemToDraftId.set(draft.checkpointKey, draft.id);
+    for (const step of draft.planItems?.steps ?? []) itemToDraftId.set(step.key, draft.id);
+    for (const dec of draft.planItems?.decisions ?? []) itemToDraftId.set(dec.key, draft.id);
+  }
+
+  // On the database, a card linked to a plan item sits in that item's Area, whatever its `area` says. Without a known step, its `area` decides.
+  // On files a card's step is only a hint (the MCP tool stores one on a card it places by Board link), so there it never decides.
   for (const card of cardList) {
-    if (card.area && areaIds.has(card.area)) {
-      ownerOf.set(card.id, card.area);
-    }
+    const stepArea = plan?.store === 'database' && card.step ? itemToDraftId.get(card.step) : undefined;
+    if (stepArea) ownerOf.set(card.id, stepArea);
+    else if (card.area && areaIds.has(card.area)) ownerOf.set(card.id, card.area);
   }
 
   for (const doc of documents ?? []) {
@@ -516,12 +526,6 @@ export function buildBoardAreas({
 
   // A commit that names a plan item (`Plan-Step: <id>`) belongs to the Area that holds it. Ids exist only on the database.
   if (plan?.store === 'database') {
-    const itemToDraftId = new Map<string, string>();
-    for (const draft of drafts) {
-      if (draft.checkpointKey) itemToDraftId.set(draft.checkpointKey, draft.id);
-      for (const step of draft.planItems?.steps ?? []) itemToDraftId.set(step.key, draft.id);
-      for (const dec of draft.planItems?.decisions ?? []) itemToDraftId.set(dec.key, draft.id);
-    }
     for (const repo of news?.commits ?? []) {
       for (const commit of repo.commits ?? []) {
         const draftId = (commit.steps ?? []).map((id) => itemToDraftId.get(id)).find((id) => id !== undefined);

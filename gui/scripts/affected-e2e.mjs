@@ -327,6 +327,7 @@ const NOTE_CARD_SPECS = [
  * and board-index is added by hand (it jumps between note and file cards through their wrappers, which stay when a card draws nothing).
  */
 const FILE_CARD_SPECS = [
+  'e2e/board-file-step.spec.ts',
   'e2e/board-workspace-files.spec.ts',
   'e2e/board-copy.spec.ts',
   'e2e/board-area.spec.ts',
