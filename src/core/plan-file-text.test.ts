@@ -22,3 +22,31 @@ describe('renderPlanFileInstructions file link line', () => {
     expect(renderPlanFileInstructions()).not.toContain('card.add');
   });
 });
+
+describe('renderPlanFileInstructions op shapes (DB4c)', () => {
+  it('lists the common ops with their fields on the database, in at most 9 lines', () => {
+    const text = renderPlanFileInstructions(true);
+    for (const shape of [
+      '{"op":"tick","id":"<id>"}',
+      '{"op":"detail","id":"<id>","rev":<rev>,"text":"<ALL the detail lines under the item: it replaces them, so start with the old lines you read>"}',
+      '{"op":"edit","id":"<id>","find":"<old words>","replace":"<new words>"}',
+      '{"op":"add","kind":"step","text":"<words>","under":"<id>"}',
+      '{"op":"add","kind":"decision","text":"<question>","under":"<id>","suggested":["<a>","<b>"],"ifNoAnswer":"<a>"}',
+      '{"op":"answer","id":"<decision id>","answer":"<their words>","rev":<rev>}',
+      '{"op":"now","id":"<step id>"}',
+    ]) expect(text).toContain(shape);
+    // card.add is shown once, in the bullet that says when to use it
+    expect(text.split('{"op":"card.add","path":"<path>","step":"<id>"}')).toHaveLength(2);
+    expect(text).toContain('`ctxspace plan apply --help` lists every op and field');
+    // Every added line counts, the blank one too: from the intro to the line before the next bullet.
+    const lines = text.split('\n');
+    const start = lines.findIndex((line) => line.startsWith('Common ops'));
+    const next = lines.findIndex((line, i) => i > start && line.startsWith('- ') && !line.startsWith('- `{'));
+    expect(next, 'a bullet must follow the block, or the count measures nothing').toBeGreaterThan(start);
+    expect(next - start).toBeLessThanOrEqual(9);
+  });
+
+  it('leaves the text for workspaces still on files alone', () => {
+    expect(renderPlanFileInstructions()).not.toContain('apply --help');
+  });
+});

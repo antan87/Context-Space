@@ -977,7 +977,7 @@ describe('moved CLI and MCP entry points', () => {
     const feature = (await loadFeatureConfig(root))!;
     const rendered = await buildContextContent({ feature, repos: [], analysis: new Map() });
     const moved = rendered.match(/## Plan[\s\S]*?(?=\n\n## Where to look)/)![0];
-    expect(Buffer.byteLength(moved)).toBeLessThanOrEqual(1400);
+    expect(Buffer.byteLength(moved)).toBeLessThanOrEqual(2100); // DB4c: 2012 bytes now (1355 before the op shapes, +657 on purpose so an AI need not learn them from refusals); about 100 bytes of room
     expect(moved).toMatch(/ctxspace plan.*ctxspace plan apply/s);
     const example = JSON.parse(moved.match(/ctxspace plan apply '({[^\n]+})'/)![1]!);
     expect(example.ops[0]).toEqual({ op: 'tick', id: expect.stringMatching(ID_PATTERN) });

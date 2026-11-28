@@ -409,7 +409,7 @@ export async function changePlanDbForApp(root: string, change: PlanFileAppChange
       };
       if (change.checkpoint) {
         const cp = await itemFor(change.checkpoint);
-        if (cp.kind !== 'checkpoint') throw new PlanFileError(`There is no checkpoint "${change.checkpoint}" in ${PLAN_FILE}.`, 'not_found');
+        if (cp.kind !== 'checkpoint' && cp.kind !== 'step') throw new PlanFileError(`No checkpoint or step "${change.checkpoint}" on the plan. Ids: \`ctxspace plan\`.`, 'not_found');
         return write([{ ...fields, under: cp.id }], { dbId: dbId ?? cp.dbId, ifRevision: cp.revision, strictRevision: options.strictRevision });
       }
       const { where, before, dbId: currentDbId, ifRevision } = await looseSpot(root, decision ? 'Decisions' : 'Steps');

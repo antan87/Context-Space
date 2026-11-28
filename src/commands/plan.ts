@@ -21,6 +21,7 @@ import {
   type MigrateOptions,
 } from '../core/plan-migrate.js';
 import { changePlanDbForApp, PlanDbChangeError, planDbParts, replayPlanAdd } from '../core/plan-db-app.js';
+import { OP_FIELDS } from '../core/workspace-db/ops.js';
 import { applyPlanBatch, planDbJson, planDbText, requirePlanDatabase } from '../core/plan-db-command.js';
 import { requireDraftDatabase, type DraftPreview } from '../core/workspace-db-drafts.js';
 import { runDbWrite } from '../core/workspace-db-write.js';
@@ -108,7 +109,7 @@ export function planChangeBy(options: { as?: string; harness?: string }, env: No
  * The item the words name: its key, or the words of one item, whole or as the start of exactly one. Several matches
  * are named, so the caller can say which.
  */
-export function findByWords(plan: PlanFile, words: string, only?: 'checkpoint' | 'decision'): ReturnType<typeof planItems>[number] {
+export function findByWords(plan: PlanFile, words: string, only?: 'checkpoint' | 'decision' | 'step'): ReturnType<typeof planItems>[number] {
   return findPlanItem(plan, words, only);
 }
 
@@ -240,6 +241,24 @@ export async function planAnswer(context: PlanCommandContext, words: string, ans
   report(context, message, after.plan);
 }
 
+/**
+ * On the database, what `--under` names: any checkpoint or step by its id, else a checkpoint by its words (as before).
+ * An unknown one is refused in words about ids, since there is no PLAN.md to read.
+ */
+function findUnder(plan: PlanFile, under: string) {
+  const id = under.trim();
+  const byId = planItems(plan).find((item) => item.key === id && ('title' in item || 'text' in item));
+  if (byId) return byId;
+  try { return findByWords(plan, under, 'checkpoint'); }
+  catch (error) {
+    if (error instanceof PlanFileError && error.code === 'not_found') {
+      const stepByWords = (() => { try { return Boolean(findByWords(plan, under, 'step')); } catch { return false; } })();
+      throw new PlanFileError(`No checkpoint or step "${under}" on the plan. Ids: \`ctxspace plan\`.${stepByWords ? ' Words find only a checkpoint; name a step by its id.' : ''}`, 'not_found');
+    }
+    throw error;
+  }
+}
+
 /** `ctxspace plan add` and `ctxspace plan decide`: a step or a decision, under a checkpoint or on its own. */
 export async function planAdd(
   context: PlanCommandContext,
@@ -260,8 +279,8 @@ export async function planAdd(
       return;
     }
   }
-  const checkpoint = under ? findByWords(plan, under, 'checkpoint') : undefined;
-  const where = checkpoint && 'title' in checkpoint ? ` under "${checkpoint.title}"` : '';
+  const checkpoint = under ? (read ? findUnder(plan, under) : findByWords(plan, under, 'checkpoint')) : undefined;
+  const where = checkpoint ? ` under "${'title' in checkpoint ? checkpoint.title : 'text' in checkpoint ? checkpoint.text : ''}"` : '';
   const message = `${added}${where}.`;
   if (read) {
     const change = 'step' in entry ? { type: 'add' as const, ...entry } : { type: 'decide' as const, ...entry };
@@ -467,7 +486,8 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
     .action(action<PlanCommonOptions & { all?: boolean }, [string | undefined]>((context, options, id) => planShow(context, { id, all: options.all })));
 
   common(plan.command('apply').description('Apply a JSON batch on a moved workspace. Pass a requestId and resend it with the same batch to retry safely.').argument('[json]')
-    .option('--file <path>', 'Read the batch from a file or use - for stdin'))
+    .option('--file <path>', 'Read the batch from a file or use - for stdin')
+    .addHelpText('after', `\nThe batch is {"ifRevision":<n>,"dbId":"<id>","requestId":"<unique>","ops":[...]}. Each op is {"op":"<name>", ...fields}; these are the fields it accepts ("answer" takes text or answer):\n${Object.entries(OP_FIELDS).map(([op, fields]) => `  ${op}: ${fields.join(', ')}`).join('\n')}`))
     .action(action<PlanCommonOptions & { file?: string }, [string | undefined]>((context, options, arg) => planApply(context, arg, options.file)));
 
   common(plan.command('drafts').description('List pending plan drafts'))
@@ -511,13 +531,13 @@ export function registerPlanCommand(program: Command, fail: (error: unknown) => 
     .action(action<PlanCommonOptions & { message?: string }, [string, string[]]>((context, options, decision, words) =>
       planAnswer(context, decision, textOf(options.message, words))));
 
-  common(plan.command('add').description('Add a step, under a checkpoint or on its own').argument('<step...>')
-    .option('--under <checkpoint>', 'The checkpoint it serves')
+  common(plan.command('add').description('Add a step, under a checkpoint or step, or on its own').argument('<step...>')
+    .option('--under <id or words>', 'A checkpoint or step id, or a checkpoint\'s words')
     .option('--request-id <id>', 'On a moved workspace, reuse this ID and the same input to retry'))
     .action(action<PlanCommonOptions & { under?: string; requestId?: string }, [string[]]>((context, options, words) => planAdd(context, { step: words.join(' ') }, options.under, options.requestId)));
 
   common(plan.command('decide').description('Add a decision only the user can make, under what it holds up').argument('<question...>')
-    .option('--under <checkpoint>', 'The checkpoint it holds up')
+    .option('--under <id or words>', 'A checkpoint or step id, or a checkpoint\'s words')
     .option('--suggest <answer>', 'An answer to suggest (repeat for more)', collect, [])
     .option('--if-no-answer <what>', 'What happens when nobody answers')
     .option('--detail <text>', 'Why it is asked')

@@ -489,7 +489,13 @@ export const OPS: Record<string, OpFn> = {
     if (typeof op.text !== 'string') throw bad('"text" is the lines to put under the item (use "" to clear).');
     if (op.text.length > LIMITS.detail) throw bad(`"text" is longer than ${LIMITS.detail} characters.`);
     const inner = ' '.repeat(indentOf(b.text) + 2);
-    b.detail = trimBlank(op.text).split('\n').map((l) => (l.trim() ? inner + l.replace(/\s+$/, '') : '')).join('\n').replace(/^\s*$/, '');
+    // The lines are put under the item at its own indentation. Lines copied as `ctxspace plan <id>` printed them already carry it, so
+    // their common leading indentation goes first (a deeper relative indentation, as in a nested list, stays), and a resend does not grow it.
+    // A line that starts with the item's own indentation was copied as printed: that prefix goes first, so an AI's own new line at
+    // column 0 next to copied lines does not push the copied ones further in on every resend.
+    const lines = trimBlank(op.text).split('\n').map((l) => (l.startsWith(inner) ? l.slice(inner.length) : l));
+    const common = Math.min(...lines.filter((l) => l.trim()).map((l) => /^[ \t]*/.exec(l)![0].length));
+    b.detail = lines.map((l) => (l.trim() ? inner + l.slice(common).replace(/\s+$/, '') : '')).join('\n').replace(/^\s*$/, '');
     dirty(b);
     ctx.log.push(`detail ${b.id} (${b.detail ? b.detail.split('\n').length : 0} lines)`);
   },

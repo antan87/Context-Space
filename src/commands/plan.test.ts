@@ -398,3 +398,92 @@ describe('ctxspace plan migrate, --status and restore', () => {
     }
   });
 });
+
+describe('ctxspace plan add and decide --under (DB4c)', () => {
+  beforeEach(() => { setActiveStorageProvider(getStorageProvider('local')); });
+
+  async function cliOut(...args: string[]) {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((text?: unknown) => { lines.push(String(text)); });
+    const failures: string[] = [];
+    const program = new Command().exitOverride();
+    registerPlanCommand(program, (error) => { failures.push(error instanceof Error ? error.message : String(error)); });
+    await program.parseAsync(['node', 'ctxspace', 'plan', ...args]);
+    vi.mocked(console.log).mockRestore();
+    return { text: lines.join('\n'), failures };
+  }
+  const idOfText = async (needle: string): Promise<string> => {
+    const { text } = await cliOut('--json', '--all', '-w', root);
+    const plan = JSON.parse(text) as { checkpoints: Array<{ id: string; title: string; steps: Array<{ id: string; text: string }> }> };
+    for (const cp of plan.checkpoints) {
+      if (cp.title.includes(needle)) return cp.id;
+      for (const s of cp.steps) if (s.text.includes(needle)) return s.id;
+    }
+    throw new Error(`no ${needle}`);
+  };
+
+  it('puts a decision under a step named by its id, and a step under a step', async () => {
+    await cliOut('migrate', '-w', root);
+    const step = await idOfText('Add the Export button');
+    const decided = await cliOut('decide', 'Which delimiter?', '--under', step, '--suggest', 'A', '--suggest', 'B', '--if-no-answer', 'A', '-w', root);
+    expect(decided.failures).toEqual([]);
+    expect(decided.text).toContain('Added the decision "Which delimiter?" under "Add the Export button".');
+    const added = await cliOut('add', 'Wire the button', '--under', step, '-w', root);
+    expect(added.failures).toEqual([]);
+    const shown = (await cliOut('show', step, '-w', root)).text;
+    expect(shown).toContain('Which delimiter?');
+    expect(shown).toContain('Wire the button');
+  });
+
+  it('still takes a checkpoint by its words, and refuses an unknown one in words about ids, not PLAN.md', async () => {
+    await cliOut('migrate', '-w', root);
+    const ok = await cliOut('add', 'Show a progress bar', '--under', 'Reports export', '-w', root);
+    expect(ok.failures).toEqual([]);
+    const cp = await idOfText('Reports export to CSV');
+    expect((await cliOut('show', cp, '-w', root)).text).toContain('Show a progress bar');
+    const unknown = await cliOut('add', 'Nope', '--under', 'x', '-w', root);
+    expect(unknown.failures[0]).toBe('No checkpoint or step "x" on the plan. Ids: `ctxspace plan`.');
+  });
+
+  it('says to name a step by its id when the words fit a step, and its help says what --under takes', async () => {
+    await cliOut('migrate', '-w', root);
+    const words = await cliOut('add', 'Nope', '--under', 'Add the Export button', '-w', root);
+    expect(words.failures[0]).toBe('No checkpoint or step "Add the Export button" on the plan. Ids: `ctxspace plan`. Words find only a checkpoint; name a step by its id.');
+    const program = new Command();
+    registerPlanCommand(program, () => undefined);
+    for (const name of ['add', 'decide']) {
+      const cmd = program.commands.find((c) => c.name() === 'plan')!.commands.find((c) => c.name() === name)!;
+      expect(cmd.options.find((o) => o.long === '--under')!.description).toBe("A checkpoint or step id, or a checkpoint's words");
+      expect(cmd.options.find((o) => o.long === '--under')!.flags).toBe('--under <id or words>');
+    }
+  });
+
+  it('names the batch keys in apply --help', async () => {
+    const program = new Command();
+    registerPlanCommand(program, () => undefined);
+    const apply = program.commands.find((c) => c.name() === 'plan')!.commands.find((c) => c.name() === 'apply')!;
+    let help = '';
+    apply.configureOutput({ writeOut: (s) => { help += s; } });
+    apply.outputHelp();
+    for (const key of ['ifRevision', 'dbId', 'requestId', 'ops', 'fields it accepts']) expect(help, key).toContain(key);
+    expect(help).not.toContain('in the order the code reads them');
+  });
+
+  it('on a workspace on files keeps today\'s message and refuses a step id', async () => {
+    const unknown = await cliOut('add', 'Nope', '--under', 'add-the-export-button', '-w', root);
+    expect(unknown.failures[0]).toMatch(/No checkpoint in PLAN.md matches "add-the-export-button"/);
+  });
+
+  it('lists every op and its fields in apply --help', async () => {
+    const { OP_FIELDS } = await import('../core/workspace-db/ops.js');
+    const program = new Command();
+    registerPlanCommand(program, () => undefined);
+    const apply = program.commands.find((c) => c.name() === 'plan')!.commands.find((c) => c.name() === 'apply')!;
+    let help = '';
+    apply.configureOutput({ writeOut: (s) => { help += s; } });
+    apply.outputHelp();
+    for (const [op, fields] of Object.entries(OP_FIELDS)) {
+      expect(help, op).toContain(`${op}: ${fields.join(', ')}`);
+    }
+  });
+});

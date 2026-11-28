@@ -139,6 +139,38 @@ describe('plan ops', () => {
     expect(getBlock(db, idOf(db, 'Query the $1 (x) $& ok'))!.name).toBe('Query the $1 (x) $& ok'); // literal, not a pattern
   });
 
+  it('detail sent back exactly as printed does not grow its indentation, and keeps a nested list\'s relative indentation', async () => {
+    const { db } = await seeded();
+    const id = idOf(db, 'Write the file');
+    const plainText = ['- one', '  - nested', '', 'two'].join('\n');
+    await apply(db, [{ op: 'detail', id, rev: getBlock(db, id)!.rev, text: plainText }]);
+    const printed = () => getBlock(db, id)!.detail; // what `ctxspace plan <id>` shows: the stored lines, indented
+    const first = printed();
+    expect(first).toContain('    - one\n      - nested');
+    const before = exportPlanMarkdown(db);
+    await apply(db, [{ op: 'detail', id, rev: getBlock(db, id)!.rev, text: printed() }]);
+    const afterOne = exportPlanMarkdown(db);
+    await apply(db, [{ op: 'detail', id, rev: getBlock(db, id)!.rev, text: printed() }]);
+    const afterTwo = exportPlanMarkdown(db);
+    expect(printed()).toBe(first);
+    expect(stripExport(afterOne)).toBe(stripExport(before));
+    expect(stripExport(afterTwo)).toBe(stripExport(afterOne));
+  });
+
+  it('detail sent back as printed plus a new line at column 0 keeps the old lines where they were (no staircase)', async () => {
+    const { db } = await seeded();
+    const id = idOf(db, 'Write the file');
+    await apply(db, [{ op: 'detail', id, rev: getBlock(db, id)!.rev, text: 'From your message: "keep my words"\n- a list\n  - nested' }]);
+    const first = getBlock(db, id)!.detail;
+    await apply(db, [{ op: 'detail', id, rev: getBlock(db, id)!.rev, text: `${first}\nWorks now: one.` }]);
+    await apply(db, [{ op: 'detail', id, rev: getBlock(db, id)!.rev, text: `${getBlock(db, id)!.detail}\nAlso: two.` }]);
+    const lines = getBlock(db, id)!.detail.split('\n');
+    const indent = (l: string) => /^ */.exec(l)![0].length;
+    const base = indent(first.split('\n')[0]!);
+    expect(lines).toEqual([...first.split('\n'), `${' '.repeat(base)}Works now: one.`, `${' '.repeat(base)}Also: two.`]);
+    expect(indent(lines[2]!)).toBe(base + 2); // the nested item keeps its relative indentation
+  });
+
   it('detail replaces the whole detail and needs rev; derived checks and decisions follow the text', async () => {
     const { db } = await seeded();
     const cp = idOf(db, 'Reports export to CSV');
